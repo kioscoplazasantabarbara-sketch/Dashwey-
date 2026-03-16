@@ -4,7 +4,7 @@
    El estado de datos vive en localStorage — no necesita red.
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME = 'dashwey-v1';
+const CACHE_NAME = 'dashwey-v2';
 const SHELL = [
   './',
   './Dashwey_v82.html',
