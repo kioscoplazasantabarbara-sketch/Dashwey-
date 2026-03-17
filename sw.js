@@ -1,54 +1,48 @@
-/* DASHWEY Service Worker v5.0 — Network-First HTML + offline fallback */
+/* Dashwey Service Worker v5 — Network-First para HTML, Cache-First para assets */
 const CACHE_NAME = 'dashwey-v5';
-const SHELL = ['./Dashwey_v82.html', './icon-192.png', './icon-512.png', './manifest.json'];
+const HTML_URL   = 'Dashwey_v82.html';
 
-self.addEventListener('install', event => {
+self.addEventListener('install', e => {
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL))
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
   );
 });
 
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
-});
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
 
-self.addEventListener('message', event => {
-  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
-});
-
-self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET') return;
-  const url = event.request.url;
-
-  // HTML principal — Network-first: intenta red, actualiza caché, fallback a caché si offline
-  if (url.includes('Dashwey_v82.html')) {
-    event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
-        .then(response => {
-          // Actualiza la caché con la versión más reciente
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-          return response;
+  // Network-first para el HTML principal
+  if (url.pathname.endsWith(HTML_URL) || url.pathname.endsWith('/')) {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res && res.status === 200) {
+            const resClone = res.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(e.request, resClone));
+          }
+          return res;
         })
-        .catch(() => caches.match(event.request)) // offline: sirve desde caché
+        .catch(() => caches.match(e.request))
     );
     return;
   }
 
-  // Assets estáticos — cache-first
-  event.respondWith(
-    caches.match(event.request).then(cached => {
+  // Cache-first para el resto de assets
+  e.respondWith(
+    caches.match(e.request).then(cached => {
       if (cached) return cached;
-      return fetch(event.request).then(response => {
-        if (response && response.status === 200) {
-          caches.open(CACHE_NAME).then(c => c.put(event.request, response.clone()));
+      return fetch(e.request).then(res => {
+        if (res && res.status === 200 && res.type !== 'opaque') {
+          const resClone = res.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(e.request, resClone));
         }
-        return response;
+        return res;
       });
     })
   );
