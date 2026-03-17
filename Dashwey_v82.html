@@ -831,6 +831,13 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 /* Almacén dock */
 .alm-dock { background: var(--bg); border-top: 1px solid var(--border); box-shadow: 0 -4px 20px rgba(100,120,160,0.10); flex-shrink: 0; position: relative; z-index: 20; }
+.alm-dock-info { padding: 10px 16px 0; }
+.alm-dock-info-row { display: flex; align-items: center; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.alm-dock-info-col { flex: 1; padding: 8px 10px; text-align: center; }
+.alm-dock-info-sep { width: 1px; align-self: stretch; background: var(--border); }
+.alm-dock-info-lbl { font-size: 8px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 2px; }
+.alm-dock-info-val { font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
+.alm-dock-info-price { color: var(--red); }
 .alm-dock-single-row { padding: 10px 14px 14px; }
 .alm-dock-single-btn {
   background: var(--red); color: #fff; border: none;
@@ -1424,17 +1431,17 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 /* ── Catálogo sheet — sube desde abajo como cobro del TPV ── */
 .orden-cat-sheet {
   position: absolute;
-  /* Empieza justo encima del prov-bar + dock (~118px) */
-  bottom: 118px;
+  /* Arranca encima del dock (alm-dock ~64px) sin tapar el buscador ni el banner */
+  bottom: 64px;
   left: 0; right: 0;
-  height: calc(100% - 118px - var(--sat, 44px));
-  max-height: 72vh;
+  /* Límite superior: deja visible prov-bar (62px) + search-bar (58px) + next-order (36px) = 156px */
+  max-height: calc(100% - 156px - var(--sat, 44px));
   background: var(--surface);
-  border-radius: 24px 24px 0 0;
+  border-radius: 22px 22px 0 0;
   border-top: 1px solid var(--border);
   box-shadow: 0 -8px 32px rgba(100,120,160,0.18);
   display: flex; flex-direction: column;
-  transform: translateY(calc(100% + 118px));
+  transform: translateY(calc(100% + 64px));
   transition: transform 0.36s cubic-bezier(0.4,0,0.2,1);
   z-index: 10;
   overflow: hidden;
@@ -2246,6 +2253,25 @@ function _authTabSafe(tab) {
 
           <!-- ══ ALMACÉN DOCK ══ -->
           <div class="alm-dock" id="alm-dock">
+            <!-- Info: próximo pedido -->
+            <div class="alm-dock-info" id="alm-dock-info" style="display:none">
+              <div class="alm-dock-info-row">
+                <div class="alm-dock-info-col">
+                  <div class="alm-dock-info-lbl">PRÓXIMO PEDIDO</div>
+                  <div class="alm-dock-info-val" id="alm-dock-dia">—</div>
+                </div>
+                <div class="alm-dock-info-sep"></div>
+                <div class="alm-dock-info-col">
+                  <div class="alm-dock-info-lbl">ARTÍCULOS</div>
+                  <div class="alm-dock-info-val" id="alm-dock-art">0</div>
+                </div>
+                <div class="alm-dock-info-sep"></div>
+                <div class="alm-dock-info-col">
+                  <div class="alm-dock-info-lbl">TOTAL A PAGAR</div>
+                  <div class="alm-dock-info-val alm-dock-info-price" id="alm-dock-price">0,00 €</div>
+                </div>
+              </div>
+            </div>
             <div class="alm-dock-single-row">
               <button class="alm-dock-single-btn" id="alm-dock-single-btn" onclick="App.alm.openProvProductos()">
                 <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -6219,25 +6245,40 @@ const alm = (() => {
     if(cestaBadge) { cestaBadge.style.display = cntCesta > 0 ? 'block' : 'none'; cestaBadge.textContent = cntCesta; }
     if(cestaTotal) cestaTotal.textContent = cntCesta > 0 ? feur(totalCesta) : '';
 
-    // ── Dock Almacén v74 — info órdenes + botón único ─────────
-    const dockPreview  = document.getElementById('alm-dock-preview');
+    // ── Dock Almacén v8.4 — próximo pedido + artículos + total ──
     const dockBtn      = document.getElementById('alm-dock-single-btn');
+    const dockInfo     = document.getElementById('alm-dock-info');
+    const dockDiaEl    = document.getElementById('alm-dock-dia');
+    const dockArtEl    = document.getElementById('alm-dock-art');
+    const dockPriceEl  = document.getElementById('alm-dock-price');
     const selProv      = State.get.selectedProv();
     const prov         = State.get.prov(selProv);
-    // Calcular órdenes por proveedor
-    const allPending   = State.get.ordenItems().filter(o => !o.checked);
-    const byProv       = {};
-    allPending.forEach(o => { byProv[o.provId] = (byProv[o.provId]||0) + 1; });
-    const nProvs       = Object.keys(byProv).length;
-    const totalGlobal  = allPending.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0),0);
-    if (dockPreview) {
-      if (nProvs > 0) {
-        dockPreview.innerHTML = `Tienes preparadas <strong>${nProvs}</strong> orden${nProvs!==1?'es':''} · <strong>${feur(totalGlobal)}</strong>`;
-      } else {
-        const provName = prov ? prov.icon + ' ' + prov.nombre : '';
-        dockPreview.textContent = provName ? provName + ' · Sin artículos en la orden' : 'Sin artículos en la orden';
+    const provItems    = State.get.ordenItems().filter(o => o.provId === selProv && !o.checked);
+    const totalOrden   = provItems.reduce((s,o) => s + (o.ncajas||1)*(o.precio||0)*1.10, 0);
+
+    // Calcular próximo día de pedido
+    let diaLabel = '—';
+    if (prov && (prov.diasPedido||[]).length > 0) {
+      const DIAS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+      const hoy = new Date(), diaHoy = hoy.getDay();
+      let menorDiff = 8, proximoDia = null;
+      prov.diasPedido.forEach(d => {
+        let diff = (d - diaHoy + 7) % 7;
+        if (diff === 0) diff = 7;
+        if (diff < menorDiff) { menorDiff = diff; proximoDia = d; }
+      });
+      if (proximoDia !== null) {
+        diaLabel = menorDiff === 1 ? 'Mañana' : menorDiff <= 6 ? DIAS[proximoDia] : (() => {
+          const f = new Date(hoy); f.setDate(hoy.getDate()+menorDiff);
+          return String(f.getDate()).padStart(2,'0')+'/'+String(f.getMonth()+1).padStart(2,'0');
+        })();
       }
     }
+
+    if (dockInfo)    dockInfo.style.display = provItems.length > 0 ? '' : 'none';
+    if (dockDiaEl)   dockDiaEl.textContent  = diaLabel;
+    if (dockArtEl)   dockArtEl.textContent  = provItems.length;
+    if (dockPriceEl) dockPriceEl.textContent = feur(totalOrden);
     if (dockBtn) dockBtn.classList.toggle('alm-dock-single-btn--pulse', cntLista > 0);
 
     // ── Summary KPIs arriba del Almacén ─────────────────────────
@@ -7468,13 +7509,7 @@ const alm = (() => {
         <div class="orden-cat-prov">${prov.icon} ${esc(prov.nombre)}</div>
         <button class="orden-cat-close" onclick="App.alm._cerrarCatalogo()">×</button>
       </div>
-      <div class="orden-cat-search-wrap">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input id="orden-cat-search" class="orden-cat-search-inp" placeholder="Buscar en ${esc(prov.nombre)}…"
-          autocomplete="off" autocorrect="off" autocapitalize="off"
-          oninput="App.alm._catSearch(this.value)">
-        <button class="orden-cat-search-clear" id="orden-cat-clear" onclick="App.alm._catClearSearch()" style="display:none">×</button>
-      </div>
+
       <div class="orden-cat-list" id="orden-cat-list">
         ${items}${addNew}
         ${!prods.length && !noMatch ? '<div class="orden-cat-empty">No hay artículos de este proveedor</div>' : ''}
