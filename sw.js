@@ -1,62 +1,47 @@
 /* ═══════════════════════════════════════════════════════════════════
-   DASHWEY · Service Worker v1.0
-   Estrategia: Cache-First para el shell de la app (HTML, assets)
-   El estado de datos vive en localStorage — no necesita red.
+   DASHWEY · Service Worker v2.0
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME = 'dashwey-v2';
-const SHELL = [
-  './',
-  './Dashwey_v82.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-];
+const CACHE_NAME = 'dashwey-v3';
+const SHELL = ['./Dashwey_v82.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
-/* ── Instalación: precachear el shell ── */
 self.addEventListener('install', event => {
+  // Skip waiting immediately — don't block on old SW
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      // addAll falla si algún recurso no existe — usamos add individual con try/catch
-      return Promise.allSettled(SHELL.map(url => cache.add(url)));
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache =>
+      Promise.allSettled(SHELL.map(url => cache.add(url)))
+    )
   );
 });
 
-/* ── Activación: limpiar cachés viejas ── */
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-/* ── Fetch: Cache-First, fallback a red ── */
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('fetch', event => {
-  // Solo interceptar GET del mismo origen
   if (event.request.method !== 'GET') return;
-  if (!event.request.url.startsWith(self.location.origin) &&
-      !event.request.url.startsWith('file://')) return;
+  // Never cache requests with _t= timestamp (update checks)
+  if (event.request.url.includes('_t=')) return;
 
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request).then(response => {
-        // Cachear respuestas válidas del mismo origen
         if (response && response.status === 200 && response.type !== 'opaque') {
           const clone = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => {
-        // Sin red y sin caché: devolver el HTML principal como fallback
-        return caches.match('./Dashwey_v82.html') ||
-               caches.match('./') ||
-               new Response('Dashwey está offline. Recarga cuando tengas conexión.', {
-                 headers: { 'Content-Type': 'text/plain' }
-               });
-      });
+      }).catch(() => caches.match('./Dashwey_v82.html'));
     })
   );
 });

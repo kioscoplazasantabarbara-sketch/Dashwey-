@@ -11,7 +11,7 @@
 <meta name="theme-color" content="#E8EDF4">
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.0</title>
+<title>Dashwey v8.2</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.0 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2346,7 +2346,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
     </div>
     <div class="sd-footer">
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.0</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.2</div>
     </div>
   </div>
 
@@ -3544,7 +3544,7 @@ const ui = (() => {
     btn.disabled = true;
 
     // Solicita el HTML principal sin caché para comparar versiones
-    fetch(location.href, { cache: 'no-store' })
+    fetch(location.href.split('?')[0] + '?_t=' + Date.now(), { cache: 'no-store' })
       .then(r => r.text())
       .then(html => {
         btn.textContent = 'Comprobar';
@@ -8194,13 +8194,29 @@ return { State, KPI, Utils, ui, nav, dash, tpv, alm, canAccess, limpiarBD: windo
 /* ═══ PWA — Service Worker + Install Banner v8.2 ═══════════════ */
 (function() {
 
-  /* ── 1. Registrar Service Worker ── */
+  /* ── 1. Service Worker — unregister old, register new ── */
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js', { scope: './' })
-        .then(reg => console.log('[Dashwey SW] registrado:', reg.scope))
-        .catch(err => console.warn('[Dashwey SW] error:', err));
-    });
+    // First unregister ALL old SWs, then register fresh
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      const unregAll = regs.map(r => r.unregister());
+      return Promise.all(unregAll);
+    }).then(() => {
+      // Clear all caches
+      if ('caches' in window) {
+        caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+      }
+      // Register new SW
+      return navigator.serviceWorker.register('./sw.js', { scope: './' });
+    }).then(reg => {
+      // Force immediate activation
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (newWorker) newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed') newWorker.postMessage({ type: 'SKIP_WAITING' });
+        });
+      });
+    }).catch(err => console.warn('[Dashwey SW] error:', err));
   }
 
   /* ── 2. Banner de instalación Android/Chrome ── */
