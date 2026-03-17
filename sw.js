@@ -1,11 +1,11 @@
-/* DASHWEY Service Worker v4.0 — Network-First para HTML */
-const CACHE_NAME = 'dashwey-v4';
-const STATIC = ['./icon-192.png', './icon-512.png', './manifest.json'];
+/* DASHWEY Service Worker v5.0 — Network-First HTML + offline fallback */
+const CACHE_NAME = 'dashwey-v5';
+const SHELL = ['./Dashwey_v82.html', './icon-192.png', './icon-512.png', './manifest.json'];
 
 self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC))
+    caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL))
   );
 });
 
@@ -25,16 +25,22 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = event.request.url;
 
-  // HTML principal — SIEMPRE network first, nunca desde caché
+  // HTML principal — Network-first: intenta red, actualiza caché, fallback a caché si offline
   if (url.includes('Dashwey_v82.html')) {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' })
-        .catch(() => caches.match(event.request))
+        .then(response => {
+          // Actualiza la caché con la versión más reciente
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+          return response;
+        })
+        .catch(() => caches.match(event.request)) // offline: sirve desde caché
     );
     return;
   }
 
-  // Assets estáticos — cache first
+  // Assets estáticos — cache-first
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
