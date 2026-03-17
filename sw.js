@@ -1,12 +1,8 @@
-/* ═══════════════════════════════════════════════════════════════════
-   DASHWEY · Service Worker v2.0
-   ═══════════════════════════════════════════════════════════════════ */
-
+/* DASHWEY Service Worker v3.0 */
 const CACHE_NAME = 'dashwey-v3';
 const SHELL = ['./Dashwey_v82.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', event => {
-  // Skip waiting immediately — don't block on old SW
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache =>
@@ -29,16 +25,13 @@ self.addEventListener('message', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  // Never cache requests with _t= timestamp (update checks)
-  if (event.request.url.includes('_t=')) return;
-
+  if (event.request.url.includes('_t=')) return; // bypass for update checks
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request).then(response => {
         if (response && response.status === 200 && response.type !== 'opaque') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, response.clone()));
         }
         return response;
       }).catch(() => caches.match('./Dashwey_v82.html'));
