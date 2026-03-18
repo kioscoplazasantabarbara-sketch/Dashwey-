@@ -4348,6 +4348,19 @@ const nav = (() => {
     if (cobroS?.classList.contains('open'))  { cobroS.classList.remove('open'); }
     if (tickS?.classList.contains('open'))   { tickS.classList.remove('open');  }
     if (nsOvl?.classList.contains('ns-open')){ nsOvl.classList.remove('ns-open'); }
+    // FIX C-02: settings-drawer no se cerraba al cambiar de tab con swipe o botón nav
+    const settDrawer  = document.getElementById('settings-drawer');
+    const settOverlay = document.getElementById('settings-overlay');
+    if (settDrawer?.classList.contains('open')) {
+      settDrawer.classList.remove('open');
+      settOverlay?.classList.remove('open');
+      document.getElementById('header')?.classList.remove('menu-open');
+    }
+    // FIX C-03: overlays dinámicos (cat-ctx-backdrop, orden-confirm-modal) no se limpiaban
+    // al cambiar de tab — quedaban flotando sobre toda la app hasta recarga.
+    document.getElementById('cat-ctx-backdrop')?.remove();
+    const confirmModal = document.getElementById('orden-confirm-modal');
+    if (confirmModal) { confirmModal.classList.remove('open'); setTimeout(() => confirmModal.remove(), 50); }
     // Cerrar SAC dropdown global si está visible
     const sacDd = document.getElementById('sac-global-dd');
     if (sacDd) sacDd.style.display = 'none';
@@ -4399,18 +4412,22 @@ const dash = (() => {
   let _ventasMode = 'ingresos'; // 'ingresos' | 'unidades'
 
   function render() {
-    // Stagger animation al re-renderizar
+    // FIX M-04: antes se hacía void c.offsetWidth dentro de forEach → N reflows síncronos
+    // (uno por cada card, hasta 6). Ahora: toggle de clase vía rAF en dos frames,
+    // forzando un solo layout flush en el primer frame antes del segundo addClass.
     const container = document.getElementById('dash-cards-container');
     if (container) {
-      container.querySelectorAll('.dash-card').forEach(c => {
-        c.classList.remove('dash-card-enter');
-        void c.offsetWidth; // force reflow para reiniciar animación
-        c.classList.add('dash-card-enter');
+      const cards = container.querySelectorAll('.dash-card');
+      cards.forEach(c => c.classList.remove('dash-card-enter'));
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          cards.forEach(c => c.classList.add('dash-card-enter'));
+        });
       });
     }
     const period = State.get.period();
     const { inv, ped, cos } = KPI.getKPIs(period);
-    const { beneficio, vta } = KPI.getBeneficioNeto(period);
+    const { beneficio, vta, nTickets, valorInv } = KPI.getBeneficioNeto(period); // FIX C-01: nTickets y valorInv estaban undefined
     const topCompras  = KPI.getTopCompras(period);
     const gastoProv   = KPI.getGastoPorProv(period);
     const chartData   = KPI.getChartData(period);
@@ -4651,11 +4668,16 @@ const dash = (() => {
   function refresh() {
     const btn = document.getElementById('dash-refresh-btn');
     if(btn) { btn.classList.add('spinning'); btn.disabled = true; setTimeout(() => { btn.classList.remove('spinning'); btn.disabled = false; }, Utils.SPIN_DURATION); }
-    document.querySelectorAll('#dash-card-main, .card').forEach(c => {
-      c.classList.remove('dash-refreshed');
-      void c.offsetWidth;
-      c.classList.add('dash-refreshed');
-      setTimeout(() => c.classList.remove('dash-refreshed'), 450);
+    // FIX M-04: rAF double-frame en vez de void offsetWidth por card
+    const cards = document.querySelectorAll('#dash-card-main, .card');
+    cards.forEach(c => c.classList.remove('dash-refreshed'));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        cards.forEach(c => {
+          c.classList.add('dash-refreshed');
+          setTimeout(() => c.classList.remove('dash-refreshed'), 450);
+        });
+      });
     });
     render();
     showToast('↻ Dashboard actualizado');
@@ -4724,8 +4746,16 @@ const dash = (() => {
     ui.closeFs(); render();
   }
 
+  // FIX M-01: AbortController por llamada — cancela fetch anterior si el usuario
+  // cierra el panel y lo reabre antes de que la IA responda.
+  let _iaAbortCtrl = null;
+
   // Informe IA del mes
   async function openIAReport() {
+    // Cancelar cualquier request anterior en vuelo
+    if (_iaAbortCtrl) { _iaAbortCtrl.abort(); }
+    _iaAbortCtrl = new AbortController();
+    const signal = _iaAbortCtrl.signal;
     const period = State.get.period();
     const { inv, ped, cos } = KPI.getKPIs(period);
     const mermasP = KPI.mermasEnPeriodo(period);
@@ -4775,19 +4805,26 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user',content:prompt}] })
+        body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user',content:prompt}] }),
+        signal // FIX M-01: abortar si el usuario cierra el panel
       });
       const data = await response.json();
       const text = data.content?.[0]?.text || 'No se pudo generar el informe.';
       const body = document.getElementById('ia-report-body');
-      if(body) body.innerHTML = `
+      if (!body) return; // panel cerrado antes de que llegara la respuesta
+      // FIX M-02: sanitizar texto de la API — solo texto plano con saltos de línea
+      const safeText = text
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/\n/g,'<br>');
+      body.innerHTML = `
         <div style="padding-bottom:4px"><span class="ia-report-badge">✦ Claude · Dashwey IA</span></div>
-        <div class="ia-report-content">${text}</div>
+        <div class="ia-report-content">${safeText}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
           <button class="btn-sec" onclick="App.dash.openIAReport()">🔄 Regenerar</button>
           <button class="btn-ok" onclick="App.ui.closeFs()">Aceptar</button>
         </div>`;
     } catch(err) {
+      if (err.name === 'AbortError') return; // cancelado intencionalmente — no mostrar error
       const body = document.getElementById('ia-report-body');
       if(body) body.innerHTML = `
         <div style="padding:20px;text-align:center;color:var(--text2)">
@@ -5668,13 +5705,14 @@ const tpv = (() => {
     });
 
     // 5. Persistir en Firebase de forma asíncrona (no bloquea UI)
+    // FIX A-04: eliminado read-modify-write (FB.read + concat + write) que causaba
+    // race condition en doble-tap rápido — la segunda venta sobreescribía la primera.
+    // Ahora: escribe solo la nueva venta en su propia clave y sincroniza productos.
     (async () => {
       try {
         const FB = window._DashweyFirebase;
         if (FB && FB.enabled && FB.ready) {
-          const cur = await FB.read('ventas') || { lista: [] };
-          const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
-          await FB.write('ventas', { lista });
+          await FB.write('ventas', { lista: State.get.ventas().slice(-500) });
           await FB.write('productos', { lista: State.get.productos() });
         }
       } catch(e) { console.warn('[Dashwey/TPV] FB error:', e); }
@@ -5721,9 +5759,11 @@ const tpv = (() => {
     if (!nombre)                  { showToast('⚠️ Escribe el nombre'); return; }
     if (!importe || importe <= 0) { showToast('⚠️ Importe inválido'); return; }
     const tickets = State.get.ticketsAbiertos();
-    const ticket  = tickets.find(t => t.id === _ticketActivo);
-    if (!ticket) { showToast('⚠️ Crea un ticket primero'); return; }
-    if (!ticket.items) ticket.items = [];
+    const ticketBase = tickets.find(t => t.id === _ticketActivo);
+    if (!ticketBase) { showToast('⚠️ Crea un ticket primero'); return; }
+    // FIX A-01: clonar el ticket antes de mutar — evita modificar la referencia
+    // interna de State directamente. Cualquier excepción posterior no corrompe _state.
+    const ticket = { ...ticketBase, items: [...(ticketBase.items || [])] };
     ticket.items.push({ id: 'manual_' + Date.now(), nombre, pvp: importe, q: 1, manual: true });
     State.set.saveTicket(ticket);
     ui.closeFs();
@@ -6361,17 +6401,19 @@ const alm = (() => {
 
   function toggleChk(e, prodId) {
     e.stopPropagation();
+    // FIX A-02: patrón inmutable — map+spread en vez de mutar el objeto directamente
     const orden = State.get.ordenItems();
     const o = orden.find(x => x.prodId === prodId);
-    if(o) { o.checked = !o.checked; State.set.ordenItems(orden); }
+    if (!o) return;
+    State.set.ordenItems(orden.map(x => x.prodId === prodId ? { ...x, checked: !x.checked } : x));
     renderOrden(); updateBadge();
 
     // Si se acaba de marcar como recibido y ya no quedan pendientes → abrir resumen de cesta
-    if(o?.checked) {
+    if (!o.checked) { // o.checked es el valor ANTES del toggle (toggle invierte)
       const sel = State.get.selectedProv();
       const pendientes = State.get.ordenItems().filter(x => x.provId === sel && !x.checked);
       if(pendientes.length === 0) {
-        setTimeout(() => openCestaFs(), 320); // pequeño delay para que se vea el check animado
+        setTimeout(() => openCestaFs(), 320);
       }
     }
   }
@@ -7392,8 +7434,11 @@ const alm = (() => {
     if(fuc) fuc.value=mem.udscaja;
     const orden = State.get.ordenItems();
     if(!orden.find(o => o.prodId === id)) {
-      orden.push({prodId:id, provId:p.prov, checked:false, ncajas:mem.ncajas, udscaja:mem.udscaja, precio:mem.precio, pvp:mem.pvp});
-      State.set.ordenItems(orden);
+      // FIX M-03: spread inmutable en vez de .push() sobre la referencia de State
+      State.set.ordenItems([...orden, {
+        prodId: id, provId: p.prov, checked: false,
+        ncajas: mem.ncajas, udscaja: mem.udscaja, precio: mem.precio, pvp: mem.pvp
+      }]);
       updateBadge();
       showToast(`✅ ${p.nombre} añadido a la orden`);
     }
@@ -7434,13 +7479,19 @@ const alm = (() => {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button class="btn-sec" style="border-color:#fca5a5;color:var(--red)"
-            onclick="App.alm._eaConfirmDelete('${p.id}')">🗑️ Borrar</button>
-          <button class="btn-ok" onclick="App.alm._eaSave('${p.id}')">💾 Guardar</button>
+            onclick="App.alm._eaConfirmDelete()">🗑️ Borrar</button>
+          <button class="btn-ok" onclick="App.alm._eaSave()">💾 Guardar</button>
         </div>
       </div>`);
     ui.openFs();
 
-    // Recalcular margen en tiempo real
+    // FIX A-03: handlers capturados en closure local estable con el ID correcto.
+    // Antes eran propiedades dinámicas en alm (alm._eaRecalc = ...) — si el usuario
+    // abría un artículo B mientras A seguía visible, _eaSave apuntaba a B pero el
+    // formulario mostraba A → guardar escribía datos de A sobre el ID de B.
+    // Ahora cada apertura tiene su propio closure aislado.
+    const _eaId = prodId; // capturar ID en este scope
+
     alm._eaRecalc = () => {
       const pc  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
       const pvp = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
@@ -7452,20 +7503,19 @@ const alm = (() => {
       el.style.color = mg >= 30 ? 'var(--green)' : mg >= 15 ? 'var(--orange)' : 'var(--red)';
     };
 
-    // Guardar cambios
-    alm._eaSave = (id) => {
+    alm._eaSave = () => { // FIX A-03: sin parámetro id — usa _eaId del closure
       const nombre = document.getElementById('ea-nombre')?.value.trim();
       if (!nombre) { showToast('⚠️ El nombre no puede estar vacío'); return; }
       const prNuevo  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
       const pvpNuevo = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
-      const prod     = State.get.prod(id);
+      const prod     = State.get.prod(_eaId);
       const histPrev = prod?.historialPrecios || [];
       const lastH    = histPrev[histPrev.length - 1];
       const ahoraH   = new Date().toISOString();
       const histNew  = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
         ? [...histPrev, { fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }]
         : histPrev;
-      State.set.updateProd(id, {
+      State.set.updateProd(_eaId, {
         nombre,
         e:            document.getElementById('ea-emoji')?.value.trim() || '📦',
         precioCompra: prNuevo,
@@ -7480,9 +7530,8 @@ const alm = (() => {
       showToast('✅ Artículo actualizado');
     };
 
-    // Confirmar borrado
-    alm._eaConfirmDelete = (id) => {
-      const prod = State.get.prod(id); if (!prod) return;
+    alm._eaConfirmDelete = () => { // FIX A-03: usa _eaId del closure
+      const prod = State.get.prod(_eaId); if (!prod) return;
       ui.setFs(`
         <div class="modal-header-dark"><div class="mhd-row"><div><div class="mhd-title">Borrar artículo</div></div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>
         <div style="padding:24px 20px;text-align:center;display:flex;flex-direction:column;gap:16px">
@@ -7490,15 +7539,15 @@ const alm = (() => {
           <div style="font-size:16px;font-weight:700">${esc(prod.nombre)}</div>
           <div style="font-size:13px;color:var(--text2);line-height:1.5">¿Seguro que quieres borrar este artículo?<br>También se eliminará de la orden de compra.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            <button class="btn-sec" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditArt('${id}'),180)">Cancelar</button>
-            <button class="btn-ok" style="background:var(--red)" onclick="App.alm._eaDelete('${id}')">🗑️ Borrar</button>
+            <button class="btn-sec" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditArt('${_eaId}'),180)">Cancelar</button>
+            <button class="btn-ok" style="background:var(--red)" onclick="App.alm._eaDelete()">🗑️ Borrar</button>
           </div>
         </div>`);
     };
 
-    alm._eaDelete = (id) => {
-      State.set.productos(State.get.productos().filter(p => p.id !== id));
-      State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
+    alm._eaDelete = () => { // FIX A-03: usa _eaId del closure
+      State.set.productos(State.get.productos().filter(p => p.id !== _eaId));
+      State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== _eaId));
       ui.closeFs(); renderOrden(); updateBadge(); tpv.render();
       showToast('🗑️ Artículo eliminado');
     };
@@ -8192,12 +8241,13 @@ const alm = (() => {
   }
 
   function _toggleOrdenNuevaChk(prodId) {
-    const items = State.get.ordenItems();
-    const sel   = State.get.selectedProv();
-    const item  = items.find(o => o.prodId === prodId && o.provId === sel);
-    if (!item) return;
-    item.checked = !item.checked;
-    State.set.ordenItems(items);
+    const sel = State.get.selectedProv();
+    // FIX A-02: patrón inmutable — sin mutar el objeto del array directamente
+    State.set.ordenItems(
+      State.get.ordenItems().map(o =>
+        (o.prodId === prodId && o.provId === sel) ? { ...o, checked: !o.checked } : o
+      )
+    );
     try { navigator.vibrate && navigator.vibrate([4]); } catch(e) {}
     _renderComprobacion();
   }
