@@ -5,7 +5,7 @@
 
 const CACHE_NAME  = 'dashwey-v7';
 const HTML_URL    = 'Dashwey_v82.html';
-const VERSION_URL = 'version.json';
+const VERSION_URL = 'version.txt';
 
 // ── install: cachear assets críticos y activar inmediatamente ──
 self.addEventListener('install', e => {
@@ -38,7 +38,7 @@ self.addEventListener('message', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // version.json: siempre network, nunca caché (anti-cache estricto)
+  // version.txt: siempre network, nunca caché (anti-cache estricto)
   if (url.pathname.endsWith(VERSION_URL)) {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' })
