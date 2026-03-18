@@ -227,6 +227,32 @@ html, body {
 .tab-page::-webkit-scrollbar { display: none; }
 .tab-content { padding: 12px 12px 20px; display: flex; flex-direction: column; gap: 12px; }
 
+/* ── Tablet Dashboard — 2 columnas ── */
+@media (min-width: 768px) {
+  #dash-cards-container.tab-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: min-content;
+    align-items: start;
+    gap: 14px;
+    padding: 16px;
+  }
+  /* KPI hero siempre a ancho completo */
+  #dash-cards-container .bn-card { grid-column: 1 / -1; }
+  /* Salud Financiera ocupa 2 cols si es la primera card de contenido */
+  #dash-cards-container .dash-card:first-of-type { grid-column: 1 / -1; }
+  /* Bottom tab: un poco más alto en tablet */
+  #bottom-tabs { height: 62px; }
+  /* Tab pages: sin padding-bottom extra en tablet */
+  .tab-page { padding-bottom: 62px !important; }
+}
+@media (min-width: 1024px) {
+  #dash-cards-container.tab-content {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+  #dash-cards-container .bn-card { grid-column: 1 / -1; }
+}
+
 /* ── § 6. BOTTOM NAV ── */
 #bottom-tabs {
   position: fixed; bottom: 0; left: 0; right: 0;
@@ -736,6 +762,39 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 /* ── § 13. ALMACÉN ── */
 #tab-alm { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--bg); position: relative; }
+
+/* ── Tablet Almacén — 2 paneles ── */
+@media (min-width: 768px) {
+  #tab-alm {
+    flex-direction: row;
+  }
+  #tab-alm > #alm-prov-bar,
+  #tab-alm > #alm-dock-info {
+    display: none; /* se mueven al panel izquierdo via JS */
+  }
+  .alm-tablet-left {
+    display: flex; flex-direction: column;
+    width: 60%; height: 100%; overflow: hidden;
+    border-right: 1px solid var(--border);
+  }
+  .alm-tablet-right {
+    flex: 1; height: 100%; overflow-y: auto;
+    padding: 16px; background: var(--bg);
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  /* Dock en tablet: posición relativa dentro del panel izquierdo */
+  #alm-dock {
+    position: relative !important;
+    bottom: auto !important;
+    display: flex !important;
+  }
+  #alm-add-btn-row {
+    position: relative !important;
+    bottom: auto !important;
+    display: block !important;
+  }
+  .alm-scroll { padding-bottom: 16px; }
+}
 .alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 140px; }
 .alm-scroll::-webkit-scrollbar { display: none; }
 
@@ -2900,6 +2959,8 @@ const State = (() => {
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
       _writeLocal(_state);
+      // Notificar al sistema de sync que este write es nuestro
+      if (typeof window._DashweyOnLocalWrite === 'function') window._DashweyOnLocalWrite();
       const fb = window._DashweyFirebase;
       if (fb?.enabled && fb.isRegistered?.()) {
         if (navigator.onLine && fb.ready) {
@@ -8505,6 +8566,42 @@ const alm = (() => {
     }
     State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
     State.set.user({ uid: fb.uid });
+
+    // ── Sync en tiempo real — escuchar cambios remotos ────────────
+    // Activa onSnapshot para recibir actualizaciones de otros dispositivos
+    let _lastLocalWrite = Date.now();
+    // Registrar cuándo escribimos nosotros para evitar re-aplicar nuestros propios cambios
+    const _origSave = window._DashweyStateSetHook;
+
+    fb.subscribe('state', remoteData => {
+      // Ignorar si los datos remotos son del mismo timestamp que el local
+      const remoteTs  = remoteData?.user?.lastSyncAt;
+      const localTs   = State.get.user().lastSyncAt;
+      // Si el remoto es más reciente que lo que tenemos → aplicar
+      if (remoteTs && localTs && remoteTs <= localTs) return;
+      // Si la última escritura local fue hace menos de 2s → ignorar (es nuestro propio write)
+      if (Date.now() - _lastLocalWrite < 2000) return;
+
+      console.info('[Dashwey] Sync remoto recibido');
+      State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
+
+      // Aplicar datos remotos (last-write-wins por timestamp)
+      const merged = Object.assign(
+        JSON.parse(JSON.stringify(remoteData)),
+        { settings: State.get.settings() } // settings siempre local
+      );
+      Object.keys(merged).forEach(k => {
+        if (typeof State.set[k] === 'function') State.set[k](merged[k]);
+      });
+
+      // Re-render sin escribir a Firebase (evitar loop)
+      _renderAll();
+      State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
+      showToast('☁️ Actualizado desde otro dispositivo');
+    });
+
+    // Exponer hook para saber cuándo nosotros escribimos
+    window._DashweyOnLocalWrite = () => { _lastLocalWrite = Date.now(); };
   });
 
   // ── Listener: re-render Dashboard al registrar una venta ────────
