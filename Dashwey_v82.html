@@ -876,10 +876,9 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .alm-dock-cta:active { transform: scale(0.96); }
 
 /* ── § 14. MODALES / FS-OVERLAY ── */
-#fs-overlay { display: none; position: fixed; inset: 0; z-index: 9000; align-items: flex-end; justify-content: center; }
+#fs-overlay { display: none; position: fixed; inset: 0; z-index: 9000; align-items: flex-end; justify-content: center; background: rgba(0,0,0,0.45); }
 #fs-overlay.open { display: flex; }
-#fs-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 8999; }
-#fs-backdrop.open { display: block; }
+/* FIX #6: #fs-backdrop eliminado — fondo oscuro ahora en #fs-overlay directamente */
 #fs-box {
   background: var(--surface); border-radius: var(--r-xl) var(--r-xl) 0 0;
   border-top: 1px solid var(--border);
@@ -2380,7 +2379,8 @@ function _authTabSafe(tab) {
 </div>
 
 <!-- BACKDROPS -->
-<div id="fs-backdrop" onclick="App.ui.closeFs()"></div>
+<!-- FIX #6: fs-backdrop eliminado — el cierre se gestiona solo desde fs-overlay (closeFsOvl)
+     que verifica correctamente si el click fue dentro o fuera del fs-box -->
 <div id="modal-backdrop" onclick="App.ui.closeModal()"></div>
 <!-- FS OVERLAY -->
 <div id="fs-overlay" onclick="App.ui.closeFsOvl(event)"><div id="fs-box"><div id="fs-content"></div></div></div>
@@ -2451,12 +2451,12 @@ function _authTabSafe(tab) {
       <div class="sd-row">
         <div class="sd-icon" style="background:#ECFDF5">🔔</div>
         <div class="sd-info"><div class="sd-title">Notificaciones</div><div class="sd-sub">Stock y caducidades</div></div>
-        <button class="sd-toggle" id="sd-notif-toggle" onclick="App.ui.toggleSetting('notifOn',this)"></button>
+        <button class="sd-toggle" id="sd-notif-toggle" data-setting="notifOn" onclick="App.ui.toggleSetting('notifOn',this)"></button>
       </div>
       <div class="sd-row">
         <div class="sd-icon" style="background:#EFF6FF">✨</div>
         <div class="sd-info"><div class="sd-title">Sugerencias IA</div><div class="sd-sub">Análisis de márgenes</div></div>
-        <button class="sd-toggle" id="sd-ia-toggle" onclick="App.ui.toggleSetting('iaOn',this)"></button>
+        <button class="sd-toggle" id="sd-ia-toggle" data-setting="iaOn" onclick="App.ui.toggleSetting('iaOn',this)"></button>
       </div>
       <div class="sd-row" onclick="App.ui.sdSubOpenCierre()">
         <div class="sd-icon" style="background:#FEF3C7">🕐</div>
@@ -2744,12 +2744,8 @@ const State = (() => {
       activeContext: 'business',   // 'business' | 'hogar' | 'inversion' — LLAVE MAESTRA
       lastSyncAt:  null,           // ISO — última sync exitosa con Firebase
     },
-    // ── Estado de sync ──────────────────────────────────────────
-    syncStatus: {
-      pendingWrites: 0,            // escrituras en cola (offline)
-      lastError:     null,
-      mode:          'local',      // 'local' | 'syncing' | 'synced' | 'error'
-    },
+    // ── Estado de sync — FIX #4: movido a _syncStatus fuera de _state ──
+    // syncStatus ya NO se guarda en localStorage (era efímero de todos modos)
     proveedores: [
       {id:'ccep',   nombre:'Coca-Cola CCEP',     icon:'🥤', direccion:'Calle Industria 12, Madrid', telefono:'910 000 001', diasPedido:[1,3], diasEntrega:[2,4], agente:'', repartidor:'', telReparto:'', banner:''},
       {id:'mahou',  nombre:'Mahou-SanMiguel',    icon:'🍺', direccion:'Av. de Mahou 3, Madrid',    telefono:'910 000 002', diasPedido:[2,4], diasEntrega:[3,5], agente:'', repartidor:'', telReparto:'', banner:''},
@@ -2841,6 +2837,10 @@ const State = (() => {
 
   let _pendingQueue  = [];   // escrituras offline pendientes
   let _isSyncing     = false;
+  // FIX #4: syncStatus vive FUERA de _state para no contaminar localStorage
+  // FIX #7: _syncTimer al scope del módulo para poder cancelarlo entre saves
+  let _syncStatus    = { pendingWrites: 0, lastError: null, mode: 'local' };
+  let _syncTimer     = null;
 
   // ── 1. Siempre local (síncrono) ────────────────────────────────
   function _writeLocal(data) {
@@ -2885,7 +2885,11 @@ const State = (() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return JSON.parse(JSON.stringify(DEFAULTS));
-      return Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), JSON.parse(raw));
+      const loaded = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), JSON.parse(raw));
+      // FIX #4: Si el localStorage guardado tiene syncStatus (versiones anteriores),
+      // eliminarlo para que no contamine _state. Es efímero — vive en _syncStatus.
+      delete loaded.syncStatus;
+      return loaded;
     } catch(e) {
       console.warn('[Dashwey] Error cargando estado, usando defaults:', e);
       return JSON.parse(JSON.stringify(DEFAULTS));
@@ -2903,11 +2907,12 @@ const State = (() => {
       const fb = window._DashweyFirebase;
       if (fb?.enabled && fb.isRegistered?.()) {
         if (navigator.onLine && fb.ready) {
-          // No marcar syncing en cada keystroke — solo si tarda >1.5s
-          const _syncTimer = setTimeout(() => {
+          // FIX #7: _syncTimer es de scope de módulo — se cancela correctamente entre saves
+          clearTimeout(_syncTimer);
+          _syncTimer = setTimeout(() => {
             State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
           }, 1500);
-          _writeFirebase(_state).then(() => clearTimeout(_syncTimer));
+          _writeFirebase(_state).then(() => { clearTimeout(_syncTimer); _syncTimer = null; });
         } else {
           // Offline — encolar
           _pendingQueue.push(JSON.parse(JSON.stringify(_state)));
@@ -2921,7 +2926,7 @@ const State = (() => {
   const get = {
     baseCats:         () => _state.baseCats || DEFAULTS.baseCats,
     user:             () => _state.user     || DEFAULTS.user,
-    syncStatus:       () => _state.syncStatus || DEFAULTS.syncStatus,
+    syncStatus:       () => _syncStatus,
     ticketsAbiertos:  () => _state.ticketsAbiertos || [],
     proveedores:      () => _state.proveedores,
     productos:        () => _state.productos,
@@ -2954,10 +2959,11 @@ const State = (() => {
     perfil:       (v)      => { _state.perfil        = Object.assign(_state.perfil || {}, v); save(); },
     user:         (v)      => { _state.user          = Object.assign(_state.user || {}, v); save(); },
     syncStatus:   (v)      => {
-      _state.syncStatus = Object.assign(_state.syncStatus || {}, v);
+      // FIX #4: _syncStatus vive fuera de _state — no se serializa en localStorage
+      Object.assign(_syncStatus, v);
       // Actualizar badge visual si Utils ya está disponible
       if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) {
-        Utils.updateSyncBadge(_state.syncStatus.mode || 'local');
+        Utils.updateSyncBadge(_syncStatus.mode || 'local');
       }
     },  // no save: solo en memoria
     lastVal: (id, vals)    => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
@@ -3069,7 +3075,13 @@ window._dashweyCheckVisibility = checkVisibility;
 //        └─ getChartData()  → labels + vals según tipo de periodo
 const KPI = (() => {
 
-  const ALL_CATS   = State.get.baseCats();
+  // FIX #5: ALL_CATS era un snapshot fijo al arranque — ahora es lazy para respetar
+  // categorías personalizadas cargadas desde localStorage o Firebase.
+  // Usar getCats() en lugar de ALL_CATS en todas las funciones del módulo KPI.
+  const getCats = () => State.get.baseCats();
+  // Alias de compatibilidad — sigue funcionando si alguien lo referencia directamente
+  // pero ahora devuelve el valor actual en el momento de la llamada.
+  const ALL_CATS = getCats(); // valor inicial (seguro: State ya está inicializado aquí)
   const MS_PER_DAY = 86400000; // milisegundos en un día
 
   // Devuelve { start, end } según el periodo actual
@@ -3462,10 +3474,9 @@ function getLV(id,defaults) { return Utils.getLV(id,defaults); }
 const ui = (() => {
 
   function setFs(html) { (document.getElementById('fs-content')||{}).innerHTML = html; }
-  function openFs()    { document.getElementById('fs-overlay').classList.add('open'); document.getElementById('fs-backdrop').classList.add('open'); }
+  function openFs()    { document.getElementById('fs-overlay').classList.add('open'); }
   function closeFs()   {
     document.getElementById('fs-overlay').classList.remove('open');
-    document.getElementById('fs-backdrop').classList.remove('open');
     document.getElementById('header').classList.remove('menu-open');
     document.getElementById('fs-box').classList.remove('fs-settings');
     // Limpiar SAC si estaba abierto en este formulario
@@ -3580,12 +3591,12 @@ const ui = (() => {
         <div class="settings-row">
           <div class="settings-row-icon" style="background:#ECFDF5">🔔</div>
           <div class="settings-row-info"><div class="settings-row-title">Notificaciones</div><div class="settings-row-sub">Stock mínimo y alertas de caducidad</div></div>
-          <button class="settings-toggle ${s.notifOn?'on':''}" onclick="App.ui.toggleSetting('notifOn',this)"></button>
+          <button class="settings-toggle ${s.notifOn?'on':''}" data-setting="notifOn" onclick="App.ui.toggleSetting('notifOn',this)"></button>
         </div>
         <div class="settings-row">
           <div class="settings-row-icon" style="background:#EFF6FF">✨</div>
           <div class="settings-row-info"><div class="settings-row-title">Sugerencias IA</div><div class="settings-row-sub">Análisis automático de márgenes y ROI</div></div>
-          <button class="settings-toggle ${s.iaOn?'on':''}" onclick="App.ui.toggleSetting('iaOn',this)"></button>
+          <button class="settings-toggle ${s.iaOn?'on':''}" data-setting="iaOn" onclick="App.ui.toggleSetting('iaOn',this)"></button>
         </div>
         <div class="settings-row" onclick="App.ui.openCierreHorario()">
           <div class="settings-row-icon" style="background:#FEF3C7">🕐</div>
@@ -3645,6 +3656,11 @@ const ui = (() => {
     const newVal = !s[key];
     State.set.settings({ [key]: newVal });
     btn.classList.toggle('on', newVal);
+    // FIX #9: Sincronizar TODOS los toggles con el mismo data-setting en el DOM
+    // (existen en fs-overlay Y en settings-drawer — deben mantenerse consistentes)
+    document.querySelectorAll(`[data-setting="${key}"]`).forEach(el => {
+      if (el !== btn) el.classList.toggle('on', newVal);
+    });
   }
 
   function confirmReset() {
@@ -4323,12 +4339,11 @@ const nav = (() => {
     }
     const fsOvl  = document.getElementById('fs-overlay');
     const modOvl = document.getElementById('modal-overlay');
-    const fsBd   = document.getElementById('fs-backdrop');
     const modBd  = document.getElementById('modal-backdrop');
     const cobroS = document.getElementById('tpv-cobro-sheet');
     const tickS  = document.getElementById('tickets-sheet');
     const nsOvl  = document.getElementById('ns-overlay');
-    if (fsOvl?.classList.contains('open'))   { fsOvl.classList.remove('open');  fsBd?.classList.remove('open'); document.getElementById('header')?.classList.remove('menu-open'); }
+    if (fsOvl?.classList.contains('open'))   { fsOvl.classList.remove('open'); document.getElementById('header')?.classList.remove('menu-open'); }
     if (modOvl?.classList.contains('open'))  { modOvl.classList.remove('open'); modBd?.classList.remove('open'); }
     if (cobroS?.classList.contains('open'))  { cobroS.classList.remove('open'); }
     if (tickS?.classList.contains('open'))   { tickS.classList.remove('open');  }
@@ -4798,35 +4813,49 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }
       return ptIndicator;
     }
-    document.addEventListener('touchstart', e => {
-      if(nav._cTab !== 1) return;
-      const dt = document.querySelectorAll('.tab-page')[1];
-      if(!dt || dt.scrollTop !== 0) return;
-      ptStart = e.touches[0].clientY; ptActive = true;
-    }, {passive:true});
-    document.addEventListener('touchmove', e => {
-      if(!ptActive || nav._cTab !== 1) return;
-      const dy = e.touches[0].clientY - ptStart;
-      if(dy < 10) return;
-      const pull = Math.min(dy * 0.4, 60);
-      const ind = getPTI();
-      ind.style.transform = `translateX(-50%) translateY(${pull-52}px)`;
-      ind.querySelector('svg').style.transform = `rotate(${pull*4}deg)`;
-    }, {passive:true});
-    document.addEventListener('touchend', e => {
-      if(!ptActive || nav._cTab !== 1) { ptActive = false; return; }
-      const dy = e.changedTouches[0].clientY - ptStart;
-      ptActive = false;
-      const ind = getPTI();
-      if(dy > 55) {
-        ind.style.transform = 'translateX(-50%) translateY(0px)';
-        ind.querySelector('svg').style.animation = 'spin360 .6s cubic-bezier(.4,0,.2,1)';
-        refresh();
-        setTimeout(() => { ind.style.transform = 'translateX(-50%) translateY(-52px)'; ind.querySelector('svg').style.animation = ''; }, 700);
-      } else {
-        ind.style.transform = 'translateX(-50%) translateY(-52px)';
-      }
-    }, {passive:true});
+
+    // FIX #1: Guard para evitar registro doble de listeners
+    // FIX #2: Respetar _activeGesture mutex — no activar pull si drag está en curso
+    if (!window._pullRefreshListenersAttached) {
+      window._pullRefreshListenersAttached = true;
+
+      document.addEventListener('touchstart', e => {
+        if(nav._cTab !== 1) return;
+        // FIX #2: No interferir si drag u otro gesto está activo
+        if (window._activeGesture && window._activeGesture !== 'pullRefresh') return;
+        const dt = document.querySelectorAll('.tab-page')[1];
+        if(!dt || dt.scrollTop !== 0) return;
+        ptStart = e.touches[0].clientY; ptActive = true;
+      }, {passive:true});
+
+      document.addEventListener('touchmove', e => {
+        if(!ptActive || nav._cTab !== 1) return;
+        if (window._activeGesture && window._activeGesture !== 'pullRefresh') { ptActive = false; return; }
+        const dy = e.touches[0].clientY - ptStart;
+        if(dy < 10) return;
+        if (!window._activeGesture) window._activeGesture = 'pullRefresh';
+        const pull = Math.min(dy * 0.4, 60);
+        const ind = getPTI();
+        ind.style.transform = `translateX(-50%) translateY(${pull-52}px)`;
+        ind.querySelector('svg').style.transform = `rotate(${pull*4}deg)`;
+      }, {passive:true});
+
+      document.addEventListener('touchend', e => {
+        if(!ptActive || nav._cTab !== 1) { ptActive = false; return; }
+        const dy = e.changedTouches[0].clientY - ptStart;
+        ptActive = false;
+        if (window._activeGesture === 'pullRefresh') window._activeGesture = null;
+        const ind = getPTI();
+        if(dy > 55) {
+          ind.style.transform = 'translateX(-50%) translateY(0px)';
+          ind.querySelector('svg').style.animation = 'spin360 .6s cubic-bezier(.4,0,.2,1)';
+          refresh();
+          setTimeout(() => { ind.style.transform = 'translateX(-50%) translateY(-52px)'; ind.querySelector('svg').style.animation = ''; }, 700);
+        } else {
+          ind.style.transform = 'translateX(-50%) translateY(-52px)';
+        }
+      }, {passive:true});
+    }
   })();
 
   // ── Card visibility (hidden via localStorage) ──────────────
@@ -5059,43 +5088,59 @@ function initDashDrag() {
     if(cont) cont.classList.remove('drag-mode');
   }
 
-  // ── Listeners globales (delegados al document) ──
-  // Touch start: inicia long-press timer
-  document.addEventListener('touchstart', e => {
+  // FIX #1: Guard — los listeners solo se registran UNA vez aunque initDashDrag se llame de nuevo
+  // FIX #2: Funciones nombradas para poder hacer removeEventListener si es necesario
+  // FIX #2: _activeGesture como mutex global — evita conflicto con pull-to-refresh
+
+  function _onDragTouchStart(e) {
     const card = e.target.closest('.dash-draggable');
-    if(!card) return;
-    // Solo activamos si estamos en el tab Dashboard (tab 1)
-    if(typeof nav !== 'undefined' && nav._cTab !== 1) return;
+    if (!card) return;
+    // Solo en tab Dashboard (tab 1)
+    if (typeof nav !== 'undefined' && nav._cTab !== 1) return;
+    // FIX #2: Si hay otro gesto activo (p.ej. pull-to-refresh), no iniciar
+    if (window._activeGesture && window._activeGesture !== 'drag') return;
 
     const touch = e.touches[0];
     _startY = touch.clientY;
     clearTimeout(_pressTimer);
     _pressTimer = setTimeout(() => {
-      e.preventDefault();
+      // Re-verificar que no haya gesto rival arrancado durante el delay
+      if (window._activeGesture && window._activeGesture !== 'drag') return;
+      window._activeGesture = 'drag';
       startDrag(card, touch.clientY);
     }, LONG_PRESS_MS);
-  }, {passive:false});
+  }
 
-  // Si el usuario mueve mucho antes del long press → cancelar
-  document.addEventListener('touchmove', e => {
-    if(_active) {
+  function _onDragTouchMove(e) {
+    if (_active) {
       e.preventDefault();
       moveDrag(e.touches[0].clientY);
       return;
     }
     const dy = Math.abs(e.touches[0].clientY - _startY);
-    if(dy > 8) clearTimeout(_pressTimer);
-  }, {passive:false});
+    if (dy > 8) clearTimeout(_pressTimer);
+  }
 
-  document.addEventListener('touchend', e => {
+  function _onDragTouchEnd(e) {
     clearTimeout(_pressTimer);
-    if(_active) { e.preventDefault(); endDrag(); }
-  }, {passive:false});
+    if (_active) { e.preventDefault(); endDrag(); }
+    if (window._activeGesture === 'drag') window._activeGesture = null;
+  }
 
-  document.addEventListener('touchcancel', () => {
+  function _onDragTouchCancel() {
     clearTimeout(_pressTimer);
     cancelDrag();
-  });
+    if (window._activeGesture === 'drag') window._activeGesture = null;
+  }
+
+  // Guard: un único conjunto de listeners por sesión de app
+  if (!window._dashDragListenersAttached) {
+    window._dashDragListenersAttached = true;
+    document.addEventListener('touchstart',  _onDragTouchStart,  {passive: false});
+    document.addEventListener('touchmove',   _onDragTouchMove,   {passive: false});
+    document.addEventListener('touchend',    _onDragTouchEnd,    {passive: false});
+    document.addEventListener('touchcancel', _onDragTouchCancel);
+  }
 
   // Inicializar: restaurar orden guardado
   setTimeout(restoreOrder, 50);
@@ -5429,7 +5474,12 @@ const tpv = (() => {
     _updateQtyIndicator(id);
     _updateDock();
     _updateTabletTicket();
-    _renderCobroItems();
+    // FIX #15: Solo re-renderizar cobro si el panel está abierto
+    if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open')) {
+      _renderCobroItems();
+      const tot = document.getElementById('cobro-total-num');
+      if (tot) tot.textContent = feur(cartTotal());
+    }
     _saveCurrentToTicket();
   }
 
@@ -5734,12 +5784,16 @@ const alm = (() => {
     _cddActive = menuId;
   }
 
-  function cddSelect(menuId, value, label, triggerId, callback) {
+  function cddSelect(menuId, value, label, triggerId, callbackKeyOrFn) {
     const menu = document.getElementById(menuId), trigger = document.getElementById(triggerId);
     if(menu) { menu.querySelectorAll('.cdd-opt').forEach(o => o.classList.toggle('sel', o.dataset.val===String(value))); menu.classList.remove('open'); }
     if(trigger) { trigger.classList.remove('open'); const v=trigger.querySelector('.cdd-val');if(v)v.textContent=label; const wrap=trigger.closest?.('.cdd-wrap');if(wrap)wrap.style.zIndex=''; }
     _cddActive = null;
-    if(callback) callback(value, label);
+    // FIX #10: resolver callback desde registry (string key) o directamente si es función
+    const cb = typeof callbackKeyOrFn === 'function'
+      ? callbackKeyOrFn
+      : _cddCallbackRegistry[callbackKeyOrFn];
+    if (cb) cb(value, label);
   }
 
   document.addEventListener('mousedown', e => {
@@ -5752,12 +5806,19 @@ const alm = (() => {
     }
   }, true);
 
+  // FIX #10: Registry de callbacks para CDD — evita interpolar funciones en strings HTML
+  // (que causa pérdida de referencia y potencial XSS con nombres de callback complejos)
+  const _cddCallbackRegistry = {};
+
   function makeCdd(id, options, selectedVal, onSelectFn, triggerClass='') {
     const menuId = id + '-menu';
+    // Registrar el callback con una clave estable basada en el id del dropdown
+    const cbKey = 'cb_' + id;
+    _cddCallbackRegistry[cbKey] = onSelectFn;
     const label = options.find(o => String(o.val)===String(selectedVal))?.label || options[0]?.label || '';
     const opts = options.map(o => `
       <div class="cdd-opt${String(o.val)===String(selectedVal)?' sel':''}" data-val="${o.val}"
-        onclick="App.alm.cddSelect('${menuId}','${o.val}','${o.label}','${id}',${onSelectFn})">
+        onclick="App.alm.cddSelect('${menuId}','${o.val}','${o.label.replace(/'/g,"&#39;")}','${id}','${cbKey}')">
         <span class="cdd-opt-lbl">${o.label}</span>
         <div class="cdd-radio"><div class="cdd-radio-dot"></div></div>
       </div>`).join('');
@@ -6271,18 +6332,31 @@ const alm = (() => {
 
     wrap.innerHTML = html;
 
-    // Long-press → selección múltiple
-    wrap.querySelectorAll('[data-longpress]').forEach(el => {
-      let t;
-      el.addEventListener('touchstart', ev => {
-        t = setTimeout(() => {
+    // FIX #3 + #11: Event delegation en el wrapper — UN solo listener,
+    // no uno por elemento. Evita re-adjuntar en cada renderOrden().
+    // Solo registrar si no existe ya el handler (guard con dataset flag).
+    if (!wrap.dataset.longpressInit) {
+      wrap.dataset.longpressInit = '1';
+      let _lpTimer = null;
+      wrap.addEventListener('touchstart', ev => {
+        const el = ev.target.closest('[data-longpress]');
+        if (!el) return;
+        clearTimeout(_lpTimer);
+        _lpTimer = setTimeout(() => {
           const id = el.dataset.longpress;
-          if(!_selMode) { _selMode = true; _ordenSel.add(id); renderOrden(); }
+          if (!_selMode) {
+            _selMode = true;
+            _ordenSel.add(id);
+            // FIX #3: requestAnimationFrame evita invalidar el DOM mientras
+            // el gesto de touchstart todavía está en ejecución sobre el elemento.
+            requestAnimationFrame(() => renderOrden());
+          }
         }, 500);
-      }, {passive:true});
-      el.addEventListener('touchend',  () => clearTimeout(t));
-      el.addEventListener('touchmove', () => clearTimeout(t));
-    });
+      }, {passive: true});
+      wrap.addEventListener('touchend',   () => clearTimeout(_lpTimer));
+      wrap.addEventListener('touchmove',  () => clearTimeout(_lpTimer));
+      wrap.addEventListener('touchcancel',() => clearTimeout(_lpTimer));
+    }
   }
 
   function toggleChk(e, prodId) {
@@ -7600,33 +7674,36 @@ const alm = (() => {
     // No auto-focus — teclado solo aparece cuando el usuario toca el buscador
   }
 
+  // FIX #16: Helper compartido para el HTML de un item del catálogo.
+  // Antes estaba duplicado en _buildCatalogoHTML y _catSearch (20 líneas idénticas).
+  function _buildCatItemHTML(p) {
+    const nc  = _ordenCarrito[p.id] || 0;
+    const sid = p.id.replace(/'/g, "\\'"); // safe ID para onclick
+    const stepper = `<div class="orden-cat-stepper">
+      <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${sid}',-1)">−</button>
+      <span class="orden-cat-qty" id="ocq-${sid}">${nc}</span>
+      <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${sid}',1)">+</button>
+    </div>`;
+    const price = `<div class="orden-cat-price">${feur(p.pvp)}</div>`;
+    return `<div class="orden-cat-item${nc > 0 ? ' sel' : ''}" id="oci-${sid}"
+              ontouchstart="App.alm._catLpStart('${sid}',this)"
+              ontouchend="App.alm._catLpEnd()"
+              ontouchcancel="App.alm._catLpEnd()"
+              onclick="App.alm._catToggle('${sid}')">
+      <div class="orden-cat-e">${p.e || '📦'}</div>
+      <div class="orden-cat-info">
+        <div class="orden-cat-name">${esc(p.nombre)}</div>
+        <div class="orden-cat-sub">${esc(p.cat || '')} · ${feur(p.precioCompra || 0)}/u</div>
+      </div>
+      <div class="orden-cat-right">${nc > 0 ? stepper : price}</div>
+    </div>`;
+  }
+
   function _buildCatalogoHTML(sel, prov, q) {
     const prods = State.get.productos()
       .filter(p => p.prov === sel && (!q || p.nombre.toLowerCase().includes(q) || (p.cat||'').toLowerCase().includes(q)));
     const noMatch = q && !prods.length;
-
-    const items = prods.map(p => {
-      const nc = _ordenCarrito[p.id] || 0;
-      return `<div class="orden-cat-item${nc>0?' sel':''}" id="oci-${p.id}"
-                ontouchstart="App.alm._catLpStart('${p.id}',this)"
-                ontouchend="App.alm._catLpEnd()"
-                ontouchcancel="App.alm._catLpEnd()"
-                onclick="App.alm._catToggle('${p.id}')">
-        <div class="orden-cat-e">${p.e||'📦'}</div>
-        <div class="orden-cat-info">
-          <div class="orden-cat-name">${esc(p.nombre)}</div>
-          <div class="orden-cat-sub">${esc(p.cat||'')} · ${feur(p.precioCompra||0)}/u</div>
-        </div>
-        <div class="orden-cat-right">
-          ${nc > 0 ? `<div class="orden-cat-stepper">
-            <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${p.id}',-1)">−</button>
-            <span class="orden-cat-qty" id="ocq-${p.id}">${nc}</span>
-            <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${p.id}',1)">+</button>
-          </div>` : `<div class="orden-cat-price">${feur(p.pvp)}</div>`}
-        </div>
-      </div>`;
-    }).join('');
-
+    const items  = prods.map(_buildCatItemHTML).join('');
     const addNew = noMatch ? `<div class="orden-cat-add-new" onclick="App.alm._catAddNew('${esc(q)}')">
       <div class="orden-cat-add-plus">+</div>
       <div class="orden-cat-add-text">Añadir "<strong>${esc(q)}</strong>" como nuevo artículo</div>
@@ -7638,7 +7715,6 @@ const alm = (() => {
         <div class="orden-cat-prov">Catálogo de ${esc(prov.nombre)}</div>
         <button class="orden-cat-close" onclick="App.alm._cerrarCatalogo()">×</button>
       </div>
-
       <div class="orden-cat-list" id="orden-cat-list">
         ${items}${addNew}
         ${!prods.length && !noMatch ? '<div class="orden-cat-empty">No hay artículos de este proveedor</div>' : ''}
@@ -7657,27 +7733,8 @@ const alm = (() => {
     const prods = State.get.productos()
       .filter(p => p.prov === sel && (!q || p.nombre.toLowerCase().includes(q) || (p.cat||'').toLowerCase().includes(q)));
     const noMatch = q && !prods.length;
-    const items = prods.map(p => {
-      const nc = _ordenCarrito[p.id] || 0;
-      return `<div class="orden-cat-item${nc>0?' sel':''}" id="oci-${p.id}"
-                ontouchstart="App.alm._catLpStart('${p.id}',this)"
-                ontouchend="App.alm._catLpEnd()"
-                ontouchcancel="App.alm._catLpEnd()"
-                onclick="App.alm._catToggle('${p.id}')">
-        <div class="orden-cat-e">${p.e||'📦'}</div>
-        <div class="orden-cat-info">
-          <div class="orden-cat-name">${esc(p.nombre)}</div>
-          <div class="orden-cat-sub">${esc(p.cat||'')} · ${feur(p.precioCompra||0)}/u</div>
-        </div>
-        <div class="orden-cat-right">
-          ${nc > 0 ? `<div class="orden-cat-stepper">
-            <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${p.id}',-1)">−</button>
-            <span class="orden-cat-qty" id="ocq-${p.id}">${nc}</span>
-            <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${p.id}',1)">+</button>
-          </div>` : `<div class="orden-cat-price">${feur(p.pvp)}</div>`}
-        </div>
-      </div>`;
-    }).join('');
+    // FIX #16: usar _buildCatItemHTML compartido — sin duplicación
+    const items  = prods.map(_buildCatItemHTML).join('');
     const addNew = noMatch ? `<div class="orden-cat-add-new" onclick="App.alm._catAddNew('${esc(val)}')">
       <div class="orden-cat-add-plus">+</div>
       <div class="orden-cat-add-text">Añadir "<strong>${esc(val)}</strong>" como nuevo artículo</div>
@@ -7912,34 +7969,53 @@ const alm = (() => {
       setTimeout(() => { if (document.body.contains(bd)) bd.remove(); }, 150);
     };
 
+    // FIX #14: Sistema unificado de eventos táctiles en el menú de contexto.
+    // Usar touchend con preventDefault() en todos los items para:
+    // - Respuesta inmediata (sin esperar 300ms del click en mobile)
+    // - Evitar que el evento burbujee al backdrop y lo cierre
+    // - Prevenir ghost clicks posteriores
+
     // Cerrar al tocar el backdrop (fuera del menú)
     bd.addEventListener('touchstart', e => {
       if (e.target === bd) { e.preventDefault(); close(); }
     }, { passive: false });
-    // Bloquear propagación dentro del menú para no cerrar accidentalmente
-    bd.querySelector('.cat-ctx-menu').addEventListener('touchstart', e => e.stopPropagation());
 
-    bd.querySelector('#ctx-cancel').addEventListener('touchstart', e => { e.preventDefault(); close(); });
+    // Helper: adjuntar touchend rápido a un elemento del menú
+    const onTap = (el, fn) => {
+      let _touched = false;
+      el.addEventListener('touchstart', e => { e.stopPropagation(); _touched = true; }, { passive: true });
+      el.addEventListener('touchmove',  () => { _touched = false; });
+      el.addEventListener('touchend', e => {
+        if (!_touched) return;
+        _touched = false;
+        e.preventDefault();
+        fn();
+      }, { passive: false });
+      // Fallback click para desktop/mouse
+      el.addEventListener('click', fn);
+    };
 
-    bd.querySelector('#ctx-edit').onclick = () => {
+    onTap(bd.querySelector('#ctx-cancel'), close);
+
+    onTap(bd.querySelector('#ctx-edit'), () => {
       close();
       setTimeout(() => openEditArt(id), 200);
-    };
+    });
 
-    bd.querySelector('#ctx-copy').onclick = () => {
+    onTap(bd.querySelector('#ctx-copy'), () => {
       close();
       _catCopyArt(id);
-    };
+    });
 
-    bd.querySelector('#ctx-reorder').onclick = () => {
+    onTap(bd.querySelector('#ctx-reorder'), () => {
       close();
       _catReorderArt(id);
-    };
+    });
 
-    bd.querySelector('#ctx-delete').onclick = () => {
+    onTap(bd.querySelector('#ctx-delete'), () => {
       close();
       _catDeleteArt(id);
-    };
+    });
 
     document.body.appendChild(bd);
   }
@@ -8621,25 +8697,30 @@ const alm = (() => {
   window.addEventListener('dashwey:tab-changed', attachListeners);
 
   // ── 2. Hide when any overlay/sheet opens ──
+  // FIX #13: Lista centralizada de overlays. show() solo actúa si NINGUNO está abierto.
+  // Antes: cerrar un overlay activaba show() aunque otro siguiera visible.
+  const _OVERLAY_IDS = ['fs-overlay', 'modal-overlay', 'tpv-cobro-sheet', 'tickets-sheet', 'settings-drawer'];
+  function _anyOverlayOpen() {
+    return _OVERLAY_IDS.some(id => document.getElementById(id)?.classList.contains('open'));
+  }
   function hide() { NAV.classList.add('nav-hidden');    _hidden = true;  _lastY = 0; }
-  function show() { NAV.classList.remove('nav-hidden'); _hidden = false; _lastY = 0; }
+  function show() {
+    // Solo mostrar si no hay ningún overlay activo
+    if (_anyOverlayOpen()) return;
+    NAV.classList.remove('nav-hidden'); _hidden = false; _lastY = 0;
+  }
   // Exponer para uso externo (buscador almacén)
   window._navHide = hide;
   window._navShow = show;
 
-  // MutationObserver for fs-box, modal-sheet, cobro, tickets, settings-drawer
-  [
-    { id: 'fs-box',           open: el => el.classList.contains('open') },
-    { id: 'modal-sheet',      open: el => el.classList.contains('open') },
-    { id: 'tpv-cobro-sheet',  open: el => el.classList.contains('open') },
-    { id: 'tickets-sheet',    open: el => el.classList.contains('open') },
-    { id: 'settings-drawer',  open: el => el.classList.contains('open') },
-  ].forEach(({ id, open }) => {
+  // MutationObserver for fs-overlay, modal-overlay, cobro, tickets, settings-drawer
+  // FIX #12: Era 'fs-box' → 'fs-overlay' y 'modal-sheet' → 'modal-overlay'
+  _OVERLAY_IDS.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const obs = new MutationObserver(() => {
-      obs.disconnect(); // evitar loop durante la ejecución
-      open(el) ? hide() : show();
+      obs.disconnect();
+      el.classList.contains('open') ? hide() : show();
       obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
     });
     obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
@@ -8724,15 +8805,14 @@ if (!window.App) {
       _target === 'sub' ? App?.ui?.sdSubClose?.() : App?.ui?.closeSettings?.();
     }
   }
-  const d = document.getElementById('settings-drawer');
-  const s = document.getElementById('sd-sub-panel');
+  // FIX #8: Solo registrar en el drawer raíz.
+  // El sub-panel (#sd-sub-panel) es hijo del drawer en el DOM, por lo que
+  // los eventos burbujean al drawer. La lógica _target en onStart ya
+  // distingue si el sub-panel está abierto para ejecutar sdSubClose o closeSettings.
+  // Registrar en ambos causaba doble disparo (sub-panel cerraba ambos a la vez).
   if (d) {
     d.addEventListener('touchstart', onStart, { passive: true });
     d.addEventListener('touchend',   onEnd,   { passive: true });
-  }
-  if (s) {
-    s.addEventListener('touchstart', onStart, { passive: true });
-    s.addEventListener('touchend',   onEnd,   { passive: true });
   }
 })();
 </script>
