@@ -2278,11 +2278,11 @@ function _authTabSafe(tab) {
     </div>
   </div>
 
+  <!-- ALM SEARCH SUGGESTIONS — fixed global, encima del dock -->
+  <div id="alm-search-suggestions" style="display:none;position:fixed;left:0;right:0;z-index:160;max-height:50vh;overflow-y:auto;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -4px 24px rgba(80,100,140,0.18);"></div>
+
   <!-- ALM DOCK GLOBAL — fixed, fuera del overflow:hidden chain -->
   <div class="alm-dock" id="alm-dock" style="display:none;position:fixed;left:0;right:0;bottom:var(--tab-real);z-index:150;touch-action:manipulation;">
-
-    <!-- Sugerencias — abre hacia arriba -->
-    <div id="alm-search-suggestions" style="display:none;max-height:240px;overflow-y:auto;margin:0 12px 6px;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-md)"></div>
 
     <!-- Buscador -->
     <div class="alm-dock-search" id="alm-search-bar">
@@ -7671,6 +7671,13 @@ const alm = (() => {
         Añadir "${esc(q)}" como nuevo artículo
       </div>`;
     }
+    // Posicionar encima del dock
+    const dockEl = document.getElementById('alm-dock');
+    if (dockEl) {
+      const dockBottom = parseInt(dockEl.style.bottom) || 0;
+      const dockH = dockEl.offsetHeight || 64;
+      sugEl.style.bottom = (dockBottom + dockH) + 'px';
+    }
     sugEl.style.display = '';
   }
 
@@ -7680,9 +7687,11 @@ const alm = (() => {
     const val = document.getElementById('alm-perm-search')?.value || '';
     if (val.trim()) _permSearch(val);
     _almKbActive = true;
-    // Asegurar que el dock está visible antes de aplicar kb-focus
+    // Asegurar que el dock está visible
     const dock = document.getElementById('alm-dock');
     if (dock && dock.style.display === 'none') dock.style.display = '';
+    // Mover dock al borde inferior INMEDIATAMENTE (sin esperar _onVVResize)
+    if (dock) dock.style.bottom = '0px';
     _almSetKbMode(true);
   }
 
@@ -7836,7 +7845,11 @@ const alm = (() => {
     const existingAll  = State.get.ordenItems();
     const existingSel  = existingAll.filter(o => o.provId === sel);
     const existingOther= existingAll.filter(o => o.provId !== sel);
-    // Merge: añadir solo productos que no estén ya en la lista
+    // Merge: actualizar ncajas si ya existe, añadir si es nuevo
+    const merged = existingSel.map(o => {
+      const nc = _ordenCarrito[o.prodId];
+      return nc !== undefined ? { ...o, ncajas: (o.ncajas||1) + nc } : o;
+    });
     const nuevos = Object.entries(_ordenCarrito)
       .filter(([prodId]) => !existingSel.some(o => o.prodId === prodId))
       .map(([prodId, ncajas]) => ({
@@ -7846,7 +7859,7 @@ const alm = (() => {
         pvp:     State.get.prod(prodId)?.pvp||0,
         checked: false,
       }));
-    State.set.ordenItems([...existingOther, ...existingSel, ...nuevos]);
+    State.set.ordenItems([...existingOther, ...merged, ...nuevos]);
     updateBadge();
     _renderComprobacion();
   }
@@ -8356,22 +8369,16 @@ const alm = (() => {
         if(_DOM.bottomTabs) _DOM.bottomTabs.style.display = kbOn ? 'none' : 'flex';
         if(_DOM.almPill) _DOM.almPill.style.marginBottom = kbOn ? kbH + 'px' : '0';
 
-        // Dock: ajustar posición
+        // Dock: solo ajustar posición bottom (visibilidad la gestiona focus/blur)
         if (_DOM.almDock) {
-          if (kbOn || almInputFocused) {
-            // Teclado arriba O input con foco → modo kb
-            const bottom = kbOn ? kbH : 0;
-            _DOM.almDock.style.bottom = bottom + 'px';
-            if (typeof App !== 'undefined' && App.alm && App.alm._almSetKbMode) {
-              App.alm._almSetKbMode(true);
-            }
-          } else {
-            // Teclado abajo Y sin foco → restaurar
+          if (kbOn) {
+            // Teclado arriba → pegar al borde superior del teclado
+            _DOM.almDock.style.bottom = kbH + 'px';
+          } else if (!almInputFocused) {
+            // Teclado abajo Y sin foco → restaurar posición normal
             _DOM.almDock.style.bottom = 'var(--tab-real)';
-            if (typeof App !== 'undefined' && App.alm && App.alm._almSetKbMode) {
-              App.alm._almSetKbMode(false);
-            }
           }
+          // Si almInputFocused y !kbOn: mantener bottom:0 (ya lo puso focus)
         }
 
         if(typeof App !== 'undefined' && App.alm && App.alm._sacActive) {
