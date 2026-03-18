@@ -1,6 +1,6 @@
-/* Dashwey Service Worker v7 — Network-First para HTML, Cache-First para assets */
-const CACHE_NAME = 'dashwey-v7';
-const HTML_URL   = 'Dashwey_v82.html';
+/* Dashwey Service Worker v8 — Network-First para HTML, Cache-First para assets */
+const CACHE_NAME = 'dashwey-v8';
+const HTML_URL   = 'index.html';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
