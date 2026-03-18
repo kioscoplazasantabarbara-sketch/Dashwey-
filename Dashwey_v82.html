@@ -915,6 +915,28 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .alm-dock-info-lbl { font-size: 8px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 2px; }
 .alm-dock-info-val { font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
 .alm-dock-dia-wrap { display: flex; align-items: center; justify-content: center; gap: 5px; }
+/* Celdas de info bar — todas clickables */
+.alm-dock-info-col { flex:1; padding:8px 10px; text-align:center; cursor:pointer; -webkit-tap-highlight-color:transparent; transition:background 0.12s; }
+.alm-dock-info-col:active { background:rgba(0,0,0,0.05); }
+/* Modal info-bar: secciones reutilizables */
+.ib-modal-section { background:var(--surface); border-radius:16px; border:1px solid var(--border); overflow:hidden; margin-bottom:12px; }
+.ib-modal-section-hdr { padding:10px 16px 8px; font-size:10px; font-weight:700; letter-spacing:1px; color:var(--ink-soft); text-transform:uppercase; border-bottom:1px solid var(--border); }
+.ib-modal-section-body { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+.ib-row { display:flex; justify-content:space-between; align-items:center; }
+.ib-row-lbl { font-size:13px; color:var(--ink-mid); }
+.ib-row-val { font-size:13px; font-weight:700; color:var(--ink); }
+.ib-kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+.ib-kpi { padding:12px 16px; }
+.ib-kpi:nth-child(odd) { border-right:1px solid var(--border); }
+.ib-kpi + .ib-kpi { border-top:1px solid var(--border); }
+.ib-kpi-lbl { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); margin-bottom:3px; }
+.ib-kpi-val { font-size:20px; font-weight:800; color:var(--ink); letter-spacing:-0.5px; }
+.ib-score { display:flex; align-items:center; justify-content:space-between; border-radius:16px; padding:14px 18px; margin-bottom:12px; }
+.ib-score-num { font-size:38px; font-weight:800; letter-spacing:-2px; }
+.ib-alert-box { border-radius:16px; padding:12px 16px; margin-bottom:12px; }
+.ib-reco-item { font-size:13px; color:var(--ink); line-height:1.5; padding:4px 0; }
+.ib-bar-wrap { background:var(--bg); border-radius:8px; height:7px; overflow:hidden; margin-top:6px; }
+.ib-bar-fill { height:100%; border-radius:8px; transition:width 0.5s cubic-bezier(0.4,0,0.2,1); }
 .alm-order-badge {
   display: inline-flex; align-items: center; justify-content: center;
   width: 8px; height: 8px; border-radius: 50%;
@@ -2387,12 +2409,12 @@ function _authTabSafe(tab) {
                 </div>
               </div>
               <div class="alm-dock-info-sep"></div>
-              <div class="alm-dock-info-col">
+              <div class="alm-dock-info-col" onclick="App.alm.openArticulosReport()" style="cursor:pointer;">
                 <div class="alm-dock-info-lbl">ARTÍCULOS</div>
                 <div class="alm-dock-info-val" id="alm-dock-art">0</div>
               </div>
               <div class="alm-dock-info-sep"></div>
-              <div class="alm-dock-info-col">
+              <div class="alm-dock-info-col" onclick="App.alm.openTotalReport()" style="cursor:pointer;">
                 <div class="alm-dock-info-lbl">TOTAL A PAGAR</div>
                 <div class="alm-dock-info-val alm-dock-info-price" id="alm-dock-price">0,00 €</div>
               </div>
@@ -3781,7 +3803,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.5.4';
+  const _APP_VERSION = 'v8.5.5';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -7594,7 +7616,7 @@ const alm = (() => {
   return {
     // Proveedor
     shiftProv, openProvPicker, selProv, addNuevoProv, openEditProv, saveProvEdit, confirmarBorrarProv, borrarProv,
-    openOrdenReport,
+    openOrdenReport, openArticulosReport, openTotalReport,
     _editProvFromPicker, _toggleDayOrder, _toggleDayDeliv, _onBannerUpload, _clearBanner,
     // Catálogo
     openCatalogoPicker, almDockToggle, _permSearch, _permSearchClear,
@@ -8291,161 +8313,279 @@ const alm = (() => {
   }
 
   // ── Informe IA del pedido — se abre desde badge Próxima Entrega ──
+
+  // ── Helpers compartidos info-bar modals ───────────────────────
+  function _ibScoreColor(v) { return v>=8?'#16A34A':v>=6?'#F97316':'#E53935'; }
+  function _ibScoreBg(v)    { return v>=8?'#DCFCE7':v>=6?'#FFF7ED':'#FEE2E2'; }
+  function _ibMgColor(v)    { return v>=30?'#16A34A':v>=15?'#F97316':'#E53935'; }
+  function _ibSection(title, rows) {
+    return '<div class="ib-modal-section"><div class="ib-modal-section-hdr">'+title+'</div><div class="ib-modal-section-body">'+rows+'</div></div>';
+  }
+  function _ibRow(lbl, val, valColor) {
+    return '<div class="ib-row"><span class="ib-row-lbl">'+lbl+'</span><span class="ib-row-val"'+(valColor?' style="color:'+valColor+'"':'')+'>'+(val||'—')+'</span></div>';
+  }
+  function _ibReco(items) {
+    return '<div class="ib-modal-section"><div class="ib-modal-section-hdr">🧠 Recomendaciones IA</div><div class="ib-modal-section-body">'+items.map(r=>'<div class="ib-reco-item">'+r+'</div>').join('')+'</div></div>';
+  }
+
+  // ══ MODAL 1: PRÓXIMA ENTREGA — operativo del pedido programado ══
   function openOrdenReport() {
     const sel   = State.get.selectedProv();
     const prov  = State.get.prov(sel);
     const items = State.get.ordenItems().filter(o => o.provId === sel);
     if (!items.length) { showToast('📦 No hay artículos en la orden actual'); return; }
 
-    // ── Cálculos ────────────────────────────────────────────────
-    const totalInv  = items.reduce((s,o) => s + (o.ncajas||1)*(o.precio||0)*1.10, 0);
-    const totalVta  = items.reduce((s,o) => s + (o.ncajas||1)*(o.udscaja||1)*(o.pvp||0), 0);
-    const ganancia  = totalVta - totalInv;
-    const margen    = totalVta > 0 ? Math.round(ganancia/totalVta*100) : 0;
-    const roi       = totalInv > 0 ? Math.round(ganancia/totalInv*100) : 0;
-    const totalUds  = items.reduce((s,o) => s + (o.ncajas||1)*(o.udscaja||1), 0);
-
-    // Rendimiento por producto
-    const itemsMg = items.map(o => {
-      const p  = State.get.prod(o.prodId);
-      const cu = (o.ncajas||1)*(o.precio||0)*1.10 / Math.max(1,(o.ncajas||1)*(o.udscaja||1));
-      const mg = o.pvp > 0 ? Math.round((o.pvp-cu)/o.pvp*100) : 0;
-      const inv= (o.ncajas||1)*(o.precio||0)*1.10;
-      return { o, p, cu, mg, inv, ncajas:o.ncajas||1 };
-    }).sort((a,b) => b.ncajas - a.ncajas);
-
-    const topComp   = itemsMg[0];
-    const botComp   = itemsMg[itemsMg.length-1];
-    const sinPvp    = itemsMg.filter(x => !x.o.pvp || x.o.pvp <= 0);
-    const bajaMg    = itemsMg.filter(x => x.mg < 15 && x.mg >= 0 && x.o.pvp > 0);
-    const negativos = itemsMg.filter(x => x.mg < 0);
-    const estrella  = [...itemsMg].sort((a,b) => b.mg-a.mg)[0];
-
-    // Historial para comparación
-    const historial = State.get.historialPedidos().filter(p => p.provId === sel);
+    const totalInv = items.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*1.10,0);
+    const totalUds = items.reduce((s,o)=>s+(o.ncajas||1)*(o.udscaja||1),0);
+    const historial = State.get.historialPedidos().filter(p=>p.provId===sel);
     const anterior  = historial[historial.length-1];
-    const diffEur   = anterior ? totalInv - (anterior.total||0) : null;
-    const diffArt   = anterior ? items.length - (anterior.items?.length||0) : null;
+    const diffEur   = anterior ? totalInv-(anterior.total||0) : null;
+    const diffArt   = anterior ? items.length-(anterior.items?.length||0) : null;
 
-    // Score (0-10)
+    // Estado del pedido
+    const checked   = items.filter(o=>o.checked).length;
+    const pending   = items.length - checked;
+    const estado    = checked===items.length ? '✅ Completado' : checked>0 ? '🔄 En progreso ('+checked+'/'+items.length+')' : '⏳ Pendiente';
+
+    // Score
+    const itemsMg = items.map(o=>{
+      const cu=(o.ncajas||1)*(o.precio||0)*1.10/Math.max(1,(o.ncajas||1)*(o.udscaja||1));
+      return {mg:o.pvp>0?Math.round((o.pvp-cu)/o.pvp*100):0};
+    });
+    const avgMg = itemsMg.length ? Math.round(itemsMg.reduce((s,x)=>s+x.mg,0)/itemsMg.length) : 0;
+    const negativos = itemsMg.filter(x=>x.mg<0).length;
     let score = 7;
-    if (margen >= 35) score += 1.5;
-    else if (margen >= 25) score += 0.8;
-    else if (margen < 15) score -= 1.5;
-    if (negativos.length) score -= negativos.length * 0.5;
-    if (bajaMg.length > items.length * 0.4) score -= 0.8;
-    if (roi > 30) score += 0.5;
-    score = Math.max(0, Math.min(10, score));
-    const scoreColor = score >= 8 ? '#16A34A' : score >= 6 ? '#F97316' : '#E53935';
-    const scoreBg    = score >= 8 ? '#DCFCE7' : score >= 6 ? '#FFF7ED' : '#FEE2E2';
+    if(avgMg>=35) score+=1.5; else if(avgMg>=25) score+=0.8; else if(avgMg<15) score-=1.5;
+    if(negativos) score-=negativos*0.5;
+    score = Math.max(0,Math.min(10,score));
 
-    // Recomendaciones
+    // Alertas
+    const alertas = [];
+    if(negativos) alertas.push('🔴 '+negativos+' artículo'+(negativos>1?'s':'')+' con margen negativo');
+    if(avgMg<15) alertas.push('⚠️ Margen medio bajo ('+avgMg+'%) — revisar PVP');
+    if(diffEur!==null && diffEur>totalInv*0.2) alertas.push('📈 Pedido un '+Math.round(diffEur/Math.max(1,anterior.total||1)*100)+'% mayor que el anterior');
+
+    const diaEl = document.getElementById('alm-dock-dia');
+    const diaLabel = diaEl?.textContent || '—';
+    const sc = score.toFixed(1);
+    const scColor = _ibScoreColor(score);
+    const scBg = _ibScoreBg(score);
+
+    ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>'+
+      '<div class="mhd-title">📅 Próxima Entrega</div>'+
+      '<div class="mhd-sub">'+(prov?.icon||'🏪')+' '+esc(prov?.nombre||'')+' · '+diaLabel+'</div></div>'+
+      '<button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'+
+      '<div style="padding:16px;font-family:var(--font)">'+
+
+      // Score
+      '<div class="ib-score" style="background:'+scBg+'">'+
+      '<div><div style="font-size:11px;font-weight:700;letter-spacing:0.8px;color:'+scColor+';text-transform:uppercase">Score del pedido</div>'+
+      '<div style="font-size:13px;color:var(--ink-mid);margin-top:2px">Margen · Equilibrio · Riesgo</div></div>'+
+      '<div class="ib-score-num" style="color:'+scColor+'">'+sc+'<span style="font-size:16px;font-weight:600">/10</span></div></div>'+
+
+      // Resumen KPIs
+      '<div class="ib-modal-section"><div class="ib-kpi-grid">'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Total pedido</div><div class="ib-kpi-val">'+feur(totalInv)+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Artículos</div><div class="ib-kpi-val">'+items.length+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Unidades</div><div class="ib-kpi-val">'+totalUds+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Estado</div><div class="ib-kpi-val" style="font-size:13px">'+estado+'</div></div>'+
+      '</div></div>'+
+
+      // vs anterior
+      (anterior ? _ibSection('📊 vs Pedido anterior',
+        _ibRow('Diferencia €', (diffEur>=0?'+':'')+feur(diffEur||0), diffEur<0?'#16A34A':diffEur>0?'#F97316':null)+
+        _ibRow('Diferencia artículos', (diffArt>=0?'+':'')+diffArt, null)+
+        _ibRow('Tendencia', diffEur>0?'📈 Pedido mayor':'📉 Pedido menor', null)
+      ) : '')+
+
+      // Alertas
+      (alertas.length ? '<div class="ib-alert-box" style="background:#FEF2F2;border:1px solid #FECACA">'+
+        '<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#DC2626;text-transform:uppercase;margin-bottom:8px">⚠️ Alertas</div>'+
+        alertas.map(a=>'<div style="font-size:13px;color:#DC2626;padding:2px 0">'+a+'</div>').join('')+
+        '</div>' : '')+
+
+      '</div>');
+  }
+
+  // ══ MODAL 2: ARTÍCULOS — inventario y stock del proveedor ═══════
+  function openArticulosReport() {
+    const sel  = State.get.selectedProv();
+    const prov = State.get.prov(sel);
+    const allProds = State.get.productos().filter(p=>p.prov===sel);
+    if (!allProds.length) { showToast('📦 No hay artículos de este proveedor'); return; }
+
+    const ventas = State.get.ventas();
+    // Calcular ventas por producto
+    const ventasPorProd = {};
+    ventas.forEach(v => v.items?.forEach(i => {
+      ventasPorProd[i.prodId] = (ventasPorProd[i.prodId]||0) + (i.qty||1);
+    }));
+
+    const prodsData = allProds.map(p => ({
+      p,
+      vendidos: ventasPorProd[p.id]||0,
+      stock: p.stockActual||0,
+      stockMin: p.stockMinimo||p.stockMin||3,
+      bajo: (p.stockActual||0) <= (p.stockMinimo||p.stockMin||3),
+      sinStock: (p.stockActual||0) === 0,
+      sinRotacion: (ventasPorProd[p.id]||0) === 0 && (p.stockActual||0) > 0
+    }));
+
+    const top3 = [...prodsData].sort((a,b)=>b.vendidos-a.vendidos).slice(0,3);
+    const bot3 = [...prodsData].filter(x=>x.vendidos>0).sort((a,b)=>a.vendidos-b.vendidos).slice(0,3);
+    const sinRot = prodsData.filter(x=>x.sinRotacion).slice(0,3);
+    const bajoStock = prodsData.filter(x=>x.bajo && !x.sinStock);
+    const sinStockList = prodsData.filter(x=>x.sinStock);
+    const cats = [...new Set(allProds.map(p=>p.cat||'Sin categoría'))];
+    const valorInv = allProds.reduce((s,p)=>s+(p.stockActual||0)*(p.precioCompra||0),0);
+
+    // Alertas
+    const alertas = [];
+    if(sinStockList.length) alertas.push('🔴 '+sinStockList.length+' artículo'+(sinStockList.length>1?'s':'')+' sin stock');
+    if(bajoStock.length) alertas.push('🟡 '+bajoStock.length+' artículo'+(bajoStock.length>1?'s':'')+' con stock bajo');
+    if(sinRot.length) alertas.push('💤 '+sinRot.length+' artículo'+(sinRot.length>1?'s':'')+' sin rotación con stock');
+
+    // Recos
     const recos = [];
-    if (bajaMg.length) recos.push('⚠️ Revisar PVP de ' + bajaMg.slice(0,2).map(x=>esc(x.p?.nombre||'')).join(', '));
-    if (negativos.length) recos.push('🔴 Margen negativo en ' + negativos.map(x=>esc(x.p?.nombre||'')).join(', '));
-    if (estrella && estrella.mg >= 35) recos.push('✨ Potenciar ' + esc(estrella.p?.nombre||'') + ' (' + estrella.mg + '% margen)');
-    if (roi > 30) recos.push('📈 ROI del pedido excelente (' + roi + '%)');
-    if (!recos.length) recos.push('✅ Pedido equilibrado y rentable');
+    if(sinStockList.length) recos.push('🔴 Reponer: '+sinStockList.slice(0,2).map(x=>esc(x.p.nombre)).join(', '));
+    if(sinRot.length) recos.push('💤 Revisar rotación: '+sinRot.slice(0,2).map(x=>esc(x.p.nombre)).join(', '));
+    if(top3[0]?.vendidos>0) recos.push('⭐ Top ventas: '+esc(top3[0].p.nombre)+' ('+top3[0].vendidos+' uds)');
+    if(!recos.length) recos.push('✅ Inventario equilibrado');
 
-    const margenColor = margen >= 30 ? '#16A34A' : margen >= 15 ? '#F97316' : '#E53935';
-    const diffStr = diffEur !== null
-      ? (diffEur >= 0 ? '+' : '') + feur(diffEur) + ' vs anterior'
-      : 'Sin historial';
+    ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>'+
+      '<div class="mhd-title">📦 Artículos</div>'+
+      '<div class="mhd-sub">'+(prov?.icon||'🏪')+' '+esc(prov?.nombre||'')+' · '+allProds.length+' productos</div></div>'+
+      '<button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'+
+      '<div style="padding:16px;font-family:var(--font)">'+
 
-    ui.setFs(`
-      <div class="modal-header-dark">
-        <div class="mhd-row">
-          <div>
-            <div class="mhd-title">📊 Informe del pedido</div>
-            <div class="mhd-sub">${prov?.icon||'🏪'} ${esc(prov?.nombre||'')} · ${items.length} artículos</div>
-          </div>
-          <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
-        </div>
-      </div>
-      <div style="padding:16px;display:flex;flex-direction:column;gap:16px;font-family:var(--font)">
+      // KPIs
+      '<div class="ib-modal-section"><div class="ib-kpi-grid">'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Total artículos</div><div class="ib-kpi-val">'+allProds.length+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Categorías</div><div class="ib-kpi-val">'+cats.length+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Stock bajo</div><div class="ib-kpi-val" style="color:'+(bajoStock.length?'#F97316':'#16A34A')+'">'+bajoStock.length+'</div></div>'+
+      '<div class="ib-kpi"><div class="ib-kpi-lbl">Valor inventario</div><div class="ib-kpi-val" style="font-size:15px">'+feur(valorInv)+'</div></div>'+
+      '</div></div>'+
 
-        <!-- Score global -->
-        <div style="display:flex;align-items:center;justify-content:space-between;background:${scoreBg};border-radius:16px;padding:14px 18px">
-          <div>
-            <div style="font-size:11px;font-weight:700;letter-spacing:0.8px;color:${scoreColor};text-transform:uppercase">Score del pedido</div>
-            <div style="font-size:13px;color:var(--ink-mid);margin-top:2px">Margen · Equilibrio · Rotación</div>
-          </div>
-          <div style="font-size:36px;font-weight:800;color:${scoreColor};letter-spacing:-2px">${score.toFixed(1)}<span style="font-size:16px;font-weight:600;color:${scoreColor};">/10</span></div>
-        </div>
+      // Top ventas
+      (top3.length ? _ibSection('🏆 Top 3 más vendidos',
+        top3.map((x,i)=>_ibRow((i+1)+'. '+esc(x.p.nombre), x.vendidos+' uds vendidas', '#16A34A')).join('')
+      ) : '')+
 
-        <!-- Resumen rápido -->
-        <div style="background:var(--surface);border-radius:16px;border:1px solid var(--border);overflow:hidden">
-          <div style="padding:12px 16px 8px;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--ink-soft);text-transform:uppercase;border-bottom:1px solid var(--border)">📋 Resumen rápido</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
-            <div style="padding:12px 16px;border-right:1px solid var(--border)">
-              <div style="font-size:10px;color:var(--ink-soft);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Total inversión</div>
-              <div style="font-size:20px;font-weight:800;color:var(--ink);margin-top:2px">${feur(totalInv)}</div>
-            </div>
-            <div style="padding:12px 16px">
-              <div style="font-size:10px;color:var(--ink-soft);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Artículos</div>
-              <div style="font-size:20px;font-weight:800;color:var(--ink);margin-top:2px">${items.length}</div>
-            </div>
-            <div style="padding:12px 16px;border-right:1px solid var(--border);border-top:1px solid var(--border)">
-              <div style="font-size:10px;color:var(--ink-soft);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Unidades totales</div>
-              <div style="font-size:20px;font-weight:800;color:var(--ink);margin-top:2px">${totalUds}</div>
-            </div>
-            <div style="padding:12px 16px;border-top:1px solid var(--border)">
-              <div style="font-size:10px;color:var(--ink-soft);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">vs anterior</div>
-              <div style="font-size:16px;font-weight:700;color:${diffEur!==null&&diffEur<0?'#16A34A':'var(--ink)'};margin-top:2px">${diffStr}</div>
-            </div>
-          </div>
-        </div>
+      // Sin rotación
+      (sinRot.length ? _ibSection('💤 Sin rotación (con stock)',
+        sinRot.map(x=>_ibRow(esc(x.p.nombre), 'Stock: '+x.stock+' uds', '#F97316')).join('')
+      ) : '')+
 
-        <!-- Rentabilidad -->
-        <div style="background:var(--surface);border-radius:16px;border:1px solid var(--border);overflow:hidden">
-          <div style="padding:12px 16px 8px;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--ink-soft);text-transform:uppercase;border-bottom:1px solid var(--border)">💰 Rentabilidad</div>
-          <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-size:14px;color:var(--ink-mid)">Venta estimada</span>
-              <span style="font-size:15px;font-weight:700;color:var(--ink)">${feur(totalVta)}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-size:14px;color:var(--ink-mid)">Beneficio esperado</span>
-              <span style="font-size:15px;font-weight:700;color:${margenColor}">${feur(ganancia)}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-size:14px;color:var(--ink-mid)">Margen global</span>
-              <span style="font-size:15px;font-weight:700;color:${margenColor}">${margen}%</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-size:14px;color:var(--ink-mid)">ROI</span>
-              <span style="font-size:15px;font-weight:700;color:${roi>30?'#16A34A':roi>10?'#F97316':'#E53935'}">${roi}%</span>
-            </div>
-            <!-- Barra de margen -->
-            <div style="background:var(--bg);border-radius:8px;height:8px;overflow:hidden;margin-top:4px">
-              <div style="height:100%;width:${Math.min(100,Math.max(0,margen))}%;background:${margenColor};border-radius:8px;transition:width 0.5s"></div>
-            </div>
-          </div>
-        </div>
+      // Stock crítico
+      (sinStockList.length||bajoStock.length ? _ibSection('⚠️ Stock crítico',
+        [...sinStockList.slice(0,3).map(x=>_ibRow(esc(x.p.nombre),'Sin stock','#E53935')),
+         ...bajoStock.slice(0,3).map(x=>_ibRow(esc(x.p.nombre),'Bajo ('+x.stock+'/'+x.stockMin+')','#F97316'))].join('')
+      ) : '')+
 
-        <!-- Rendimiento productos -->
-        <div style="background:var(--surface);border-radius:16px;border:1px solid var(--border);overflow:hidden">
-          <div style="padding:12px 16px 8px;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--ink-soft);text-transform:uppercase;border-bottom:1px solid var(--border)">📊 Rendimiento</div>
-          <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
-            ${topComp ? '<div style="display:flex;justify-content:space-between"><span style="font-size:13px;color:var(--ink-mid)">Más pedido</span><span style="font-size:13px;font-weight:700;color:var(--ink)">' + esc(topComp.p?.nombre||'—') + ' ('+topComp.ncajas+' cajas)</span></div>' : ''}
-            ${botComp && botComp !== topComp ? '<div style="display:flex;justify-content:space-between"><span style="font-size:13px;color:var(--ink-mid)">Menos pedido</span><span style="font-size:13px;font-weight:700;color:var(--ink)">' + esc(botComp.p?.nombre||'—') + ' ('+botComp.ncajas+' cajas)</span></div>' : ''}
-            ${estrella ? '<div style="display:flex;justify-content:space-between"><span style="font-size:13px;color:var(--ink-mid)">Mayor margen</span><span style="font-size:13px;font-weight:700;color:#16A34A">' + esc(estrella.p?.nombre||'—') + ' ('+estrella.mg+'%)</span></div>' : ''}
-            ${sinPvp.length ? '<div style="display:flex;justify-content:space-between"><span style="font-size:13px;color:var(--ink-mid)">Sin PVP definido</span><span style="font-size:13px;font-weight:700;color:#F97316">'+sinPvp.length+' artículo'+( sinPvp.length>1?'s':'')+'</span></div>' : ''}
-          </div>
-        </div>
+      // Recomendaciones
+      _ibReco(recos)+
 
-        <!-- Recomendaciones IA -->
-        <div style="background:var(--surface);border-radius:16px;border:1px solid var(--border);overflow:hidden">
-          <div style="padding:12px 16px 8px;font-size:10px;font-weight:700;letter-spacing:1px;color:var(--ink-soft);text-transform:uppercase;border-bottom:1px solid var(--border)">🧠 Recomendaciones IA</div>
-          <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px">
-            ${recos.map(r => '<div style="font-size:13px;color:var(--ink);line-height:1.5">'+r+'</div>').join('')}
-          </div>
-        </div>
+      '</div>');
+  }
 
-        <!-- Alertas -->
-        ${(negativos.length || bajaMg.length > items.length * 0.3) ? '<div style="background:#FEF2F2;border-radius:16px;border:1px solid #FECACA;padding:14px 16px"><div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#DC2626;text-transform:uppercase;margin-bottom:8px">⚠️ Alertas</div>' + (negativos.length ? '<div style="font-size:13px;color:#DC2626;margin-bottom:4px">🔴 '+negativos.length+' producto'+( negativos.length>1?'s':'')+' con margen negativo</div>' : '') + (bajaMg.length > items.length * 0.3 ? '<div style="font-size:13px;color:#F97316">⚠️ '+Math.round(bajaMg.length/items.length*100)+'% de artículos con margen bajo</div>' : '') + '</div>' : ''}
+  // ══ MODAL 3: TOTAL A PAGAR — financiero del pedido ══════════════
+  function openTotalReport() {
+    const sel  = State.get.selectedProv();
+    const prov = State.get.prov(sel);
+    const items = State.get.ordenItems().filter(o=>o.provId===sel);
+    if (!items.length) { showToast('📦 No hay artículos en la orden actual'); return; }
 
-      </div>`);
+    const totalInv  = items.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*1.10,0);
+    const subtotal  = items.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0),0);
+    const iva       = totalInv - subtotal;
+    const totalVta  = items.reduce((s,o)=>s+(o.ncajas||1)*(o.udscaja||1)*(o.pvp||0),0);
+    const ganancia  = totalVta - totalInv;
+    const margen    = totalVta>0?Math.round(ganancia/totalVta*100):0;
+    const roi       = totalInv>0?Math.round(ganancia/totalInv*100):0;
+
+    // Subtotales por categoría
+    const catMap = {};
+    items.forEach(o=>{
+      const p=State.get.prod(o.prodId);
+      const cat=p?.cat||'Sin categoría';
+      catMap[cat]=(catMap[cat]||0)+(o.ncajas||1)*(o.precio||0)*1.10;
+    });
+    const catSorted = Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
+
+    // vs anterior
+    const historial = State.get.historialPedidos().filter(p=>p.provId===sel);
+    const anterior  = historial[historial.length-1];
+    const diffEur   = anterior ? totalInv-(anterior.total||0) : null;
+    const pctDiff   = anterior&&anterior.total>0 ? Math.round(diffEur/anterior.total*100) : null;
+
+    // Alertas y recos financieras
+    const alertas = [];
+    const recos   = [];
+    const bajaMg  = items.filter(o=>{
+      const cu=(o.ncajas||1)*(o.precio||0)*1.10/Math.max(1,(o.ncajas||1)*(o.udscaja||1));
+      return o.pvp>0&&Math.round((o.pvp-cu)/o.pvp*100)<15;
+    });
+    if(margen<15) alertas.push('⚠️ Margen global bajo ('+margen+'%) — objetivo mínimo 20%');
+    if(bajaMg.length) alertas.push('🟡 '+bajaMg.length+' artículo'+(bajaMg.length>1?'s':'')+' con margen <15%');
+    if(diffEur!==null&&diffEur>totalInv*0.25) alertas.push('📈 Gasto +'+pctDiff+'% respecto al pedido anterior');
+
+    if(margen>=30) recos.push('✨ Margen excelente ('+margen+'%) — pedido muy rentable');
+    if(roi>25) recos.push('📈 ROI del pedido: '+roi+'% — por encima de la media');
+    if(bajaMg.length) recos.push('⚠️ Revisar PVP de '+bajaMg.slice(0,2).map(o=>{const p=State.get.prod(o.prodId);return esc(p?.nombre||'');}).join(', '));
+    if(!recos.length) recos.push('✅ Rentabilidad equilibrada');
+
+    const mgColor = _ibMgColor(margen);
+    const mgBg    = margen>=30?'#DCFCE7':margen>=15?'#FFF7ED':'#FEE2E2';
+
+    ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>'+
+      '<div class="mhd-title">💰 Total a Pagar</div>'+
+      '<div class="mhd-sub">'+(prov?.icon||'🏪')+' '+esc(prov?.nombre||'')+' · '+items.length+' artículos</div></div>'+
+      '<button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'+
+      '<div style="padding:16px;font-family:var(--font)">'+
+
+      // Resumen financiero
+      _ibSection('💳 Resumen financiero',
+        _ibRow('Subtotal (sin IVA)', feur(subtotal))+
+        _ibRow('IVA (10%)', '+'+feur(iva), '#F97316')+
+        _ibRow('Total con IVA', feur(totalInv), 'var(--ink)')+
+        '<div class="ib-bar-wrap"><div class="ib-bar-fill" style="width:100%;background:var(--blue)"></div></div>'
+      )+
+
+      // Por categoría
+      (catSorted.length>1 ? _ibSection('📂 Por categoría',
+        catSorted.map(([cat,tot])=>_ibRow(cat, feur(tot))).join('')
+      ) : '')+
+
+      // Rentabilidad
+      '<div class="ib-modal-section" style="background:'+mgBg+'">'+
+      '<div class="ib-modal-section-hdr" style="color:'+mgColor+'">📊 Rentabilidad estimada</div>'+
+      '<div class="ib-modal-section-body">'+
+      _ibRow('Venta estimada', feur(totalVta))+
+      _ibRow('Beneficio esperado', feur(ganancia), mgColor)+
+      _ibRow('Margen global', margen+'%', mgColor)+
+      _ibRow('ROI', roi+'%', roi>25?'#16A34A':roi>10?'#F97316':'#E53935')+
+      '<div class="ib-bar-wrap"><div class="ib-bar-fill" style="width:'+Math.min(100,Math.max(0,margen))+'%;background:'+mgColor+'"></div></div>'+
+      '</div></div>'+
+
+      // vs anterior
+      (anterior ? _ibSection('📈 vs Pedido anterior',
+        _ibRow('Pedido anterior', feur(anterior.total||0))+
+        _ibRow('Diferencia', (diffEur>=0?'+':'')+feur(diffEur||0), diffEur<0?'#16A34A':diffEur>0?'#F97316':null)+
+        (pctDiff!==null ? _ibRow('Variación', (pctDiff>=0?'+':'')+pctDiff+'%', pctDiff<0?'#16A34A':pctDiff>20?'#E53935':'#F97316') : '')
+      ) : '')+
+
+      // Alertas
+      (alertas.length ? '<div class="ib-alert-box" style="background:#FEF2F2;border:1px solid #FECACA">'+
+        '<div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#DC2626;text-transform:uppercase;margin-bottom:8px">⚠️ Alertas</div>'+
+        alertas.map(a=>'<div style="font-size:13px;color:#DC2626;padding:2px 0">'+a+'</div>').join('')+'</div>' : '')+
+
+      // Recomendaciones
+      _ibReco(recos)+
+
+      '</div>');
   }
 
   function _cerrarComprobacion() {
