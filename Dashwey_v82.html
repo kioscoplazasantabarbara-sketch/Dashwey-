@@ -2281,11 +2281,9 @@ function _authTabSafe(tab) {
   <!-- ALM SEARCH SUGGESTIONS — fixed global, encima del dock -->
   <div id="alm-search-suggestions" style="display:none;position:fixed;left:0;right:0;z-index:160;max-height:50vh;overflow-y:auto;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -4px 24px rgba(80,100,140,0.18);"></div>
 
-  <!-- ALM DOCK GLOBAL — fixed, fuera del overflow:hidden chain -->
-  <div class="alm-dock" id="alm-dock" style="display:none;position:fixed;left:0;right:0;bottom:var(--tab-real);z-index:150;touch-action:manipulation;">
-
-    <!-- Buscador -->
-    <div class="alm-dock-search" id="alm-search-bar">
+  <!-- ALM SEARCH BAR — fixed, solo el buscador, se mueve con el teclado -->
+  <div id="alm-dock" style="display:none;position:fixed;left:0;right:0;z-index:152;touch-action:manipulation;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 12px rgba(80,100,140,0.10);">
+    <div class="alm-dock-search" id="alm-search-bar" style="margin:8px 12px;">
       <svg width="15" height="15" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input id="alm-perm-search" type="search" placeholder="Buscar artículo o añadir nuevo…"
         autocomplete="off" autocorrect="off" autocapitalize="off" inputmode="search"
@@ -2295,14 +2293,14 @@ function _authTabSafe(tab) {
         onblur="App.alm._permSearchBlur()">
       <button id="alm-perm-clear" onclick="App.alm._permSearchClear()" style="display:none;background:none;border:none;color:var(--ink-soft);cursor:pointer;font-size:18px;padding:0 2px;line-height:1">×</button>
     </div>
+  </div>
 
-    <!-- Botón añadir artículo -->
-    <div class="alm-dock-single-row">
-      <button class="alm-dock-single-btn" id="alm-dock-single-btn" onclick="App.alm.openProvProductos()">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Añadir artículo
-      </button>
-    </div>
+  <!-- ALM ADD BUTTON — fixed, NUNCA se mueve, siempre encima de la nav -->
+  <div id="alm-add-btn-row" style="display:none;position:fixed;left:0;right:0;z-index:151;padding:8px 14px 10px;background:var(--surface);">
+    <button class="alm-dock-single-btn" id="alm-dock-single-btn" onclick="App.alm.openProvProductos()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Añadir artículo
+    </button>
   </div>
 
   <!-- BOTTOM NAV v76 — blanca, auto-hide, desde cero -->
@@ -4267,16 +4265,12 @@ const nav = (() => {
     // Ocultar dock almacén al cambiar de tab
     const almDockEl = document.getElementById('alm-dock');
     if (i !== 2) {
-      if (almDockEl) almDockEl.style.display = 'none';
-      // Limpiar estado kb-focus si estaba activo
-      if (almDockEl) almDockEl.classList.remove('kb-focus');
-      // Restaurar nav (puede estar oculta por el teclado)
+      if (almDockEl) { almDockEl.style.display = 'none'; almDockEl.classList.remove('kb-focus'); }
+      const almAddBtnEl = document.getElementById('alm-add-btn-row');
+      if (almAddBtnEl) almAddBtnEl.style.display = 'none';
       const navEl = document.getElementById('bottom-tabs');
       if (navEl) navEl.classList.remove('nav-hidden');
-      // Restaurar elementos del dock
-      const btn  = almDockEl ? almDockEl.querySelector('.alm-dock-single-row') : null;
       const info = document.getElementById('alm-dock-info');
-      if (btn)  btn.style.display  = '';
       if (info) info.style.display = '';
     }
     const fsOvl  = document.getElementById('fs-overlay');
@@ -4310,9 +4304,16 @@ const nav = (() => {
       App.alm.renderOrden();
       App.alm.updateBadge();
       App.alm.updateProvBar();
-      // Mostrar dock fijo del almacén
+      // Mostrar buscador y botón del almacén
       const almDock = document.getElementById('alm-dock');
       if (almDock) almDock.style.display = '';
+      const almAddBtn = document.getElementById('alm-add-btn-row');
+      if (almAddBtn) almAddBtn.style.display = '';
+      // Posicionar: botón encima de la nav, buscador encima del botón
+      const tabH = document.getElementById('bottom-tabs')?.offsetHeight || 68;
+      const btnH = almAddBtn?.offsetHeight || 76;
+      if (almAddBtn) almAddBtn.style.bottom = tabH + 'px';
+      if (almDock)   almDock.style.bottom   = (tabH + btnH) + 'px';
     }
   }
 
@@ -7687,43 +7688,38 @@ const alm = (() => {
     const val = document.getElementById('alm-perm-search')?.value || '';
     if (val.trim()) _permSearch(val);
     _almKbActive = true;
-    // Asegurar que el dock está visible
+    // Solo mover el buscador — botón y nav no se tocan
     const dock = document.getElementById('alm-dock');
     if (dock && dock.style.display === 'none') dock.style.display = '';
-    // Mover dock al borde inferior INMEDIATAMENTE (sin esperar _onVVResize)
-    if (dock) dock.style.bottom = '0px';
+    // bottom se ajustará con _onVVResize cuando el teclado suba
+    // Por ahora no hacer nada más — evitar saltar antes del teclado
     _almSetKbMode(true);
   }
 
   function _permSearchBlur() {
     _almKbActive = false;
-    // Delay para permitir click en sugerencia y esperar estabilización
     setTimeout(() => {
+      // Ocultar sugerencias
       const sugEl = document.getElementById('alm-search-suggestions');
       if (sugEl) sugEl.style.display = 'none';
-      // Restaurar siempre — si el teclado sigue arriba, _onVVResize
-      // lo volverá a activar en su siguiente ciclo
+      // Restaurar buscador a posición original (encima del botón)
       _almSetKbMode(false);
+      const dock    = document.getElementById('alm-dock');
+      const addBtn  = document.getElementById('alm-add-btn-row');
+      const tabH    = document.getElementById('bottom-tabs')?.offsetHeight || 68;
+      const btnH    = addBtn?.offsetHeight || 76;
+      if (dock)   dock.style.bottom   = (tabH + btnH) + 'px';
+      if (addBtn) addBtn.style.bottom = tabH + 'px';
     }, 350);
   }
 
   function _almSetKbMode(on) {
+    // Solo gestiona el buscador — nav y botón son elementos independientes y estáticos
     const dock = document.getElementById('alm-dock');
-    const btn  = dock ? dock.querySelector('.alm-dock-single-row') : null;
-    const info = document.getElementById('alm-dock-info');
-    const nav  = document.getElementById('bottom-tabs');
     if (on) {
-      if (dock) { dock.classList.add('kb-focus'); }
-      if (btn)  btn.style.display  = 'none';
-      if (info) info.style.display = 'none';
-      // Ocultar nav directamente (no usar _navHide que tiene animación)
-      if (nav)  nav.classList.add('nav-hidden');
+      if (dock) dock.classList.add('kb-focus');
     } else {
-      if (dock) { dock.classList.remove('kb-focus'); }
-      if (btn)  btn.style.display  = '';
-      if (info) info.style.display = '';
-      // Restaurar nav directamente
-      if (nav)  nav.classList.remove('nav-hidden');
+      if (dock) dock.classList.remove('kb-focus');
     }
   }
 
@@ -8153,6 +8149,7 @@ const alm = (() => {
     almPill:    document.getElementById('alm-pill'),
     almScroll:  document.getElementById('alm-scroll-el'),
     almDock:    document.getElementById('alm-dock'),
+    almAddBtn:  document.getElementById('alm-add-btn-row'),
     bottomTabs: document.getElementById('bottom-tabs'),
     toast:      document.getElementById('toast'),
     header:     document.getElementById('header'),
@@ -8369,16 +8366,18 @@ const alm = (() => {
         if(_DOM.bottomTabs) _DOM.bottomTabs.style.display = kbOn ? 'none' : 'flex';
         if(_DOM.almPill) _DOM.almPill.style.marginBottom = kbOn ? kbH + 'px' : '0';
 
-        // Dock: solo ajustar posición bottom (visibilidad la gestiona focus/blur)
+        // Solo mover el buscador — botón y nav son estáticos
         if (_DOM.almDock) {
           if (kbOn) {
-            // Teclado arriba → pegar al borde superior del teclado
+            // Teclado arriba → buscador pegado al borde superior del teclado
             _DOM.almDock.style.bottom = kbH + 'px';
           } else if (!almInputFocused) {
-            // Teclado abajo Y sin foco → restaurar posición normal
-            _DOM.almDock.style.bottom = 'var(--tab-real)';
+            // Teclado abajo y sin foco → restaurar a posición normal
+            const addBtn = document.getElementById('alm-add-btn-row');
+            const tabH   = document.getElementById('bottom-tabs')?.offsetHeight || 68;
+            const btnH   = addBtn?.offsetHeight || 76;
+            _DOM.almDock.style.bottom = (tabH + btnH) + 'px';
           }
-          // Si almInputFocused y !kbOn: mantener bottom:0 (ya lo puso focus)
         }
 
         if(typeof App !== 'undefined' && App.alm && App.alm._sacActive) {
