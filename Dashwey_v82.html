@@ -2045,35 +2045,77 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 <script>
 /* ═══ AUTH SAFE WRAPPERS v8.4 — funcionan antes y después de que App esté listo ═══ */
+
+// ── Helpers de contexto de vista — usados por TODOS los event listeners globales ──
+// _isAuthVisible(): true si el login/auth está en pantalla (bloquea gestos del dashboard)
+// _isAppActive():   true si el usuario ya está dentro de la app (no en login)
+function _isAuthVisible() {
+  const s = document.getElementById('auth-screen');
+  return s && s.style.display !== 'none' && !s.classList.contains('hidden');
+}
+function _isAppActive() { return !_isAuthVisible(); }
 function _authLoginSafe() {
   if (window.App && window.App.ui && window.App.ui.authLogin) { App.ui.authLogin(); return; }
-  const s=document.getElementById('auth-screen'), fb=window._DashweyFirebase;
-  const email=document.getElementById('auth-email-login')?.value?.trim();
-  const pass=document.getElementById('auth-pass-login')?.value;
-  const err=document.getElementById('auth-err-login'), btn=document.getElementById('auth-btn-login');
-  if (!fb || !fb.enabled) { if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);} return; }
-  if (!email||!pass) { if(err) err.textContent='Rellena email y contraseña'; return; }
-  if(btn){btn.disabled=true;btn.textContent='Entrando…';}
-  fb.login(email,pass).then(res=>{
-    if(res.ok){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}}
-    else{if(err)err.textContent=res.error;if(btn){btn.disabled=false;btn.textContent='Entrar';}}
+  // Fallback: App aún no está listo — usar Firebase directamente
+  const fb = window._DashweyFirebase;
+  const email = document.getElementById('auth-email-login')?.value?.trim();
+  const pass  = document.getElementById('auth-pass-login')?.value;
+  const err   = document.getElementById('auth-err-login');
+  const btn   = document.getElementById('auth-btn-login');
+  const s     = document.getElementById('auth-screen');
+  if (err) err.textContent = '';
+  if (!fb || !fb.enabled) {
+    if (s) { s.classList.add('hidden'); setTimeout(() => s.style.display = 'none', 300); }
+    return;
+  }
+  if (!email || !pass) { if (err) err.textContent = 'Rellena email y contraseña'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Entrando…'; }
+  console.log('[Dashwey/Auth/Safe] Login iniciado');
+  // Timeout de seguridad — evita bloqueo eterno
+  const _reset = () => { if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; } };
+  const _timer = setTimeout(() => {
+    console.warn('[Dashwey/Auth/Safe] Timeout >12s');
+    _reset(); if (err) err.textContent = 'Tiempo agotado. Comprueba tu conexión.';
+  }, 12000);
+  fb.login(email, pass).then(res => {
+    clearTimeout(_timer);
+    if (res.ok) { if (s) { s.classList.add('hidden'); setTimeout(() => s.style.display = 'none', 300); } }
+    else { _reset(); if (err) err.textContent = res.error || 'Error de autenticación'; }
+  }).catch(e => {
+    clearTimeout(_timer);
+    console.error('[Dashwey/Auth/Safe] Error:', e);
+    _reset(); if (err) err.textContent = 'Error inesperado. Inténtalo de nuevo.';
   });
 }
 function _authRegisterSafe() {
   if (window.App && window.App.ui && window.App.ui.authRegister) { App.ui.authRegister(); return; }
-  const s=document.getElementById('auth-screen'), fb=window._DashweyFirebase;
-  const email=document.getElementById('auth-email-reg')?.value?.trim();
-  const pass=document.getElementById('auth-pass-reg')?.value;
-  const pass2=document.getElementById('auth-pass-reg2')?.value;
-  const err=document.getElementById('auth-err-reg'), btn=document.getElementById('auth-btn-reg');
-  if (!fb||!fb.enabled){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}return;}
-  if(!email||!pass){if(err)err.textContent='Rellena todos los campos';return;}
-  if(pass!==pass2){if(err)err.textContent='Las contraseñas no coinciden';return;}
-  if(pass.length<6){if(err)err.textContent='Mínimo 6 caracteres';return;}
-  if(btn){btn.disabled=true;btn.textContent='Creando cuenta…';}
-  fb.register(email,pass).then(res=>{
-    if(res.ok){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}}
-    else{if(err)err.textContent=res.error;if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
+  const fb = window._DashweyFirebase;
+  const email = document.getElementById('auth-email-reg')?.value?.trim();
+  const pass  = document.getElementById('auth-pass-reg')?.value;
+  const pass2 = document.getElementById('auth-pass-reg2')?.value;
+  const err   = document.getElementById('auth-err-reg');
+  const btn   = document.getElementById('auth-btn-reg');
+  const s     = document.getElementById('auth-screen');
+  if (err) err.textContent = '';
+  if (!fb || !fb.enabled) {
+    if (s) { s.classList.add('hidden'); setTimeout(() => s.style.display = 'none', 300); }
+    return;
+  }
+  if (!email || !pass) { if (err) err.textContent = 'Rellena todos los campos'; return; }
+  if (pass !== pass2)  { if (err) err.textContent = 'Las contraseñas no coinciden'; return; }
+  if (pass.length < 6) { if (err) err.textContent = 'Mínimo 6 caracteres'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando cuenta…'; }
+  const _reset = () => { if (btn) { btn.disabled = false; btn.textContent = 'Crear cuenta'; } };
+  const _timer = setTimeout(() => {
+    _reset(); if (err) err.textContent = 'Tiempo agotado. Inténtalo de nuevo.';
+  }, 12000);
+  fb.register(email, pass).then(res => {
+    clearTimeout(_timer);
+    if (res.ok) { if (s) { s.classList.add('hidden'); setTimeout(() => s.style.display = 'none', 300); } }
+    else { _reset(); if (err) err.textContent = res.error || 'Error al crear cuenta'; }
+  }).catch(e => {
+    clearTimeout(_timer);
+    _reset(); if (err) err.textContent = 'Error inesperado. Inténtalo de nuevo.';
   });
 }
 function _authSkipSafe() {
@@ -4018,18 +4060,49 @@ const ui = (() => {
     const pass  = document.getElementById('auth-pass-login').value;
     const btn   = document.getElementById('auth-btn-login');
     const err   = document.getElementById('auth-err-login');
-    if (!email || !pass) { err.textContent = 'Rellena email y contraseña'; return; }
+
+    if (err) err.textContent = '';
+    if (!email || !pass) { if (err) err.textContent = 'Rellena email y contraseña'; return; }
+
     btn.disabled = true; btn.textContent = 'Entrando…';
+    console.log('[Dashwey/Auth] Login iniciado para:', email);
+
+    // FIX LOGIN: timeout de seguridad 12s — garantiza que el botón NUNCA queda bloqueado
+    const _btnReset = () => { btn.disabled = false; btn.textContent = 'Entrar'; };
+    const _safetyTimer = setTimeout(() => {
+      console.warn('[Dashwey/Auth] Timeout de seguridad — login tardó >12s');
+      if (btn.disabled) {
+        _btnReset();
+        if (err) err.textContent = 'Tiempo de espera agotado. Comprueba tu conexión.';
+      }
+    }, 12000);
+
     const fb = window._DashweyFirebase;
-    if (!fb?.enabled) { hideAuthScreen(); return; }
-    const res = await fb.login(email, pass);
-    if (res.ok) {
-      State.set.user({ email: res.user.email, uid: res.user.uid });
+    if (!fb?.enabled) {
+      clearTimeout(_safetyTimer);
+      console.log('[Dashwey/Auth] Firebase desactivado — acceso local directo');
       hideAuthScreen();
-      showToast('👋 Bienvenido de nuevo');
-    } else {
-      err.textContent = res.error;
-      btn.disabled = false; btn.textContent = 'Entrar';
+      return;
+    }
+
+    try {
+      console.log('[Dashwey/Auth] Llamando a fb.login()…');
+      const res = await fb.login(email, pass);
+      clearTimeout(_safetyTimer);
+      console.log('[Dashwey/Auth] Respuesta recibida:', res.ok ? 'OK' : res.error);
+      if (res.ok) {
+        State.set.user({ email: res.user.email, uid: res.user.uid });
+        hideAuthScreen();
+        showToast('👋 Bienvenido de nuevo');
+      } else {
+        _btnReset();
+        if (err) err.textContent = res.error || 'Error de autenticación';
+      }
+    } catch (e) {
+      clearTimeout(_safetyTimer);
+      console.error('[Dashwey/Auth] Error inesperado en login:', e);
+      _btnReset();
+      if (err) err.textContent = 'Error inesperado. Inténtalo de nuevo.';
     }
   }
 
@@ -4040,20 +4113,41 @@ const ui = (() => {
     const pass2 = document.getElementById('auth-pass-reg2').value;
     const btn   = document.getElementById('auth-btn-reg');
     const err   = document.getElementById('auth-err-reg');
-    if (!email || !pass) { err.textContent = 'Rellena todos los campos'; return; }
-    if (pass !== pass2)  { err.textContent = 'Las contraseñas no coinciden'; return; }
-    if (pass.length < 6) { err.textContent = 'Mínimo 6 caracteres'; return; }
+
+    if (err) err.textContent = '';
+    if (!email || !pass) { if (err) err.textContent = 'Rellena todos los campos'; return; }
+    if (pass !== pass2)  { if (err) err.textContent = 'Las contraseñas no coinciden'; return; }
+    if (pass.length < 6) { if (err) err.textContent = 'Mínimo 6 caracteres'; return; }
+
     btn.disabled = true; btn.textContent = 'Creando cuenta…';
+    console.log('[Dashwey/Auth] Registro iniciado para:', email);
+
+    const _btnReset = () => { btn.disabled = false; btn.textContent = 'Crear cuenta'; };
+    const _safetyTimer = setTimeout(() => {
+      console.warn('[Dashwey/Auth] Timeout registro >12s');
+      if (btn.disabled) { _btnReset(); if (err) err.textContent = 'Tiempo agotado. Inténtalo de nuevo.'; }
+    }, 12000);
+
     const fb = window._DashweyFirebase;
-    if (!fb?.enabled) { hideAuthScreen(); return; }
-    const res = await fb.register(email, pass);
-    if (res.ok) {
-      State.set.user({ email: res.user.email, uid: res.user.uid });
-      hideAuthScreen();
-      showToast('🎉 Cuenta creada — tus datos están en la nube');
-    } else {
-      err.textContent = res.error;
-      btn.disabled = false; btn.textContent = 'Crear cuenta';
+    if (!fb?.enabled) { clearTimeout(_safetyTimer); hideAuthScreen(); return; }
+
+    try {
+      const res = await fb.register(email, pass);
+      clearTimeout(_safetyTimer);
+      console.log('[Dashwey/Auth] Registro:', res.ok ? 'OK' : res.error);
+      if (res.ok) {
+        State.set.user({ email: res.user.email, uid: res.user.uid });
+        hideAuthScreen();
+        showToast('🎉 Cuenta creada — tus datos están en la nube');
+      } else {
+        _btnReset();
+        if (err) err.textContent = res.error || 'Error al crear la cuenta';
+      }
+    } catch (e) {
+      clearTimeout(_safetyTimer);
+      console.error('[Dashwey/Auth] Error inesperado en registro:', e);
+      _btnReset();
+      if (err) err.textContent = 'Error inesperado. Inténtalo de nuevo.';
     }
   }
 
@@ -4402,20 +4496,22 @@ const nav = (() => {
   let _sx = 0, _sy = 0, _tx = 0, _vw = 0, _drag = false;
 
   track.addEventListener('touchstart', e => {
+    // FIX BUG2: bloquear swipe de tabs cuando el login está visible
+    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) return;
     _sx   = e.touches[0].clientX;
     _sy   = e.touches[0].clientY;
-    _vw   = window.innerWidth;       // cachea — no releer en touchmove
+    _vw   = window.innerWidth;
     _tx   = -_cTab * _vw;
     _drag = true;
-    track.style.transition = 'none'; // desactiva CSS transition durante drag
+    track.style.transition = 'none';
   }, {passive:true});
 
   track.addEventListener('touchmove', e => {
     if(!_drag) return;
+    // FIX BUG2: cancelar swipe si auth aparece durante el gesto
+    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) { _drag = false; return; }
     const dx = e.touches[0].clientX - _sx, dy = e.touches[0].clientY - _sy;
-    // Si movimiento vertical > horizontal+5px → scroll nativo, no swipe
     if(Math.abs(dy) > Math.abs(dx) + 5) { _drag = false; return; }
-    // Clamp: no arrastrar más allá del primer o último tab
     track.style.transform = `translateX(${Math.max(-(_vw*2), Math.min(0, _tx+dx))}px)`;
   }, {passive:true});
 
@@ -4967,6 +5063,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       window._pullRefreshListenersAttached = true;
 
       document.addEventListener('touchstart', e => {
+        // FIX BUG2: NO activar pull-to-refresh si el login está visible
+        if (_isAuthVisible()) return;
         if(nav._cTab !== 1) return;
         // FIX #2: No interferir si drag u otro gesto está activo
         if (window._activeGesture && window._activeGesture !== 'pullRefresh') return;
@@ -4977,6 +5075,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
       document.addEventListener('touchmove', e => {
         if(!ptActive || nav._cTab !== 1) return;
+        if (_isAuthVisible()) { ptActive = false; return; } // FIX BUG2
         if (window._activeGesture && window._activeGesture !== 'pullRefresh') { ptActive = false; return; }
         const dy = e.touches[0].clientY - ptStart;
         if(dy < 10) return;
@@ -4989,6 +5088,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
       document.addEventListener('touchend', e => {
         if(!ptActive || nav._cTab !== 1) { ptActive = false; return; }
+        if (_isAuthVisible()) { ptActive = false; return; } // FIX BUG2
         const dy = e.changedTouches[0].clientY - ptStart;
         ptActive = false;
         if (window._activeGesture === 'pullRefresh') window._activeGesture = null;
@@ -5244,6 +5344,8 @@ function initDashDrag() {
     if (!card) return;
     // Solo en tab Dashboard (tab 1)
     if (typeof nav !== 'undefined' && nav._cTab !== 1) return;
+    // FIX BUG2: No activar drag si el login está visible
+    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) return;
     // FIX #2: Si hay otro gesto activo (p.ej. pull-to-refresh), no iniciar
     if (window._activeGesture && window._activeGesture !== 'drag') return;
 
@@ -9051,13 +9153,23 @@ const alm = (() => {
         }
         // Si es anónimo, la pantalla de auth queda visible para que se registre
       }, { once: true });
-      // Timeout de seguridad — si Firebase tarda >5s, permitir uso local
+      // FIX: Timeout de seguridad — si Firebase tarda >8s en estar listo,
+      // mostrar aviso claro y permitir acceso local inmediato
       setTimeout(() => {
         if (_authScreen && _authScreen.style.display !== 'none') {
           const err = document.getElementById('auth-err-login');
-          if (err && !err.textContent) err.textContent = 'Sin conexión. Puedes continuar en modo local.';
+          if (err && !err.textContent) {
+            err.textContent = 'Sin conexión al servidor. Usa "Continuar sin cuenta" para modo local.';
+            console.warn('[Dashwey/Auth] Firebase no respondió en 8s — modo local disponible');
+          }
+          // Re-habilitar botón si quedó en estado Entrando… por algún race condition
+          const btn = document.getElementById('auth-btn-login');
+          if (btn && btn.disabled) {
+            btn.disabled = false; btn.textContent = 'Entrar';
+            console.warn('[Dashwey/Auth] Botón forzado a reset tras timeout init');
+          }
         }
-      }, 5000);
+      }, 8000);
     }
   }
 
