@@ -123,6 +123,39 @@ html, body {
   background: var(--bg);
 }
 
+/* ── UPDATE BANNER — aparece sobre el header, no bloquea nada ── */
+#update-banner {
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0;
+  z-index: 9999;
+  background: var(--blue);
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 13px; font-weight: 600;
+  font-family: var(--font);
+  display: none; /* JS lo muestra */
+  align-items: center; justify-content: space-between;
+  gap: 10px;
+  box-shadow: 0 2px 12px rgba(37,99,235,0.35);
+  animation: slideDown 0.3s cubic-bezier(0.4,0,0.2,1);
+}
+@keyframes slideDown { from { transform:translateY(-100%) } to { transform:translateY(0) } }
+#update-banner span { flex:1; }
+#update-banner-btn {
+  background: #fff; color: var(--blue);
+  border: none; border-radius: 8px;
+  padding: 6px 14px; font-size: 12px; font-weight: 700;
+  cursor: pointer; flex-shrink: 0;
+  font-family: var(--font);
+  transition: opacity 0.15s;
+}
+#update-banner-btn:active { opacity: 0.8; }
+#update-banner-close {
+  background: none; border: none; color: rgba(255,255,255,0.7);
+  font-size: 18px; cursor: pointer; padding: 0 4px; flex-shrink: 0;
+  line-height: 1;
+}
+
 /* ── § 3. HEADER ── */
 #header {
   display: flex;
@@ -1938,6 +1971,13 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 </head>
 <body>
+<!-- UPDATE BANNER — fixed, fuera del flujo del app -->
+<div id="update-banner">
+  <span id="update-banner-msg">🆕 Nueva versión disponible</span>
+  <button id="update-banner-btn" onclick="App.ui.doUpdate()">Actualizar ahora</button>
+  <button id="update-banner-close" onclick="document.getElementById('update-banner').style.display='none'" title="Cerrar">×</button>
+</div>
+
 <div id="app">
 
   <!-- HEADER -->
@@ -3735,56 +3775,94 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.4r1';
+  const _APP_VERSION = 'v8.5';
+  function _getAppVersion() { return _APP_VERSION; }
 
+  // ── checkForUpdate — usa version.json, fallback a HTML ──────
   function checkForUpdate() {
-    const btn  = document.getElementById('update-check-btn');
-    const txt  = document.getElementById('update-status-txt');
-    const bar  = document.getElementById('update-bar');
-    if (!btn || !txt) return;
+    const btn = document.getElementById('update-check-btn');
+    const txt = document.getElementById('update-status-txt');
+    const bar = document.getElementById('update-bar');
+    if (btn) { btn.textContent = '...'; btn.style.opacity = '0.6'; btn.disabled = true; }
 
-    btn.textContent = '...';
-    btn.style.opacity = '0.6';
-    btn.disabled = true;
+    const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
+    const versionUrl = baseUrl + 'version.json?_t=' + Date.now();
 
-    // Solicita el HTML principal sin caché para comparar versiones
-    fetch(location.href.split('?')[0] + '?_t=' + Date.now(), { cache: 'no-store' })
-      .then(r => r.text())
-      .then(html => {
-        btn.textContent = 'Comprobar';
-        btn.style.opacity = '1';
-        btn.disabled = false;
-
-        // Busca el string de versión en el HTML descargado
-        const match = html.match(/const _APP_VERSION = '([^']+)'/);
-        const remoteVer = match ? match[1] : null;
-
-        if (remoteVer && remoteVer !== _APP_VERSION) {
-          txt.textContent = 'Nueva versión disponible: ' + remoteVer;
-          txt.style.color = 'var(--blue)';
-          txt.style.fontWeight = '700';
-          if (bar) bar.style.display = 'block';
-        } else {
-          txt.textContent = 'Tienes la versión más reciente (' + _APP_VERSION + ')';
-          txt.style.color = 'var(--green)';
-          txt.style.fontWeight = '600';
-          if (bar) bar.style.display = 'none';
-        }
+    fetch(versionUrl, { cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error('no version.json'); return r.json(); })
+      .then(data => {
+        if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
+        const remoteVer = data.version ? 'v' + data.version : data.build || null;
+        _applyVersionResult(remoteVer, txt, bar);
       })
       .catch(() => {
-        btn.textContent = 'Comprobar';
-        btn.style.opacity = '1';
-        btn.disabled = false;
-        txt.textContent = 'Sin conexión · inténtalo de nuevo';
-        txt.style.color = 'var(--red)';
+        // Fallback: buscar en el HTML (compatibilidad)
+        fetch(location.href.split('?')[0] + '?_t=' + Date.now(), { cache: 'no-store' })
+          .then(r => r.text())
+          .then(html => {
+            if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
+            const match = html.match(/const _APP_VERSION = '([^']+)'/);
+            _applyVersionResult(match ? match[1] : null, txt, bar);
+          })
+          .catch(() => {
+            if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
+            if (txt) { txt.textContent = 'Sin conexión'; txt.style.color = 'var(--red)'; }
+          });
       });
   }
 
+  function _applyVersionResult(remoteVer, txt, bar) {
+    if (remoteVer && remoteVer !== _APP_VERSION) {
+      if (txt) { txt.textContent = 'Nueva versión: ' + remoteVer; txt.style.color = 'var(--blue)'; txt.style.fontWeight = '700'; }
+      if (bar) bar.style.display = 'block';
+      // También mostrar el banner global
+      _showUpdateBanner(remoteVer);
+    } else {
+      if (txt) { txt.textContent = 'Versión más reciente (' + _APP_VERSION + ')'; txt.style.color = 'var(--green)'; txt.style.fontWeight = '600'; }
+      if (bar) bar.style.display = 'none';
+    }
+  }
+
+  function _showUpdateBanner(newVer) {
+    const banner = document.getElementById('update-banner');
+    const msg    = document.getElementById('update-banner-msg');
+    if (!banner) return;
+    if (msg) msg.textContent = '🆕 Nueva versión disponible: ' + newVer;
+    banner.style.display = 'flex';
+  }
+
   function doUpdate() {
-    // Limpia la caché del Service Worker y recarga
-    if ('serviceWorker' in navigator && 'caches' in window) {
-      caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
-        .then(() => location.reload(true));
+    // Ocultar banner para evitar doble click
+    const banner = document.getElementById('update-banner');
+    if (banner) banner.style.display = 'none';
+
+    const btn = document.getElementById('update-banner-btn');
+    if (btn) { btn.textContent = 'Actualizando…'; btn.disabled = true; }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration()
+        .then(reg => {
+          if (reg?.waiting) {
+            // SW en espera → activar inmediatamente
+            reg.waiting.postMessage({ action: 'skipWaiting' });
+          } else if (reg) {
+            // Forzar check de update
+            reg.update().then(() => {
+              if (reg.waiting) reg.waiting.postMessage({ action: 'skipWaiting' });
+            });
+          }
+        })
+        .catch(() => {});
+      // controllerchange dispara el reload (ver handler en bloque SW)
+      // Safety net: si no hay SW, recargar directamente tras 2s
+      setTimeout(() => {
+        if ('caches' in window) {
+          caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
+            .then(() => location.reload(true));
+        } else {
+          location.reload(true);
+        }
+      }, 2500);
     } else {
       location.reload(true);
     }
@@ -4313,7 +4391,7 @@ const ui = (() => {
   }
   // ══ FIN SUBPANEL ══
 
-  return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openMainMenu, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSubOpenPerfil, sdSavePerfil, sdSubOpenCierre, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate };
+  return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openMainMenu, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSubOpenPerfil, sdSavePerfil, sdSubOpenCierre, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner };
 })();
 
 // ══════════════════════════════════════════
@@ -8838,29 +8916,78 @@ if (!window.App) {
 /* ═══ PWA — Service Worker + Install Banner v8.2 ═══════════════ */
 (function() {
 
-  /* ── 1. Service Worker — unregister old, register new ── */
+  /* ── 1. Service Worker — registro robusto con auto-update ── */
   if ('serviceWorker' in navigator) {
-    // First unregister ALL old SWs, then register fresh
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      const unregAll = regs.map(r => r.unregister());
-      return Promise.all(unregAll);
-    }).then(() => {
-      // Clear all caches
-      if ('caches' in window) {
-        caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
-      }
-      // Register new SW
-      return navigator.serviceWorker.register('./sw.js', { scope: './' });
-    }).then(reg => {
-      // Force immediate activation
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-      reg.addEventListener('updatefound', () => {
-        const newWorker = reg.installing;
-        if (newWorker) newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed') newWorker.postMessage({ type: 'SKIP_WAITING' });
+    let _swReloadPending = false;
+
+    // controllerchange: el nuevo SW tomó control → recargar limpiamente
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swReloadPending) return; // evitar doble reload
+      _swReloadPending = true;
+      // Pequeño delay para que el SW termine de activarse
+      setTimeout(() => window.location.reload(), 300);
+    });
+
+    // Registrar SW
+    navigator.serviceWorker.register('./sw.js', { scope: './' })
+      .then(reg => {
+        // Si hay un SW en espera al arrancar → activar ya
+        if (reg.waiting) {
+          reg.waiting.postMessage({ action: 'skipWaiting' });
+        }
+
+        // Detectar nuevas versiones del SW
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // Nuevo SW instalado y listo — activar directamente
+              // (no hay usuario activo que perder datos, el banner ya notificó)
+              newWorker.postMessage({ action: 'skipWaiting' });
+            }
+          });
         });
-      });
-    }).catch(err => console.warn('[Dashwey SW] error:', err));
+
+        // ── Auto-check de versión al arrancar ────────────────────
+        // Solo si hay conexión y el usuario lleva más de 5s en la app
+        setTimeout(() => {
+          if (navigator.onLine && typeof App !== 'undefined' && App.ui?.checkForUpdate) {
+            // Silencioso: solo muestra banner si hay nueva versión, no actualiza el Settings
+            _silentCheckUpdate();
+          }
+        }, 8000); // 8s tras arranque — no interferir con carga inicial
+
+        // Auto-check periódico cada 5 minutos (solo si app en foreground)
+        setInterval(() => {
+          if (document.visibilityState === 'visible' && navigator.onLine) {
+            _silentCheckUpdate();
+          }
+        }, 5 * 60 * 1000);
+      })
+      .catch(err => console.warn('[Dashwey SW]', err));
+  }
+
+  // ── Silent version check — solo muestra banner, no toca Settings ──
+  function _silentCheckUpdate() {
+    const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
+    fetch(baseUrl + 'version.json?_t=' + Date.now(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const remoteVer = data.version ? 'v' + data.version : data.build;
+        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
+        if (remoteVer && localVer && remoteVer !== localVer) {
+          // Mostrar banner si no está ya visible
+          const banner = document.getElementById('update-banner');
+          if (banner && banner.style.display === 'none') {
+            const msg = document.getElementById('update-banner-msg');
+            if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
+            banner.style.display = 'flex';
+          }
+        }
+      })
+      .catch(() => {}); // silencioso — sin errores en consola si falla
   }
 
   /* ── 2. Banner de instalación Android/Chrome ── */
