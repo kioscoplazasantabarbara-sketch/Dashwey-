@@ -7819,6 +7819,8 @@ const alm = (() => {
   }
 
   function _catToggle(id) {
+    // Bloquear si el long press acaba de ejecutarse
+    if (_lpFired) { _lpFired = false; return; }
     if (_ordenCarrito[id]) { delete _ordenCarrito[id]; }
     else { _ordenCarrito[id] = 1; }
     _catRefreshItem(id);
@@ -7851,20 +7853,25 @@ const alm = (() => {
   }
 
   let _lpActiveEl = null;
+  let _lpFired    = false; // true cuando el long press ya se ejecutó → bloquea onclick
 
   function _catLpStart(id, el) {
+    _lpFired   = false;
     _lpActiveEl = el;
     el.classList.add('lp-active');
     _lpTimer = setTimeout(() => {
-      _lpTimer = null;
-      try { navigator.vibrate && navigator.vibrate([12,30,8]); } catch(e) {}
-      _openCatCtxMenu(id);
+      _lpTimer  = null;
+      _lpFired  = true; // marcar antes de vibrar para bloquear onclick
+      try { navigator.vibrate && navigator.vibrate([12, 30, 8]); } catch(e) {}
+      // setTimeout(0): vaciar el stack touchend→onclick antes de insertar el backdrop
+      setTimeout(() => _openCatCtxMenu(id), 0);
     }, 480);
   }
 
   function _catLpEnd() {
     if (_lpActiveEl) { _lpActiveEl.classList.remove('lp-active'); _lpActiveEl = null; }
     if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+    // No resetear _lpFired aquí — se resetea en _catToggle
   }
 
   function _openCatCtxMenu(id) {
@@ -7899,13 +7906,20 @@ const alm = (() => {
       </div>`;
 
     const close = () => {
-      bd.style.animation = 'none';
+      if (!document.body.contains(bd)) return;
+      bd.style.transition = 'opacity 0.15s';
       bd.style.opacity = '0';
-      setTimeout(() => bd.remove(), 150);
+      setTimeout(() => { if (document.body.contains(bd)) bd.remove(); }, 150);
     };
 
-    bd.addEventListener('click', e => { if (e.target === bd) close(); });
-    bd.querySelector('#ctx-cancel').onclick = close;
+    // Cerrar al tocar el backdrop (fuera del menú)
+    bd.addEventListener('touchstart', e => {
+      if (e.target === bd) { e.preventDefault(); close(); }
+    }, { passive: false });
+    // Bloquear propagación dentro del menú para no cerrar accidentalmente
+    bd.querySelector('.cat-ctx-menu').addEventListener('touchstart', e => e.stopPropagation());
+
+    bd.querySelector('#ctx-cancel').addEventListener('touchstart', e => { e.preventDefault(); close(); });
 
     bd.querySelector('#ctx-edit').onclick = () => {
       close();
