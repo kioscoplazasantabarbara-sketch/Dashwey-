@@ -2054,6 +2054,92 @@ function _isAuthVisible() {
   return s && s.style.display !== 'none' && !s.classList.contains('hidden');
 }
 function _isAppActive() { return !_isAuthVisible(); }
+
+// ══════════════════════════════════════════════════════════════════
+// AppState — Sistema de control de vista activa v8.6
+//
+// Fuente única de verdad para el contexto de navegación.
+// NO duplica estado — deriva de las estructuras existentes:
+//   - _isAuthVisible()   → detecta pantalla de login
+//   - nav._cTab          → detecta tab activo (0=TPV,1=Dashboard,2=Almacén)
+//
+// Uso:
+//   AppState.currentView  → "login"|"tpv"|"dashboard"|"almacen"
+//   AppState.is("dashboard") → boolean
+//   AppState.isApp()      → true si el usuario está dentro de la app
+//   AppState.setView(v)   → cambia vista y dispara evento
+//
+// Todos los event listeners globales usan AppState.is() como guard.
+// ══════════════════════════════════════════════════════════════════
+const AppState = (() => {
+  // Las 4 vistas posibles
+  const VIEWS = { LOGIN: 'login', TPV: 'tpv', DASHBOARD: 'dashboard', ALMACEN: 'almacen' };
+  const TAB_TO_VIEW = { 0: VIEWS.TPV, 1: VIEWS.DASHBOARD, 2: VIEWS.ALMACEN };
+
+  // Estado interno — se actualiza mediante setView()
+  let _currentView = VIEWS.LOGIN;
+
+  // ── Getters ──────────────────────────────────────────────────
+  function currentView() {
+    // Siempre leer desde la fuente real para coherencia
+    if (_isAuthVisible()) return VIEWS.LOGIN;
+    // nav puede no estar disponible en el momento de la llamada
+    const tab = (typeof App !== 'undefined' && App.nav)
+      ? App.nav._cTab
+      : (typeof nav !== 'undefined' ? nav._cTab : 1);
+    return TAB_TO_VIEW[tab] || VIEWS.DASHBOARD;
+  }
+
+  function is(view) { return currentView() === view; }
+  function isApp()  { return currentView() !== VIEWS.LOGIN; }
+  function isLogin(){ return currentView() === VIEWS.LOGIN; }
+
+  // ── setView — función central de navegación ───────────────────
+  // Actualiza la vista, ejecuta navegación y dispara evento.
+  // Es el único punto de entrada para cambios de vista desde lógica externa.
+  function setView(viewName) {
+    const prev = currentView();
+    console.log(`[AppState] setView: ${prev} → ${viewName}`);
+
+    if (viewName === VIEWS.LOGIN) {
+      // Logout → mostrar pantalla de auth
+      if (typeof App !== 'undefined' && App.ui?.showAuthScreen) {
+        App.ui.showAuthScreen();
+      }
+    } else if (viewName === VIEWS.TPV) {
+      if (_isAuthVisible()) return; // no navegar si login visible
+      if (typeof App !== 'undefined' && App.nav?.goTab) App.nav.goTab(0);
+    } else if (viewName === VIEWS.DASHBOARD) {
+      if (_isAuthVisible()) return;
+      if (typeof App !== 'undefined' && App.nav?.goTab) App.nav.goTab(1);
+    } else if (viewName === VIEWS.ALMACEN) {
+      if (_isAuthVisible()) return;
+      if (typeof App !== 'undefined' && App.nav?.goTab) App.nav.goTab(2);
+    }
+
+    // Disparar evento para que módulos puedan reaccionar
+    window.dispatchEvent(new CustomEvent('dashwey:view-changed', {
+      detail: { from: prev, to: viewName }
+    }));
+  }
+
+  // ── canInteract — guard centralizado para eventos ─────────────
+  // Devuelve true SOLO si la vista activa coincide con la esperada.
+  // Uso: if (!AppState.canInteract('dashboard')) return;
+  function canInteract(view) {
+    if (_isAuthVisible()) return false; // nunca en login
+    return !view || currentView() === view;
+  }
+
+  return {
+    get currentView() { return currentView(); },
+    is, isApp, isLogin, setView, canInteract,
+    VIEWS,
+  };
+})();
+
+// Exponer globalmente para acceso desde cualquier módulo
+window.AppState = AppState;
 function _authLoginSafe() {
   if (window.App && window.App.ui && window.App.ui.authLogin) { App.ui.authLogin(); return; }
   // Fallback: App aún no está listo — usar Firebase directamente
@@ -4036,12 +4122,24 @@ const ui = (() => {
   function showAuthScreen() {
     const s = _authScreen();
     if (s) { s.style.display = 'flex'; s.classList.remove('hidden'); }
+    // Notificar cambio de vista
+    window.dispatchEvent(new CustomEvent('dashwey:view-changed', {
+      detail: { from: 'app', to: 'login' }
+    }));
+    console.log('[AppState] → login');
   }
   function hideAuthScreen() {
     const s = _authScreen();
     if (!s) return;
     s.classList.add('hidden');
     setTimeout(() => { s.style.display = 'none'; }, 300);
+    // Notificar cambio de vista — el tab activo determina qué vista es
+    const tab = (typeof nav !== 'undefined') ? nav._cTab : 1;
+    const viewName = ['tpv','dashboard','almacen'][tab] || 'dashboard';
+    window.dispatchEvent(new CustomEvent('dashwey:view-changed', {
+      detail: { from: 'login', to: viewName }
+    }));
+    console.log(`[AppState] login → ${viewName}`);
   }
 
   // Cambiar pestaña login/registro
@@ -4496,8 +4594,8 @@ const nav = (() => {
   let _sx = 0, _sy = 0, _tx = 0, _vw = 0, _drag = false;
 
   track.addEventListener('touchstart', e => {
-    // FIX BUG2: bloquear swipe de tabs cuando el login está visible
-    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) return;
+    // AppState guard: swipe de tabs solo cuando el usuario está en la app
+    if (AppState.isLogin()) return;
     _sx   = e.touches[0].clientX;
     _sy   = e.touches[0].clientY;
     _vw   = window.innerWidth;
@@ -4508,8 +4606,8 @@ const nav = (() => {
 
   track.addEventListener('touchmove', e => {
     if(!_drag) return;
-    // FIX BUG2: cancelar swipe si auth aparece durante el gesto
-    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) { _drag = false; return; }
+    // AppState guard: cancelar swipe si el estado de vista cambió
+    if (AppState.isLogin()) { _drag = false; return; }
     const dx = e.touches[0].clientX - _sx, dy = e.touches[0].clientY - _sy;
     if(Math.abs(dy) > Math.abs(dx) + 5) { _drag = false; return; }
     track.style.transform = `translateX(${Math.max(-(_vw*2), Math.min(0, _tx+dx))}px)`;
@@ -4580,9 +4678,15 @@ const nav = (() => {
     document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === i));
     (document.getElementById('header-title')||{}).textContent = TITLES[i];
     window.dispatchEvent(new CustomEvent('dashwey:tab-changed', { detail: { tab: i } }));
+    // AppState view-changed — para módulos que escuchan el cambio de vista
+    const _viewName = ['tpv','dashboard','almacen'][i] || 'dashboard';
+    window.dispatchEvent(new CustomEvent('dashwey:view-changed', { detail: { to: _viewName, tab: i } }));
     const sn = document.getElementById('sub-nav');
     if (sn) sn.style.display = 'none'; // period selector is in bn-card
-    if(i === 1) {
+    if (i === 0) {
+      // TPV: re-render al entrar — actualiza hot grid y lista de productos
+      App.tpv.render();
+    } else if(i === 1) {
       const sl = document.getElementById('snav-label');
       if (sl) sl.textContent = State.get.period().label;
     } else if(i === 2) {
@@ -5063,9 +5167,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       window._pullRefreshListenersAttached = true;
 
       document.addEventListener('touchstart', e => {
-        // FIX BUG2: NO activar pull-to-refresh si el login está visible
-        if (_isAuthVisible()) return;
-        if(nav._cTab !== 1) return;
+        // AppState guard: NO activar si estamos en login o fuera del Dashboard
+        if (!AppState.is('dashboard')) return;
         // FIX #2: No interferir si drag u otro gesto está activo
         if (window._activeGesture && window._activeGesture !== 'pullRefresh') return;
         const dt = document.querySelectorAll('.tab-page')[1];
@@ -5074,8 +5177,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }, {passive:true});
 
       document.addEventListener('touchmove', e => {
-        if(!ptActive || nav._cTab !== 1) return;
-        if (_isAuthVisible()) { ptActive = false; return; } // FIX BUG2
+        if(!ptActive) return;
+        if (!AppState.is('dashboard')) { ptActive = false; return; }
         if (window._activeGesture && window._activeGesture !== 'pullRefresh') { ptActive = false; return; }
         const dy = e.touches[0].clientY - ptStart;
         if(dy < 10) return;
@@ -5087,8 +5190,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }, {passive:true});
 
       document.addEventListener('touchend', e => {
-        if(!ptActive || nav._cTab !== 1) { ptActive = false; return; }
-        if (_isAuthVisible()) { ptActive = false; return; } // FIX BUG2
+        if(!ptActive) { ptActive = false; return; }
+        if (!AppState.is('dashboard')) { ptActive = false; return; }
         const dy = e.changedTouches[0].clientY - ptStart;
         ptActive = false;
         if (window._activeGesture === 'pullRefresh') window._activeGesture = null;
@@ -5342,10 +5445,8 @@ function initDashDrag() {
   function _onDragTouchStart(e) {
     const card = e.target.closest('.dash-draggable');
     if (!card) return;
-    // Solo en tab Dashboard (tab 1)
-    if (typeof nav !== 'undefined' && nav._cTab !== 1) return;
-    // FIX BUG2: No activar drag si el login está visible
-    if (typeof _isAuthVisible === 'function' && _isAuthVisible()) return;
+    // AppState guard: drag solo activo en Dashboard, nunca en login
+    if (!AppState.is('dashboard')) return;
     // FIX #2: Si hay otro gesto activo (p.ej. pull-to-refresh), no iniciar
     if (window._activeGesture && window._activeGesture !== 'drag') return;
 
@@ -5519,6 +5620,8 @@ const tpv = (() => {
 
   // ── TAP-TO-ADD VELOCITY ───────────────────────────────────────
   function addCart(id, triggerEl) {
+    // AppState guard: addCart solo activo en TPV
+    if (!AppState.is('tpv')) return;
     const p = State.get.prod(id);
     if (!p) return;
     _cart[id] = _cart[id] || { p, q: 0 };
@@ -5874,6 +5977,8 @@ const tpv = (() => {
 
   // ── PROCESAR PAGO ─────────────────────────────────────────────
   function procesarPago(metodo) {
+    // AppState guard: cobro solo permitido desde TPV
+    if (!AppState.isApp()) { showToast('⚠️ Accede al TPV primero'); return; }
     const items = cartItems();
     if (!items.length) { showToast('El carrito está vacío'); return; }
     const tot   = cartTotal();
@@ -6049,6 +6154,8 @@ const alm = (() => {
   }
 
   document.addEventListener('mousedown', e => {
+    // AppState guard: el CDD solo es relevante en Almacén
+    if (!AppState.isApp()) return;
     if(_cddActive) {
       const menu = document.getElementById(_cddActive);
       const trigger = document.querySelector(`.cdd-trigger[data-menu="${_cddActive}"]`);
@@ -6821,6 +6928,8 @@ const alm = (() => {
   }
 
   document.addEventListener('click', e => {
+    // AppState guard: autocomplete solo relevante en Almacén
+    if (!AppState.is('almacen')) return;
     if(!document.getElementById('alm-search-box')?.contains(e.target))
       document.getElementById('autocomplete-list')?.classList.remove('show');
   });
