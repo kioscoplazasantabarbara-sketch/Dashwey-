@@ -4,7 +4,7 @@
    ═══════════════════════════════════════════════════════════════ */
 
 const CACHE_NAME  = 'dashwey-v8-7';
-const HTML_URL    = 'index.html';
+const HTML_URL    = 'Dashwey_v82.html';
 const VERSION_URL = 'version.txt';
 
 // ── install: cachear assets críticos y activar inmediatamente ──

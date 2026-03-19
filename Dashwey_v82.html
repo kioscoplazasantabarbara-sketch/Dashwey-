@@ -4068,7 +4068,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.7.0';
+  const _APP_VERSION = 'v8.7.1';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4132,39 +4132,40 @@ const ui = (() => {
   }
 
   function doUpdate() {
-    // Ocultar banner para evitar doble click
+    // Ocultar banner, deshabilitar botón para evitar doble click
     const banner = document.getElementById('update-banner');
-    if (banner) { banner.classList.remove('visible'); }
-
+    if (banner) banner.classList.remove('visible');
     const btn = document.getElementById('update-banner-btn');
     if (btn) { btn.textContent = 'Actualizando…'; btn.disabled = true; }
+
+    // Limpiar TODA la caché y recargar
+    const _doReload = () => {
+      if ('caches' in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .then(() => location.reload(true))
+          .catch(() => location.reload(true));
+      } else {
+        location.reload(true);
+      }
+    };
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistration()
         .then(reg => {
           if (reg?.waiting) {
-            // SW en espera → activar inmediatamente
+            // SW en espera → activar; controllerchange dispara reload
             reg.waiting.postMessage({ action: 'skipWaiting' });
-          } else if (reg) {
-            // Forzar check de update
-            reg.update().then(() => {
-              if (reg.waiting) reg.waiting.postMessage({ action: 'skipWaiting' });
-            });
+            // Safety net: si controllerchange no dispara en 1.5s, forzar reload
+            setTimeout(_doReload, 1500);
+          } else {
+            // No hay SW en espera → limpiar caché y recargar directo
+            _doReload();
           }
         })
-        .catch(() => {});
-      // controllerchange dispara el reload (ver handler en bloque SW)
-      // Safety net: si no hay SW, recargar directamente tras 2s
-      setTimeout(() => {
-        if ('caches' in window) {
-          caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
-            .then(() => location.reload(true));
-        } else {
-          location.reload(true);
-        }
-      }, 2500);
+        .catch(_doReload);
     } else {
-      location.reload(true);
+      _doReload();
     }
   }
 
@@ -9956,27 +9957,35 @@ if (!window.App) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (_swReloadPending) return; // evitar doble reload
       _swReloadPending = true;
-      // Pequeño delay para que el SW termine de activarse
-      setTimeout(() => window.location.reload(), 300);
+      // Limpiar caché antes de recargar para garantizar assets frescos
+      const _reload = () => window.location.reload(true);
+      if ('caches' in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .then(_reload).catch(_reload);
+      } else {
+        setTimeout(_reload, 300);
+      }
     });
 
     // Registrar SW
     navigator.serviceWorker.register('./sw.js', { scope: './' })
       .then(reg => {
-        // Si hay un SW en espera al arrancar → activar ya
+        // Si hay un SW en espera al arrancar: NO activar automáticamente.
+        // Mostrar banner y dejar que el usuario decida.
+        // (Auto-skipWaiting causa el bucle de reload al cambiar de index.html)
         if (reg.waiting) {
-          reg.waiting.postMessage({ action: 'skipWaiting' });
+          _silentCheckUpdate();
         }
 
-        // Detectar nuevas versiones del SW
+        // Detectar nuevas versiones del SW instaladas en background
         reg.addEventListener('updatefound', () => {
           const newWorker = reg.installing;
           if (!newWorker) return;
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nuevo SW instalado y listo — activar directamente
-              // (no hay usuario activo que perder datos, el banner ya notificó)
-              newWorker.postMessage({ action: 'skipWaiting' });
+              // Nuevo SW listo — mostrar banner, NO activar solo
+              _silentCheckUpdate();
             }
           });
         });
@@ -10001,6 +10010,7 @@ if (!window.App) {
   }
 
   // ── Silent version check — solo muestra banner, no toca Settings ──
+  let _lastRemoteVer = null; // guard: evita mostrar el mismo banner en bucle
   function _silentCheckUpdate() {
     const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
     fetch(baseUrl + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
@@ -10009,17 +10019,25 @@ if (!window.App) {
         if (!data) return;
         const remoteVer = data.version ? 'v' + data.version : data.build;
         const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
-        if (remoteVer && localVer && remoteVer !== localVer) {
-          // Mostrar banner si no está ya visible
+        if (!remoteVer || !localVer) return;
+        // Si la versión remota == local: ocultar banner (ya actualizado)
+        if (remoteVer === localVer) {
           const banner = document.getElementById('update-banner');
-          if (banner && !banner.classList.contains('visible')) {
-            const msg = document.getElementById('update-banner-msg');
-            if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
-            banner.classList.add('visible');
-          }
+          if (banner) banner.classList.remove('visible');
+          return;
+        }
+        // Guard: no re-mostrar el banner para la misma remoteVer
+        if (remoteVer === _lastRemoteVer) return;
+        _lastRemoteVer = remoteVer;
+        // Mostrar banner
+        const banner = document.getElementById('update-banner');
+        if (banner && !banner.classList.contains('visible')) {
+          const msg = document.getElementById('update-banner-msg');
+          if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
+          banner.classList.add('visible');
         }
       })
-      .catch(() => {}); // silencioso — sin errores en consola si falla
+      .catch(() => {}); // silencioso
   }
 
   /* ── 2. Banner de instalación Android/Chrome ── */
