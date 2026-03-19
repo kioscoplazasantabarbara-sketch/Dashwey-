@@ -1778,33 +1778,15 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .sub-menu, .sub-item { display: none !important; }
 
 /* ── Catálogo sheet — sube desde abajo como cobro del TPV ── */
+/* orden-cat-sheet: modo inline — el catálogo vive dentro del scroll */
 .orden-cat-sheet {
-  position: absolute;
-  /* Arranca encima del dock (alm-dock ~64px) sin tapar el buscador ni el banner */
-  bottom: 64px;
-  left: 0; right: 0;
-  /* Límite superior: deja visible prov-bar + info-bar + buscador ~220px */
-  max-height: calc(100% - 130px - var(--sat, 44px));
-  background: var(--surface);
-  border-radius: 22px 22px 0 0;
-  border-top: 1px solid var(--border);
-  box-shadow: 0 -8px 32px rgba(100,120,160,0.18);
-  display: flex; flex-direction: column;
-  transform: translateY(calc(100% + 64px));
-  transition: transform 0.36s cubic-bezier(0.4,0,0.2,1);
-  z-index: 10;
-  overflow: hidden;
-  color: var(--ink);
+  display: contents; /* transparente en el layout — sus hijos van al flujo normal */
 }
-.orden-cat-sheet.open { transform: translateY(0); }
-.orden-cat-handle {
-  width: 36px; height: 4px; border-radius: 4px;
-  background: rgba(0,0,0,0.14); margin: 12px auto 0; flex-shrink: 0;
-}
-.orden-cat-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px 8px; flex-shrink: 0;
-}
+.orden-cat-sheet.open { display: contents; }
+/* orden-cat-handle: oculto en modo inline */
+.orden-cat-handle { display: none; }
+/* orden-cat-header: oculto en modo inline (el proveedor ya está en la barra) */
+.orden-cat-header { display: none; }
 .orden-cat-prov { font-size: 16px; font-weight: 700; color: var(--ink); }
 .orden-cat-close {
   width: 28px; height: 28px; border-radius: 50%;
@@ -2637,6 +2619,8 @@ function _authTabSafe(tab) {
           </div>
 
           <div class="alm-scroll" id="alm-scroll-el">
+            <!-- Catálogo inline: visible siempre, ocupa el espacio del scroll -->
+            <div id="orden-catalogo-sheet" class="orden-cat-sheet"></div>
             <div id="orden-wrap"></div>
             <div class="alm-empty" id="alm-empty">
               <div class="es-wrap">
@@ -4021,7 +4005,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.6';
+  const _APP_VERSION = 'v8.6.7';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4759,15 +4743,20 @@ const nav = (() => {
       App.alm.renderOrden();
       App.alm.updateBadge();
       App.alm.updateProvBar();
-      // Buscador ahora inline — solo posicionar botón añadir
+      // Mostrar catálogo inline al entrar en Almacén
       const almAddBtn = document.getElementById('alm-add-btn-row');
       if (almAddBtn) {
-        almAddBtn.style.display = '';
+        almAddBtn.style.display = 'none'; // oculto hasta que haya artículos en carrito
         requestAnimationFrame(() => {
           const tabH = document.getElementById('bottom-tabs')?.offsetHeight || 68;
           almAddBtn.style.bottom = tabH + 'px';
         });
       }
+      // Abrir catálogo inline automáticamente
+      requestAnimationFrame(() => {
+        const sel = State.get.selectedProv();
+        if (sel) _abrirCatalogo();
+      });
     }
   }
 
@@ -7987,51 +7976,44 @@ const alm = (() => {
     const btn = document.getElementById('alm-dock-single-btn');
     if (!btn) return;
     const cnt = Object.keys(_ordenCarrito).length;
-    if (_ordenEstado === 0) {
-      btn.style.background = '';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> Ver catálogo';
-    } else if (_ordenEstado === 1 && cnt > 0) {
+    const totalCajas = Object.values(_ordenCarrito).reduce((s,n)=>s+n,0);
+    if (totalCajas > 0) {
+      btn.style.display = '';
       btn.style.background = '#16A34A';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Aceptar (' + cnt + ' art.)';
-    } else if (_ordenEstado === 1) {
-      btn.style.background = '';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cerrar catálogo';
-    } else if (_ordenEstado === 2) {
-      btn.style.background = 'var(--blue)';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Añadir más';
+      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Aceptar (' + totalCajas + ' caja' + (totalCajas !== 1 ? 's' : '') + ')';
+    } else {
+      btn.style.display = 'none'; // ocultar si no hay nada en el carrito
     }
   }
 
   // ── Tap principal — según estado ─────────────────────────────
   function openProvProductos() {
-    if (_ordenEstado === 0) { _abrirCatalogo(); }
-    else if (_ordenEstado === 1) {
-      const cnt = Object.keys(_ordenCarrito).length;
-      if (cnt > 0) { _cerrarCatalogo(); _activarComprobacion(); }
-      else { _cerrarCatalogo(); }
-    } else if (_ordenEstado === 2) {
-      // En estado 2: "Añadir artículo" abre el catálogo sin perder los checks
-      _abrirCatalogoDesdeEstado2();
+    // Botón rojo SOLO acepta el carrito — nunca abre catálogo
+    const totalCajas = Object.values(_ordenCarrito).reduce((s,n)=>s+n,0);
+    if (totalCajas > 0) {
+      _activarComprobacion();
+    } else {
+      showToast('Toca los artículos del catálogo para añadirlos');
     }
   }
+
 
   function _abrirCatalogoDesdeEstado2() {
     const sel  = State.get.selectedProv();
     const prov = State.get.prov(sel);
     if (!prov) return;
-    _ordenCarrito = {};  // reset solo el carrito, NO los items del State
+    _ordenCarrito = {};
     _ordenEstado  = 1;
     _updateMainBtn();
-    let sheet = document.getElementById('orden-catalogo-sheet');
-    if (!sheet) {
-      sheet = document.createElement('div');
-      sheet.id = 'orden-catalogo-sheet';
-      sheet.className = 'orden-cat-sheet';
-      document.getElementById('tab-alm').appendChild(sheet);
-    }
+    const sheet = document.getElementById('orden-catalogo-sheet');
+    if (!sheet) return;
     _ordenSheetEl = sheet;
     sheet.innerHTML = _buildCatalogoHTML(sel, prov, '');
-    requestAnimationFrame(() => sheet.classList.add('open'));
+    sheet.classList.add('open');
+    const emptyEl = document.getElementById('alm-empty');
+    const wrap    = document.getElementById('orden-wrap');
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (wrap)    wrap.style.display    = 'none';
   }
 
   // ══ ESTADO 1: CATÁLOGO ════════════════════════════════════════
@@ -8041,23 +8023,26 @@ const alm = (() => {
     const prov = State.get.prov(sel);
     if (!prov) { showToast('⚠️ Selecciona un proveedor primero'); openProvPicker(); return; }
 
-    // Reset carrito al abrir — sin selecciones previas
     _ordenCarrito = {};
     _ordenEstado  = 1;
     _updateMainBtn();
 
-    // Crear sheet si no existe
-    let sheet = document.getElementById('orden-catalogo-sheet');
-    if (!sheet) {
-      sheet = document.createElement('div');
-      sheet.id = 'orden-catalogo-sheet';
-      sheet.className = 'orden-cat-sheet';
-      document.getElementById('tab-alm').appendChild(sheet);
-    }
+    // El sheet ahora vive dentro del scroll — siempre existe en el DOM
+    const sheet = document.getElementById('orden-catalogo-sheet');
+    if (!sheet) return;
     _ordenSheetEl = sheet;
     sheet.innerHTML = _buildCatalogoHTML(sel, prov, '');
-    requestAnimationFrame(() => sheet.classList.add('open'));
-    // No auto-focus — teclado solo aparece cuando el usuario toca el buscador
+    sheet.classList.add('open');
+
+    // Ocultar estado vacío y orden-wrap
+    const emptyEl = document.getElementById('alm-empty');
+    const wrap    = document.getElementById('orden-wrap');
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (wrap)    wrap.style.display    = 'none';
+
+    // Scroll al inicio del catálogo
+    const scroll = document.getElementById('alm-scroll-el');
+    if (scroll) scroll.scrollTop = 0;
   }
 
   // ── Helper: renderizar un item del catálogo (reutilizado en build y search) ──
@@ -8251,10 +8236,16 @@ const alm = (() => {
   function _catToggle(id) {
     // Bloquear si el long press acaba de ejecutarse
     if (_lpFired) { _lpFired = false; return; }
-    if (_ordenCarrito[id]) { delete _ordenCarrito[id]; }
-    else { _ordenCarrito[id] = 1; }
+    // Cada tap suma 1 caja al carrito
+    _ordenCarrito[id] = (_ordenCarrito[id] || 0) + 1;
     _catRefreshItem(id);
     _updateMainBtn();
+    // Actualizar contador EN CESTA en la info bar
+    const artEl = document.getElementById('alm-dock-art');
+    if (artEl) {
+      const total = Object.values(_ordenCarrito).reduce((s,n)=>s+n,0);
+      artEl.textContent = total;
+    }
     try { navigator.vibrate && navigator.vibrate([4]); } catch(e) {}
   }
 
@@ -8451,12 +8442,14 @@ const alm = (() => {
 
   function _cerrarCatalogo() {
     const sheet = document.getElementById('orden-catalogo-sheet');
-    if (sheet) {
-      sheet.classList.remove('open');
-      setTimeout(() => { sheet.innerHTML = ''; }, 350);
-    }
-    _ordenEstado = 0;
+    if (sheet) { sheet.innerHTML = ''; sheet.classList.remove('open'); }
+    _ordenEstado  = 0;
+    _ordenCarrito = {};
     _updateMainBtn();
+    _ordenSheetEl = null;
+    const wrap = document.getElementById('orden-wrap');
+    if (wrap) wrap.style.display = '';
+    renderOrden();
   }
 
   // ══ ESTADO 2: COMPROBACIÓN ════════════════════════════════════
