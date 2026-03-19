@@ -36,6 +36,9 @@ self.addEventListener('message', e => {
 
 // ── fetch: network-first HTML, cache-first assets ──────────────
 self.addEventListener('fetch', e => {
+  // Ignorar peticiones no-GET (POST, PUT, etc.) — no se pueden cachear
+  if (e.request.method !== 'GET') return;
+
   const url = new URL(e.request.url);
 
   // version.txt: siempre network, nunca caché (anti-cache estricto)
