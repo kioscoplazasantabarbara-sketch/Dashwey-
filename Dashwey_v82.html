@@ -866,7 +866,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 /* ── Tablet Almacén — reservado para implementación futura ── */
 /* El layout de 2 paneles se activa cuando el contenido del panel
    derecho esté implementado. Por ahora el almacén es mobile-only. */
-.alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--tab-real) + 90px); }
+.alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 140px; }
 .alm-scroll::-webkit-scrollbar { display: none; }
 
 /* KPI summary */
@@ -1674,8 +1674,6 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .auth-btn:active { transform: scale(0.97); }
 .auth-error   { font-size: 12px; color: var(--red); text-align: center; min-height: 18px; margin-bottom: 10px; }
 .auth-skip    { background: none; border: none; font-size: 13px; color: var(--ink-soft); cursor: pointer; margin-top: 14px; text-decoration: underline; }
-.auth-skip-btn { display:block; width:100%; margin-top:12px; background:none; border:1.5px solid var(--border); border-radius:12px; padding:12px; font-size:14px; font-weight:600; color:var(--ink-mid); cursor:pointer; font-family:var(--font); transition:background 0.15s; -webkit-tap-highlight-color:transparent; }
-.auth-skip-btn:active { background:var(--bg); }
 
 /* ── § 23. MISCELLANEOUS ── */
 .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ink-soft); }
@@ -1823,7 +1821,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 /* Lista de artículos */
 .orden-cat-list {
   flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
-  padding: 0 12px 8px;
+  padding: 0 12px 16px;
 }
 .orden-cat-list::-webkit-scrollbar { display: none; }
 .orden-cat-sheet .orden-cat-item {
@@ -2168,7 +2166,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 /* Tab page padding bottom */
 .tab-page { padding-bottom: var(--tab-real) !important; }
-.alm-scroll { padding-bottom: calc(var(--tab-real) + 90px) !important; }
+.alm-scroll { padding-bottom: 140px !important; }
 
 </style>
 
@@ -2226,7 +2224,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
       <div class="auth-error" id="auth-err-reg"></div>
     </div>
   </div>
-  <button class="auth-skip-btn" onclick="_authSkipSafe()">Continuar sin cuenta →</button>
+  <span class="auth-skip" onclick="_authSkipSafe()">Continuar sin cuenta (solo local)</span>
 </div>
 
 <script>
@@ -2706,7 +2704,14 @@ function _authTabSafe(tab) {
 <!-- TOAST -->
 <div id="toast"></div>
 <!-- NS OVERLAY — buscador de nombre sin parpadeo en Android -->
-
+<div id="ns-overlay">
+  <div id="ns-search-bar">
+    <svg width="16" height="16" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="ns-input" type="text" placeholder="Buscar producto..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="App.alm.renderNS(this.value)">
+    <button class="ns-cancel" onmousedown="event.preventDefault();App.alm.closeNombreSearch()">Cancelar</button>
+  </div>
+  <div id="ns-list"></div>
+</div>
 
 <!-- ══════════════════════════════════════════════════════════
   JS-0 · FIREBASE MODULAR CDN
@@ -2882,15 +2887,15 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
 
-  // Auth anónimo como punto de partida
-  // En file:// la persistencia de sesión no funciona — usar anónimo siempre
+  // Auth anónimo como punto de partida — migración a email/Google en v5.x
   signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
 
   onAuthStateChanged(_auth, user => {
     _uid = user?.uid || null;
-    window._DashweyFirebase.uid   = _uid;
+    // Notificar al IIFE principal cuando el UID esté disponible
+    window._DashweyFirebase.uid = _uid;
     window._DashweyFirebase.ready = !!_uid;
-    // Disparar SIEMPRE — incluso si uid es null (para desbloquear la UI)
+    // Disparar sync inicial si hay datos pendientes
     window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
   });
 }
@@ -3222,7 +3227,7 @@ const State = (() => {
     _saveTimer = setTimeout(() => {
       _writeLocal(_state);
       // Notificar al sistema de sync que este write es nuestro
-      if (typeof window._DashweyOnLocalWrite === 'function') { window._DashweyOnLocalWrite(); }
+      if (typeof window._DashweyOnLocalWrite === 'function') window._DashweyOnLocalWrite();
       const fb = window._DashweyFirebase;
       if (fb?.enabled && fb.isRegistered?.()) {
         if (navigator.onLine && fb.ready) {
@@ -4007,7 +4012,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.3';
+  const _APP_VERSION = 'v8.5.9';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4276,10 +4281,6 @@ const ui = (() => {
       State.set.user({ email: res.user.email, uid: res.user.uid });
       hideAuthScreen();
       showToast('👋 Bienvenido de nuevo');
-      // Disparar sync completo tras login
-      if (typeof window._DashweyInitialSync === 'function') {
-        window._DashweyInitialSync();
-      }
     } else {
       err.textContent = res.error;
       btn.disabled = false; btn.textContent = 'Entrar';
@@ -4304,9 +4305,6 @@ const ui = (() => {
       State.set.user({ email: res.user.email, uid: res.user.uid });
       hideAuthScreen();
       showToast('🎉 Cuenta creada — tus datos están en la nube');
-      if (typeof window._DashweyInitialSync === 'function') {
-        window._DashweyInitialSync();
-      }
     } else {
       err.textContent = res.error;
       btn.disabled = false; btn.textContent = 'Crear cuenta';
@@ -4316,11 +4314,7 @@ const ui = (() => {
   // Saltar auth — usar solo local
   function authSkip() {
     hideAuthScreen();
-    showToast('✅ Continuando en modo local');
-    // Intentar sync si Firebase está listo (puede que se haya conectado tarde)
-    if (typeof window._DashweyInitialSync === 'function') {
-      setTimeout(window._DashweyInitialSync, 200);
-    }
+    showToast('Modo local activado');
   }
 
   // Cerrar sesión
@@ -6480,7 +6474,7 @@ const alm = (() => {
   // El modal de pestañas (Proveedores/Pedidos/Informes) con buscador
   // y checkboxes queda BORRADO. No se puede recuperar ni invocar.
   // ═══════════════════════════════════════════════════════════════
-  function openCatalogoPicker() { _abrirCatalogo(); } // abre catálogo directo
+  function openCatalogoPicker() { openNuevoArtFs(); }
 
   // ── Orden ──
   function toggleSelMode(on) {
@@ -6781,7 +6775,10 @@ const alm = (() => {
   }
 
   // ── Almacén Dock toggle (legacy compat) ──
-  function almDockToggle() {} // legacy eliminado
+  function almDockToggle() {
+    const dock = document.getElementById('alm-dock');
+    if (dock) dock.classList.toggle('alm-dock--expanded');
+  }
 
   // ── Botón único: Añadir artículo (estilo cobro TPV) ─────────────
   function openAddOrden() {
@@ -6827,7 +6824,12 @@ const alm = (() => {
   }
 
   // ── Live Search (nuevo input unificado) ──
-  // onSearch/onSearchInput: legacy eliminado — usar _permSearch()
+  function onSearch(val) {
+    const q = val.toLowerCase().trim();
+    renderOrden(q);
+  }
+
+  // ── Live Search (legacy SAC) ──
   function onSearchInput(val) {
     const box  = document.getElementById('alm-search-box');
     const list = document.getElementById('autocomplete-list');
@@ -6866,7 +6868,12 @@ const alm = (() => {
     showToast(`${ic} ${p.nombre} — Margen ${mg}%${tip}`);
   }
 
-  // clearSearch: legacy eliminado
+  function clearSearch() {
+    const inp = document.getElementById('search-input');
+    if(inp) inp.value = '';
+    document.getElementById('autocomplete-list')?.classList.remove('show');
+    document.getElementById('alm-search-box')?.classList.remove('has-text');
+  }
 
   document.addEventListener('click', e => {
     if(!document.getElementById('alm-search-box')?.contains(e.target))
@@ -7748,15 +7755,59 @@ const alm = (() => {
     showToast('✅ ' + n + ' guardado y añadido al carrito (' + nc + ' cajas)');
   }
 
-  // ── NS Overlay: legacy eliminado (ns-overlay removido del DOM) ──
-  function openNombreSearch() {}
-  function closeNombreSearch() {}
-  function renderNS() {}
-  function selectNombreSearch(id) {
-    // Redirigir a la función moderna
-    _permSearchPick(id);
+  // ── NS Overlay — buscador de nombre ──
+  function openNombreSearch() {
+    const ov = document.getElementById('ns-overlay'); if(!ov) return;
+    ov.classList.add('ns-open');
+    const inp = document.getElementById('ns-input');
+    if(inp) { inp.value=''; setTimeout(() => inp.focus(), 60); }
+    renderNS('');
   }
 
+  function closeNombreSearch() {
+    document.getElementById('ns-overlay')?.classList.remove('ns-open');
+  }
+
+  function renderNS(val) {
+    const list = document.getElementById('ns-list'); if(!list) return;
+    const q = val.toLowerCase().trim();
+    const all = State.get.productos();
+    const matches = q ? all.filter(p => p.nombre.toLowerCase().includes(q) || p.cat.toLowerCase().includes(q)).slice(0,14) : all.slice(0,14);
+    if(!matches.length) { list.innerHTML='<div style="padding:32px;text-align:center;color:var(--white-35);font-size:14px">Sin resultados</div>'; return; }
+    const hi = str => q ? esc(str).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<b style="color:#f87171">$1</b>') : esc(str);
+    list.innerHTML = matches.map(p => {
+      const inOrden = State.get.ordenItems().some(o => o.prodId === p.id);
+      const pNombre = State.get.prov(p.prov)?.nombre || '';
+      return `<div class="ns-item" onmousedown="event.preventDefault()" onclick="App.alm.selectNombreSearch('${p.id}')">
+        <span class="ns-e">${p.e}</span>
+        <div class="ns-info"><div class="ns-nombre">${hi(p.nombre)}</div><div class="ns-sub">${esc(p.cat)} · ${esc(pNombre)} · PVP ${feur(p.pvp)}</div></div>
+        <div class="ns-tag ${inOrden?'ns-ok':'ns-add'}">${inOrden?'✓ En orden':'Añadir'}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function selectNombreSearch(id) {
+    const p = State.get.prod(id); if(!p) return;
+    closeNombreSearch();
+    const dt = document.getElementById('fn-display-text');
+    if(dt) { dt.textContent = p.nombre; dt.style.color = 'var(--text)'; }
+    const fn = document.getElementById('fn'); if(fn) fn.value = p.nombre;
+    if(p.foto) { const prev = document.getElementById('prod-photo-prev'); if(prev) prev.innerHTML=`<img src="${p.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`; }
+    const mem = getLV(id, {ncajas:1, udscaja:p.stockMinimo||12, precio:p.precioCompra, pvp:p.pvp});
+    const fpr=document.getElementById('fpr'), fpvp=document.getElementById('fpvp'), fnc=document.getElementById('fnc'), fuc=document.getElementById('fuc');
+    if(fpr) fpr.value=Number(mem.precio).toFixed(2);
+    if(fpvp) fpvp.value=Number(mem.pvp).toFixed(2);
+    if(fnc) fnc.value=mem.ncajas;
+    if(fuc) fuc.value=mem.udscaja;
+    const orden = State.get.ordenItems();
+    if(!orden.find(o => o.prodId === id)) {
+      orden.push({prodId:id, provId:p.prov, checked:false, ncajas:mem.ncajas, udscaja:mem.udscaja, precio:mem.precio, pvp:mem.pvp});
+      State.set.ordenItems(orden);
+      updateBadge();
+      showToast(`✅ ${p.nombre} añadido a la orden`);
+    }
+    setTimeout(calcIAAnalysis, 80);
+  }
 
   // ── Editar artículo existente ──────────────────────────────────
   function openEditArt(prodId) {
@@ -8106,9 +8157,8 @@ const alm = (() => {
     const sel  = State.get.selectedProv();
     const prov = State.get.prov(sel);
     if (!prov || !_ordenSheetEl) return;
-    // Botón clear ahora es alm-perm-clear (buscador inline)
-    const clear = document.getElementById('alm-perm-clear');
-    if (clear) clear.style.display = val ? 'inline-block' : 'none';
+    const clear = document.getElementById('orden-cat-clear');
+    if (clear) clear.style.display = val ? 'flex' : 'none';
     const list = document.getElementById('orden-cat-list');
     if (!list) return;
     const q = val.toLowerCase().trim();
@@ -8201,7 +8251,15 @@ const alm = (() => {
     }, 350);
   }
 
-  function _almSetKbMode(on) {} // no-op: buscador inline, no hay dock posicionable
+  function _almSetKbMode(on) {
+    // Solo gestiona el buscador — nav y botón son elementos independientes y estáticos
+    const dock = document.getElementById('alm-dock');
+    if (on) {
+      if (dock) dock.classList.add('kb-focus');
+    } else {
+      if (dock) dock.classList.remove('kb-focus');
+    }
+  }
 
   function _permSearchPick(prodId) {
     const p = State.get.prod(prodId); if (!p) return;
@@ -8240,9 +8298,8 @@ const alm = (() => {
   }
 
   function _catClearSearch() {
-    // buscador de catálogo eliminado — usar buscador principal inline
-    const inp = document.getElementById('alm-perm-search');
-    if (inp) { inp.value = ''; _permSearch(''); }
+    const inp = document.getElementById('orden-cat-search');
+    if (inp) { inp.value = ''; inp.focus(); }
     _catSearch('');
   }
 
@@ -8272,13 +8329,12 @@ const alm = (() => {
     const right = el.querySelector('.orden-cat-right');
     if (!right) return;
     right.innerHTML = nc > 0
-      ? '<span class="orden-cat-qty-badge">' + nc + '</span>' +
-        '<div class="orden-cat-stepper">' +
-          '<button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep(' + JSON.stringify(id) + ',-1)">−</button>' +
-          '<span class="orden-cat-qty" id="ocq-' + id + '">' + nc + '</span>' +
-          '<button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep(' + JSON.stringify(id) + ',1)">+</button>' +
-        '</div>'
-      : '<div class="orden-cat-price">' + feur(p?.pvp||0) + '</div>';
+      ? `<div class="orden-cat-stepper">
+          <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${id}',-1)">−</button>
+          <span class="orden-cat-qty" id="ocq-${id}">${nc}</span>
+          <button class="orden-cat-step" onclick="event.stopPropagation();App.alm._catStep('${id}',1)">+</button>
+        </div>`
+      : `<div class="orden-cat-price">${feur(p?.pvp||0)}</div>`;
   }
 
   let _lpActiveEl = null;
@@ -9247,9 +9303,6 @@ const alm = (() => {
   // consulta en cada lectura/escritura para elegir la ruta correcta.
   window._DashweyActiveContext = State.get.activeContext();
 
-  // Estado de sync inicial — siempre 'local' hasta que Firebase confirme
-  State.set.syncStatus({ mode: 'local', pendingWrites: 0 });
-
   // Aplicar estado visual del ctx-switcher según contexto guardado
   const _initCtx = State.get.activeContext();
   document.querySelectorAll('#ctx-switcher .ctx-btn').forEach(btn => {
@@ -9295,47 +9348,37 @@ const alm = (() => {
   alm.renderOrden();
   alm.updateBadge();
 
-  // ── Auth gate ─────────────────────────────────────────────────
+  // ── Auth gate — mostrar login si Firebase está activo ──────────
+  // Si el usuario ya está registrado (no anónimo), ocultar directamente.
+  // Si es anónimo o no hay usuario, mostrar la pantalla de auth.
+  // El evento firebase-ready llega cuando onAuthStateChanged confirma el UID.
   const _authScreen = document.getElementById('auth-screen');
-  const _fb = window._DashweyFirebase;
-
-  // Si estamos en archivo local (file://) → saltar auth, modo local directo
-  const _isLocalFile = location.protocol === 'file:';
-
   if (_authScreen) {
-    if (!_fb?.enabled || _isLocalFile) {
-      // Sin Firebase o archivo local → modo local directo, sin login
+    const fb = window._DashweyFirebase;
+    if (!fb?.enabled) {
+      // Firebase desactivado — ocultar pantalla, modo local directo
       _authScreen.style.display = 'none';
     } else {
-      // Firebase activo → ocultar mientras confirma, mostrar solo si anónimo
-      _authScreen.style.display = 'none';
-
-      const _showAuthIfAnon = () => {
-        if (_fb.isRegistered()) {
-          // Cuenta real → entrar directo
-          _authScreen.style.display = 'none';
-          const email = _fb.currentEmail?.();
+      // Firebase activo — mostrar hasta confirmar estado de auth
+      _authScreen.style.display = 'flex';
+      window.addEventListener('dashwey:firebase-ready', () => {
+        if (fb.isRegistered()) {
+          // Usuario con cuenta real — entrar directo
+          ui.hideAuthScreen();
+          const email = fb.currentEmail();
           if (email) showToast('👋 ' + email);
+          // Re-evaluar visibilidad con el rol real del usuario
           checkVisibility();
-        } else {
-          // Anónimo → mostrar login con skip visible
-          _authScreen.style.display = 'flex';
         }
-      };
-
-      if (_fb.ready) {
-        _showAuthIfAnon();
-      } else {
-        window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
-        // Si Firebase no responde en 5s → modo local
-        setTimeout(() => {
-          if (_authScreen.style.display !== 'none') return;
-          if (!_fb.ready) {
-            _authScreen.style.display = 'none';
-            showToast('⚠️ Sin conexión — modo local');
-          }
-        }, 5000);
-      }
+        // Si es anónimo, la pantalla de auth queda visible para que se registre
+      }, { once: true });
+      // Timeout de seguridad — si Firebase tarda >5s, permitir uso local
+      setTimeout(() => {
+        if (_authScreen && _authScreen.style.display !== 'none') {
+          const err = document.getElementById('auth-err-login');
+          if (err && !err.textContent) err.textContent = 'Sin conexión. Puedes continuar en modo local.';
+        }
+      }, 5000);
     }
   }
 
@@ -9367,13 +9410,9 @@ const alm = (() => {
     alm.updateBadge();
   }
 
-  // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
-  async function _doInitialSync() {
+  window.addEventListener('dashwey:firebase-ready', async () => {
     const fb = window._DashweyFirebase;
-    if (!fb?.enabled) return;
-    // No requerir fb.ready — el UID puede haberse actualizado tras login
-    const uid = fb.uid || fb._auth?.currentUser?.uid;
-    if (!uid) return;
+    if (!fb?.enabled || !fb?.ready) return;
 
     const remote = await fb.read('state');
     if (!remote) {
@@ -9439,20 +9478,7 @@ const alm = (() => {
 
     // Exponer hook para saber cuándo nosotros escribimos
     window._DashweyOnLocalWrite = () => { _lastLocalWrite = Date.now(); };
-  }
-
-  // Exponer para uso en authLogin/authRegister
-  window._DashweyInitialSync = _doInitialSync;
-
-  // Ejecutar sync: si ya está listo, inmediatamente; si no, esperar evento
-  if (_fb?.ready) {
-    _doInitialSync();
-  } else {
-    window.addEventListener('dashwey:firebase-ready', () => {
-      // Pequeño delay para que onAuthStateChanged actualice fb.uid primero
-      setTimeout(_doInitialSync, 100);
-    }, { once: true });
-  }
+  });
 
   // ── Listener: re-render Dashboard al registrar una venta ────────
   // Dispara inmediatamente cuando procesarPago() termina, sin esperar sync FB
