@@ -1,9 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   Dashwey Service Worker v8.7.9
+   Dashwey Service Worker v8.8.0
    Network-First HTML · Cache-First assets · Auto-update support
    ═══════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v8-7-9';
+const CACHE_NAME  = 'dashwey-v8-8-0';
 const HTML_URL    = 'Dashwey_v82.html';
 const VERSION_URL = 'version.txt';
 

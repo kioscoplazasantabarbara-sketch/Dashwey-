@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.7.9</title>
+<title>Dashwey v8.8.0</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.7.9</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.0</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.7.9</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.8.0</div>
     </div>
   </div>
 
@@ -4083,7 +4083,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v8.7.9</div>
+        <div class="menu-ver">Dashwey v8.8.0</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -6859,11 +6859,15 @@ const alm = (() => {
   function renderOrden(searchQ) {
     // Actualizar barra de proveedor
     updateProvBar();
-    // Usar nuevo render de orden
+    // Nuevo sistema de render — gestiona todos los estados (0, 2)
     _renderOrdenNueva();
-    // Refrescar catálogo inline permanente
+    // Catálogo inline permanente (debajo del dock)
     if (typeof renderCatInline === 'function') renderCatInline();
+    // El bloque legacy de checklist ha sido eliminado (v8.7.9):
+    // _renderOrdenNueva() gestiona completamente el área #orden-wrap.
+    return; // salida temprana — evita re-renderizar el checklist antiguo
 
+    // ── LEGACY (desactivado) ── mantenido solo como referencia
     const wrap    = document.getElementById('orden-wrap');
     const emptyEl = document.getElementById('alm-empty');
     const sel     = State.get.selectedProv();
@@ -7112,7 +7116,8 @@ const alm = (() => {
       orderBadge.style.display = allProvItems.length > 0 ? 'inline-flex' : 'none';
     }
     // Celda EN CESTA: mostrar items del carrito activo o de la orden
-    const carritoCount = Object.keys(typeof _ordenCarrito !== 'undefined' ? _ordenCarrito : {}).length;
+    const carritoVals = typeof _ordenCarrito !== 'undefined' ? Object.values(_ordenCarrito) : [];
+    const carritoCount = carritoVals.reduce((s, n) => s + n, 0);
     if (dockArtEl) dockArtEl.textContent = carritoCount > 0 ? carritoCount : allProvItems.length;
 
     // ── Summary KPIs arriba del Almacén ─────────────────────────
@@ -8763,12 +8768,13 @@ const alm = (() => {
 
   // ── Botón Aceptar rojo fijo — mostrar/ocultar y posicionar ────
   function _updateAcceptBtn() {
-    const cnt = Object.keys(_ordenCarrito).length;
+    const cnt = Object.values(_ordenCarrito).reduce((s, n) => s + n, 0);
+    const nArts = Object.keys(_ordenCarrito).length;
     const btn = document.getElementById('alm-accept-fixed');
     const lbl = document.getElementById('alm-accept-label');
     if (!btn) return;
-    if (cnt > 0) {
-      if (lbl) lbl.textContent = 'Aceptar pedido (' + cnt + ' art.)';
+    if (nArts > 0) {
+      if (lbl) lbl.textContent = 'Aceptar pedido (' + cnt + ' caja' + (cnt !== 1 ? 's' : '') + ')';
       if (btn.style.display === 'none' || btn.style.display === '') {
         btn.style.display = 'block';
         // posicionar sobre la navbar
@@ -10355,7 +10361,7 @@ if (!window.App) {
   }
 
   // ── Silent version check — solo muestra banner, no toca Settings ──
-  let _lastRemoteVer = null; // guard: evita mostrar el mismo banner en bucle
+  let _lastRemoteVer = null; // guard en memoria: evita mostrar el mismo banner en bucle
   function _silentCheckUpdate() {
     const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
     fetch(baseUrl + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
@@ -10365,17 +10371,22 @@ if (!window.App) {
         const remoteVer = data.version ? 'v' + data.version : data.build;
         const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
         if (!remoteVer || !localVer) return;
-        // Si la versión remota == local: ocultar banner (ya actualizado)
+        const banner = document.getElementById('update-banner');
+        // Si la versión remota == local: ocultar banner y resetear guard
         if (remoteVer === localVer) {
-          const banner = document.getElementById('update-banner');
           if (banner) banner.classList.remove('visible');
+          _lastRemoteVer = null; // resetear para detectar futuras actualizaciones reales
+          sessionStorage.removeItem('dashwey_pending_ver');
           return;
         }
-        // Guard: no re-mostrar el banner para la misma remoteVer
+        // Guard persistente en sessionStorage: evita re-mostrar tras reload
+        const shownVer = sessionStorage.getItem('dashwey_pending_ver');
+        if (remoteVer === shownVer) return;
+        // Guard en memoria: evita doble-show en la misma sesión
         if (remoteVer === _lastRemoteVer) return;
         _lastRemoteVer = remoteVer;
+        sessionStorage.setItem('dashwey_pending_ver', remoteVer);
         // Mostrar banner
-        const banner = document.getElementById('update-banner');
         if (banner && !banner.classList.contains('visible')) {
           const msg = document.getElementById('update-banner-msg');
           if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
