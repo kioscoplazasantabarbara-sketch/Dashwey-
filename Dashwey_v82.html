@@ -1674,6 +1674,8 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .auth-btn:active { transform: scale(0.97); }
 .auth-error   { font-size: 12px; color: var(--red); text-align: center; min-height: 18px; margin-bottom: 10px; }
 .auth-skip    { background: none; border: none; font-size: 13px; color: var(--ink-soft); cursor: pointer; margin-top: 14px; text-decoration: underline; }
+.auth-skip-btn { display:block; width:100%; margin-top:12px; background:none; border:1.5px solid var(--border); border-radius:12px; padding:12px; font-size:14px; font-weight:600; color:var(--ink-mid); cursor:pointer; font-family:var(--font); transition:background 0.15s; -webkit-tap-highlight-color:transparent; }
+.auth-skip-btn:active { background:var(--bg); }
 
 /* ── § 23. MISCELLANEOUS ── */
 .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ink-soft); }
@@ -2224,7 +2226,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
       <div class="auth-error" id="auth-err-reg"></div>
     </div>
   </div>
-  <span class="auth-skip" onclick="_authSkipSafe()">Continuar sin cuenta (solo local)</span>
+  <button class="auth-skip-btn" onclick="_authSkipSafe()">Continuar sin cuenta →</button>
 </div>
 
 <script>
@@ -2880,7 +2882,8 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
 
-  // Auth anónimo como punto de partida — migración a email/Google en v5.x
+  // Auth anónimo como punto de partida
+  // En file:// la persistencia de sesión no funciona — usar anónimo siempre
   signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
 
   onAuthStateChanged(_auth, user => {
@@ -4004,7 +4007,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.2';
+  const _APP_VERSION = 'v8.6.3';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4313,7 +4316,11 @@ const ui = (() => {
   // Saltar auth — usar solo local
   function authSkip() {
     hideAuthScreen();
-    showToast('Modo local activado');
+    showToast('✅ Continuando en modo local');
+    // Intentar sync si Firebase está listo (puede que se haya conectado tarde)
+    if (typeof window._DashweyInitialSync === 'function') {
+      setTimeout(window._DashweyInitialSync, 200);
+    }
   }
 
   // Cerrar sesión
@@ -9288,55 +9295,49 @@ const alm = (() => {
   alm.renderOrden();
   alm.updateBadge();
 
-  // ── Auth gate — lógica simplificada y robusta ─────────────────
+  // ── Auth gate ─────────────────────────────────────────────────
   const _authScreen = document.getElementById('auth-screen');
   const _fb = window._DashweyFirebase;
 
-  // Ocultar auth screen mientras Firebase resuelve
-  // Solo mostrarla si onAuthStateChanged confirma que el usuario es anónimo
-  if (_authScreen) _authScreen.style.display = 'none';
+  // Si estamos en archivo local (file://) → saltar auth, modo local directo
+  const _isLocalFile = location.protocol === 'file:';
 
-  // Cuando Firebase confirme estado de auth:
-  function _onFirebaseAuthReady() {
-    if (!_fb?.enabled) return;
-    if (_fb.isRegistered()) {
-      // Usuario con cuenta real → ocultar, sincronizar
-      if (_authScreen) _authScreen.style.display = 'none';
-      const email = _fb.currentEmail?.();
-      if (email) showToast('👋 ' + email);
-      checkVisibility();
+  if (_authScreen) {
+    if (!_fb?.enabled || _isLocalFile) {
+      // Sin Firebase o archivo local → modo local directo, sin login
+      _authScreen.style.display = 'none';
     } else {
-      // Usuario anónimo → mostrar pantalla de login
-      if (_authScreen) {
-        _authScreen.style.display = 'flex';
-        // Mensaje de ayuda si lleva tiempo sin conectar
+      // Firebase activo → ocultar mientras confirma, mostrar solo si anónimo
+      _authScreen.style.display = 'none';
+
+      const _showAuthIfAnon = () => {
+        if (_fb.isRegistered()) {
+          // Cuenta real → entrar directo
+          _authScreen.style.display = 'none';
+          const email = _fb.currentEmail?.();
+          if (email) showToast('👋 ' + email);
+          checkVisibility();
+        } else {
+          // Anónimo → mostrar login con skip visible
+          _authScreen.style.display = 'flex';
+        }
+      };
+
+      if (_fb.ready) {
+        _showAuthIfAnon();
+      } else {
+        window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
+        // Si Firebase no responde en 5s → modo local
         setTimeout(() => {
-          if (_authScreen.style.display !== 'none') {
-            const err = document.getElementById('auth-err-login');
-            if (err && !err.textContent) {
-              err.textContent = 'Inicia sesión para sincronizar tus datos.';
-            }
+          if (_authScreen.style.display !== 'none') return;
+          if (!_fb.ready) {
+            _authScreen.style.display = 'none';
+            showToast('⚠️ Sin conexión — modo local');
           }
-        }, 2000);
+        }, 5000);
       }
     }
   }
-
-  // Ejecutar cuando Firebase esté listo
-  if (_fb?.ready) {
-    _onFirebaseAuthReady();
-  } else {
-    window.addEventListener('dashwey:firebase-ready', _onFirebaseAuthReady, { once: true });
-  }
-
-  // Timeout de seguridad — si Firebase no responde en 8s, mostrar opción local
-  setTimeout(() => {
-    if (_authScreen && _authScreen.style.display === 'none') return; // ya resuelto
-    const err = document.getElementById('auth-err-login');
-    if (err && !err.textContent) {
-      err.textContent = 'Sin conexión. Puedes continuar en modo local.';
-    }
-  }, 8000);
 
   // ── Sync inicial con Firebase ──────────────────────────────────
   // Cuando Firebase esté listo, leer el estado remoto.
