@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.8.1</title>
+<title>Dashwey v8.8.2</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.1</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.2</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.8.1</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.8.2</div>
     </div>
   </div>
 
@@ -4083,7 +4083,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v8.8.1</div>
+        <div class="menu-ver">Dashwey v8.8.2</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -4140,7 +4140,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.7.5';
+  const _APP_VERSION = 'v8.8.2';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -6225,7 +6225,20 @@ const alm = (() => {
   let _ordenSel = new Set();
   // ── Estado Orden Nueva ──
   let _ordenCarrito = {};
-  let _ordenEstado  = 0;    // 0=reposo 1=catalogo 2=comprobacion
+  let _ordenEstado  = 0;    // 0=reposo 1=catalogo (estado 2 eliminado en v8.8.2)
+
+  // Limpiar items "checked" residuales del flujo de comprobación antiguo
+  // Se ejecuta una vez al cargar el módulo — no afecta a datos válidos
+  ;(function _limpiarCheckedResiduales() {
+    try {
+      const items = State.get.ordenItems();
+      const sinChecked = items.map(o => ({ ...o, checked: false }));
+      // Solo escribir si hay diferencia (evitar escritura innecesaria)
+      if (items.some(o => o.checked)) {
+        State.set.ordenItems(sinChecked);
+      }
+    } catch(e) {}
+  })();
   let _ordenSheetEl = null;
   let _lpTimer      = null;
   let _catInlineQ   = '';   // filtro actual del buscador inline
@@ -9624,23 +9637,20 @@ const alm = (() => {
     const wrap  = document.getElementById('orden-wrap');
     const empty = document.getElementById('alm-empty');
     if (!wrap) return;
-    // Estado 2 eliminado — _renderComprobacion ya no se usa
-    // Estado 0: mostrar lista existente del proveedor
     const sel   = State.get.selectedProv();
-    const items = State.get.ordenItems().filter(o => o.provId === sel);
+    // Solo mostrar items pendientes (no checked) — los checked son restos del
+    // flujo de comprobación antiguo y no deben mostrarse (v8.8.2)
+    const allItems = State.get.ordenItems().filter(o => o.provId === sel);
+    const items = allItems.filter(o => !o.checked);
     if (!items.length) {
       wrap.innerHTML = '';
       if (empty) empty.style.display = 'flex';
       return;
     }
     if (empty) empty.style.display = 'none';
-    const prov = State.get.prov(sel);
-    const total = items.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*1.10,0);
-    wrap.innerHTML = `
-      ${items.map(o => {
-        const p = State.get.prod(o.prodId);
-        return `<div class="orden-new-item${o.checked?' done':''}" id="oni-${o.prodId}">
-          <div class="orden-new-chk${o.checked?' done':''}"></div>
+    wrap.innerHTML = items.map(o => {
+      const p = State.get.prod(o.prodId);
+      return `<div class="orden-new-item" id="oni-${o.prodId}">
           <div class="orden-new-e">${p?.e||'📦'}</div>
           <div class="orden-new-info">
             <div class="orden-new-name">${esc(p?.nombre||'')}</div>
@@ -9648,7 +9658,7 @@ const alm = (() => {
           </div>
           <div class="orden-new-price">${feur((o.ncajas||1)*(o.precio||0)*1.10)}</div>
         </div>`;
-      }).join('')}`;
+    }).join('');
   }
 
   // ══ FIN ORDEN NUEVA ═══════════════════════════════════════════
