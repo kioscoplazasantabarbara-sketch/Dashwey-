@@ -1,10 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════
-   Dashwey Service Worker v8
+   Dashwey Service Worker v8.7
    Network-First HTML · Cache-First assets · Auto-update support
    ═══════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v8';
-const HTML_URL    = 'Dashwey_v82.html';
+const CACHE_NAME  = 'dashwey-v8-7';
+const HTML_URL    = 'index.html';
 const VERSION_URL = 'version.txt';
 
 // ── install: cachear assets críticos y activar inmediatamente ──
@@ -12,7 +12,7 @@ self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll([HTML_URL, VERSION_URL]).catch(() => {}))
-      .then(() => self.skipWaiting()) // activar sin esperar a que cierren los clientes
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -23,7 +23,7 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(
         keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
       ))
-      .then(() => self.clients.claim()) // controlar tabs abiertos sin reload
+      .then(() => self.clients.claim())
   );
 });
 
@@ -36,12 +36,11 @@ self.addEventListener('message', e => {
 
 // ── fetch: network-first HTML, cache-first assets ──────────────
 self.addEventListener('fetch', e => {
-  // Ignorar peticiones no-GET (POST, PUT, etc.) — no se pueden cachear
   if (e.request.method !== 'GET') return;
 
   const url = new URL(e.request.url);
 
-  // version.txt: siempre network, nunca caché (anti-cache estricto)
+  // version.txt: siempre network, nunca caché
   if (url.pathname.endsWith(VERSION_URL)) {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' })
@@ -56,7 +55,7 @@ self.addEventListener('fetch', e => {
       fetch(e.request, { cache: 'no-store' })
         .then(res => {
           if (res?.status === 200) {
-            const resClone = res.clone(); // clonar ANTES de consumir
+            const resClone = res.clone();
             caches.open(CACHE_NAME)
               .then(cache => cache.put(e.request, resClone));
           }
@@ -67,14 +66,14 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Assets (JS, CSS, fonts, imágenes): cache-first, fallback network
+  // Assets: cache-first, fallback network
   e.respondWith(
     caches.match(e.request)
       .then(cached => {
         if (cached) return cached;
         return fetch(e.request).then(res => {
           if (res?.status === 200 && res.type !== 'opaque') {
-            const resClone = res.clone(); // clonar ANTES de consumir
+            const resClone = res.clone();
             caches.open(CACHE_NAME)
               .then(cache => cache.put(e.request, resClone));
           }
