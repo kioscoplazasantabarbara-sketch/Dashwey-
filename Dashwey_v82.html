@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.7</title>
+<title>Dashwey v8.7.6</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.4</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.7.6</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.4</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.7.6</div>
     </div>
   </div>
 
@@ -3003,15 +3003,22 @@ if (FIREBASE_ENABLED) {
 
   let _fbReadyFired = false;
   onAuthStateChanged(_auth, user => {
+    const wasAnon = _auth?.currentUser === null || window._DashweyFirebase.uid === null;
     _uid = user?.uid || null;
-    window._DashweyFirebase.uid   = _uid;
-    window._DashweyFirebase.ready = !!_uid;
+    window._DashweyFirebase.uid        = _uid;
+    window._DashweyFirebase.ready      = !!_uid;
+    window._DashweyFirebase._isAnon    = user?.isAnonymous ?? true;
     // Disparar dashwey:firebase-ready solo la primera vez
     // Las siguientes veces (login/logout) no deben re-mostrar el auth screen
     if (!_fbReadyFired) {
       _fbReadyFired = true;
       window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
     }
+    // Siempre disparar dashwey:auth-changed para que authLogin pueda
+    // reaccionar al estado final del usuario (real vs anónimo)
+    window.dispatchEvent(new CustomEvent('dashwey:auth-changed', {
+      detail: { uid: _uid, isAnonymous: user?.isAnonymous ?? true }
+    }));
   });
 }
 
@@ -3097,12 +3104,23 @@ window._DashweyFirebase = {
   },
 
   // Login con email/contraseña
+  // FIX v8.7.6: Si hay usuario anónimo activo, hacer signOut primero para
+  // evitar colisión de estado en onAuthStateChanged durante el login real.
   async login(email, password) {
     if (!FIREBASE_ENABLED || !_auth) return { ok: false, error: 'Firebase no disponible' };
     try {
+      // Si hay usuario anónimo, deslogarlo antes de hacer login real
+      if (_auth.currentUser?.isAnonymous) {
+        await signOut(_auth);
+      }
       const userCredential = await signInWithEmailAndPassword(_auth, email, password);
       return { ok: true, user: userCredential.user };
     } catch(e) {
+      // Si el login falla tras el signOut, intentar restaurar sesión anónima
+      // para que la app siga siendo usable
+      if (!_auth.currentUser) {
+        signInAnonymously(_auth).catch(() => {});
+      }
       return { ok: false, error: _authErrorMsg(e.code) };
     }
   },
@@ -4382,7 +4400,7 @@ const ui = (() => {
     (document.getElementById('auth-err-reg')||{}).textContent = '';
   }
 
-  // Login
+  // Login — v8.7.6: robusto ante colisión anónimo→real
   async function authLogin() {
     const email = document.getElementById('auth-email-login').value.trim();
     const pass  = document.getElementById('auth-pass-login').value;
@@ -4397,6 +4415,18 @@ const ui = (() => {
       if (!fb?.enabled) { hideAuthScreen(); return; }
       const res = await fb.login(email, pass);
       if (res.ok) {
+        // Esperar confirmación de onAuthStateChanged antes de ocultar pantalla
+        await new Promise(resolve => {
+          if (fb.isRegistered()) { resolve(); return; }
+          const _t = setTimeout(resolve, 5000);
+          window.addEventListener('dashwey:auth-changed', function _onOk(e) {
+            if (!e.detail?.isAnonymous) {
+              clearTimeout(_t);
+              window.removeEventListener('dashwey:auth-changed', _onOk);
+              resolve();
+            }
+          });
+        });
         State.set.user({ email: res.user.email, uid: res.user.uid });
         hideAuthScreen();
         showToast('👋 Bienvenido');
