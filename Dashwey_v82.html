@@ -2338,8 +2338,16 @@ function _authLoginSafe() {
   if (!email||!pass) { if(err) err.textContent='Rellena email y contraseña'; return; }
   if(btn){btn.disabled=true;btn.textContent='Entrando…';}
   fb.login(email,pass).then(res=>{
-    if(res.ok){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}}
-    else{if(err)err.textContent=res.error;if(btn){btn.disabled=false;btn.textContent='Entrar';}}
+    if(res.ok){
+      if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}
+      try{if(typeof window._DashweyInitialSync==='function')window._DashweyInitialSync();}catch(e){}
+    } else {
+      if(err)err.textContent=res.error||'Error de autenticación';
+      if(btn){btn.disabled=false;btn.textContent='Entrar';}
+    }
+  }).catch(e=>{
+    if(err)err.textContent='Error inesperado';
+    if(btn){btn.disabled=false;btn.textContent='Entrar';}
   });
 }
 function _authRegisterSafe() {
@@ -2993,12 +3001,17 @@ if (FIREBASE_ENABLED) {
   // En file:// la persistencia de sesión no funciona — usar anónimo siempre
   signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
 
+  let _fbReadyFired = false;
   onAuthStateChanged(_auth, user => {
     _uid = user?.uid || null;
     window._DashweyFirebase.uid   = _uid;
     window._DashweyFirebase.ready = !!_uid;
-    // Disparar SIEMPRE — incluso si uid es null (para desbloquear la UI)
-    window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
+    // Disparar dashwey:firebase-ready solo la primera vez
+    // Las siguientes veces (login/logout) no deben re-mostrar el auth screen
+    if (!_fbReadyFired) {
+      _fbReadyFired = true;
+      window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
+    }
   });
 }
 
@@ -4114,7 +4127,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.7.4';
+  const _APP_VERSION = 'v8.7.5';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4376,21 +4389,28 @@ const ui = (() => {
     const btn   = document.getElementById('auth-btn-login');
     const err   = document.getElementById('auth-err-login');
     if (!email || !pass) { err.textContent = 'Rellena email y contraseña'; return; }
+    if (err) err.textContent = '';
     btn.disabled = true; btn.textContent = 'Entrando…';
-    const fb = window._DashweyFirebase;
-    if (!fb?.enabled) { hideAuthScreen(); return; }
-    const res = await fb.login(email, pass);
-    if (res.ok) {
-      State.set.user({ email: res.user.email, uid: res.user.uid });
-      hideAuthScreen();
-      showToast('👋 Bienvenido de nuevo');
-      // Disparar sync completo tras login
-      if (typeof window._DashweyInitialSync === 'function') {
-        window._DashweyInitialSync();
+    const _restore = () => { btn.disabled = false; btn.textContent = 'Entrar'; };
+    try {
+      const fb = window._DashweyFirebase;
+      if (!fb?.enabled) { hideAuthScreen(); return; }
+      const res = await fb.login(email, pass);
+      if (res.ok) {
+        State.set.user({ email: res.user.email, uid: res.user.uid });
+        hideAuthScreen();
+        showToast('👋 Bienvenido');
+        if (typeof window._DashweyInitialSync === 'function') {
+          try { window._DashweyInitialSync(); } catch(e) { console.warn('[Dashwey] sync error:', e); }
+        }
+      } else {
+        if (err) err.textContent = res.error || 'Error de autenticación';
+        _restore();
       }
-    } else {
-      err.textContent = res.error;
-      btn.disabled = false; btn.textContent = 'Entrar';
+    } catch(e) {
+      console.warn('[Dashwey] authLogin error:', e);
+      if (err) err.textContent = 'Error inesperado, inténtalo de nuevo';
+      _restore();
     }
   }
 
@@ -9831,14 +9851,13 @@ const alm = (() => {
         _showAuthIfAnon();
       } else {
         window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
-        // Si Firebase no responde en 5s → modo local
+        // Si Firebase no responde en 4s → modo local
         setTimeout(() => {
-          if (_authScreen.style.display !== 'none') return;
-          if (!_fb.ready) {
+          if (!_fb.ready && _authScreen.style.display !== 'none') {
             _authScreen.style.display = 'none';
             showToast('⚠️ Sin conexión — modo local');
           }
-        }, 5000);
+        }, 4000);
       }
     }
   }
@@ -9865,10 +9884,11 @@ const alm = (() => {
   }
   // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
   function _renderAll() {
-    dash.render();
-    tpv.render();
-    alm.renderOrden();
-    alm.updateBadge();
+    try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
+    try { tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
+    try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
+    try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
+    try { alm.updateBadge(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
   }
 
   // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
