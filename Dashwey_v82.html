@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.8.3</title>
+<title>Dashwey v8.8.4</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.3</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.4</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.8.3</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.8.4</div>
     </div>
   </div>
 
@@ -2997,24 +2997,27 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
 
-  // Auth anónimo como punto de partida
-  // En file:// la persistencia de sesión no funciona — usar anónimo siempre
-  signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
+  // v8.8.4: SIN signInAnonymously al arranque.
+  // Firebase restaura la sesión real desde localStorage automáticamente.
+  // signInAnonymously causaba una carrera que mostraba el login siempre.
 
   let _fbReadyFired = false;
   onAuthStateChanged(_auth, user => {
     _uid = user?.uid || null;
     window._DashweyFirebase.uid     = _uid;
-    window._DashweyFirebase.ready   = !!_uid;
-    window._DashweyFirebase._isAnon = user?.isAnonymous ?? true;
-    // Disparar dashwey:firebase-ready solo la primera vez
-    if (!_fbReadyFired) {
+    window._DashweyFirebase._isAnon = user?.isAnonymous ?? false;
+    // ready = true solo si hay usuario REAL registrado (no anónimo, no null)
+    window._DashweyFirebase.ready   = !!user && !user.isAnonymous;
+
+    // firebase-ready: primera vez que hay usuario real autenticado
+    if (!_fbReadyFired && user && !user.isAnonymous) {
       _fbReadyFired = true;
       window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
     }
-    // Siempre disparar auth-changed (login real, logout, reconexión)
+
+    // auth-changed: siempre, para que el auth gate reaccione a cada cambio
     window.dispatchEvent(new CustomEvent('dashwey:auth-changed', {
-      detail: { uid: _uid, isAnonymous: user?.isAnonymous ?? true, hasUser: !!user }
+      detail: { uid: _uid, isAnonymous: user?.isAnonymous ?? false, hasUser: !!user }
     }));
   });
 }
@@ -3111,19 +3114,20 @@ window._DashweyFirebase = {
     }
   },
 
-  // Cierre de sesión interno (sin restaurar anónimo) — usado por authLogin
+  // Cierre de sesión interno — sin restaurar anónimo
   async _signOut() {
     if (!FIREBASE_ENABLED || !_auth) return;
     await signOut(_auth);
   },
 
-  // Cerrar sesión — restaura anónimo para que la app siga funcionando
+  // Cerrar sesión — limpio, sin restaurar anónimo (v8.8.4)
+  // El auth gate reacciona a onAuthStateChanged(null) y muestra login
   async logout() {
     if (!FIREBASE_ENABLED || !_auth) return;
     try {
+      // Marcar logout intencional para que al arrancar muestre login
+      try { localStorage.setItem('dashwey_logged_out', '1'); } catch(_) {}
       await signOut(_auth);
-      // Volver a auth anónimo para que la app siga en modo local
-      await signInAnonymously(_auth);
     } catch(e) {
       console.warn('[Dashwey] logout error:', e);
     }
@@ -4083,7 +4087,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v8.8.3</div>
+        <div class="menu-ver">Dashwey v8.8.4</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -4140,7 +4144,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.8.3';
+  const _APP_VERSION = 'v8.8.4';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4414,8 +4418,10 @@ const ui = (() => {
       }
       const res = await fb.login(email, pass);
       if (res.ok) {
+        // Limpiar flag de logout intencional
+        try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
         State.set.user({ email: res.user.email, uid: res.user.uid });
-        hideAuthScreen();  // ocultar inmediatamente — no esperar evento
+        hideAuthScreen();
         showToast('👋 Bienvenido');
         if (typeof window._DashweyInitialSync === 'function') {
           try { window._DashweyInitialSync(); } catch(e) { console.warn('[Dashwey] sync error:', e); }
@@ -4458,22 +4464,26 @@ const ui = (() => {
     }
   }
 
-  // Saltar auth — usar solo local
+  // Saltar auth — usar solo local (v8.8.4)
   function authSkip() {
+    // Marcar que el usuario eligió continuar sin cuenta
+    // No limpiar dashwey_logged_out para que la próxima apertura muestre login
+    // (el usuario skipeó, no inició sesión real)
     hideAuthScreen();
     showToast('✅ Continuando en modo local');
-    // Intentar sync si Firebase está listo (puede que se haya conectado tarde)
     if (typeof window._DashweyInitialSync === 'function') {
       setTimeout(window._DashweyInitialSync, 200);
     }
   }
 
-  // Cerrar sesión
+  // Cerrar sesión — v8.8.4
   async function authLogout() {
     const fb = window._DashweyFirebase;
     if (fb?.enabled) await fb.logout();
     showToast('Sesión cerrada');
-    showAuthScreen();
+    // Mostrar pantalla login inmediatamente
+    const s = _authScreen();
+    if (s) { s.style.display = 'flex'; s.classList.remove('hidden'); }
   }
 
   // Pantalla de cambio de contraseña
@@ -9432,34 +9442,64 @@ const alm = (() => {
       // Sin Firebase o archivo local → modo local directo, sin login
       _authScreen.style.display = 'none';
     } else {
-      // Firebase activo → ocultar mientras confirma, mostrar solo si anónimo
-      _authScreen.style.display = 'none';
+      // Firebase activo — v8.8.4: auth gate basado en auth-changed permanente
+      //
+      // FLUJO:
+      //   a) Si hubo logout intencional → mostrar login directamente
+      //   b) Si no → ocultar pantalla y esperar que Firebase restaure sesión
+      //   c) auth-changed con usuario real → ocultar pantalla → entrar
+      //   d) auth-changed con null → timeout → mostrar login
+      //   e) Sin respuesta en 5s → modo local sin login
 
-      const _showAuthIfAnon = () => {
-        if (_fb.isRegistered()) {
-          // Cuenta real → entrar directo
-          _authScreen.style.display = 'none';
+      const _loggedOut = (() => { try { return localStorage.getItem('dashwey_logged_out') === '1'; } catch(_) { return false; } })();
+
+      if (_loggedOut) {
+        // Logout intencional previo → mostrar login
+        _authScreen.style.display = 'flex';
+      } else {
+        // Esperar restauración de sesión — pantalla oculta mientras tanto
+        _authScreen.style.display = 'none';
+      }
+
+      // Listener permanente: reacciona a login, logout y restauración de sesión
+      function _onAuthChange(e) {
+        const { isAnonymous, hasUser } = e.detail || {};
+        if (hasUser && !isAnonymous) {
+          // Usuario real autenticado → ocultar pantalla, entrar
+          _authScreen.classList.add('hidden');
+          setTimeout(() => { _authScreen.style.display = 'none'; }, 200);
+          // Limpiar flag de logout
+          try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
           const email = _fb.currentEmail?.();
           if (email) showToast('👋 ' + email);
           checkVisibility();
-        } else {
-          // Anónimo → mostrar login con skip visible
+        } else if (!hasUser) {
+          // Sin sesión (null) → mostrar login
+          _authScreen.classList.remove('hidden');
           _authScreen.style.display = 'flex';
         }
-      };
-
-      if (_fb.ready) {
-        _showAuthIfAnon();
-      } else {
-        window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
-        // Si Firebase no responde en 4s → modo local
-        setTimeout(() => {
-          if (!_fb.ready && _authScreen.style.display !== 'none') {
-            _authScreen.style.display = 'none';
-            showToast('⚠️ Sin conexión — modo local');
-          }
-        }, 4000);
+        // Anónimo: ignorar — no mostrar ni ocultar (estado transitorio)
       }
+      window.addEventListener('dashwey:auth-changed', _onAuthChange);
+
+      // Timeout de seguridad: si Firebase no responde en 5s → modo local
+      const _gateTimeout = setTimeout(() => {
+        if (_authScreen.style.display !== 'none') {
+          // Sin respuesta → dejar pantalla visible para que el usuario decida
+          // Si no hay sesión guardada, está bien pedir login
+          // Si hay sesión, Firebase tardará un poco más — seguir esperando
+          if (_loggedOut) return; // ya está mostrando login, correcto
+          // Si no había logout intencional, asumir modo local
+          _authScreen.style.display = 'none';
+          try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
+          console.warn('[Dashwey] Auth gate timeout — modo local');
+        }
+      }, 5000);
+
+      // Cancelar timeout cuando llegue cualquier respuesta de auth
+      window.addEventListener('dashwey:auth-changed', () => {
+        clearTimeout(_gateTimeout);
+      }, { once: true });
     }
   }
 
