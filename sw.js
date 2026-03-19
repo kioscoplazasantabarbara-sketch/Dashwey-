@@ -1,9 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   Dashwey Service Worker v7
+   Dashwey Service Worker v8
    Network-First HTML · Cache-First assets · Auto-update support
    ═══════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v7';
+const CACHE_NAME  = 'dashwey-v8';
 const HTML_URL    = 'Dashwey_v82.html';
 const VERSION_URL = 'version.txt';
 
@@ -53,8 +53,9 @@ self.addEventListener('fetch', e => {
       fetch(e.request, { cache: 'no-store' })
         .then(res => {
           if (res?.status === 200) {
+            const resClone = res.clone(); // clonar ANTES de consumir
             caches.open(CACHE_NAME)
-              .then(cache => cache.put(e.request, res.clone()));
+              .then(cache => cache.put(e.request, resClone));
           }
           return res;
         })
@@ -70,8 +71,9 @@ self.addEventListener('fetch', e => {
         if (cached) return cached;
         return fetch(e.request).then(res => {
           if (res?.status === 200 && res.type !== 'opaque') {
+            const resClone = res.clone(); // clonar ANTES de consumir
             caches.open(CACHE_NAME)
-              .then(cache => cache.put(e.request, res.clone()));
+              .then(cache => cache.put(e.request, resClone));
           }
           return res;
         });

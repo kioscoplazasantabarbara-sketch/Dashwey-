@@ -9,6 +9,20 @@
 <meta name="apple-mobile-web-app-title" content="Dashwey">
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#E8EDF4">
+  <script>
+    // Safety net: App disponible antes de que el IIFE termine de cargarse
+    // Evita "App is not defined" si el usuario pulsa un botón muy rápido
+    if (typeof App === 'undefined') {
+      window.App = new Proxy({}, {
+        get: function(t, p) {
+          return new Proxy(function(){}, {
+            apply: function(){ return undefined; },
+            get: function(){ return new Proxy(function(){}, { apply: function(){} }); }
+          });
+        }
+      });
+    }
+  </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <title>Dashwey v8.4</title>
@@ -1674,6 +1688,8 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .auth-btn:active { transform: scale(0.97); }
 .auth-error   { font-size: 12px; color: var(--red); text-align: center; min-height: 18px; margin-bottom: 10px; }
 .auth-skip    { background: none; border: none; font-size: 13px; color: var(--ink-soft); cursor: pointer; margin-top: 14px; text-decoration: underline; }
+.auth-skip-btn { display:block; width:100%; margin-top:12px; background:none; border:1.5px solid var(--border); border-radius:12px; padding:12px; font-size:14px; font-weight:600; color:var(--ink-mid); cursor:pointer; font-family:var(--font); transition:background 0.15s; -webkit-tap-highlight-color:transparent; }
+.auth-skip-btn:active { background:var(--bg); }
 
 /* ── § 23. MISCELLANEOUS ── */
 .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ink-soft); }
@@ -2224,7 +2240,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
       <div class="auth-error" id="auth-err-reg"></div>
     </div>
   </div>
-  <span class="auth-skip" onclick="_authSkipSafe()">Continuar sin cuenta (solo local)</span>
+  <button class="auth-skip-btn" onclick="_authSkipSafe()">Continuar sin cuenta →</button>
 </div>
 
 <script>
@@ -2653,7 +2669,7 @@ function _authTabSafe(tab) {
   </div>
 
   <!-- ALM SEARCH SUGGESTIONS — fixed global, encima del dock -->
-  <div id="alm-search-suggestions" style="display:none;position:fixed;left:0;right:0;z-index:160;max-height:45vh;overflow-y:auto;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:0 4px 24px rgba(80,100,140,0.18);"></div>
+
 
   <!-- ALM DOCK (compat stub — el buscador ahora está inline en el tab) -->
   <div id="alm-dock" style="display:none;position:fixed;left:0;right:0;z-index:152;pointer-events:none;height:0;overflow:hidden;"></div>
@@ -2661,8 +2677,8 @@ function _authTabSafe(tab) {
   <!-- ALM ADD BUTTON — fixed, NUNCA se mueve, siempre encima de la nav -->
   <div id="alm-add-btn-row" style="display:none;position:fixed;left:0;right:0;z-index:151;padding:8px 14px 10px;background:var(--surface);">
     <button class="alm-dock-single-btn" id="alm-dock-single-btn" onclick="App.alm.openProvProductos()">
-      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      Añadir artículo
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Ver catálogo
     </button>
   </div>
 
@@ -2880,7 +2896,8 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
 
-  // Auth anónimo como punto de partida — migración a email/Google en v5.x
+  // Auth anónimo como punto de partida
+  // En file:// la persistencia de sesión no funciona — usar anónimo siempre
   signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
 
   onAuthStateChanged(_auth, user => {
@@ -4004,7 +4021,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.2';
+  const _APP_VERSION = 'v8.6.5';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4313,7 +4330,11 @@ const ui = (() => {
   // Saltar auth — usar solo local
   function authSkip() {
     hideAuthScreen();
-    showToast('Modo local activado');
+    showToast('✅ Continuando en modo local');
+    // Intentar sync si Firebase está listo (puede que se haya conectado tarde)
+    if (typeof window._DashweyInitialSync === 'function') {
+      setTimeout(window._DashweyInitialSync, 200);
+    }
   }
 
   // Cerrar sesión
@@ -6820,7 +6841,8 @@ const alm = (() => {
   }
 
   // ── Live Search (nuevo input unificado) ──
-  // onSearch/onSearchInput: legacy eliminado — usar _permSearch()
+  function onSearch(val) { _searchQ = val.trim().toLowerCase(); renderProductos(); }
+  // onSearchInput: legacy eliminado — usar _permSearch()
   function onSearchInput(val) {
     const box  = document.getElementById('alm-search-box');
     const list = document.getElementById('autocomplete-list');
@@ -7967,16 +7989,16 @@ const alm = (() => {
     const cnt = Object.keys(_ordenCarrito).length;
     if (_ordenEstado === 0) {
       btn.style.background = '';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Añadir artículo';
+      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> Ver catálogo';
     } else if (_ordenEstado === 1 && cnt > 0) {
       btn.style.background = '#16A34A';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> ✓ Aceptar (' + cnt + ')';
+      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Aceptar (' + cnt + ' art.)';
     } else if (_ordenEstado === 1) {
       btn.style.background = '';
       btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cerrar catálogo';
     } else if (_ordenEstado === 2) {
-      btn.style.background = '';
-      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Añadir artículo';
+      btn.style.background = 'var(--blue)';
+      btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Añadir más';
     }
   }
 
@@ -8160,13 +8182,7 @@ const alm = (() => {
         Añadir "${esc(q)}" como nuevo artículo
       </div>`;
     }
-    // Posicionar encima del dock
-    const dockEl = document.getElementById('alm-dock');
-    if (dockEl) {
-      const dockBottom = parseInt(dockEl.style.bottom) || 0;
-      const dockH = dockEl.offsetHeight || 64;
-      sugEl.style.bottom = (dockBottom + dockH) + 'px';
-    }
+    // Sugerencias posicionadas por CSS (absolute en wrapper relativo)
     sugEl.style.display = '';
   }
 
@@ -8176,14 +8192,7 @@ const alm = (() => {
     const val = document.getElementById('alm-perm-search')?.value || '';
     if (val.trim()) _permSearch(val);
     _almKbActive = true;
-    // Posicionar sugerencias justo debajo del buscador inline
-    const searchBar = document.getElementById('alm-dock-inline');
-    const sugEl     = document.getElementById('alm-search-suggestions');
-    if (searchBar && sugEl) {
-      const r = searchBar.getBoundingClientRect();
-      sugEl.style.top  = r.bottom + 'px';
-      sugEl.style.bottom = 'auto';
-    }
+    // Sugerencias posicionadas por CSS
   }
 
   function _permSearchBlur() {
@@ -8996,8 +9005,44 @@ const alm = (() => {
   }
 
   function _exportarPedidoPDF() {
-    // Usa el informe existente de cesta como resumen del pedido
-    openCestaFs();
+    const sel   = State.get.selectedProv();
+    const prov  = State.get.prov(sel);
+    const items = State.get.ordenItems().filter(function(o){ return o.provId === sel; });
+    if (!items.length) { openCestaFs(); return; }
+
+    const totalInv = items.reduce(function(s,o){ return s + (o.ncajas||1)*(o.precio||0)*1.10; }, 0);
+    const totalVta = items.reduce(function(s,o){ return s + (o.ncajas||1)*(o.udscaja||1)*(o.pvp||0); }, 0);
+    const margen   = totalVta > 0 ? Math.round((totalVta-totalInv)/totalVta*100) : 0;
+    const roi      = totalInv > 0 ? Math.round((totalVta-totalInv)/totalInv*100) : 0;
+    const fecha    = new Date().toLocaleDateString('es-ES');
+    var NL = String.fromCharCode(10);
+
+    var txt = 'DASHWEY - RESUMEN DE PEDIDO' + NL;
+    txt += '============================' + NL;
+    txt += 'Proveedor: ' + (prov ? prov.nombre : '-') + NL;
+    txt += 'Fecha: ' + fecha + NL + NL;
+    txt += 'ARTICULOS' + NL + '---------' + NL;
+    items.forEach(function(o) {
+      var p = State.get.prod(o.prodId);
+      var cost = (o.ncajas||1)*(o.precio||0)*1.10;
+      txt += (p ? p.nombre : 'Articulo') + ': ' + (o.ncajas||1) + ' caja(s) x ' + feur(o.precio||0) + ' = ' + feur(cost) + NL;
+    });
+    txt += NL + 'TOTAL INVERSION: ' + feur(totalInv) + NL;
+    txt += 'VENTA ESTIMADA:  ' + feur(totalVta) + NL;
+    txt += 'MARGEN GLOBAL:   ' + margen + '%' + NL;
+    txt += 'ROI:             ' + roi + '%' + NL;
+
+    var blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href     = url;
+    var provName = (prov && prov.nombre) ? prov.nombre.toLowerCase().replace(/ /g, '-') : 'dashwey';
+    a.download = 'pedido-' + provName + '-' + fecha.replace(/\//g, '-') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Resumen descargado');
   }
 
   function _cerrarComprobacion() {
@@ -9288,55 +9333,49 @@ const alm = (() => {
   alm.renderOrden();
   alm.updateBadge();
 
-  // ── Auth gate — lógica simplificada y robusta ─────────────────
+  // ── Auth gate ─────────────────────────────────────────────────
   const _authScreen = document.getElementById('auth-screen');
   const _fb = window._DashweyFirebase;
 
-  // Ocultar auth screen mientras Firebase resuelve
-  // Solo mostrarla si onAuthStateChanged confirma que el usuario es anónimo
-  if (_authScreen) _authScreen.style.display = 'none';
+  // Si estamos en archivo local (file://) → saltar auth, modo local directo
+  const _isLocalFile = location.protocol === 'file:';
 
-  // Cuando Firebase confirme estado de auth:
-  function _onFirebaseAuthReady() {
-    if (!_fb?.enabled) return;
-    if (_fb.isRegistered()) {
-      // Usuario con cuenta real → ocultar, sincronizar
-      if (_authScreen) _authScreen.style.display = 'none';
-      const email = _fb.currentEmail?.();
-      if (email) showToast('👋 ' + email);
-      checkVisibility();
+  if (_authScreen) {
+    if (!_fb?.enabled || _isLocalFile) {
+      // Sin Firebase o archivo local → modo local directo, sin login
+      _authScreen.style.display = 'none';
     } else {
-      // Usuario anónimo → mostrar pantalla de login
-      if (_authScreen) {
-        _authScreen.style.display = 'flex';
-        // Mensaje de ayuda si lleva tiempo sin conectar
+      // Firebase activo → ocultar mientras confirma, mostrar solo si anónimo
+      _authScreen.style.display = 'none';
+
+      const _showAuthIfAnon = () => {
+        if (_fb.isRegistered()) {
+          // Cuenta real → entrar directo
+          _authScreen.style.display = 'none';
+          const email = _fb.currentEmail?.();
+          if (email) showToast('👋 ' + email);
+          checkVisibility();
+        } else {
+          // Anónimo → mostrar login con skip visible
+          _authScreen.style.display = 'flex';
+        }
+      };
+
+      if (_fb.ready) {
+        _showAuthIfAnon();
+      } else {
+        window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
+        // Si Firebase no responde en 5s → modo local
         setTimeout(() => {
-          if (_authScreen.style.display !== 'none') {
-            const err = document.getElementById('auth-err-login');
-            if (err && !err.textContent) {
-              err.textContent = 'Inicia sesión para sincronizar tus datos.';
-            }
+          if (_authScreen.style.display !== 'none') return;
+          if (!_fb.ready) {
+            _authScreen.style.display = 'none';
+            showToast('⚠️ Sin conexión — modo local');
           }
-        }, 2000);
+        }, 5000);
       }
     }
   }
-
-  // Ejecutar cuando Firebase esté listo
-  if (_fb?.ready) {
-    _onFirebaseAuthReady();
-  } else {
-    window.addEventListener('dashwey:firebase-ready', _onFirebaseAuthReady, { once: true });
-  }
-
-  // Timeout de seguridad — si Firebase no responde en 8s, mostrar opción local
-  setTimeout(() => {
-    if (_authScreen && _authScreen.style.display === 'none') return; // ya resuelto
-    const err = document.getElementById('auth-err-login');
-    if (err && !err.textContent) {
-      err.textContent = 'Sin conexión. Puedes continuar en modo local.';
-    }
-  }, 8000);
 
   // ── Sync inicial con Firebase ──────────────────────────────────
   // Cuando Firebase esté listo, leer el estado remoto.
