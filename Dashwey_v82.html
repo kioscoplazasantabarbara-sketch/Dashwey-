@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.8.0</title>
+<title>Dashwey v8.8.1</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.0</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.8.1</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.8.0</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.8.1</div>
     </div>
   </div>
 
@@ -4083,7 +4083,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v8.8.0</div>
+        <div class="menu-ver">Dashwey v8.8.1</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -8331,7 +8331,7 @@ const alm = (() => {
     setupCaducidadNotif,
     // Orden nueva sistema completo
     openProvProductos, updateProvBar, _renderOrdenNueva,
-    _toggleOrdenNuevaChk, _cerrarCatalogo, _cerrarComprobacion,
+    _cerrarCatalogo, _cerrarComprobacion, _guardarCarritoYPopup,
     _catSearch, _catClearSearch, _catToggle, _catStep, _catLpStart, _catLpEnd,
     _catDeleteConfirm,
     _catAddNew, _mostrarModalConfirmacion, _cerrarModalConfirmacion, _aceptarOrden,
@@ -8408,12 +8408,10 @@ const alm = (() => {
     if (_ordenEstado === 0) { _abrirCatalogo(); }
     else if (_ordenEstado === 1) {
       const cnt = Object.keys(_ordenCarrito).length;
-      if (cnt > 0) { _cerrarCatalogo(); _activarComprobacion(); }
+      if (cnt > 0) { _cerrarCatalogo(); _guardarCarritoYPopup(); }
       else { _cerrarCatalogo(); }
-    } else if (_ordenEstado === 2) {
-      // En estado 2: "Añadir artículo" abre el catálogo sin perder los checks
-      _abrirCatalogoDesdeEstado2();
     }
+    // Estado 2 eliminado: ya no existe la vista de comprobación
   }
 
   function _abrirCatalogoDesdeEstado2() {
@@ -8792,20 +8790,52 @@ const alm = (() => {
   // ── Handler del botón Aceptar rojo ───────────────────────────
   function _onAcceptBtnTap() {
     try { navigator.vibrate && navigator.vibrate([8, 20, 8]); } catch(e) {}
-    // Animación: escalar el botón y luego proceder
     const btn = document.getElementById('alm-accept-fixed');
     if (btn) {
       btn.style.transform = 'scale(0.94)';
       setTimeout(() => { btn.style.transform = ''; }, 140);
     }
-    // Si estamos en estado 1 (catálogo abierto), cerrar y activar comprobación
     if (_ordenEstado === 1) {
       _cerrarCatalogo();
-      setTimeout(() => _activarComprobacion(), 300);
+      setTimeout(() => _guardarCarritoYPopup(), 300);
     } else {
-      // En cualquier otro estado con carrito con items: ir directo a comprobación
-      _activarComprobacion();
+      _guardarCarritoYPopup();
     }
+  }
+
+  // Guardar carrito en State y abrir popup de análisis — flujo directo sin estado 2
+  function _guardarCarritoYPopup() {
+    const sel  = State.get.selectedProv();
+    const acceptBtn = document.getElementById('alm-accept-fixed');
+    if (acceptBtn) acceptBtn.style.display = 'none';
+
+    // Guardar items del carrito en State (merge con existentes del mismo proveedor)
+    const existingAll   = State.get.ordenItems();
+    const existingSel   = existingAll.filter(o => o.provId === sel);
+    const existingOther = existingAll.filter(o => o.provId !== sel);
+    const merged = existingSel.map(o => {
+      const nc = _ordenCarrito[o.prodId];
+      return nc !== undefined ? { ...o, ncajas: (o.ncajas||1) + nc } : o;
+    });
+    const nuevos = Object.entries(_ordenCarrito)
+      .filter(([prodId]) => !existingSel.some(o => o.prodId === prodId))
+      .map(([prodId, ncajas]) => ({
+        prodId, provId: sel, ncajas,
+        udscaja: State.get.prod(prodId)?.stockMinimo||12,
+        precio:  State.get.prod(prodId)?.precioCompra||0,
+        pvp:     State.get.prod(prodId)?.pvp||0,
+        checked: false,
+      }));
+    State.set.ordenItems([...existingOther, ...merged, ...nuevos]);
+
+    // Reset carrito y estado
+    _ordenCarrito = {};
+    _ordenEstado  = 0;
+    updateBadge();
+    _renderOrdenNueva();
+
+    // Abrir popup de análisis financiero
+    setTimeout(() => _openAceptarPopup(sel), 200);
   }
 
   function _openCatCtxMenu(id) {
@@ -9066,104 +9096,14 @@ const alm = (() => {
     document.body.appendChild(overlay);
   }
 
-  function _activarComprobacion() {
-    const sel  = State.get.selectedProv();
-    const prov = State.get.prov(sel);
-    _ordenEstado = 2;
-    _updateMainBtn(); // también oculta botón rojo via _updateAcceptBtn
-    // Ocultar botón Aceptar rojo — en estado 2 ya no aplica
-    const acceptBtn = document.getElementById('alm-accept-fixed');
-    if (acceptBtn) acceptBtn.style.display = 'none';
-    // Reset carrito local tras guardar en State
-    _ordenCarrito = {};
+  // _activarComprobacion: stub de compatibilidad (estado 2 eliminado en v8.8.1)
+  // Redirige al nuevo flujo directo sin pantalla de comprobación
+  function _activarComprobacion() { _guardarCarritoYPopup(); }
 
-    // Guardar items en State
-    const existingAll  = State.get.ordenItems();
-    const existingSel  = existingAll.filter(o => o.provId === sel);
-    const existingOther= existingAll.filter(o => o.provId !== sel);
-    // Merge: actualizar ncajas si ya existe, añadir si es nuevo
-    const merged = existingSel.map(o => {
-      const nc = _ordenCarrito[o.prodId];
-      return nc !== undefined ? { ...o, ncajas: (o.ncajas||1) + nc } : o;
-    });
-    const nuevos = Object.entries(_ordenCarrito)
-      .filter(([prodId]) => !existingSel.some(o => o.prodId === prodId))
-      .map(([prodId, ncajas]) => ({
-        prodId, provId: sel, ncajas,
-        udscaja: State.get.prod(prodId)?.stockMinimo||12,
-        precio:  State.get.prod(prodId)?.precioCompra||0,
-        pvp:     State.get.prod(prodId)?.pvp||0,
-        checked: false,
-      }));
-    State.set.ordenItems([...existingOther, ...merged, ...nuevos]);
-    updateBadge();
-    _renderComprobacion();
-    // Mostrar popup de análisis al aceptar el carrito
-    setTimeout(() => _openAceptarPopup(sel), 300);
-  }
-
-  function _renderComprobacion() {
-    const sel   = State.get.selectedProv();
-    const prov  = State.get.prov(sel);
-    const items = State.get.ordenItems().filter(o => o.provId === sel);
-    const wrap  = document.getElementById('orden-wrap');
-    const empty = document.getElementById('alm-empty');
-    if (!wrap) return;
-    if (empty) empty.style.display = 'none';
-
-    const pending  = items.filter(o => !o.checked);
-    const received = items.filter(o => o.checked);
-    const totalPend = pending.reduce((s,o) => s+(o.ncajas||1)*(o.precio||0)*1.10,0);
-    const totalRcv  = received.reduce((s,o) => s+(o.ncajas||1)*(o.precio||0)*1.10,0);
-    const totalAll  = totalPend + totalRcv;
-
-    const renderItem = (o, isPending) => {
-      const p = State.get.prod(o.prodId);
-      const cost = (o.ncajas||1)*(o.precio||0)*1.10;
-      return `<div class="orden-new-item${!isPending?' done':''}" id="oni-${o.prodId}">
-        <div class="orden-new-chk${!isPending?' done':''}" onclick="App.alm._toggleOrdenNuevaChk('${o.prodId}')">${!isPending?'✓':''}</div>
-        <div class="orden-new-e">${p?.e||'📦'}</div>
-        <div class="orden-new-info">
-          <div class="orden-new-name">${esc(p?.nombre||'Producto')}</div>
-          <div class="orden-new-sub">${o.ncajas||1} caja${(o.ncajas||1)!==1?'s':''} · ${feur(o.precio||0)} c/u</div>
-        </div>
-        <div class="orden-new-price">${feur(cost)}</div>
-      </div>`;
-    };
-
-    const doneSection = received.length ? `
-      <div class="orden-comp-done-hdr">
-        <span>✓ Comprobados (${received.length})</span>
-        <span style="color:var(--green);font-weight:700">${feur(totalRcv)}</span>
-      </div>
-      ${received.map(o => renderItem(o, false)).join('')}
-    ` : '';
-
-    wrap.innerHTML = `
-      <div id="orden-comp-pending">${pending.map(o => renderItem(o, true)).join('')}</div>
-      <div id="orden-comp-done">${doneSection}</div>
-      ${pending.length === 0 && received.length > 0 ? `
-        <div class="orden-comp-done-all">
-          <div style="font-size:28px">🎉</div>
-          <div style="font-size:16px;font-weight:700;color:var(--ink)">¡Pedido completado!</div>
-          <div style="font-size:13px;color:var(--ink-soft);margin-top:4px">Total comprobado: ${feur(totalRcv)}</div>
-          <button class="btn-ok" style="margin-top:16px;width:100%" onclick="App.alm._mostrarModalConfirmacion()">
-            Confirmar recepción
-          </button>
-        </div>
-      ` : ''}`;
-  }
-
-  function _toggleOrdenNuevaChk(prodId) {
-    const items = State.get.ordenItems();
-    const sel   = State.get.selectedProv();
-    const item  = items.find(o => o.prodId === prodId && o.provId === sel);
-    if (!item) return;
-    item.checked = !item.checked;
-    State.set.ordenItems(items);
-    try { navigator.vibrate && navigator.vibrate([4]); } catch(e) {}
-    _renderComprobacion();
-  }
+  // _renderComprobacion / _toggleOrdenNuevaChk: eliminados en v8.8.1
+  // La pantalla de comprobación ya no existe. El flujo va directo al popup de análisis.
+  function _renderComprobacion() { /* eliminado */ }
+  function _toggleOrdenNuevaChk() { /* eliminado */ }
 
   // ── Informe IA del pedido — se abre desde badge Próxima Entrega ──
 
@@ -9555,12 +9495,8 @@ const alm = (() => {
     showToast('Resumen descargado');
   }
 
-  function _cerrarComprobacion() {
-    _ordenEstado = 0;
-    _ordenCarrito = {};
-    _updateMainBtn();
-    _renderOrdenNueva();
-  }
+  // _cerrarComprobacion: stub de compatibilidad (v8.8.1)
+  function _cerrarComprobacion() { _ordenEstado = 0; _ordenCarrito = {}; _updateMainBtn(); _renderOrdenNueva(); }
 
   // ══ ESTADO 3: MODAL CONFIRMACIÓN CON BLUR ════════════════════
 
@@ -9688,7 +9624,7 @@ const alm = (() => {
     const wrap  = document.getElementById('orden-wrap');
     const empty = document.getElementById('alm-empty');
     if (!wrap) return;
-    if (_ordenEstado === 2) { _renderComprobacion(); return; }
+    // Estado 2 eliminado — _renderComprobacion ya no se usa
     // Estado 0: mostrar lista existente del proveedor
     const sel   = State.get.selectedProv();
     const items = State.get.ordenItems().filter(o => o.provId === sel);
@@ -9704,7 +9640,7 @@ const alm = (() => {
       ${items.map(o => {
         const p = State.get.prod(o.prodId);
         return `<div class="orden-new-item${o.checked?' done':''}" id="oni-${o.prodId}">
-          <div class="orden-new-chk${o.checked?' done':''}" onclick="App.alm._toggleOrdenNuevaChk('${o.prodId}')">${o.checked?'✓':''}</div>
+          <div class="orden-new-chk${o.checked?' done':''}"></div>
           <div class="orden-new-e">${p?.e||'📦'}</div>
           <div class="orden-new-info">
             <div class="orden-new-name">${esc(p?.nombre||'')}</div>
