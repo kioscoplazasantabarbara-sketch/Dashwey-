@@ -2885,10 +2885,9 @@ if (FIREBASE_ENABLED) {
 
   onAuthStateChanged(_auth, user => {
     _uid = user?.uid || null;
-    // Notificar al IIFE principal cuando el UID esté disponible
-    window._DashweyFirebase.uid = _uid;
+    window._DashweyFirebase.uid   = _uid;
     window._DashweyFirebase.ready = !!_uid;
-    // Disparar sync inicial si hay datos pendientes
+    // Disparar SIEMPRE — incluso si uid es null (para desbloquear la UI)
     window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
   });
 }
@@ -3220,7 +3219,7 @@ const State = (() => {
     _saveTimer = setTimeout(() => {
       _writeLocal(_state);
       // Notificar al sistema de sync que este write es nuestro
-      if (typeof window._DashweyOnLocalWrite === 'function') window._DashweyOnLocalWrite();
+      if (typeof window._DashweyOnLocalWrite === 'function') { window._DashweyOnLocalWrite(); }
       const fb = window._DashweyFirebase;
       if (fb?.enabled && fb.isRegistered?.()) {
         if (navigator.onLine && fb.ready) {
@@ -4005,7 +4004,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.0';
+  const _APP_VERSION = 'v8.6.1';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -9234,6 +9233,9 @@ const alm = (() => {
   // consulta en cada lectura/escritura para elegir la ruta correcta.
   window._DashweyActiveContext = State.get.activeContext();
 
+  // Estado de sync inicial — siempre 'local' hasta que Firebase confirme
+  State.set.syncStatus({ mode: 'local', pendingWrites: 0 });
+
   // Aplicar estado visual del ctx-switcher según contexto guardado
   const _initCtx = State.get.activeContext();
   document.querySelectorAll('#ctx-switcher .ctx-btn').forEach(btn => {
@@ -9280,36 +9282,44 @@ const alm = (() => {
   alm.updateBadge();
 
   // ── Auth gate — mostrar login si Firebase está activo ──────────
-  // Si el usuario ya está registrado (no anónimo), ocultar directamente.
-  // Si es anónimo o no hay usuario, mostrar la pantalla de auth.
-  // El evento firebase-ready llega cuando onAuthStateChanged confirma el UID.
   const _authScreen = document.getElementById('auth-screen');
+  const _fb = window._DashweyFirebase;
+
+  function _handleAuthReady() {
+    if (!_fb?.enabled) {
+      // Firebase desactivado — modo local directo
+      if (_authScreen) _authScreen.style.display = 'none';
+      return;
+    }
+    if (_fb.isRegistered()) {
+      // Usuario registrado — entrar directo sin mostrar login
+      if (_authScreen) _authScreen.style.display = 'none';
+      const email = _fb.currentEmail?.();
+      if (email) showToast('👋 ' + email);
+      checkVisibility();
+    }
+    // Si anónimo, la pantalla queda visible
+  }
+
   if (_authScreen) {
-    const fb = window._DashweyFirebase;
-    if (!fb?.enabled) {
-      // Firebase desactivado — ocultar pantalla, modo local directo
+    if (!_fb?.enabled) {
       _authScreen.style.display = 'none';
+    } else if (_fb.ready) {
+      // Firebase ya está listo (evento llegó antes) — procesar inmediatamente
+      _handleAuthReady();
     } else {
-      // Firebase activo — mostrar hasta confirmar estado de auth
+      // Esperar el evento
       _authScreen.style.display = 'flex';
-      window.addEventListener('dashwey:firebase-ready', () => {
-        if (fb.isRegistered()) {
-          // Usuario con cuenta real — entrar directo
-          ui.hideAuthScreen();
-          const email = fb.currentEmail();
-          if (email) showToast('👋 ' + email);
-          // Re-evaluar visibilidad con el rol real del usuario
-          checkVisibility();
-        }
-        // Si es anónimo, la pantalla de auth queda visible para que se registre
-      }, { once: true });
-      // Timeout de seguridad — si Firebase tarda >5s, permitir uso local
+      window.addEventListener('dashwey:firebase-ready', _handleAuthReady, { once: true });
+      // Timeout de seguridad — si Firebase tarda >6s, mensaje de error
       setTimeout(() => {
         if (_authScreen && _authScreen.style.display !== 'none') {
           const err = document.getElementById('auth-err-login');
-          if (err && !err.textContent) err.textContent = 'Sin conexión. Puedes continuar en modo local.';
+          if (err && !err.textContent) {
+            err.textContent = 'Sin conexión. Puedes continuar en modo local.';
+          }
         }
-      }, 5000);
+      }, 6000);
     }
   }
 
@@ -9341,7 +9351,8 @@ const alm = (() => {
     alm.updateBadge();
   }
 
-  window.addEventListener('dashwey:firebase-ready', async () => {
+  // ── Sync inicial — con protección anti race condition ──────────
+  async function _doInitialSync() {
     const fb = window._DashweyFirebase;
     if (!fb?.enabled || !fb?.ready) return;
 
@@ -9409,7 +9420,14 @@ const alm = (() => {
 
     // Exponer hook para saber cuándo nosotros escribimos
     window._DashweyOnLocalWrite = () => { _lastLocalWrite = Date.now(); };
-  });
+  }
+
+  // Ejecutar sync: si ya está listo, inmediatamente; si no, esperar evento
+  if (_fb?.ready) {
+    _doInitialSync();
+  } else {
+    window.addEventListener('dashwey:firebase-ready', _doInitialSync, { once: true });
+  }
 
   // ── Listener: re-render Dashboard al registrar una venta ────────
   // Dispara inmediatamente cuando procesarPago() termina, sin esperar sync FB
