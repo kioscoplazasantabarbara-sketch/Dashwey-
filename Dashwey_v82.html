@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v8.7.8</title>
+<title>Dashwey v8.7.9</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2932,7 +2932,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.7.8</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v8.7.9</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -2941,7 +2941,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v8.7.8</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v8.7.9</div>
     </div>
   </div>
 
@@ -2997,25 +2997,22 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
 
-  // v8.7.8: SIN signInAnonymously al arranque.
-  // Motivo: el anónimo colisionaba con el login real y bloqueaba el auth gate.
-  // Ahora Firebase arranca en null → muestra pantalla login → login real →
-  // onAuthStateChanged dispara con usuario real → todo funciona.
+  // Auth anónimo como punto de partida
+  // En file:// la persistencia de sesión no funciona — usar anónimo siempre
+  signInAnonymously(_auth).catch(e => console.warn('[Dashwey] Auth error:', e));
 
   let _fbReadyFired = false;
   onAuthStateChanged(_auth, user => {
     _uid = user?.uid || null;
     window._DashweyFirebase.uid     = _uid;
-    window._DashweyFirebase.ready   = !!user && !user.isAnonymous;
-    window._DashweyFirebase._isAnon = user?.isAnonymous ?? false;
-
-    // firebase-ready: solo la primera vez que hay usuario real registrado
-    if (!_fbReadyFired && _uid && !user.isAnonymous) {
+    window._DashweyFirebase.ready   = !!_uid;
+    window._DashweyFirebase._isAnon = user?.isAnonymous ?? true;
+    // Disparar dashwey:firebase-ready solo la primera vez
+    if (!_fbReadyFired) {
       _fbReadyFired = true;
       window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
     }
-
-    // auth-changed: siempre — para que el auth gate reaccione a cada cambio
+    // Siempre disparar auth-changed (login real, logout, reconexión)
     window.dispatchEvent(new CustomEvent('dashwey:auth-changed', {
       detail: { uid: _uid, isAnonymous: user?.isAnonymous ?? true, hasUser: !!user }
     }));
@@ -3103,7 +3100,7 @@ window._DashweyFirebase = {
     }
   },
 
-  // Login con email/contraseña — v8.7.8: flujo limpio sin anónimo
+  // Login con email/contraseña
   async login(email, password) {
     if (!FIREBASE_ENABLED || !_auth) return { ok: false, error: 'Firebase no disponible' };
     try {
@@ -3114,13 +3111,19 @@ window._DashweyFirebase = {
     }
   },
 
-  // Cerrar sesión — v8.7.8: signOut limpio, sin restaurar anónimo
+  // Cierre de sesión interno (sin restaurar anónimo) — usado por authLogin
+  async _signOut() {
+    if (!FIREBASE_ENABLED || !_auth) return;
+    await signOut(_auth);
+  },
+
+  // Cerrar sesión — restaura anónimo para que la app siga funcionando
   async logout() {
     if (!FIREBASE_ENABLED || !_auth) return;
     try {
       await signOut(_auth);
-      // No restaurar anónimo: el auth gate reaccionará a auth-changed
-      // y mostrará la pantalla de login automáticamente.
+      // Volver a auth anónimo para que la app siga en modo local
+      await signInAnonymously(_auth);
     } catch(e) {
       console.warn('[Dashwey] logout error:', e);
     }
@@ -3137,7 +3140,10 @@ window._DashweyFirebase = {
     }
   },
 
-  // ¿El usuario actual tiene cuenta real registrada?
+  // Referencia interna al auth (solo lectura) — para authLogin
+  get _auth() { return _auth; },
+
+  // ¿El usuario actual tiene cuenta real (no anónima)?
   isRegistered() {
     return !!_auth?.currentUser && !_auth.currentUser.isAnonymous;
   },
@@ -4077,7 +4083,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v8.4</div>
+        <div class="menu-ver">Dashwey v8.7.9</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -4389,7 +4395,7 @@ const ui = (() => {
     (document.getElementById('auth-err-reg')||{}).textContent = '';
   }
 
-  // Login — v8.7.8: flujo limpio. La pantalla se oculta via _handleAuthChange.
+  // Login
   async function authLogin() {
     const email = document.getElementById('auth-email-login').value.trim();
     const pass  = document.getElementById('auth-pass-login').value;
@@ -4402,11 +4408,15 @@ const ui = (() => {
     try {
       const fb = window._DashweyFirebase;
       if (!fb?.enabled) { hideAuthScreen(); return; }
+      // Si hay sesión anónima activa, cerrarla antes del login real
+      if (fb._auth?.currentUser?.isAnonymous) {
+        try { await fb._signOut(); } catch(_) {}
+      }
       const res = await fb.login(email, pass);
       if (res.ok) {
-        // La pantalla de auth la oculta _handleAuthChange via dashwey:auth-changed.
-        // Aquí solo actualizamos estado y sync.
         State.set.user({ email: res.user.email, uid: res.user.uid });
+        hideAuthScreen();  // ocultar inmediatamente — no esperar evento
+        showToast('👋 Bienvenido');
         if (typeof window._DashweyInitialSync === 'function') {
           try { window._DashweyInitialSync(); } catch(e) { console.warn('[Dashwey] sync error:', e); }
         }
@@ -4458,15 +4468,12 @@ const ui = (() => {
     }
   }
 
-  // Cerrar sesión — v8.7.8: el auth-changed listener mostrará login automáticamente
+  // Cerrar sesión
   async function authLogout() {
     const fb = window._DashweyFirebase;
     if (fb?.enabled) await fb.logout();
     showToast('Sesión cerrada');
-    // La pantalla de auth aparecerá sola via dashwey:auth-changed → _handleAuthChange
-    // pero forzamos por si Firebase tarda:
-    const s = _authScreen();
-    if (s) { s.style.display = 'flex'; s.classList.remove('hidden'); }
+    showAuthScreen();
   }
 
   // Pantalla de cambio de contraseña
@@ -6257,7 +6264,7 @@ const alm = (() => {
     });
     // Si hay búsqueda y no match exacto, ofrecer añadir
     if (q && !prods.find(p => p.nombre.toLowerCase() === q)) {
-      html += '<div style="display:flex;align-items:center;gap:10px;padding:12px 2px;cursor:pointer;color:var(--red);font-size:13px;font-weight:600" onclick="App.alm._catInlineAddNew(\\'' + esc(q) + '\\')">' +
+      html += '<div style="display:flex;align-items:center;gap:10px;padding:12px 2px;cursor:pointer;color:var(--red);font-size:13px;font-weight:600" onclick="App.alm._catInlineAddNew(&apos;' + esc(q) + '&apos;)">' +
         '<div style="width:36px;height:36px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center"><svg width="16" height="16" fill="none" stroke="var(--red)" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>' +
         'Añadir "' + esc(q) + '" como nuevo artículo</div>';
     }
@@ -6280,17 +6287,17 @@ const alm = (() => {
     const rightHtml = nc > 0
       ? '<div class="alm-cat-badge" id="acb-' + p.id + '">' + nc + '</div>' +
         '<div class="alm-cat-stepper">' +
-          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(\\'' + p.id + '\',-1)">\u2212</button>' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + p.id + '&apos;,-1)">\u2212</button>' +
           '<span class="alm-cat-qty" id="acq-' + p.id + '">' + nc + '</span>' +
-          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(\\'' + p.id + '\',1)">+</button>' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + p.id + '&apos;,1)">+</button>' +
         '</div>'
       : '<div class="alm-cat-price">' + feur(p.pvp||0) + '</div>';
 
     return '<div class="alm-cat-item' + (nc > 0 ? ' in-cart' : '') + '" id="aci-' + p.id + '"' +
-      ' ontouchstart="App.alm._catInlineLpStart(\\'' + p.id + '\',this,event)"' +
+      ' ontouchstart="App.alm._catInlineLpStart(&apos;' + p.id + '&apos;,this,event)"' +
       ' ontouchend="App.alm._catInlineLpEnd()"' +
       ' ontouchcancel="App.alm._catInlineLpEnd()"' +
-      ' onclick="App.alm._catInlineTap(\\'' + p.id + '\',event)">' +
+      ' onclick="App.alm._catInlineTap(&apos;' + p.id + '&apos;,event)">' +
       thumb +
       '<div class="alm-cat-info">' +
         '<div class="alm-cat-name">' + esc(p.nombre) + '</div>' +
@@ -6337,9 +6344,9 @@ const alm = (() => {
       right.innerHTML =
         '<div class="alm-cat-badge" id="acb-' + id + '">' + nc + '</div>' +
         '<div class="alm-cat-stepper">' +
-          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(\\'' + id + '\',-1)">\u2212</button>' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + id + '&apos;,-1)">\u2212</button>' +
           '<span class="alm-cat-qty" id="acq-' + id + '">' + nc + '</span>' +
-          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(\\'' + id + '\',1)">+</button>' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + id + '&apos;,1)">+</button>' +
         '</div>';
     } else {
       right.innerHTML = '<div class="alm-cat-price">' + feur(p?.pvp||0) + '</div>';
@@ -9841,55 +9848,34 @@ const alm = (() => {
       // Sin Firebase o archivo local → modo local directo, sin login
       _authScreen.style.display = 'none';
     } else {
-      // Firebase activo → mostrar login hasta confirmar usuario real
-      // v8.7.8: listener permanente a auth-changed (reacciona a login Y logout)
-      _authScreen.style.display = 'flex'; // mostrar login por defecto
+      // Firebase activo → ocultar mientras confirma, mostrar solo si anónimo
+      _authScreen.style.display = 'none';
 
-      function _handleAuthChange(e) {
-        const detail = e?.detail || {};
-        if (!detail.hasUser) {
-          // Sin usuario (null) → mostrar login
-          _authScreen.style.display = 'flex';
-          return;
-        }
-        if (!detail.isAnonymous) {
-          // Usuario real registrado → ocultar pantalla login
-          _authScreen.classList.add('hidden');
-          setTimeout(() => { _authScreen.style.display = 'none'; }, 300);
+      const _showAuthIfAnon = () => {
+        if (_fb.isRegistered()) {
+          // Cuenta real → entrar directo
+          _authScreen.style.display = 'none';
           const email = _fb.currentEmail?.();
           if (email) showToast('👋 ' + email);
           checkVisibility();
         } else {
-          // Anónimo → mostrar login
+          // Anónimo → mostrar login con skip visible
           _authScreen.style.display = 'flex';
-          _authScreen.classList.remove('hidden');
         }
+      };
+
+      if (_fb.ready) {
+        _showAuthIfAnon();
+      } else {
+        window.addEventListener('dashwey:firebase-ready', _showAuthIfAnon, { once: true });
+        // Si Firebase no responde en 4s → modo local
+        setTimeout(() => {
+          if (!_fb.ready && _authScreen.style.display !== 'none') {
+            _authScreen.style.display = 'none';
+            showToast('⚠️ Sin conexión — modo local');
+          }
+        }, 4000);
       }
-
-      // Escuchar todos los cambios de auth (login, logout, cambio de cuenta)
-      window.addEventListener('dashwey:auth-changed', _handleAuthChange);
-
-      // Si Firebase ya tiene estado (persistencia de sesión previa) → actuar ya
-      if (_fb.ready && _fb.isRegistered()) {
-        _authScreen.style.display = 'none';
-        const email = _fb.currentEmail?.();
-        if (email) showToast('👋 ' + email);
-        checkVisibility();
-      }
-
-      // Timeout de seguridad: si en 6s no hay confirmación → modo local
-      const _authTimeout = setTimeout(() => {
-        if (_authScreen.style.display !== 'none') {
-          // Dejar visible la pantalla login — el usuario decide
-          // Pero habilitar el botón "Continuar sin cuenta"
-          console.warn('[Dashwey] Auth timeout — Firebase tardó demasiado');
-        }
-      }, 6000);
-
-      // Cuando llegue el primer auth-changed, cancelar timeout
-      window.addEventListener('dashwey:auth-changed', () => {
-        clearTimeout(_authTimeout);
-      }, { once: true });
     }
   }
 
