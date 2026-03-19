@@ -4004,7 +4004,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v8.6.1';
+  const _APP_VERSION = 'v8.6.2';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -4273,6 +4273,10 @@ const ui = (() => {
       State.set.user({ email: res.user.email, uid: res.user.uid });
       hideAuthScreen();
       showToast('👋 Bienvenido de nuevo');
+      // Disparar sync completo tras login
+      if (typeof window._DashweyInitialSync === 'function') {
+        window._DashweyInitialSync();
+      }
     } else {
       err.textContent = res.error;
       btn.disabled = false; btn.textContent = 'Entrar';
@@ -4297,6 +4301,9 @@ const ui = (() => {
       State.set.user({ email: res.user.email, uid: res.user.uid });
       hideAuthScreen();
       showToast('🎉 Cuenta creada — tus datos están en la nube');
+      if (typeof window._DashweyInitialSync === 'function') {
+        window._DashweyInitialSync();
+      }
     } else {
       err.textContent = res.error;
       btn.disabled = false; btn.textContent = 'Crear cuenta';
@@ -9281,47 +9288,55 @@ const alm = (() => {
   alm.renderOrden();
   alm.updateBadge();
 
-  // ── Auth gate — mostrar login si Firebase está activo ──────────
+  // ── Auth gate — lógica simplificada y robusta ─────────────────
   const _authScreen = document.getElementById('auth-screen');
   const _fb = window._DashweyFirebase;
 
-  function _handleAuthReady() {
-    if (!_fb?.enabled) {
-      // Firebase desactivado — modo local directo
-      if (_authScreen) _authScreen.style.display = 'none';
-      return;
-    }
+  // Ocultar auth screen mientras Firebase resuelve
+  // Solo mostrarla si onAuthStateChanged confirma que el usuario es anónimo
+  if (_authScreen) _authScreen.style.display = 'none';
+
+  // Cuando Firebase confirme estado de auth:
+  function _onFirebaseAuthReady() {
+    if (!_fb?.enabled) return;
     if (_fb.isRegistered()) {
-      // Usuario registrado — entrar directo sin mostrar login
+      // Usuario con cuenta real → ocultar, sincronizar
       if (_authScreen) _authScreen.style.display = 'none';
       const email = _fb.currentEmail?.();
       if (email) showToast('👋 ' + email);
       checkVisibility();
+    } else {
+      // Usuario anónimo → mostrar pantalla de login
+      if (_authScreen) {
+        _authScreen.style.display = 'flex';
+        // Mensaje de ayuda si lleva tiempo sin conectar
+        setTimeout(() => {
+          if (_authScreen.style.display !== 'none') {
+            const err = document.getElementById('auth-err-login');
+            if (err && !err.textContent) {
+              err.textContent = 'Inicia sesión para sincronizar tus datos.';
+            }
+          }
+        }, 2000);
+      }
     }
-    // Si anónimo, la pantalla queda visible
   }
 
-  if (_authScreen) {
-    if (!_fb?.enabled) {
-      _authScreen.style.display = 'none';
-    } else if (_fb.ready) {
-      // Firebase ya está listo (evento llegó antes) — procesar inmediatamente
-      _handleAuthReady();
-    } else {
-      // Esperar el evento
-      _authScreen.style.display = 'flex';
-      window.addEventListener('dashwey:firebase-ready', _handleAuthReady, { once: true });
-      // Timeout de seguridad — si Firebase tarda >6s, mensaje de error
-      setTimeout(() => {
-        if (_authScreen && _authScreen.style.display !== 'none') {
-          const err = document.getElementById('auth-err-login');
-          if (err && !err.textContent) {
-            err.textContent = 'Sin conexión. Puedes continuar en modo local.';
-          }
-        }
-      }, 6000);
-    }
+  // Ejecutar cuando Firebase esté listo
+  if (_fb?.ready) {
+    _onFirebaseAuthReady();
+  } else {
+    window.addEventListener('dashwey:firebase-ready', _onFirebaseAuthReady, { once: true });
   }
+
+  // Timeout de seguridad — si Firebase no responde en 8s, mostrar opción local
+  setTimeout(() => {
+    if (_authScreen && _authScreen.style.display === 'none') return; // ya resuelto
+    const err = document.getElementById('auth-err-login');
+    if (err && !err.textContent) {
+      err.textContent = 'Sin conexión. Puedes continuar en modo local.';
+    }
+  }, 8000);
 
   // ── Sync inicial con Firebase ──────────────────────────────────
   // Cuando Firebase esté listo, leer el estado remoto.
@@ -9351,10 +9366,13 @@ const alm = (() => {
     alm.updateBadge();
   }
 
-  // ── Sync inicial — con protección anti race condition ──────────
+  // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
   async function _doInitialSync() {
     const fb = window._DashweyFirebase;
-    if (!fb?.enabled || !fb?.ready) return;
+    if (!fb?.enabled) return;
+    // No requerir fb.ready — el UID puede haberse actualizado tras login
+    const uid = fb.uid || fb._auth?.currentUser?.uid;
+    if (!uid) return;
 
     const remote = await fb.read('state');
     if (!remote) {
@@ -9422,11 +9440,17 @@ const alm = (() => {
     window._DashweyOnLocalWrite = () => { _lastLocalWrite = Date.now(); };
   }
 
+  // Exponer para uso en authLogin/authRegister
+  window._DashweyInitialSync = _doInitialSync;
+
   // Ejecutar sync: si ya está listo, inmediatamente; si no, esperar evento
   if (_fb?.ready) {
     _doInitialSync();
   } else {
-    window.addEventListener('dashwey:firebase-ready', _doInitialSync, { once: true });
+    window.addEventListener('dashwey:firebase-ready', () => {
+      // Pequeño delay para que onAuthStateChanged actualice fb.uid primero
+      setTimeout(_doInitialSync, 100);
+    }, { once: true });
   }
 
   // ── Listener: re-render Dashboard al registrar una venta ────────
