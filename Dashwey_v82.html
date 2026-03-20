@@ -2,7 +2,8 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.26 -->
+<meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
 <meta name="mobile-web-app-capable" content="yes">
@@ -40,23 +41,45 @@
     });
   }
 
-  /* 3. SW force-update: si hay SW activo con cache antigua, limpiar */
+  /* 3. SW force-update: activación agresiva para garantizar cache fresca en mobile/PWA
+        FIX v9.5.26: skipWaiting inmediato + cleanup completo de cache antigua */
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(function(regs) {
       regs.forEach(function(reg) {
-        /* Forzar check de actualización en cada carga */
+        /* Forzar descarga del nuevo SW aunque no haya cambiado el byte-hash */
         reg.update().catch(function(){});
-        /* Si hay SW en espera (versión nueva instalada), activarlo ya */
+        /* Si hay SW en espera: activarlo ya, sin esperar navegación */
         if (reg.waiting) {
           reg.waiting.postMessage({ action: 'skipWaiting' });
         }
+        /* Si el SW instalando también tiene waiting anidado: cubrirlo */
+        if (reg.installing) {
+          reg.installing.addEventListener('statechange', function() {
+            if (reg.waiting) reg.waiting.postMessage({ action: 'skipWaiting' });
+          });
+        }
       });
     }).catch(function(){});
+
+    /* Limpiar TODA la cache de browser (no solo SW) para casos extremos de
+       mobile PWA que cachean el HTML a nivel de navegador/OS */
+    if ('caches' in window) {
+      /* Solo limpiar caches con nombre 'dashwey-' que NO sean la versión actual */
+      var CURRENT_CACHE = 'dashwey-v9-5-26';
+      caches.keys().then(function(keys) {
+        keys.forEach(function(key) {
+          if (key.startsWith('dashwey-') && key !== CURRENT_CACHE) {
+            caches.delete(key);
+          }
+        });
+      }).catch(function(){});
+    }
   }
 </script>
-<link rel="manifest" href="./manifest.json">
-<link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.25</title>
+<link rel="manifest" href="./manifest.json?v=9.5.26"><!-- v9.5.26: cache-bust manifest -->
+<link rel="apple-touch-icon" href="./icon-192.png?v=9.5.26"><!-- v9.5.26: cache-bust icon -->
+<link rel="icon" type="image/png" href="./icon-192.png?v=9.5.26">
+<title>Dashwey v9.5.26</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3060,6 +3083,7 @@ body.dark .auth-card    { background: var(--surface); }
   /* Crear el elemento splash */
   var s = document.createElement('div');
   s.id = 'splash-screen';
+  s.setAttribute('data-version', '9.5.26'); /* FIX v9.5.26: versión para debug cache */
   s.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:199999',
     'background:#F7F2F2',
@@ -5870,7 +5894,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.25.1';
+  const _APP_VERSION = 'v9.5.26';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14326,9 +14350,10 @@ if (!window.App) {
 
     // controllerchange: el nuevo SW tomó control → recargar limpiamente
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (_swReloadPending) return; // evitar doble reload
+      if (_swReloadPending) return;
       _swReloadPending = true;
-      // Limpiar caché antes de recargar para garantizar assets frescos
+      /* FIX v9.5.26: limpiar TODA la cache antes de recargar
+         Esto garantiza que el nuevo HTML (con splash nuevo) se descargue fresco */
       const _reload = () => window.location.reload(true);
       if ('caches' in window) {
         caches.keys()
@@ -14336,6 +14361,18 @@ if (!window.App) {
           .then(_reload).catch(_reload);
       } else {
         setTimeout(_reload, 300);
+      }
+    });
+
+    /* FIX v9.5.26: escuchar mensaje SW_UPDATED del nuevo SW activo */
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data?.action === 'SW_UPDATED') {
+        /* El SW ya limpió las caches. Si no hay transacción en curso, recargar */
+        if (!_swReloadPending && document.visibilityState !== 'hidden') {
+          _swReloadPending = true;
+          /* Pequeño delay para que el SW termine claim() */
+          setTimeout(() => window.location.reload(true), 500);
+        }
       }
     });
 
