@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.4.2</title>
+<title>Dashwey v9.4.3</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2854,6 +2854,11 @@ body.dark .auth-card    { background: var(--surface); }
 /* ── Scrollbars ocultos ── */
 * { scrollbar-width: none; -ms-overflow-style: none; }
 *::-webkit-scrollbar { display: none; }
+
+/* ── Alertas financieras globales ── */
+.fin-alerta-item { font-size: 12px; font-weight: 600; color: var(--ink); padding: 2px 0; }
+.fin-alerta-critical { color: var(--red); }
+.fin-alerta-warning  { color: #D97706; }
 </style>
 
 </head>
@@ -3812,7 +3817,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.4.2</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.4.3</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -3821,7 +3826,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v9.4.2</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v9.4.3</div>
     </div>
   </div>
 
@@ -4599,9 +4604,14 @@ const KPI = (() => {
     const pedidos = pedidosEnPeriodo(period);
     let invTotal = 0, pedCount = pedidos.length;
     pedidos.forEach(ped => {
-      ped.items.forEach(item => {
-        invTotal += item.ncajas * item.precio * 1.10;
-      });
+      // Usar FinEngine.pedidoCoste si disponible (IVA real por item)
+      if (typeof FinEngine !== 'undefined') {
+        invTotal += FinEngine.pedidoCoste(ped);
+      } else {
+        ped.items.forEach(item => {
+          invTotal += (item.ncajas||0) * (item.precio||0) * 1.10;
+        });
+      }
     });
     const cosMedia = pedCount > 0 ? invTotal / pedCount : 0;
     return { inv: invTotal, ped: pedCount, cos: cosMedia };
@@ -4827,29 +4837,366 @@ const KPI = (() => {
 
   // ── Beneficio Neto (Ventas reales - Inversión periodo) ──────────
   function getBeneficioNeto(period) {
+    // ── Usa FinEngine para coherencia total entre módulos ────────
     const inv    = getKPIs(period).inv;
     const ventas = ventasEnPeriodo(period);
+
+    // Calcular con FinEngine utils (misma lógica que el resto de la app)
     let vta = 0, costeVentas = 0;
     ventas.forEach(v => {
-      if (v.items) {
-        v.items.forEach(i => {
-          vta         += (i.pvp   || 0) * (i.qty || 0);
-          costeVentas += (i.coste || 0) * (i.qty || 0);
-        });
-      } else {
-        vta += (v.pvp || 0) * (v.qty || 0);
-        const p = State.get.prod(v.prodId);
-        costeVentas += (p?.precioCompra || 0) * (v.qty || 0);
-      }
+      vta         += typeof FinEngine !== 'undefined'
+        ? FinEngine.ventaIngresos(v)
+        : (v.total || (v.items ? v.items.reduce((s,i)=>s+i.qty*i.pvp,0) : (v.qty||0)*(v.pvp||0)));
+      costeVentas += typeof FinEngine !== 'undefined'
+        ? FinEngine.ventaCoste(v)
+        : (v.items ? v.items.reduce((s,i)=>s+i.qty*(i.coste||0),0) : (v.qty||0)*(v.coste||0));
     });
     const margenBruto = vta - costeVentas;
     const nTickets    = new Set(ventas.map(v => v.ticketId || v.id)).size;
-    const valorInv    = State.get.productos().reduce((s,p) => s + (p.stockActual||0)*(p.precioCompra||0), 0);
+    const valorInv    = typeof FinEngine !== 'undefined'
+      ? FinEngine.valorStock()
+      : State.get.productos().reduce((s,p) => s + (p.stockActual||0)*(p.precioCompra||0), 0);
     return { beneficio: margenBruto, inv, vta, costeVentas, nTickets, valorInv };
   }
 
-  return { getKPIs, getTopCompras, getGastoPorProv, getChartData, pedidosEnPeriodo, mermasEnPeriodo, ventasEnPeriodo, getVentasChartData, getTopVentas, getTopRoi, getCaducidadesAlerta, getBeneficioNeto, ALL_CATS };
+  return { getKPIs, getTopCompras, getGastoPorProv, getChartData, pedidosEnPeriodo, mermasEnPeriodo, ventasEnPeriodo, getVentasChartData, getTopVentas, getTopRoi, getCaducidadesAlerta, getBeneficioNeto, ALL_CATS, getRange: periodRange };
 })();
+
+// ══════════════════════════════════════════════════════════════════
+// FINANCIAL ENGINE v1.0 — DASHWEY
+// Única fuente de verdad financiera para toda la plataforma.
+// Todos los módulos (TPV, Dashboard, Almacén) usan este motor.
+// ══════════════════════════════════════════════════════════════════
+const FinEngine = (() => {
+
+  // ── Utilidad: parsear moneda a 2 decimales ────────────────────
+  function money(n) {
+    return Math.round((n || 0) * 100) / 100;
+  }
+
+  // ── Utilidad: calcular ingresos de una venta (cualquier schema) ─
+  // Venta puede ser { total } o { items: [{qty, pvp}] } o { qty, pvp }
+  function ventaIngresos(v) {
+    if (!v) return 0;
+    if (v.total != null && v.total > 0) return v.total;          // campo total — más fiable
+    if (v.items && v.items.length) {
+      return v.items.reduce((s, i) => s + (i.qty || 0) * (i.pvp || 0), 0);
+    }
+    return (v.qty || 0) * (v.pvp || 0);                           // venta simple legacy
+  }
+
+  // ── Utilidad: calcular coste de una venta ────────────────────────
+  function ventaCoste(v) {
+    if (!v) return 0;
+    if (v.items && v.items.length) {
+      return v.items.reduce((s, i) => s + (i.qty || 0) * (i.coste || 0), 0);
+    }
+    // Legacy: coste desde producto o campo coste
+    const p = State.get.prod(v.prodId);
+    return (v.qty || 0) * (v.coste || p?.precioCompra || 0);
+  }
+
+  // ── Utilidad: coste total de un pedido de almacén (+IVA) ─────────
+  function pedidoCoste(ped) {
+    if (!ped || !ped.items) return 0;
+    return ped.items.reduce((s, it) => {
+      const base = (it.ncajas || 0) * (it.precio || 0);
+      const ivaPct = it.iva ? (parseFloat(it.iva) / 100) : 0.10;
+      return s + base * (1 + ivaPct);
+    }, 0);
+  }
+
+  // ── Utilidad: gastoMensual equivalente (respeta periodicidad) ────
+  function gastoMensualEq(gastos) {
+    return (gastos || []).reduce((s, g) => {
+      const eq = g.mensualEq !== undefined ? g.mensualEq : (g.importe || 0);
+      return s + eq;
+    }, 0);
+  }
+
+  // ── Utilidad: rango de fechas para "mes actual" (calendar month) ─
+  function mesActualRange() {
+    const now = new Date();
+    return {
+      start: new Date(now.getFullYear(), now.getMonth(), 1),
+      end:   new Date(now.getFullYear(), now.getMonth() + 1, 1)
+    };
+  }
+
+  // ── Utilidad: rango "últimos N días" (rolling) ───────────────────
+  function rollingRange(days) {
+    const now = new Date();
+    return {
+      start: new Date(now.getTime() - days * 24 * 3600 * 1000),
+      end:   now
+    };
+  }
+
+  // ═══════════════════════════════════════════════════
+  // API PÚBLICA — Todas las métricas financieras
+  // ═══════════════════════════════════════════════════
+
+  // ── 1. INGRESOS ──────────────────────────────────────────────────
+  // revenue({ start, end }): suma de ventas en el rango de fechas
+  function revenue(range) {
+    const ventas = State.get.ventas();
+    return money(ventas
+      .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
+      .reduce((s, v) => s + ventaIngresos(v), 0)
+    );
+  }
+
+  // revenueMesActual(): ingresos del mes calendario actual
+  function revenueMesActual() {
+    return revenue(mesActualRange());
+  }
+
+  // revenue30d(): ingresos últimos 30 días (rolling)
+  function revenue30d() {
+    return revenue(rollingRange(30));
+  }
+
+  // ── 2. COSTE DE VENTAS ───────────────────────────────────────────
+  // COGS = coste de los productos vendidos
+  function costeVentas(range) {
+    const ventas = State.get.ventas();
+    return money(ventas
+      .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
+      .reduce((s, v) => s + ventaCoste(v), 0)
+    );
+  }
+
+  function costeVentasMesActual() {
+    return costeVentas(mesActualRange());
+  }
+
+  // ── 3. COMPRAS (INVERSIÓN EN STOCK) ─────────────────────────────
+  // Coste total de pedidos realizados al almacén
+  function comprasPeriodo(range) {
+    const pedidos = State.get.historialPedidos();
+    return money(pedidos
+      .filter(p => { const d = new Date(p.fecha); return d >= range.start && d < range.end; })
+      .reduce((s, p) => s + pedidoCoste(p), 0)
+    );
+  }
+
+  function comprasMesActual() {
+    return comprasPeriodo(mesActualRange());
+  }
+
+  // ── 4. GASTOS OPERATIVOS ─────────────────────────────────────────
+  // gastoMensualTotal(): equivalente mensual de todos los gastos
+  function gastoMensualTotal() {
+    return money(gastoMensualEq(State.get.gastosOp()));
+  }
+
+  // gastoFijoMensual(): solo gastos recurrentes
+  function gastoFijoMensual() {
+    const gastos = State.get.gastosOp().filter(g => g.recurrente);
+    return money(gastoMensualEq(gastos));
+  }
+
+  // gastoVariableMensual()
+  function gastoVariableMensual() {
+    return money(gastoMensualTotal() - gastoFijoMensual());
+  }
+
+  // gastoBruto(): suma de importes reales (no equivalentes) — para cash flow
+  function gastoBruto() {
+    return money((State.get.gastosOp() || []).reduce((s, g) => s + (g.importe || 0), 0));
+  }
+
+  // ── 5. BENEFICIO ─────────────────────────────────────────────────
+  // beneficioNeto(range): ingresos - COGS - gastos operativos
+  function beneficioNeto(range) {
+    const ing  = revenue(range);
+    const cogs = costeVentas(range);
+    const gop  = gastoMensualTotal();          // gastos fijos/mes (normalizados)
+    return money(ing - cogs - gop);
+  }
+
+  function beneficioNetoMesActual() {
+    return beneficioNeto(mesActualRange());
+  }
+
+  // margenBruto(range): (ingresos - COGS) / ingresos * 100
+  function margenBruto(range) {
+    const ing  = revenue(range);
+    const cogs = costeVentas(range);
+    if (ing === 0) return 0;
+    return Math.round((ing - cogs) / ing * 100);
+  }
+
+  function margenBrutoMesActual() {
+    return margenBruto(mesActualRange());
+  }
+
+  // ── 6. LIQUIDEZ / CASH ───────────────────────────────────────────
+  // saldoCuentas(): suma de todas las cuentas bancarias
+  function saldoCuentas() {
+    return money((State.get.cuentas() || []).reduce((s, c) => s + (c.saldo || 0), 0));
+  }
+
+  // runway(): días de operación con el saldo actual
+  function runway() {
+    const saldo  = saldoCuentas();
+    const diario = gastoMensualTotal() / 30;
+    if (diario <= 0) return 999;
+    return Math.round(saldo / diario);
+  }
+
+  // ratioLiquidez(): ingresos30d / gastoMensual
+  function ratioLiquidez() {
+    const ing = revenue30d();
+    const gop = gastoMensualTotal();
+    if (gop === 0) return 99;
+    return Math.round((ing / gop) * 100) / 100;
+  }
+
+  // ── 7. STOCK ─────────────────────────────────────────────────────
+  // valorStock(): valor de inventario al coste de compra
+  function valorStock() {
+    return money((State.get.productos() || [])
+      .reduce((s, p) => s + (p.stockActual || 0) * (p.precioCompra || 0), 0)
+    );
+  }
+
+  // ── 8. TICKET MEDIO ──────────────────────────────────────────────
+  function ticketMedio(range) {
+    const ventas = State.get.ventas()
+      .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; });
+    if (ventas.length === 0) return 0;
+    const totalIng = ventas.reduce((s, v) => s + ventaIngresos(v), 0);
+    return money(totalIng / ventas.length);
+  }
+
+  function ticketMedioMesActual() {
+    return ticketMedio(mesActualRange());
+  }
+
+  // ── 9. DELTA VS MES ANTERIOR ─────────────────────────────────────
+  function deltaRevenue() {
+    const now  = new Date();
+    const rangeMes  = mesActualRange();
+    const rangeAnt  = {
+      start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+      end:   new Date(now.getFullYear(), now.getMonth(), 1)
+    };
+    const actual   = revenue(rangeMes);
+    const anterior = revenue(rangeAnt);
+    if (anterior === 0) return null;
+    return Math.round((actual - anterior) / anterior * 100);
+  }
+
+  // ── 10. COMPROMETIDO (gastos fijos recurrentes) ──────────────────
+  function comprometido() {
+    return money(
+      (State.get.gastosOp() || [])
+        .filter(g => g.recurrente)
+        .reduce((s, g) => s + (g.importe || 0), 0)
+    );
+  }
+
+  // ── 11. RESUMEN FINANCIERO COMPLETO ──────────────────────────────
+  // snapshot(): un objeto con TODAS las métricas → único punto de acceso para la UI
+  function snapshot(period) {
+    const range = period ? _rangeFromPeriod(period) : mesActualRange();
+    const ing        = revenue(range);
+    const cogs       = costeVentas(range);
+    const compras    = comprasPeriodo(range);
+    const gop        = gastoMensualTotal();
+    const gFijo      = gastoFijoMensual();
+    const gVar       = gastoVariableMensual();
+    const benNeto    = money(ing - cogs - gop);
+    const mgBruto    = ing > 0 ? Math.round((ing - cogs) / ing * 100) : 0;
+    const saldo      = saldoCuentas();
+    const rw         = runway();
+    const ratio      = ratioLiquidez();
+    const valStock   = valorStock();
+    const tkMedio    = ticketMedio(range);
+    const delta      = deltaRevenue();
+    const comp       = comprometido();
+
+    return {
+      // Ingresos
+      ingresos:        ing,
+      ingresosMes:     revenueMesActual(),
+      ingresos30d:     revenue30d(),
+      ticketMedio:     tkMedio,
+      deltaRevenue:    delta,
+
+      // Costes
+      costeVentas:     cogs,
+      compras:         compras,
+      gastoMensual:    gop,
+      gastoFijo:       gFijo,
+      gastoVariable:   gVar,
+      comprometido:    comp,
+
+      // Beneficio
+      beneficioNeto:   benNeto,
+      margenBruto:     mgBruto,
+
+      // Liquidez
+      saldo:           saldo,
+      runway:          rw,
+      ratioLiquidez:   ratio,
+
+      // Stock
+      valorStock:      valStock,
+    };
+  }
+
+  // ── Helper privado: period object → date range ───────────────────
+  function _rangeFromPeriod(period) {
+    if (!period) return mesActualRange();
+    const now = new Date();
+    try {
+      // KPI.periodRange ya existe — reutilizarlo
+      if (typeof KPI !== 'undefined' && KPI.pedidosEnPeriodo) {
+        const { start, end } = KPI.getRange ? KPI.getRange(period) : mesActualRange();
+        return { start, end };
+      }
+    } catch(e) {}
+    return mesActualRange();
+  }
+
+  // ── Expose ────────────────────────────────────────────────────────
+  return {
+    // Utils
+    money, ventaIngresos, ventaCoste, pedidoCoste,
+    gastoMensualEq, mesActualRange, rollingRange,
+
+    // Revenue
+    revenue, revenueMesActual, revenue30d,
+
+    // Costs
+    costeVentas, costeVentasMesActual,
+    comprasPeriodo, comprasMesActual,
+    gastoMensualTotal, gastoFijoMensual, gastoVariableMensual, gastoBruto,
+
+    // Profit
+    beneficioNeto, beneficioNetoMesActual,
+    margenBruto, margenBrutoMesActual,
+
+    // Cash
+    saldoCuentas, runway, ratioLiquidez,
+
+    // Stock
+    valorStock,
+
+    // Ticket
+    ticketMedio, ticketMedioMesActual,
+
+    // Delta
+    deltaRevenue, comprometido,
+
+    // Master snapshot
+    snapshot,
+  };
+})();
+
+
 
 // ══════════════════════════════════════════
 // ══════════════════════════════════════════
@@ -5102,7 +5449,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v9.4.2</div>
+        <div class="menu-ver">Dashwey v9.4.3</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -5159,7 +5506,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.4.2';
+  const _APP_VERSION = 'v9.4.3';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -5920,7 +6267,7 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
-    'v9.4.2': {
+    'v9.4.3': {
       title: 'Auditoría forense completa',
       items: [
         '🧹 ~160 líneas de código muerto eliminadas',
@@ -6126,7 +6473,7 @@ const dash = (() => {
     }
     const period = State.get.period();
     const { inv, ped, cos } = KPI.getKPIs(period);
-    const { beneficio, vta } = KPI.getBeneficioNeto(period);
+    const { beneficio, vta, nTickets: nTkKPI, valorInv: _valorInvKPI } = KPI.getBeneficioNeto(period);
     const topCompras  = KPI.getTopCompras(period);
     const gastoProv   = KPI.getGastoPorProv(period);
     const chartData   = KPI.getChartData(period);
@@ -6134,6 +6481,10 @@ const dash = (() => {
     const topRoi      = KPI.getTopRoi(period);
     const caducidades = KPI.getCaducidadesAlerta();
     const ventasData  = KPI.getVentasChartData(period, 'ingresos');
+
+    // ── FinEngine: métricas financieras normalizadas ──────────────
+    // Usamos el snapshot del FinEngine para todos los valores monetarios del dashboard
+    const _finSnap = FinEngine.snapshot(period);
 
     // ── Tarjetas financieras ──────────────────────────────────
     try { renderFinanciero(); } catch(e) {}
@@ -6164,7 +6515,7 @@ const dash = (() => {
 
     // Valor del inventario
     const invValEl = document.getElementById('kpi-valor-inv');
-    if(invValEl) invValEl.textContent = feur(valorInv || 0);
+    if(invValEl) invValEl.textContent = feur(FinEngine.valorStock());
 
     // Delta beneficio
     const delta = document.getElementById('kpi-ben-delta');
@@ -6693,22 +7044,15 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function renderCuentas() {
     const cuentas  = State.get.cuentas();
     const gastos   = State.get.gastosOp();
-    const ventas   = State.get.ventas();
-    const pedidos  = State.get.historialPedidos();
 
-    const saldoTotal   = cuentas.reduce((s,c) => s + (c.saldo||0), 0);
-    const gastoMensual = gastos.reduce((s,g) => s + (g.mensualEq!==undefined?g.mensualEq:(g.importe||0)), 0);
+    // ── FinEngine: fuente única de cálculo ─────────────────────
+    const saldoTotal   = FinEngine.saldoCuentas();
+    const gastoMensual = FinEngine.gastoMensualTotal();
     const gastoDiario  = gastoMensual / 30;
-    const runway       = gastoDiario > 0 ? Math.round(saldoTotal / gastoDiario) : 999;
-
-    // Ingresos últimos 30 días
-    const hace30 = new Date(Date.now() - 30*24*3600*1000);
-    const ing30  = ventas.filter(v => new Date(v.fecha) >= hace30)
-                         .reduce((s,v) => s + (v.qty||1)*(v.pvp||0), 0);
-    const ratio  = gastoMensual > 0 ? (ing30 / gastoMensual) : 0;
-
-    // Comprometido = gasto fijo mensual
-    const comprometido = gastos.filter(g=>g.recurrente).reduce((s,g)=>s+(g.importe||0),0);
+    const runway       = FinEngine.runway();
+    const ing30        = FinEngine.revenue30d();
+    const ratio        = FinEngine.ratioLiquidez();
+    const comprometido = FinEngine.comprometido();
 
     // DOM
     const el = (id) => document.getElementById(id);
@@ -6762,9 +7106,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const cuentas = State.get.cuentas();
     const saldo   = cuentas.reduce((s,c)=>s+(c.saldo||0),0);
 
-    const total  = gastos.reduce((s,g)=>s+(g.importe||0),0);
-    const fijos  = gastos.filter(g=>g.recurrente).reduce((s,g)=>s+(g.importe||0),0);
-    const vars   = total - fijos;
+    // ── FinEngine: fuente única de cálculo ─────────────────────
+    const total  = FinEngine.gastoMensualTotal();   // usa mensualEq (normalizado)
+    const fijos  = FinEngine.gastoFijoMensual();
+    const vars   = FinEngine.gastoVariableMensual();
     const diario = total / 30;
 
     const el = (id) => document.getElementById(id);
@@ -6814,33 +7159,20 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const gastos  = State.get.gastosOp();
     const pedidos = State.get.historialPedidos();
 
-    // Periodo actual
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const ventasMes = ventas.filter(v => new Date(v.fecha) >= startOfMonth);
-    const totalIng  = ventasMes.reduce((s,v)=>s+(v.qty||1)*(v.pvp||0), 0);
-    const nTickets  = ventasMes.length;
-    const ticket    = nTickets > 0 ? totalIng/nTickets : 0;
+    // ── FinEngine: fuente única de cálculo ─────────────────────
+    const now         = new Date();
+    const range       = FinEngine.mesActualRange();
+    const ventasMes   = State.get.ventas().filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; });
+    const totalIng    = FinEngine.revenueMesActual();
+    const nTickets    = ventasMes.length;
+    const ticket      = FinEngine.ticketMedioMesActual();
+    const costeMes    = FinEngine.costeVentasMesActual();
+    const margenBruto = FinEngine.margenBrutoMesActual();
+    const gastoMensual = FinEngine.gastoMensualTotal();
+    const benefNeto   = FinEngine.beneficioNetoMesActual();
 
-    // Coste de ventas (compras)
-    const costeMes = pedidos
-      .filter(p => new Date(p.fecha) >= startOfMonth)
-      .reduce((s,p)=>s+(p.items||[]).reduce((ss,it)=>{
-        return ss + (it.ncajas||1)*(it.precio||0)*1.10;
-      },0), 0);
-
-    const margenBruto = totalIng > 0 ? Math.round((totalIng-costeMes)/totalIng*100) : 0;
-    const gastoMensual = gastos.reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0);
-    const benefNeto = totalIng - costeMes - gastoMensual;
-
-    // Mes anterior para delta
-    const startPrev = new Date(now.getFullYear(), now.getMonth()-1, 1);
-    const endPrev   = new Date(now.getFullYear(), now.getMonth(), 0);
-    const ventasPrev = ventas.filter(v => {
-      const d = new Date(v.fecha); return d >= startPrev && d <= endPrev;
-    });
-    const totalPrev = ventasPrev.reduce((s,v)=>s+(v.qty||1)*(v.pvp||0), 0);
-    const delta = totalPrev > 0 ? Math.round((totalIng-totalPrev)/totalPrev*100) : 0;
+    // ── Delta vs mes anterior (FinEngine) ─────────────────────
+    const delta = FinEngine.deltaRevenue();
 
     const el = (id) => document.getElementById(id);
     if (el('fin-ingresos-total')) el('fin-ingresos-total').textContent = _feur(totalIng);
@@ -6862,9 +7194,16 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Top productos
     const topEl = el('fin-ingresos-top');
     if (topEl && ventasMes.length) {
+      // ── FinEngine: calcular ingresos por producto correctamente ──
       const byProd = {};
       ventasMes.forEach(v => {
-        byProd[v.prodId] = (byProd[v.prodId]||0) + (v.qty||1)*(v.pvp||0);
+        if (v.items && v.items.length) {
+          v.items.forEach(i => {
+            byProd[i.prodId] = (byProd[i.prodId]||0) + (i.qty||0)*(i.pvp||0);
+          });
+        } else {
+          byProd[v.prodId] = (byProd[v.prodId]||0) + FinEngine.ventaIngresos(v);
+        }
       });
       const top = Object.entries(byProd).sort((a,b)=>b[1]-a[1]).slice(0,3);
       const maxVal = top[0]?.[1] || 1;
@@ -7038,6 +7377,41 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     try { renderGastos(); }             catch(e) { console.warn('[Fin] gastos:', e); }
     try { renderIngresosFin(); }        catch(e) { console.warn('[Fin] ingresos:', e); }
     try { renderPedidosCalendario(); }  catch(e) { console.warn('[Fin] pedidos-cal:', e); }
+    try { _validarCoherenciaFinanciera(); } catch(e) {}
+  }
+
+  // ── Validador de coherencia financiera ─────────────────────────
+  function _validarCoherenciaFinanciera() {
+    if (typeof FinEngine === 'undefined') return;
+    const saldo     = FinEngine.saldoCuentas();
+    const gasto     = FinEngine.gastoMensualTotal();
+    const runway    = FinEngine.runway();
+    const ingresos  = FinEngine.revenueMesActual();
+    const beneficio = FinEngine.beneficioNetoMesActual();
+
+    // Detectar alertas críticas y mostrar en la tarjeta de cuentas
+    const alertEl = document.getElementById('fin-alerta-global');
+    if (!alertEl) return;
+
+    const alertas = [];
+    if (runway < 30 && saldo > 0) {
+      alertas.push({ tipo: 'critical', msg: '⚠️ Runway ' + runway + ' días — liquidez crítica' });
+    }
+    if (beneficio < 0 && ingresos > 0) {
+      alertas.push({ tipo: 'warning', msg: '🔴 Beneficio negativo: ' + feur(beneficio) });
+    }
+    if (gasto > 0 && ingresos > 0 && ingresos < gasto * 0.5) {
+      alertas.push({ tipo: 'warning', msg: '📉 Ingresos < 50% de gastos operativos este mes' });
+    }
+
+    if (alertas.length > 0) {
+      alertEl.style.display = '';
+      alertEl.innerHTML = alertas.map(a =>
+        '<div class="fin-alerta-item fin-alerta-' + a.tipo + '">' + a.msg + '</div>'
+      ).join('');
+    } else {
+      alertEl.style.display = 'none';
+    }
   }
 
   // ── Modal detallado ────────────────────────────────────────
@@ -7089,9 +7463,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function _openCuentasModal() {
     const cuentas = State.get.cuentas();
     const gastos  = State.get.gastosOp();
-    const saldo   = cuentas.reduce((s,c)=>s+(c.saldo||0),0);
-    const gastoM  = gastos.reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0);
-    const runway  = gastoM > 0 ? Math.round(saldo/gastoM*30) : 999;
+    // ── FinEngine: fuente única de cálculo ─────────────────────
+    const saldo   = FinEngine.saldoCuentas();
+    const gastoM  = FinEngine.gastoMensualTotal();
+    const runway  = FinEngine.runway();
     const html = `
       <div class="modal-header-dark">
         <div><div class="mhd-title">🏦 Cuentas Bancarias</div><div class="mhd-sub">Análisis de liquidez</div></div>
@@ -7270,7 +7645,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function _openGastosModal() {
     const gastos  = State.get.gastosOp();
     const cuentas = State.get.cuentas();
-    const total   = gastos.reduce((s,g) => s + (g.mensualEq !== undefined ? g.mensualEq : (g.importe||0)), 0);
+    // ── FinEngine: total mensual normalizado ─────────────────────
+    const total   = FinEngine.gastoMensualTotal();
     const CATS    = ['Fijos','Servicios','Marketing','Personal','Otros'];
     const ICONS   = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
     const PLABELS = { mensual:'Mensual', trimestral:'Trimestral', anual:'Anual', unico:'Único' };
@@ -11688,7 +12064,7 @@ const alm = (() => {
 
   // ── What's New — mostrar una vez por versión ─────────────────
   setTimeout(() => {
-    try { App.ui.showWhatsNew('9.4.2'); } catch(_) {}
+    try { App.ui.showWhatsNew('9.4.3'); } catch(_) {}
   }, 1500); // delay para no interferir con el arranque
 
   // ── Idioma — aplicar al arrancar ──────────────────────────────
@@ -12083,7 +12459,7 @@ const alm = (() => {
 })();
 
 // Exponer módulos públicos
-return { State, KPI, Utils, ui, nav, dash, tpv, alm, canAccess, limpiarBD: window._dashweyLimpiarBD };
+return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess, limpiarBD: window._dashweyLimpiarBD };
 
 // Fin App
 })();
@@ -12406,7 +12782,7 @@ if (!window.App) {
     <div class="wn-header">
       <div class="wn-emoji">🎉</div>
       <div class="wn-title" id="wn-title">What's New in Dashwey</div>
-      <div class="wn-ver"  id="wn-ver">v9.4.2</div>
+      <div class="wn-ver"  id="wn-ver">v9.4.3</div>
     </div>
     <div class="wn-scroll" id="wn-scroll"></div>
     <button class="wn-close" onclick="App.ui.closeWhatsNew()">Cerrar</button>
