@@ -1,5 +1,5 @@
 /* Dashwey Service Worker v9.5.10 */
-const CACHE_NAME='dashwey-v9-5-10',HTML_URL='Dashwey_v82.html',VERSION_URL='version.txt';
+const CACHE_NAME='dashwey-v9-5-10-1',HTML_URL='Dashwey_v82.html',VERSION_URL='version.txt';
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll([HTML_URL,VERSION_URL]).catch(()=>{})).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('message',e=>{if(e.data?.action==='skipWaiting')self.skipWaiting();});
