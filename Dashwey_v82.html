@@ -3838,7 +3838,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.5.5.1</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px" id="sd-ver-status">Cargando versión…</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -3847,7 +3847,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v9.5.5.1</div>
+      <div class="sd-ver" id="sd-ver">Dashwey…</div>
     </div>
   </div>
 
@@ -4361,12 +4361,21 @@ const State = (() => {
     const fb = window._DashweyFirebase;
     if (!fb?.enabled || !fb?.ready || !navigator.onLine) return;
     _isSyncing = true;
-    const snapshot = _pendingQueue[_pendingQueue.length - 1]; // solo el más reciente
+    // Tomar el snapshot más reciente y actualizar lastSyncAt/lastDeviceId
+    // para que el onSnapshot del write sea identificable como propio (Guard 2)
+    const snapshot = _pendingQueue[_pendingQueue.length - 1];
+    if (snapshot?.user) {
+      const now      = Date.now();
+      const deviceId = window._DashweyDeviceId || 'unknown';
+      snapshot.user.lastSyncAt  = now;
+      snapshot.user.lastDeviceId = deviceId;
+      State.set.user({ lastSyncAt: now, lastDeviceId: deviceId });
+      console.log('[SYNC] flushQueue — actualizando lastSyncAt:', now, 'deviceId:', deviceId);
+    }
     _writeFirebase(snapshot).then(ok => {
       if (ok) { _pendingQueue = []; }
       _isSyncing = false;
-    })
-        .catch(() => { _isSyncing = false; });
+    }).catch(() => { _isSyncing = false; });
   }
 
   // Escuchar reconexión
@@ -5471,7 +5480,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v9.5.5.1</div>
+        <div class="menu-ver">Dashwey ' + _getAppVersion() + '</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -5528,7 +5537,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.13';
+  const _APP_VERSION = 'v9.5.14';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -6086,6 +6095,11 @@ const ui = (() => {
     if (el('sd-cierre-sub'))   el('sd-cierre-sub').textContent = s.cierreHora || '21:00';
     // ctx selector
     _refreshCtxSelector();
+    // Versión actual — siempre desde _APP_VERSION (nunca hardcodeada)
+    const _ver = _getAppVersion();
+    if (el('sd-ver'))        el('sd-ver').textContent        = 'Dashwey ' + _ver;
+    if (el('sd-ver-status')) el('sd-ver-status').textContent = 'Versión actual: ' + _ver;
+    console.log('[VERSION] actual renderizada:', _ver);
     // open
     overlay.classList.add('open');
     drawer.classList.add('open');
@@ -9293,7 +9307,9 @@ const alm = (() => {
 
   function addNuevoProv() {
     const id = 'pv' + Date.now();
-    State.set.addProv({id, nombre:'Nuevo proveedor', icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''});
+    const prov = {id, nombre:'Nuevo proveedor', icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''};
+    State.set.addProv(prov);
+    console.log('[ALM] proveedor creado:', id, '— total:', State.get.proveedores().length);
     ui.closeFs();
     setTimeout(() => openEditProv(id), Utils.ANIM_DELAY);
   }
@@ -10560,7 +10576,9 @@ const alm = (() => {
 
   function _sacAddProv(nombre) {
     const id = 'prov_' + Date.now();
-    State.set.addProv({id, nombre, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''});
+    const prov = {id, nombre, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''};
+    State.set.addProv(prov);
+    console.log('[ALM] proveedor creado desde SAC:', id, nombre, '— total:', State.get.proveedores().length);
     _sacPickProv(id, nombre);
     showToast('✅ Proveedor "' + nombre + '" creado');
   }
@@ -10936,10 +10954,12 @@ const alm = (() => {
     };
 
     alm._eaDelete = (id) => {
+      const prod = State.get.prod(id);
       State.set.productos(State.get.productos().filter(p => p.id !== id));
       State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
+      console.log('[ALM] artículo eliminado:', id, prod?.nombre);
       ui.closeModal(); ui.closeFs();
-      renderOrden(); updateBadge(); tpv.render();
+      renderOrden(); updateBadge(); tpv.render(); renderCatInline();
       showToast('Artículo eliminado');
     };
 
@@ -11416,19 +11436,20 @@ const alm = (() => {
   function _catDeleteConfirm(id) {
     const p = State.get.prod(id); if (!p) return;
     const nombre = p.nombre;
-    // Eliminar de productos
-    const prods = State.get.productos().filter(pr => pr.id !== id);
-    State.set.productos(prods);
+    // Eliminar de productos (inmutable — nueva referencia)
+    State.set.productos(State.get.productos().filter(pr => pr.id !== id));
     // Eliminar de la orden si estaba
-    const orden = State.get.ordenItems().filter(o => o.prodId !== id);
-    State.set.ordenItems(orden);
+    State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
+    console.log('[ALM] artículo eliminado:', id, nombre);
     App.ui.closeModal();
-    // Refresh catálogo
+    // Refresh completo: catálogo sheet + inline + TPV
+    renderCatInline();
+    tpv.render();
+    updateBadge();
     const sel = State.get.selectedProv();
     const prov = State.get.prov(sel);
     const sheet = document.getElementById('orden-catalogo-sheet');
     if (sheet) sheet.innerHTML = _buildCatalogoHTML(sel, prov, '');
-    updateBadge();
     showToast('🗑️ ' + nombre + ' borrado');
   }
 
@@ -12500,6 +12521,8 @@ const alm = (() => {
     try { tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
     try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
     try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
+    try { alm.updateProvBar?.(); } catch(e) {}
+    try { alm.updateProvBar?.(); } catch(e) {}
     try { alm.updateBadge(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
   }
 
