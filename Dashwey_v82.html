@@ -4441,12 +4441,12 @@ const State = (() => {
     user:             () => _state.user     || DEFAULTS.user,
     syncStatus:       () => _state.syncStatus || DEFAULTS.syncStatus,
     ticketsAbiertos:  () => _state.ticketsAbiertos || [],
-    proveedores:      () => _state.proveedores,
-    productos:        () => _state.productos,
-    historialPedidos: () => _state.historialPedidos,
-    mermas:           () => _state.mermas,
-    ventas:           () => _state.ventas,
-    ordenItems:       () => _state.ordenItems,
+    proveedores:      () => _state.proveedores || [],
+    productos:        () => _state.productos || [],
+    historialPedidos: () => _state.historialPedidos || [],
+    mermas:           () => _state.mermas || [],
+    ventas:           () => _state.ventas || [],
+    ordenItems:       () => _state.ordenItems || [],
     lastVals:         () => _state.lastVals,
     selectedProv:     () => _state.selectedProv,
     period:           () => _state.period,
@@ -5551,7 +5551,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.17';
+  const _APP_VERSION = 'v9.5.19';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -5861,7 +5861,12 @@ const ui = (() => {
       if (res.ok) {
         // Limpiar flag de logout intencional
         try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
-        State.set.user({ email: res.user.email, uid: res.user.uid });
+        // FIX: mutar _state directamente para no disparar save() doble
+        // (InitialSync ya subirá el estado completo a Firebase)
+        try {
+          const _su = State.get.user();
+          if (_su) { _su.email = res.user.email; _su.uid = res.user.uid; }
+        } catch(_) { State.set.user({ email: res.user.email, uid: res.user.uid }); }
         hideAuthScreen();
         showToast('👋 Bienvenido');
         if (typeof window._DashweyInitialSync === 'function') {
@@ -6113,7 +6118,7 @@ const ui = (() => {
     const _ver = _getAppVersion();
     if (el('sd-ver'))        el('sd-ver').textContent        = 'Dashwey ' + _ver;
     if (el('sd-ver-status')) el('sd-ver-status').textContent = 'Versión actual: ' + _ver;
-    console.log('[VERSION] actual renderizada:', _ver);
+
     // open
     overlay.classList.add('open');
     drawer.classList.add('open');
@@ -6860,6 +6865,7 @@ const dash = (() => {
   // Informe IA del mes
   async function openIAReport() {
     const period = State.get.period();
+    try {
     const { inv, ped, cos } = KPI.getKPIs(period);
     const mermasP = KPI.mermasEnPeriodo(period);
     const totalMermas = mermasP.reduce((s,m) => s + m.coste, 0);
@@ -6929,6 +6935,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           <div style="font-size:12px">No se pudo conectar con la IA.<br>Comprueba tu conexión e inténtalo de nuevo.</div>
           <button class="btn-ok" style="margin-top:16px;width:100%" onclick="App.dash.openIAReport()">🔄 Reintentar</button>
         </div>`;
+    }
+    } catch(e) {
+      console.error('[IA] openIAReport error:', e);
+      showToast('Error al generar informe IA');
     }
   }
 
@@ -7271,7 +7281,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       const r = { start: new Date(d.getFullYear(), d.getMonth()-1, 1), end: new Date(d.getFullYear(), d.getMonth(), 1) };
       return typeof FinEngine.revenue === 'function' ? (FinEngine.revenue(r) ?? 0) : 0;
     } catch(e) { return 0; } })();
-    console.log('[FIN] ingresos delta:', delta, 'totalPrev:', totalPrev);
+
 
     const el = (id) => document.getElementById(id);
     if (el('fin-ingresos-total')) el('fin-ingresos-total').textContent = _feur(totalIng);
@@ -9333,7 +9343,7 @@ const alm = (() => {
     const id = 'pv' + Date.now();
     const prov = {id, nombre:'Nuevo proveedor', icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''};
     State.set.addProv(prov);
-    console.log('[ALM] proveedor creado:', id, '— total:', State.get.proveedores().length);
+
     ui.closeFs();
     setTimeout(() => openEditProv(id), Utils.ANIM_DELAY);
   }
@@ -10602,7 +10612,7 @@ const alm = (() => {
     const id = 'prov_' + Date.now();
     const prov = {id, nombre, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'', banner:''};
     State.set.addProv(prov);
-    console.log('[ALM] proveedor creado desde SAC:', id, nombre, '— total:', State.get.proveedores().length);
+
     _sacPickProv(id, nombre);
     showToast('✅ Proveedor "' + nombre + '" creado');
   }
@@ -10981,7 +10991,7 @@ const alm = (() => {
       const prod = State.get.prod(id);
       State.set.productos(State.get.productos().filter(p => p.id !== id));
       State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
-      console.log('[ALM] artículo eliminado:', id, prod?.nombre);
+
       ui.closeModal(); ui.closeFs();
       renderOrden(); updateBadge(); tpv.render(); renderCatInline();
       showToast('Artículo eliminado');
@@ -11464,7 +11474,7 @@ const alm = (() => {
     State.set.productos(State.get.productos().filter(pr => pr.id !== id));
     // Eliminar de la orden si estaba
     State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
-    console.log('[ALM] artículo eliminado:', id, nombre);
+
     App.ui.closeModal();
     // Refresh completo: catálogo sheet + inline + TPV
     renderCatInline();
@@ -11507,7 +11517,7 @@ const alm = (() => {
   // Popup de análisis leyendo directamente de _ordenCarrito (v8.9.0)
   function _openAceptarPopupFromCarrito(sel) {
     const carritoKeys = Object.keys(_ordenCarrito);
-    console.log('[CONFIRM] _openAceptarPopupFromCarrito — sel:', sel, 'items:', carritoKeys.length);
+
 
     if (!carritoKeys.length) {
       console.warn('[CONFIRM] carrito vacío al abrir popup — abort');
@@ -11523,7 +11533,7 @@ const alm = (() => {
       : JSON.parse(JSON.stringify(_ordenCarrito));
 
     _pedidoPendiente = { sel, carrito: _carritoSnapshot, ts: Date.now() };
-    console.log('[CONFIRM] snapshot creado — items:', Object.keys(_carritoSnapshot).length, 'ts:', _pedidoPendiente.ts);
+
 
     const prov = State.get.prov(sel);
 
@@ -11629,7 +11639,7 @@ const alm = (() => {
 
   // Cancelar pedido — limpia cesta completamente, nunca deja estado sucio
   function _cancelarPedidoCarrito() {
-    console.log('[CONFIRM] cancelar pedido — limpiando snapshot y carrito');
+
     document.getElementById('aceptar-popup-overlay')?.remove();
     _pedidoPendiente = null;   // snapshot descartado
     _ordenCarrito    = {};
@@ -11643,7 +11653,7 @@ const alm = (() => {
   // Confirmar pedido desde carrito (v8.9.0) — lee _ordenCarrito, sin State.ordenItems
   // _confirmandoPedido declarado al inicio del módulo (evita TDZ con let)
   function _confirmarPedidoDesdeCarrito() {
-    console.log('[CONFIRM] _confirmarPedidoDesdeCarrito() — flag:', _confirmandoPedido);
+
 
     // ── Guard doble-tap ─────────────────────────────────────────
     if (_confirmandoPedido) {
@@ -11651,8 +11661,10 @@ const alm = (() => {
       return;
     }
     _confirmandoPedido = true;
+    // FIX: finally garantiza liberacion del flag incluso en excepciones
+    try {
 
-    // ── Validación del snapshot inmutable ───────────────────────
+    // -- Validación del snapshot inmutable ───────────────────────
     // NUNCA usar _ordenCarrito aquí — puede haberse vaciado entre el
     // momento en que se abrió el popup y el tap de confirmación.
     if (!_pedidoPendiente) {
@@ -11663,7 +11675,7 @@ const alm = (() => {
 
     const { sel, carrito: carritoSnap, ts } = _pedidoPendiente;
     const snapKeys = Object.keys(carritoSnap);
-    console.log('[CONFIRM] snapshot age:', Date.now() - ts, 'ms | items:', snapKeys.length, snapKeys);
+
 
     if (!snapKeys.length) {
       console.error('[CONFIRM] ERROR — snapshot vacío. Pedido abortado.');
@@ -11676,14 +11688,14 @@ const alm = (() => {
     document.getElementById('aceptar-popup-overlay')?.remove();
 
     const prov = State.get.prov(sel);
-    console.log('[CONFIRM] prov:', prov?.nombre || '(sin nombre)', '| sel:', sel);
+
 
     // ── Construir items desde el snapshot (inmutable) ───────────
     const items = Object.entries(carritoSnap).map(([prodId, ncajas]) => {
       const p        = State.get.prod(prodId);
       const savedUds = getLV(prodId, { udscaja: p?.udscaja || 12 }).udscaja;
       const udscaja  = p?.udscaja || savedUds || 12;
-      console.log('[CONFIRM]  item:', prodId, '| ncajas:', ncajas, '| udscaja:', udscaja, '| precio:', p?.precioCompra || 0);
+
       return {
         prodId, ncajas,
         udscaja,
@@ -11697,7 +11709,7 @@ const alm = (() => {
       const p = State.get.prod(o.prodId);
       if (p) {
         const newStock = (p.stockActual || 0) + (o.ncajas || 1) * (o.udscaja || 1);
-        console.log('[CONFIRM]  stock', o.prodId, p.stockActual, '→', newStock);
+
         State.set.updateProd(o.prodId, { stockActual: newStock });
       } else {
         console.warn('[CONFIRM]  producto no encontrado:', o.prodId);
@@ -11711,10 +11723,10 @@ const alm = (() => {
       provId: sel,
       items:  items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja, precio: o.precio, pvp: o.pvp })),
     };
-    console.log('[CONFIRM] guardando pedido:', pedido.id, '| items:', pedido.items.length);
+
     try {
       State.set.addPedido(pedido);
-      console.log('[CONFIRM] addPedido ✅');
+
     } catch (err) {
       console.error('[CONFIRM] addPedido FAILED:', err.message);
     }
@@ -11724,7 +11736,7 @@ const alm = (() => {
     _ordenCarrito    = {};
     try { localStorage.removeItem('dashwey_carrito_v1'); } catch (e) {}
     _ordenEstado     = 0;
-    console.log('[CONFIRM] estado limpiado');
+
 
     try { _updateMainBtn();  } catch (e) { console.warn('[CONFIRM] _updateMainBtn:', e.message); }
     try { updateBadge();     } catch (e) { console.warn('[CONFIRM] updateBadge:', e.message); }
@@ -11732,15 +11744,17 @@ const alm = (() => {
 
     // ── Mostrar resumen ─────────────────────────────────────────
     _confirmandoPedido = false;
-    console.log('[CONFIRM] abriendo resumen en 200ms...');
+
     setTimeout(() => {
       try {
         _mostrarResumenPedido(pedido, prov);
-        console.log('[CONFIRM] resumen abierto ✅');
+
       } catch (err) {
         console.error('[CONFIRM] _mostrarResumenPedido FAILED:', err.message);
       }
     }, 200);
+    } catch(e) { console.error('[CONFIRM] unexpected error:', e); }
+    finally { _confirmandoPedido = false; }
   }
   // _activarComprobacion: stub de compatibilidad (estado 2 eliminado en v8.8.1)
   // Redirige al nuevo flujo directo sin pantalla de comprobación
@@ -12417,12 +12431,9 @@ const alm = (() => {
   const _titleEl = document.getElementById('header-title');
   if (_titleEl) _titleEl.textContent = 'DASHBOARD';
 
-  // Renders iniciales — síncronos para que los handlers estén activos
-  try { dash.render(); }       catch(e) { console.warn('[Dashwey] dash.render:', e); }
-  try { dash._applyHidden(); } catch(e) {}
-  try { tpv.render(); }        catch(e) { console.warn('[Dashwey] tpv.render:', e); }
-  try { alm.renderOrden(); }   catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
-  try { alm.updateBadge(); }   catch(e) {}
+  // Renders iniciales via _renderAll (unica fuente de verdad)
+  try { dash._applyHidden?.(); } catch(e) {}
+  try { _renderAll(); } catch(e) { console.warn('[Dashwey] init render:', e); }
 
   // ── Auth gate ─────────────────────────────────────────────────
   const _authScreen = document.getElementById('auth-screen');
@@ -12547,7 +12558,7 @@ const alm = (() => {
   // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
   let _syncRunning = false; // anti-race: evita _doInitialSync concurrente
   async function _doInitialSync() {
-  if (_syncRunning) { console.log('[SYNC] ya en curso, ignorando llamada duplicada'); return; }
+  if (_syncRunning) { return; } // guard: ya en curso
   _syncRunning = true;
   try {
     const fb = window._DashweyFirebase;
@@ -12563,9 +12574,9 @@ const alm = (() => {
     if (!remote) {
       // Primera vez en la nube — subir snapshot del estado local
       const ok = await fb.write('state', _buildLocalSnapshot());
-      if (ok) {
-        console.log('[SYNC] primer upload — estado local subido a Firebase');
-        State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
+      if (ok && _state?.syncStatus) {
+        Object.assign(_state.syncStatus, { mode: 'synced', pendingWrites: 0 });
+        if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
       }
       return;
     }
@@ -12581,11 +12592,11 @@ const alm = (() => {
 
     const localTs  = _toMs(State.get.user().lastSyncAt);
     const remoteTs = _toMs(remote.user?.lastSyncAt);
-    console.log('[SYNC] initialSync — localTs:', localTs, '| remoteTs:', remoteTs);
+
 
     if (remoteTs > localTs) {
       // Remoto mas reciente: aplicar datos de la nube
-      console.log('[SYNC] aplicando datos remotos (remoto mas reciente)');
+
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remote)),
         { settings: State.get.settings() }
@@ -12600,7 +12611,7 @@ const alm = (() => {
       showToast('☁️ Datos sincronizados');
     } else {
       // Local igual o más reciente → subir a Firebase
-      console.log('[SYNC] subiendo estado local a Firebase (local >= remoto)');
+
       await fb.write('state', _buildLocalSnapshot());
     }
     // FIX: mutacion directa sin pasar por save() para no re-disparar write
@@ -12619,7 +12630,7 @@ const alm = (() => {
 
       // ── Guard 1: grace period post-suscripción ─────────────────
       if (now - _subscribeTs < GRACE_MS) {
-        console.log('[SYNC] grace period — ignorado (', Math.round((now - _subscribeTs)/1000), 's <', GRACE_MS/1000, 's)');
+
         return;
       }
 
@@ -12627,26 +12638,26 @@ const alm = (() => {
       // Si este onSnapshot fue causado por nuestra propia escritura, ignorar.
       const remoteDevice = remoteData?.user?.lastDeviceId;
       if (remoteDevice && remoteDevice === deviceId) {
-        console.log('[SYNC] ignorado — snapshot propio (deviceId:', deviceId, ')');
+
         return;
       }
 
       // ── Guard 3: timestamp — aplicar solo si el remoto es más nuevo ─
       const rTs = _toMs(remoteData?.user?.lastSyncAt);
       const lTs = _toMs(State.get.user().lastSyncAt);
-      console.log('[SYNC] remoteTs:', rTs, '| localTs:', lTs, '| remoteDevice:', remoteDevice, '| myDevice:', deviceId);
+
 
       if (rTs <= lTs) {
-        console.log('[SYNC] ignorado — datos remotos no más recientes (rTs <= lTs)');
+
         return;
       }
 
       // -- Guard: no aplicar si ya hay write local en curso (evita loop)
       if (_isSaving) {
-        console.log('[SYNC] ignorado -- write local en curso (_isSaving)');
+
         return;
       }
-      console.log('[SYNC] aplicando datos de otro dispositivo');
+
 
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remoteData)),
@@ -12664,7 +12675,7 @@ const alm = (() => {
       }
 
       _renderAll();
-      console.log('[SYNC] applied from device:', remoteDevice);
+
       showToast('☁️ Actualizado desde otro dispositivo');
     });
 
@@ -12694,7 +12705,7 @@ const alm = (() => {
           : ('dev_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36));
         localStorage.setItem(KEY, id);
       }
-      console.log('[SYNC] device:', id);
+
       return id;
     } catch(e) {
       return 'dev_fallback_' + Date.now().toString(36);
@@ -12706,8 +12717,8 @@ const alm = (() => {
     _doInitialSync();
   } else {
     window.addEventListener('dashwey:firebase-ready', () => {
-      // Pequeño delay para que onAuthStateChanged actualice fb.uid primero
-      setTimeout(_doInitialSync, 100);
+      // Microtask: cede el hilo para que onAuthStateChanged actualice fb.uid
+      Promise.resolve().then(_doInitialSync).catch(e => console.warn('[Sync] init error:', e));
     }, { once: true });
   }
 
@@ -13294,5 +13305,17 @@ if (!window.App) {
 })();
 </script>
 
+<script>
+// Global error boundary
+window.addEventListener('error', function(e) {
+  console.error('[Dashwey] Uncaught:', e.message, e.filename + ':' + e.lineno);
+  if (e.target && e.target !== window) return;
+  try { if (typeof showToast === 'function') showToast('⚠️ Error inesperado. Recarga si la app no responde.'); } catch(_) {}
+});
+window.addEventListener('unhandledrejection', function(e) {
+  console.error('[Dashwey] Unhandled rejection:', e.reason);
+  e.preventDefault();
+});
+</script>
 </body>
 </html>
