@@ -10,19 +10,41 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-    // Safety net: App disponible antes de que el IIFE termine de cargarse
-    // Evita "App is not defined" si el usuario pulsa un botón muy rápido
-    if (typeof App === 'undefined') {
-      window.App = new Proxy({}, {
-        get: function(t, p) {
-          return new Proxy(function(){}, {
-            apply: function(){ return undefined; },
-            get: function(){ return new Proxy(function(){}, { apply: function(){} }); }
-          });
-        }
+  /* HEAD BOOTSTRAP — primer JS que corre, antes de cualquier otro */
+
+  /* 1. _hideSplash temprano — el splash puede estar en DOM antes del App script */
+  window._hideSplash = window._hideSplash || function() {
+    var s = document.getElementById('splash-screen');
+    if (!s || s._done) return; s._done = true;
+    s.style.transition = 'opacity 0.3s ease';
+    s.style.opacity = '0';
+    setTimeout(function() {
+      if (s.parentNode) s.parentNode.removeChild(s);
+    }, 320);
+  };
+
+  /* 2. Safety net: App proxy para evitar errores si usuario toca antes de cargar */
+  if (typeof App === 'undefined') {
+    window.App = new Proxy({}, {
+      get: function(t, p) {
+        return new Proxy(function(){}, {
+          apply: function(){ return undefined; },
+          get: function(){ return new Proxy(function(){}, { apply: function(){} }); }
+        });
+      }
+    });
+  }
+
+  /* 3. SW force-update: si hay SW activo con cache antigua, limpiar */
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function(regs) {
+      regs.forEach(function(reg) {
+        /* Forzar check de actualización en cada carga */
+        reg.update().catch(function(){});
       });
-    }
-  </script>
+    }).catch(function(){});
+  }
+</script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <title>Dashwey v9.4.3</title>
@@ -2935,6 +2957,35 @@ body.dark .auth-card    { background: var(--surface); }
     </div>
   </div>
 </div>
+<script>
+/* Splash controller — corre ANTES del App script, permite pintura inmediata */
+(function(){
+  var s = document.getElementById('splash-screen');
+  var p = document.getElementById('splash-progress');
+  var c = document.getElementById('splash-sys-code');
+  if (c) c.textContent = '';           /* eliminar texto debug */
+  if (s) s.style.display = 'flex';    /* asegurar visible */
+  var _done = false;
+  window._hideSplash = function() {
+    if (_done) return; _done = true;
+    if (!s) return;
+    s.style.transition = 'opacity 0.3s ease';
+    s.style.opacity = '0';
+    setTimeout(function() {
+      s.style.display = 'none';
+      if (s.parentNode) s.parentNode.removeChild(s);
+    }, 320);
+  };
+  /* Safety: ocultar siempre a los 4s aunque el App falle */
+  setTimeout(window._hideSplash, 4000);
+  /* Barra de progreso: animar tras primer paint con doble rAF */
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      if (p) p.style.width = '100%';
+    });
+  });
+})();
+</script>
 <div id="app">
 
   <!-- HEADER -->
@@ -5510,7 +5561,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.4.5';
+  const _APP_VERSION = 'v9.4.6';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12500,42 +12551,7 @@ return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess, limpi
 
 // Fin App
 })();
-// ══════════════════════════════════════════════════════════════
-// SPLASH SCREEN — Scope global, FUERA del App IIFE
-// Corre DESPUÉS de App pero antes del paint → splash visible inmediato
-// ══════════════════════════════════════════════════════════════
-(function() {
-  var splash   = document.getElementById('splash-screen');
-  var progress = document.getElementById('splash-progress');
-  var sysCode  = document.getElementById('splash-sys-code');
-  if (!splash) return;
-
-  // Limpiar el texto debug inicial inmediatamente
-  if (sysCode) sysCode.textContent = '';
-
-  // Barra de progreso — doble rAF garantiza primer paint antes de animar
-  requestAnimationFrame(function() {
-    requestAnimationFrame(function() {
-      if (progress) progress.style.width = '100%';
-    });
-  });
-
-  // Función global de ocultar — llamada desde auth gate
-  var _hidden = false;
-  window._hideSplash = function() {
-    if (_hidden) return;
-    _hidden = true;
-    splash.style.transition = 'opacity 0.32s ease';
-    splash.style.opacity = '0';
-    setTimeout(function() {
-      splash.style.display = 'none';
-      if (splash.parentNode) splash.parentNode.removeChild(splash);
-    }, 340);
-  };
-
-  // Safety timeout: 3s máximo — siempre se oculta pase lo que pase
-  setTimeout(window._hideSplash, 3000);
-})();
+/* Splash controller moved to inline script before App script */
 
 
 
