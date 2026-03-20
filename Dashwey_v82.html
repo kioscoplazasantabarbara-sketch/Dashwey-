@@ -56,7 +56,7 @@
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.22</title>
+<title>Dashwey v9.5.23</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -586,17 +586,21 @@ html, body {
   color: rgba(100,100,110,0.55); font-family: var(--font);
   touch-action: manipulation; -webkit-tap-highlight-color: transparent;
   transition: color 0.14s;
+  position: relative; /* FIX v9.5.23: necesario para ::after indicator */
+  overflow: visible;  /* asegurar que ::after no quede recortado */
 }
 .bt svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 1.8; fill: none; }
 .bt.active { color: var(--red); }
 .bt::after {
+  /* FIX v9.5.23: indicator centrado sobre cada botón (requiere position:relative en .bt) */
   content: ''; position: absolute; top: 0; left: 50%;
   transform: translateX(-50%);
-  width: 0; height: 3px; border-radius: 0 0 3px 3px;
+  width: 0; height: 3px; border-radius: 0 0 4px 4px;
   background: var(--red);
-  transition: width 0.28s var(--ease);
+  transition: width 0.30s cubic-bezier(0.34, 1.56, 0.64, 1); /* spring effect */
+  pointer-events: none;
 }
-.bt.active::after { width: 32px; }
+.bt.active::after { width: 36px; }
 body[data-ctx="hogar"]     .bt.active { color: var(--green); }
 body[data-ctx="hogar"]     .bt.active::after { background: var(--green); }
 body[data-ctx="inversion"] .bt.active { color: var(--indigo); }
@@ -3473,9 +3477,20 @@ function _authTabSafe(tab) {
           <div class="card dash-draggable fin-card-tap" data-card-id="gastos-op" id="dash-card-gastos" onclick="App.dash.openFinModal('gastos')">
             <div class="drag-handle-hint"><span></span><span></span><span></span></div>
             <button class="card-remove-btn" data-card-id="gastos-op" onclick="event.stopPropagation();App.dash.removeCard('gastos-op')" title="Quitar">×</button>
-            <div class="card-title-wrap">
-              <div class="card-title-text">💸 Gastos Operativos</div>
-              <div id="fin-gastos-period-sub" style="font-size:10px;font-weight:500;color:var(--ink-soft);margin-top:1px;letter-spacing:.2px">Control de costes</div>
+            <div class="card-title-wrap" style="display:flex;align-items:flex-start;justify-content:space-between">
+              <div>
+                <div class="card-title-text">💸 Gastos Operativos</div>
+                <div id="fin-gastos-period-sub" style="font-size:10px;font-weight:500;color:var(--ink-soft);margin-top:1px;letter-spacing:.2px">Control de costes</div>
+              </div>
+              <!-- FIX v9.5.23: botón selector de periodo para gastos -->
+              <button onclick="event.stopPropagation();App.dash._openGastosPeriodPicker()"
+                id="gastos-period-btn"
+                style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                       padding:3px 8px;font-size:10px;font-weight:600;color:var(--ink-mid);
+                       cursor:pointer;font-family:var(--font);flex-shrink:0;margin-top:2px;
+                       touch-action:manipulation">
+                <span id="gastos-period-btn-lbl">Mensual ▾</span>
+              </button>
             </div>
             <div class="fade-sep"></div>
             <div class="fin-hero">
@@ -4320,6 +4335,7 @@ const State = (() => {
     },
     baseCats: ['Bebidas','Cervezas','Snacks','Gominolas','Cafetería','Agua'],
     // ── Finanzas ────────────────────────────────────────────────
+    gastosCustomPeriod: null, // { start: ISO, end: ISO } | null = periodo mensual normal
     cuentas: [
       { id:'c1', nombre:'Cuenta Principal', banco:'Banco', saldo:5200, color:'#2563EB', iban:'' },
       { id:'c2', nombre:'Caja Efectivo',    banco:'Efectivo', saldo:320, color:'#16A34A', iban:'' },
@@ -4496,8 +4512,9 @@ const State = (() => {
     perfil:           () => _state.perfil || DEFAULTS.perfil,
     // activeContext — llave maestra para separar Negocio / Hogar / Inversión
     activeContext:    () => (_state.user?.activeContext) || 'business',
-    cuentas:    () => _state.cuentas || [],
-    gastosOp:   () => _state.gastosOp || [],
+    cuentas:          () => _state.cuentas || [],
+    gastosOp:         () => _state.gastosOp || [],
+    gastosCustomPeriod: () => _state.gastosCustomPeriod || null,
     prov: (id) => _state.proveedores.find(p => p.id === id),
     prod: (id) => _state.productos.find(p => p.id === id),
   };
@@ -4524,6 +4541,7 @@ const State = (() => {
     },  // no save: solo en memoria
     lastVal: (id, vals)    => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
     addCuenta:  (c)        => { _state.cuentas.push(c); save(); },
+    gastosCustomPeriod: (v) => { _state.gastosCustomPeriod = v; /* no save: UI-only */ },
     setCuentas: (v)        => { _state.cuentas = v; save(); },
     updateCuenta: (id, v)  => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
     addGasto:   (g)        => { _state.gastosOp.push(g); save(); },
@@ -5599,7 +5617,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.22';
+  const _APP_VERSION = 'v9.5.23';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -6573,9 +6591,20 @@ const nav = (() => {
     });
   });
 
+  // FIX v9.5.23: sincronizar clases .active sin re-render completo
+  function _syncNavActive(i) {
+    document.querySelectorAll('.bt').forEach((t, idx) =>
+      t.classList.toggle('active', idx === i)
+    );
+  }
+
   function goTab(i) {
-    // Guard: no re-render si ya estamos en esta tab (usa _cTab nativo del nav module)
-    if (_cTab === i) return;
+    // Guard: no re-render completo si ya estamos en esta tab
+    // PERO siempre sincronizar el indicador visual (fix navbar indicator)
+    if (_cTab === i) {
+      _syncNavActive(i); // asegurar que .active siempre refleje el tab correcto
+      return;
+    }
     // ── Cerrar todos los overlays abiertos antes de navegar ─────
     // Garantiza que modales, FS, SAC o tickets sheets no queden
     // huérfanos al cambiar de tab desde la barra de navegación.
@@ -6605,7 +6634,7 @@ const nav = (() => {
     _cTab = i;
     track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
     track.style.transform = `translateX(${-i * window.innerWidth}px)`;
-    document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === i));
+    _syncNavActive(i); // FIX v9.5.23: centralizado en _syncNavActive
     (document.getElementById('header-title')||{}).textContent = TITLES[i];
     window.dispatchEvent(new CustomEvent('dashwey:tab-changed', { detail: { tab: i } }));
     const sn = document.getElementById('sub-nav');
@@ -7230,16 +7259,61 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
   // ── Render tarjeta Gastos ──────────────────────────────────
+  // FIX v9.5.23: calcular gastos para un rango de días dado
+  // Proyecta el coste mensual en el rango: coste * (días / 30)
+  function _gastosEnRango(start, end) {
+    const total   = FinEngine.gastoMensualTotal();
+    const fijos   = FinEngine.gastoFijoMensual();
+    const vars    = FinEngine.gastoVariableMensual();
+    const msRange = end - start;
+    const dias    = Math.max(1, Math.round(msRange / (1000 * 3600 * 24)));
+    const factor  = dias / 30;
+    return {
+      total:  Math.round(total  * factor * 100) / 100,
+      fijos:  Math.round(fijos  * factor * 100) / 100,
+      vars:   Math.round(vars   * factor * 100) / 100,
+      dias,
+      factor,
+      label:  _fmtRangeShort(start, end),
+    };
+  }
+
+  function _fmtRangeShort(start, end) {
+    const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const s = new Date(start), e = new Date(end);
+    return String(s.getDate()).padStart(2,'0')+' '+M[s.getMonth()]+' – '+String(e.getDate()).padStart(2,'0')+' '+M[e.getMonth()];
+  }
+
   function renderGastos() {
     const gastos  = State.get.gastosOp();
     const cuentas = State.get.cuentas();
     const saldo   = cuentas.reduce((s,c)=>s+(c.saldo||0),0);
 
-    // ── FinEngine: fuente única de cálculo ─────────────────────
-    const total  = FinEngine.gastoMensualTotal();   // usa mensualEq (normalizado)
-    const fijos  = FinEngine.gastoFijoMensual();
-    const vars   = FinEngine.gastoVariableMensual();
-    const diario = total / 30;
+    // FIX v9.5.23: usar periodo personalizado de gastos si está activo
+    const customPeriod = State.get.gastosCustomPeriod();
+    let total, fijos, vars, diario, periodoLabel, esPeriodoCustom;
+
+    if (customPeriod?.start && customPeriod?.end) {
+      // Periodo personalizado: proyectar coste en el rango
+      const rangeData = _gastosEnRango(
+        new Date(customPeriod.start).getTime(),
+        new Date(customPeriod.end).getTime()
+      );
+      total  = rangeData.total;
+      fijos  = rangeData.fijos;
+      vars   = rangeData.vars;
+      diario = total / rangeData.dias;
+      periodoLabel = rangeData.label;
+      esPeriodoCustom = true;
+    } else {
+      // Periodo mensual normal (FinEngine)
+      total  = FinEngine.gastoMensualTotal();
+      fijos  = FinEngine.gastoFijoMensual();
+      vars   = FinEngine.gastoVariableMensual();
+      diario = total / 30;
+      periodoLabel = 'Control de costes';
+      esPeriodoCustom = false;
+    }
 
     const el = (id) => document.getElementById(id);
     if (el('fin-gastos-total'))  el('fin-gastos-total').textContent  = _feur(total);
@@ -7247,24 +7321,14 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (el('fin-gastos-fijos'))  el('fin-gastos-fijos').textContent  = _feur(fijos);
     if (el('fin-gastos-var'))    el('fin-gastos-var').textContent    = _feur(vars);
     if (el('fin-gastos-count'))  el('fin-gastos-count').textContent  = gastos.length;
-    // FIX v9.5.10: subtítulo de periodo activo en tarjeta
-    const _gPer = State.get.period();
-    const _gSubEl  = el('fin-gastos-period-sub');
-    const _gLblEl  = el('fin-gastos-period-lbl');
-    if (_gPer.type === 'custom' && _gPer.customStart && _gPer.customEnd) {
-      // Formato legible: "01 Mar – 15 Mar"
-      const _fmt = (iso) => {
-        const d = new Date(iso);
-        const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-        return d.getDate() + ' ' + MESES[d.getMonth()];
-      };
-      const rango = _fmt(_gPer.customStart) + ' – ' + _fmt(_gPer.customEnd);
-      if (_gSubEl) _gSubEl.textContent = rango;
-      if (_gLblEl) _gLblEl.textContent = 'PERIODO PERSONALIZADO';
-    } else {
-      if (_gSubEl) _gSubEl.textContent = _gPer.label || 'Control de costes';
-      if (_gLblEl) _gLblEl.textContent = 'TOTAL MENSUAL';
-    }
+
+    // Actualizar subtítulo y botón de periodo
+    const _gSubEl = el('fin-gastos-period-sub');
+    const _gLblEl = el('fin-gastos-period-lbl');
+    const _btnLbl = el('gastos-period-btn-lbl');
+    if (_gSubEl) _gSubEl.textContent = periodoLabel;
+    if (_gLblEl) _gLblEl.textContent = esPeriodoCustom ? 'PERIODO PERSONALIZADO' : 'TOTAL MENSUAL';
+    if (_btnLbl) _btnLbl.textContent = esPeriodoCustom ? _fmtRangeShort(new Date(customPeriod.start), new Date(customPeriod.end)) + ' ▾' : 'Mensual ▾';
 
     // Lista top gastos (hasta 4)
     const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
@@ -7789,6 +7853,153 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     return importe; // unico: contabiliza completo este mes
   }
 
+  // FIX v9.5.23: Selector de periodo personalizado para la tarjeta Gastos
+  function _openGastosPeriodPicker() {
+    const current = State.get.gastosCustomPeriod();
+    const now     = new Date();
+    // Defaults: inicio del mes actual → hoy
+    const defStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,16);
+    const defEnd   = now.toISOString().slice(0,16);
+    const cStart   = current?.start ? new Date(current.start).toISOString().slice(0,16) : defStart;
+    const cEnd     = current?.end   ? new Date(current.end).toISOString().slice(0,16)   : defEnd;
+
+    const modal = document.createElement('div');
+    modal.id = 'gastos-period-modal';
+    modal.style.cssText = [
+      'position:fixed;inset:0;z-index:99994',
+      'background:rgba(0,0,0,0.45)',
+      'display:flex;align-items:flex-end',
+    ].join(';');
+
+    modal.innerHTML = `
+      <div style="width:100%;background:var(--surface);border-radius:22px 22px 0 0;
+                  padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));
+                  font-family:var(--font)">
+        <!-- Handle -->
+        <div style="width:36px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 18px"></div>
+        <div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:4px">Periodo de gastos</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-bottom:18px">Proyecta los gastos operativos en el rango seleccionado</div>
+
+        <!-- Presets rápidos -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px" id="gpp-presets">
+          ${[
+            { lbl:'Esta semana',  days:7  },
+            { lbl:'Este mes',     days:0  },
+            { lbl:'Últimos 30d',  days:30 },
+            { lbl:'Trimestre',    days:90 },
+          ].map(p => `<button data-gpp-preset="${p.days}"
+            style="flex:1;min-width:70px;height:34px;border-radius:10px;border:1.5px solid var(--border);
+                   background:var(--bg);font-size:12px;font-weight:600;color:var(--ink-mid);
+                   cursor:pointer;font-family:var(--font);touch-action:manipulation">${p.lbl}</button>`
+          ).join('')}
+        </div>
+
+        <!-- Inputs de fecha -->
+        <div style="display:flex;gap:10px;margin-bottom:16px">
+          <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Desde</label>
+            <input id="gpp-start" type="datetime-local" value="${cStart}"
+              style="height:46px;border-radius:11px;border:1.5px solid var(--border);
+                     padding:0 12px;font-size:14px;font-family:var(--font);
+                     color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Hasta</label>
+            <input id="gpp-end" type="datetime-local" value="${cEnd}"
+              style="height:46px;border-radius:11px;border:1.5px solid var(--border);
+                     padding:0 12px;font-size:14px;font-family:var(--font);
+                     color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
+          </div>
+        </div>
+
+        <!-- Preview dinámico -->
+        <div id="gpp-preview" style="background:var(--bg);border-radius:12px;padding:12px 14px;
+             margin-bottom:16px;font-size:13px;color:var(--ink);line-height:1.5"></div>
+
+        <!-- Acciones -->
+        <div style="display:flex;gap:8px">
+          <button onclick="App.dash._clearGastosPeriod()"
+            style="flex:1;height:48px;border-radius:13px;border:1.5px solid var(--border);
+                   background:var(--bg);font-size:14px;font-weight:600;
+                   color:var(--ink-mid);cursor:pointer;font-family:var(--font)">
+            Mensual (reset)
+          </button>
+          <button onclick="App.dash._applyGastosPeriod()"
+            style="flex:2;height:48px;border-radius:13px;border:none;
+                   background:var(--red);color:#fff;font-size:14px;font-weight:700;
+                   cursor:pointer;font-family:var(--font)">
+            Aplicar periodo
+          </button>
+        </div>
+      </div>`;
+
+    // Cerrar al tocar fondo
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); } });
+    document.body.appendChild(modal);
+
+    // Preview en tiempo real
+    function _updatePreview() {
+      const s = document.getElementById('gpp-start')?.value;
+      const e = document.getElementById('gpp-end')?.value;
+      const prev = document.getElementById('gpp-preview');
+      if (!prev) return;
+      if (!s || !e) { prev.textContent = 'Selecciona un rango de fechas'; return; }
+      const ms = new Date(e) - new Date(s);
+      if (ms <= 0) { prev.textContent = '⚠️ La fecha de fin debe ser posterior al inicio'; return; }
+      const data = _gastosEnRango(new Date(s).getTime(), new Date(e).getTime());
+      prev.innerHTML =
+        '<strong>' + data.label + '</strong> · ' + data.dias + ' días<br>' +
+        '💸 Coste proyectado: <strong>' + _feur(data.total) + '</strong>' +
+        ' (factor ' + data.factor.toFixed(2) + 'x mensual)';
+    }
+
+    document.getElementById('gpp-start')?.addEventListener('input', _updatePreview);
+    document.getElementById('gpp-end')?.addEventListener('input',   _updatePreview);
+
+    // Presets
+    document.getElementById('gpp-presets')?.querySelectorAll('[data-gpp-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const days = parseInt(btn.dataset.gppPreset);
+        const now2 = new Date();
+        let st, en;
+        if (days === 0) {
+          // Este mes
+          st = new Date(now2.getFullYear(), now2.getMonth(), 1);
+          en = new Date(now2.getFullYear(), now2.getMonth() + 1, 0, 23, 59);
+        } else {
+          st = new Date(now2.getTime() - days * 24 * 3600 * 1000);
+          en = now2;
+        }
+        const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
+        const si = document.getElementById('gpp-start');
+        const ei = document.getElementById('gpp-end');
+        if (si) si.value = toLocal(st);
+        if (ei) ei.value = toLocal(en);
+        _updatePreview();
+      });
+    });
+
+    _updatePreview();
+  }
+
+  function _applyGastosPeriod() {
+    const s = document.getElementById('gpp-start')?.value;
+    const e = document.getElementById('gpp-end')?.value;
+    if (!s || !e || new Date(e) <= new Date(s)) {
+      if (typeof showToast === 'function') showToast('⚠️ Rango de fechas inválido');
+      return;
+    }
+    State.set.gastosCustomPeriod({ start: new Date(s).toISOString(), end: new Date(e).toISOString() });
+    document.getElementById('gastos-period-modal')?.remove();
+    renderGastos(); // re-render tarjeta con nuevo periodo
+  }
+
+  function _clearGastosPeriod() {
+    State.set.gastosCustomPeriod(null);
+    document.getElementById('gastos-period-modal')?.remove();
+    renderGastos();
+  }
+
   function _openGastosModal() {
     const gastos  = State.get.gastosOp();
     const cuentas = State.get.cuentas();
@@ -8051,7 +8262,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     App.ui.openFs();
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso };
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod };
 })();
 
 // ══════════════════════════════════════════
@@ -12476,7 +12687,12 @@ const alm = (() => {
   })();
 
   // Sincronizar estado visual de la navbar al arranque (bt-1 activo = Dashboard)
+  // FIX v9.5.23: usar la misma lógica que goTab para consistencia
   document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === 1));
+  // Forzar layout recalc para que ::after se posicione correctamente
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === 1));
+  });
   const _titleEl = document.getElementById('header-title');
   if (_titleEl) _titleEl.textContent = 'DASHBOARD';
 
