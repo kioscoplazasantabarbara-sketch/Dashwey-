@@ -12,44 +12,51 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-/* ═══════════════════════════════════════════════════════════════
-   HEAD BOOTSTRAP v9.5.8 — primer JS que corre antes de todo
-   REGLA: este bloque NO toca el Service Worker.
-   El registro y gestión del SW ocurre en el bloque al final del body.
-   ═══════════════════════════════════════════════════════════════ */
+  /* HEAD BOOTSTRAP — primer JS que corre, antes de cualquier otro */
 
-  /* 1. _hideSplash stub — sobreescrito por el splash dinámico más adelante.
-        Idempotente: seguro llamarlo antes de que el splash exista. */
-  window._hideSplash = function() {
+  /* 1. _hideSplash stub temprano — será reemplazado por la versión real del splash dinámico.
+        Si se llama antes de que el splash exista, no hace nada (el splash dinámico
+        tiene su propio timeout de seguridad de 4s). */
+  window._hideSplash = window._hideSplash || function() {
+    // Stub: el splash dinámico sobreescribirá esta función con la versión real.
+    // Solo actúa si el splash ya existe en el DOM (llamada muy tardía/rara).
     var s = document.getElementById('splash-screen');
     if (!s || s._done) return;
     s._done = true;
-    s.style.transition = 'opacity 0.35s ease';
+    s.style.transition = 'opacity 0.3s ease';
     s.style.opacity = '0';
-    setTimeout(function() { if (s && s.parentNode) s.parentNode.removeChild(s); }, 360);
+    setTimeout(function() { if (s.parentNode) s.parentNode.removeChild(s); }, 320);
   };
 
-  /* 2. Safety net: App proxy — evita errores si el usuario toca antes de cargar */
+  /* 2. Safety net: App proxy para evitar errores si usuario toca antes de cargar */
   if (typeof App === 'undefined') {
     window.App = new Proxy({}, {
       get: function(t, p) {
         return new Proxy(function(){}, {
-          apply: function() { return undefined; },
-          get:   function() { return new Proxy(function(){}, { apply: function(){} }); }
+          apply: function(){ return undefined; },
+          get: function(){ return new Proxy(function(){}, { apply: function(){} }); }
         });
       }
     });
   }
 
-  /* ── NO SW CODE AQUÍ ──────────────────────────────────────────
-     El registro del SW y la gestión de updates está al final del
-     body. Poner skipWaiting en el HEAD causa loops infinitos de
-     reload: HEAD skipWaiting → controllerchange → reload → HEAD → ∞
-     ────────────────────────────────────────────────────────────── */
+  /* 3. SW force-update: si hay SW activo con cache antigua, limpiar */
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function(regs) {
+      regs.forEach(function(reg) {
+        /* Forzar check de actualización en cada carga */
+        reg.update().catch(function(){});
+        /* Si hay SW en espera (versión nueva instalada), activarlo ya */
+        if (reg.waiting) {
+          reg.waiting.postMessage({ action: 'skipWaiting' });
+        }
+      });
+    }).catch(function(){});
+  }
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey</title>
+<title>Dashwey v9.5.9</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2888,24 +2895,12 @@ body.dark .auth-card    { background: var(--surface); }
 
 
 <script>
-/* ═══════════════════════════════════════════════════════════════
-   SPLASH v9.5.8 — Singleton garantizado
-   - Guard: si ya existe #splash-screen en DOM, no crear otro
-   - JS puro: inmune a HTML cacheado antiguo del SW
-   - Idempotente: _hideSplash seguro de llamar N veces
-   ═══════════════════════════════════════════════════════════════ */
+/* ── SPLASH DINÁMICO ── Crea y controla el splash 100% desde JS
+   Al ser JS puro, el SW cache no puede servir un HTML antiguo con splash viejo */
 (function() {
-  /* Guard singleton: eliminar cualquier splash residual antes de crear */
-  var existing = document.getElementById('splash-screen');
-  if (existing) {
-    console.log('[Splash] removing residual splash from DOM');
-    existing.parentNode && existing.parentNode.removeChild(existing);
-  }
-
-  /* Crear splash */
+  /* Crear el elemento splash */
   var s = document.createElement('div');
-  s.id       = 'splash-screen';
-  s._done    = false;
+  s.id = 'splash-screen';
   s.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:199999',
     'background:#F7F2F2',
@@ -2915,6 +2910,7 @@ body.dark .auth-card    { background: var(--surface); }
   ].join(';');
 
   s.innerHTML = [
+    /* Logo icon */
     '<div style="width:88px;height:88px;border-radius:22px;background:#8B1A2F;',
     'display:flex;align-items:center;justify-content:center;',
     'box-shadow:0 8px 32px rgba(139,26,47,.30);margin-bottom:22px">',
@@ -2924,13 +2920,17 @@ body.dark .auth-card    { background: var(--surface); }
     '<rect x="6" y="24" width="14" height="14" rx="3" fill="white"/>',
     '<rect x="24" y="24" width="14" height="14" rx="3" fill="white"/>',
     '</svg></div>',
+    /* Wordmark */
     '<div style="font-size:34px;font-weight:900;letter-spacing:8px;',
     'color:#1A1A1A;text-transform:uppercase;margin-bottom:10px">DASHWEY</div>',
+    /* Línea roja */
     '<div style="width:36px;height:2px;background:#8B1A2F;border-radius:2px;margin-bottom:0"></div>',
+    /* Progress bar */
     '<div style="position:absolute;bottom:40px;left:50%;transform:translateX(-50%);',
     'width:120px;height:1.5px;background:rgba(26,26,26,.08);border-radius:2px;overflow:hidden">',
     '<div id="_sp" style="width:0%;height:100%;background:#8B1A2F;',
     'transition:width 1.4s cubic-bezier(.4,0,.2,1)"></div></div>',
+    /* Footer */
     '<div style="position:absolute;bottom:58px;left:0;right:0;text-align:center;',
     'font-size:10px;font-weight:600;letter-spacing:3px;',
     'color:rgba(26,26,26,.32);text-transform:uppercase">',
@@ -2938,9 +2938,9 @@ body.dark .auth-card    { background: var(--surface); }
   ].join('');
 
   document.body.insertBefore(s, document.body.firstChild);
-  console.log('[Splash] created');
+  s._done = false; // flag de idempotencia para _hideSplash
 
-  /* Animar barra — doble rAF garantiza primer paint antes de animar */
+  /* Animar barra — doble rAF para garantizar primer paint */
   requestAnimationFrame(function() {
     requestAnimationFrame(function() {
       var bar = document.getElementById('_sp');
@@ -2948,26 +2948,21 @@ body.dark .auth-card    { background: var(--surface); }
     });
   });
 
-  /* _hideSplash real — closure sobre `s`, idempotente */
+  /* _hideSplash: versión real — usa closure sobre `s` para no depender del DOM */
+  /* Sobreescribe el stub del HEAD. Idempotente: múltiples llamadas son seguras. */
   window._hideSplash = function() {
     if (s._done) return;
     s._done = true;
-    console.log('[Splash] hiding');
-    s.style.transition = 'opacity 0.35s ease';
-    s.style.opacity    = '0';
+    s.style.transition = 'opacity 0.3s ease';
+    s.style.opacity = '0';
     setTimeout(function() {
-      if (s && s.parentNode) s.parentNode.removeChild(s);
-      console.log('[Splash] removed from DOM');
-    }, 360);
+      if (s.parentNode) s.parentNode.removeChild(s);
+    }, 320);
   };
 
-  /* Safety timeout: 6s máximo — el auth gate lo oculta antes si Firebase responde */
-  setTimeout(function() {
-    if (!s._done) {
-      console.log('[Splash] safety timeout fired');
-      window._hideSplash();
-    }
-  }, 6000);
+  /* Safety: ocultar a los 6s si auth gate no resolvió antes.
+     6s > 4s del timeout del gate → el gate siempre gana si Firebase responde. */
+  setTimeout(window._hideSplash, 6000);
 })();
 </script>
 
@@ -3841,7 +3836,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.5.5.1</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: —</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -5531,86 +5526,58 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  // ── VERSION SSOT v9.5.8 ─────────────────────────────────────────
-  // La versión se lee de version.txt (única fuente de verdad).
-  // _APP_VERSION se inicializa con el valor del build y se actualiza
-  // en runtime desde version.txt para garantizar consistencia.
-  let _APP_VERSION = 'v9.5.8'; // valor build — se sobreescribe desde version.txt
-  (function() {
-    const base = location.href.split('?')[0].replace(/[^/]+$/, '');
-    fetch(base + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        const v = data.version ? 'v' + data.version : (data.build || _APP_VERSION);
-        _APP_VERSION = v;
-        console.log('[Version] SSOT resolved:', v);
-        // Actualizar UI si Settings está abierto
-        const el = document.getElementById('update-status-txt');
-        if (el && el.textContent.includes(_APP_VERSION)) {
-          el.textContent = '✅ Versión actual: ' + v;
-        }
-      })
-      .catch(() => console.log('[Version] version.txt unavailable, using build value'));
-  })();
+  const _APP_VERSION = 'v9.5.9';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
-  // ── UPDATE SYSTEM v9.5.8 ─────────────────────────────────────────
-  // SSOT: version.txt es la única fuente válida de versión.
-  // Flujo: version.txt → comparar con _APP_VERSION → mostrar banner.
-  // El usuario decide cuándo activar. skipWaiting solo bajo petición.
-  // ─────────────────────────────────────────────────────────────────
-
   function checkForUpdate() {
     const btn = document.getElementById('update-check-btn');
     const txt = document.getElementById('update-status-txt');
     const bar = document.getElementById('update-bar');
-    if (btn) { btn.textContent = '⏳'; btn.style.opacity = '0.6'; btn.disabled = true; }
+    if (btn) { btn.textContent = '...'; btn.style.opacity = '0.6'; btn.disabled = true; }
 
-    const base       = location.href.split('?')[0].replace(/[^/]+$/, '');
-    const versionUrl = base + 'version.txt?_t=' + Date.now();
-
-    console.log('[Update] checkForUpdate → fetching', versionUrl);
+    const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
+    const versionUrl = baseUrl + 'version.txt?_t=' + Date.now();
 
     fetch(versionUrl, { cache: 'no-store' })
-      .then(r => { if (!r.ok) throw new Error('version.txt HTTP ' + r.status); return r.json(); })
+      .then(r => { if (!r.ok) throw new Error('no version.txt'); return r.json(); })
       .then(data => {
         if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
-        const remoteVer = data.version ? 'v' + data.version : (data.build || null);
-        console.log('[Update] remote:', remoteVer, '/ local:', _APP_VERSION);
+        const remoteVer = data.version ? 'v' + data.version : data.build || null;
         _applyVersionResult(remoteVer, txt, bar);
       })
-      .catch(err => {
-        console.warn('[Update] checkForUpdate failed:', err.message);
-        if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
-        if (txt) { txt.textContent = '⚠️ Sin conexión'; txt.style.color = 'var(--red)'; }
+      .catch(() => {
+        // Fallback: buscar en el HTML (compatibilidad)
+        fetch(location.href.split('?')[0] + '?_t=' + Date.now(), { cache: 'no-store' })
+          .then(r => r.text())
+          .then(html => {
+            if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
+            const match = html.match(/const _APP_VERSION = '([^']+)'/);
+            _applyVersionResult(match ? match[1] : null, txt, bar);
+          })
+          .catch(() => {
+            if (btn) { btn.textContent = 'Comprobar'; btn.style.opacity = '1'; btn.disabled = false; }
+            if (txt) { txt.textContent = 'Sin conexión'; txt.style.color = 'var(--red)'; }
+          });
       });
   }
 
   function _applyVersionResult(remoteVer, txt, bar) {
-    const local = _APP_VERSION;
-    if (remoteVer && remoteVer !== local) {
-      console.log('[Update] version mismatch — remote:', remoteVer, 'local:', local);
+    if (remoteVer && remoteVer !== _APP_VERSION) {
       if (txt) {
-        txt.textContent    = '🆕 Nueva versión disponible: ' + remoteVer;
-        txt.style.color    = 'var(--blue)';
+        txt.textContent  = '🆕 Nueva versión: ' + remoteVer;
+        txt.style.color  = 'var(--blue)';
         txt.style.fontWeight = '700';
       }
       if (bar) bar.style.display = 'block';
       _showUpdateBanner(remoteVer);
     } else {
-      console.log('[Update] up to date:', local);
       if (txt) {
-        txt.textContent    = '✅ Versión actual: ' + local;
-        txt.style.color    = 'var(--green)';
+        txt.textContent  = '✅ Versión más reciente (' + _APP_VERSION + ')';
+        txt.style.color  = 'var(--green)';
         txt.style.fontWeight = '600';
       }
       if (bar) bar.style.display = 'none';
-      // Limpiar banner y guards si ya estamos actualizados
-      const banner = document.getElementById('update-banner');
-      if (banner) banner.classList.remove('visible');
-      try { sessionStorage.removeItem('dashwey_pending_ver'); } catch(_) {}
     }
   }
 
@@ -5618,13 +5585,8 @@ const ui = (() => {
     const banner = document.getElementById('update-banner');
     const msg    = document.getElementById('update-banner-msg');
     if (!banner) return;
-    // Guard: no re-mostrar si ya está visible con la misma versión
-    const shownVer = banner.dataset.shownVer;
-    if (shownVer === newVer && banner.classList.contains('visible')) return;
-    banner.dataset.shownVer = newVer;
-    if (msg) msg.textContent = '🆕 Nueva versión disponible: ' + newVer;
+    if (msg) msg.textContent = '🆕 Nueva versión: ' + newVer;
     banner.classList.add('visible');
-    console.log('[Update] banner shown for:', newVer);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -5644,30 +5606,20 @@ const ui = (() => {
     e.preventDefault();
   });
 
-  // ── doUpdate v9.5.8 ─────────────────────────────────────────────
-  // Flujo: skipWaiting → controllerchange → reload (exactamente 1 vez)
-  // Safety: timer de 3s si controllerchange no llega (muy raro)
-  // ─────────────────────────────────────────────────────────────────
   function doUpdate() {
-    console.log('[Update] doUpdate() called');
-
-    // UI feedback inmediato
+    // Ocultar banner y deshabilitar botón para evitar doble click
     const banner = document.getElementById('update-banner');
     if (banner) banner.classList.remove('visible');
     const btn = document.getElementById('update-banner-btn');
     if (btn) { btn.textContent = 'Actualizando…'; btn.disabled = true; }
 
-    // Reload limpio — limpiar cache del browser antes de recargar
-    let _reloadDone = false;
+    // Limpiar TODA la caché y recargar
     const _doReload = () => {
-      if (_reloadDone) return;
-      _reloadDone = true;
-      console.log('[Update] reloading...');
       if ('caches' in window) {
         caches.keys()
           .then(keys => Promise.all(keys.map(k => caches.delete(k))))
           .then(() => location.reload(true))
-          .catch(()  => location.reload(true));
+          .catch(() => location.reload(true));
       } else {
         location.reload(true);
       }
@@ -5677,31 +5629,16 @@ const ui = (() => {
       navigator.serviceWorker.getRegistration()
         .then(reg => {
           if (reg?.waiting) {
-            console.log('[Update] SW waiting found — sending skipWaiting');
-            // Escuchar controllerchange {once} → dispara reload cuando el SW activa
-            navigator.serviceWorker.addEventListener('controllerchange', () => {
-              console.log('[Update] controllerchange received → reloading');
-              _doReload();
-            }, { once: true });
-            // Safety: si controllerchange no llega en 3s, forzar reload
-            setTimeout(() => {
-              if (!_reloadDone) {
-                console.warn('[Update] controllerchange timeout — forcing reload');
-                _doReload();
-              }
-            }, 3000);
-            // Activar el nuevo SW
+            // SW en espera → activar; controllerchange dispara reload
             reg.waiting.postMessage({ action: 'skipWaiting' });
+            // Safety net: si controllerchange no dispara en 1.5s, forzar reload
+            setTimeout(_doReload, 1500);
           } else {
-            // No hay SW en espera — el HTML ya es el más reciente, solo recargar
-            console.log('[Update] no SW waiting — reloading directly');
+            // No hay SW en espera → limpiar caché y recargar directo
             _doReload();
           }
         })
-        .catch(err => {
-          console.warn('[Update] getRegistration error:', err.message);
-          _doReload();
-        });
+        .catch(_doReload);
     } else {
       _doReload();
     }
@@ -6158,6 +6095,13 @@ const ui = (() => {
         btn.classList.toggle('active', btn.dataset.theme === _tm);
       });
     });
+    // BUG 3 FIX v9.5.9: actualizar version display con _APP_VERSION real
+    // El HTML estático tiene el valor del build; aquí se sobreescribe con el
+    // valor resuelto desde version.txt (SSOT) al abrir Settings.
+    const verEl = el('update-status-txt');
+    if (verEl && !verEl.dataset.checking) {
+      verEl.textContent = 'Versión actual: ' + _APP_VERSION;
+    }
   }
 
   function closeSettings() {
@@ -9696,7 +9640,7 @@ const alm = (() => {
             <span class="orden-ticket-total-lbl">TOTAL ORDEN (+IVA)</span>
             <span class="orden-ticket-total-num">${feur(totalPending)}</span>
           </div>
-          <button class="orden-ticket-cta" onclick="App.alm.openCestaFs()">
+          <button class="orden-ticket-cta" onclick="App.alm._onAcceptBtnTap()">
             <svg width="18" height="18" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24">
               <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
               <line x1="3" y1="6" x2="21" y2="6"/>
@@ -11260,7 +11204,11 @@ const alm = (() => {
   }
   function _permSearchBlur() {
     _almKbActive = false;
+    // BUG 2 FIX v9.5.9: blur() explícito en el input para cerrar teclado
+    // Android Chrome mantiene el cursor activo si no se llama blur()
     setTimeout(() => {
+      const inp   = document.getElementById('alm-perm-search');
+      if (inp && document.activeElement === inp) inp.blur();
       const sugEl = document.getElementById('alm-search-suggestions');
       if (sugEl) sugEl.style.display = 'none';
       const sb = document.getElementById('alm-search-bar-inline');
@@ -11289,7 +11237,7 @@ const alm = (() => {
     const clear = document.getElementById('alm-perm-clear');
     const sugEl = document.getElementById('alm-search-suggestions');
     const sb    = document.getElementById('alm-search-bar-inline');
-    if (inp)   inp.value = '';
+    if (inp)   { inp.value = ''; inp.blur(); } // BUG 2 FIX: blur al limpiar
     if (clear) clear.style.display = 'none';
     if (sugEl) sugEl.style.display = 'none';
     if (sb)    sb.classList.remove('sug-open');
@@ -12432,12 +12380,8 @@ const alm = (() => {
   // ── Helpers de sincronización ────────────────────────────────
   // Construye el snapshot del estado local para subir a Firebase
   function _buildLocalSnapshot() {
-    // FIX v9.5.8: incluir lastSyncAt real para que el guard de timestamp funcione.
-    // Sin esto, localTs siempre era null → el guard nunca bloqueaba el toast.
-    const now = new Date().toISOString();
-    State.set.user({ lastSyncAt: now });
     return {
-      user:             { ...State.get.user(), lastSyncAt: now },
+      user:             State.get.user(),
       proveedores:      State.get.proveedores(),
       productos:        State.get.productos(),
       historialPedidos: State.get.historialPedidos(),
@@ -12504,24 +12448,22 @@ const alm = (() => {
     // ── Sync en tiempo real — escuchar cambios remotos ────────────
     // Activa onSnapshot para recibir actualizaciones de otros dispositivos
     let _lastLocalWrite = Date.now();
-    // Grace period: ignorar el primer disparo de onSnapshot (disparo inicial de Firebase).
-    // onSnapshot SIEMPRE dispara al suscribirse — no es un cambio real de otro dispositivo.
+    // Grace period: ignorar el primer disparo de onSnapshot (es la carga inicial de Firebase,
+    // no un cambio real de otro dispositivo). onSnapshot SIEMPRE dispara al suscribirse.
     const _subscribeTs = Date.now();
-    // FIX v9.5.8: GRACE_MS 10s — suficiente para reloads lentos post-update.
-    // El disparo inicial de Firebase ocurre en los primeros 1-3s.
-    // Reloads por doUpdate pueden tardar 5-8s (limpiar caché + Firebase init).
-    const GRACE_MS = 10000;
+    const GRACE_MS = 4000; // 4s tras suscribirse = ignorar disparo inicial
+    // Registrar cuándo escribimos nosotros para evitar re-aplicar nuestros propios cambios
     const _origSave = window._DashweyStateSetHook;
 
     fb.subscribe('state', remoteData => {
-      // Grace period: ignorar disparo inicial de Firebase
+      // Grace period: si llevamos menos de GRACE_MS suscritos, es el disparo inicial de Firebase
       if (Date.now() - _subscribeTs < GRACE_MS) return;
       // Ignorar si los datos remotos son del mismo timestamp que el local
       const remoteTs  = remoteData?.user?.lastSyncAt;
       const localTs   = State.get.user().lastSyncAt;
-      // Guard de timestamp: si remoto no es más nuevo que local → ignorar
+      // Si el remoto es más reciente que lo que tenemos → aplicar
       if (remoteTs && localTs && remoteTs <= localTs) return;
-      // Guard de escritura local: si escribimos hace menos de 8s → es nuestro propio write
+      // Si la última escritura local fue hace menos de 8s → ignorar (es nuestro propio write)
       if (Date.now() - _lastLocalWrite < 8000) return;
 
       // sync: remoto recibido
@@ -12863,98 +12805,101 @@ if (!window.App) {
 /* ═══ PWA — Service Worker + Install Banner v8.2 ═══════════════ */
 (function() {
 
-  /* ── SERVICE WORKER v9.5.8 ──────────────────────────────────────
-   Arquitectura limpia: registro → detección → banner → usuario decide.
-   NO skipWaiting automático. NO loops. NO state externo complejo.
-   ─────────────────────────────────────────────────────────────── */
-  (function() {
-    if (!('serviceWorker' in navigator)) {
-      console.log('[SW] not supported in this browser');
-      return;
-    }
+  /* ── 1. Service Worker — registro robusto con auto-update ── */
+  if ('serviceWorker' in navigator) {
+    let _swReloadPending = false;
 
-    // ── Registro del SW ─────────────────────────────────────────
+    // controllerchange: el nuevo SW tomó control → recargar limpiamente
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swReloadPending) return; // evitar doble reload
+      _swReloadPending = true;
+      // Limpiar caché antes de recargar para garantizar assets frescos
+      const _reload = () => window.location.reload(true);
+      if ('caches' in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .then(_reload).catch(_reload);
+      } else {
+        setTimeout(_reload, 300);
+      }
+    });
+
+    // Registrar SW
     navigator.serviceWorker.register('./sw.js', { scope: './' })
       .then(reg => {
-        console.log('[SW] registered, scope:', reg.scope);
-
-        // ── SW en espera al arrancar (versión nueva ya instalada) ──
-        // Mostrar banner: el usuario decide cuándo activar.
+        // Si hay un SW en espera al arrancar: NO activar automáticamente.
+        // Mostrar banner y dejar que el usuario decida.
+        // (Auto-skipWaiting causa el bucle de reload al cambiar de index.html)
         if (reg.waiting) {
-          console.log('[SW] found waiting SW on startup → showing banner');
           _silentCheckUpdate();
         }
 
-        // ── Detectar nuevas instalaciones en background ──────────
+        // Detectar nuevas versiones del SW instaladas en background
         reg.addEventListener('updatefound', () => {
           const newWorker = reg.installing;
           if (!newWorker) return;
-          console.log('[SW] updatefound — new SW installing');
           newWorker.addEventListener('statechange', () => {
-            console.log('[SW] new worker state:', newWorker.state);
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nuevo SW instalado y en espera — mostrar banner
-              console.log('[SW] new SW installed and waiting → showing banner');
+              // Nuevo SW listo — mostrar banner, NO activar solo
               _silentCheckUpdate();
             }
           });
         });
 
-        // ── Auto-check de versión al arrancar (8s delay) ────────
-        // Evitar interferir con la carga inicial y Firebase init.
+        // ── Auto-check de versión al arrancar ────────────────────
+        // Solo si hay conexión y el usuario lleva más de 5s en la app
         setTimeout(() => {
-          if (navigator.onLine) _silentCheckUpdate();
-        }, 8000);
+          if (navigator.onLine && window.App?.ui?.checkForUpdate) {
+            // Silencioso: solo muestra banner si hay nueva versión, no actualiza el Settings
+            _silentCheckUpdate();
+          }
+        }, 8000); // 8s tras arranque — no interferir con carga inicial
 
-        // ── Auto-check periódico (cada 5 min, solo foreground) ──
+        // Auto-check periódico cada 5 minutos (solo si app en foreground)
         setInterval(() => {
           if (document.visibilityState === 'visible' && navigator.onLine) {
             _silentCheckUpdate();
           }
         }, 5 * 60 * 1000);
       })
-      .catch(err => console.warn('[SW] registration failed:', err.message));
+      .catch(err => console.warn('[Dashwey SW]', err));
+  }
 
-    // ── Silent version check — SSOT desde version.txt ───────────
-    // Solo muestra el banner, no toca Settings ni recarga nada.
-    // Guard: no re-mostrar la misma versión dos veces.
-    let _lastShownVer = null;
-
-    function _silentCheckUpdate() {
-      const base = location.href.split('?')[0].replace(/[^/]+$/, '');
-      fetch(base + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
-        .then(r => r.ok ? r.json() : Promise.reject('no version.txt'))
-        .then(data => {
-          const remoteVer = data.version ? 'v' + data.version : (data.build || null);
-          const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
-
-          if (!remoteVer || !localVer) return;
-
-          console.log('[Update] silent check — remote:', remoteVer, 'local:', localVer);
-
-          if (remoteVer === localVer) {
-            // Ya actualizados — limpiar banner si estuviera visible
-            const banner = document.getElementById('update-banner');
-            if (banner) banner.classList.remove('visible');
-            _lastShownVer = null;
-            return;
-          }
-
-          // Guard: no mostrar el mismo banner dos veces
-          if (remoteVer === _lastShownVer) return;
-          _lastShownVer = remoteVer;
-
-          console.log('[Update] version mismatch detected → showing banner');
-
-          // Mostrar banner via función del módulo ui
-          if (typeof App !== 'undefined' && App.ui?._showUpdateBanner) {
-            App.ui._showUpdateBanner(remoteVer);
-          }
-        })
-        .catch(err => console.log('[Update] silent check error (ok if offline):', err));
-    }
-
-  })();
+  // ── Silent version check — solo muestra banner, no toca Settings ──
+  let _lastRemoteVer = null; // guard en memoria: evita mostrar el mismo banner en bucle
+  function _silentCheckUpdate() {
+    const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
+    fetch(baseUrl + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const remoteVer = data.version ? 'v' + data.version : data.build;
+        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
+        if (!remoteVer || !localVer) return;
+        const banner = document.getElementById('update-banner');
+        // Si la versión remota == local: ocultar banner y resetear guard
+        if (remoteVer === localVer) {
+          if (banner) banner.classList.remove('visible');
+          _lastRemoteVer = null; // resetear para detectar futuras actualizaciones reales
+          sessionStorage.removeItem('dashwey_pending_ver');
+          return;
+        }
+        // Guard persistente en sessionStorage: evita re-mostrar tras reload
+        const shownVer = sessionStorage.getItem('dashwey_pending_ver');
+        if (remoteVer === shownVer) return;
+        // Guard en memoria: evita doble-show en la misma sesión
+        if (remoteVer === _lastRemoteVer) return;
+        _lastRemoteVer = remoteVer;
+        sessionStorage.setItem('dashwey_pending_ver', remoteVer);
+        // Mostrar banner
+        if (banner && !banner.classList.contains('visible')) {
+          const msg = document.getElementById('update-banner-msg');
+          if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
+          banner.classList.add('visible');
+        }
+      })
+      .catch(() => {}); // silencioso
+  }
 
   /* ── 2. Banner de instalación Android/Chrome ── */
   let _prompt = null;
