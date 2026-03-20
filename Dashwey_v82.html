@@ -2870,10 +2870,7 @@ body.dark .auth-card    { background: var(--surface); }
   <button id="update-banner-close" onclick="document.getElementById('update-banner').classList.remove('visible')" title="Cerrar">×</button>
 </div>
 
-<div id="app">
 
-  <!-- HEADER -->
-  <!-- ══ AUTH SCREEN — visible hasta que el usuario se autentica ══ -->
 <!-- ════ SPLASH SCREEN ════ -->
 <div id="splash-screen" style="
   position:fixed; inset:0; z-index:199999;
@@ -2888,7 +2885,7 @@ body.dark .auth-card    { background: var(--surface); }
     font-family:'Helvetica Neue',Helvetica,monospace;
     font-size:11px; letter-spacing:0.5px;
     color:rgba(26,26,26,0.18); font-weight:400;
-  " id="splash-sys-code">00.000.00 // SYS_INIT</div>
+  " id="splash-sys-code"></div>
 
   <!-- Centro: logo + wordmark -->
   <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
@@ -2938,6 +2935,10 @@ body.dark .auth-card    { background: var(--surface); }
     </div>
   </div>
 </div>
+<div id="app">
+
+  <!-- HEADER -->
+  <!-- ══ AUTH SCREEN — visible hasta que el usuario se autentica ══ -->
 
 <div id="auth-screen" style="background:#F7F2F2">
   <!-- Fondo off-white cálido -->
@@ -5509,7 +5510,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.4.4-fix1';
+  const _APP_VERSION = 'v9.4.5';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12062,44 +12063,6 @@ const alm = (() => {
 
 // ══════════════════════════════════════════
 
-  // ── SPLASH SCREEN ─────────────────────────────────────────────────
-  (function initSplash() {
-    const splash   = document.getElementById('splash-screen');
-    const progress = document.getElementById('splash-progress');
-    const sysCode  = document.getElementById('splash-sys-code');
-    if (!splash) return;
-
-    // Códigos de sistema animados
-    const codes = ['00.128.34 // SYS_BOOT', '00.293.41 // SYS_READY'];
-    let ci = 0;
-    const codeTimer = setInterval(() => {
-      if (sysCode && ci < codes.length) sysCode.textContent = codes[ci++];
-      if (ci >= codes.length) clearInterval(codeTimer);
-    }, 450);
-
-    // Barra de progreso: setTimeout(50) garantiza primer paint antes de animar
-    setTimeout(() => {
-      if (progress) progress.style.width = '100%';
-    }, 50);
-
-    // Función de ocultar — llamable desde auth gate o por timeout
-    let _splashHidden = false;
-    window._hideSplash = function() {
-      if (_splashHidden) return;
-      _splashHidden = true;
-      clearInterval(codeTimer);
-      splash.style.transition = 'opacity 0.35s ease';
-      splash.style.opacity = '0';
-      setTimeout(() => {
-        splash.style.display = 'none';
-        splash.remove(); // limpiar del DOM
-      }, 360);
-    };
-
-    // Timeout máximo: 2.2s — independiente del auth
-    setTimeout(window._hideSplash, 2200);
-  })();
-
 // 9. INIT — Bootstrap de la app
 // ══════════════════════════════════════════
 (function init() {
@@ -12180,12 +12143,15 @@ const alm = (() => {
   const _titleEl = document.getElementById('header-title');
   if (_titleEl) _titleEl.textContent = 'DASHBOARD';
 
-  // Renders iniciales — Dashboard + TPV + Almacén
-  dash.render();
-  dash._applyHidden();
-  tpv.render();
-  alm.renderOrden();
-  alm.updateBadge();
+  // Renders iniciales — diferidos con setTimeout(0) para liberar main thread
+  // Permite que el splash pinte antes de empezar renders pesados
+  setTimeout(function() {
+    try { dash.render(); }      catch(e) { console.warn('[Dashwey] dash.render:', e); }
+    try { dash._applyHidden(); } catch(e) {}
+    try { tpv.render(); }       catch(e) { console.warn('[Dashwey] tpv.render:', e); }
+    try { alm.renderOrden(); }  catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
+    try { alm.updateBadge(); }  catch(e) {}
+  }, 0);
 
   // ── Auth gate ─────────────────────────────────────────────────
   const _authScreen = document.getElementById('auth-screen');
@@ -12534,6 +12500,44 @@ return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess, limpi
 
 // Fin App
 })();
+// ══════════════════════════════════════════════════════════════
+// SPLASH SCREEN — Scope global, FUERA del App IIFE
+// Corre DESPUÉS de App pero antes del paint → splash visible inmediato
+// ══════════════════════════════════════════════════════════════
+(function() {
+  var splash   = document.getElementById('splash-screen');
+  var progress = document.getElementById('splash-progress');
+  var sysCode  = document.getElementById('splash-sys-code');
+  if (!splash) return;
+
+  // Limpiar el texto debug inicial inmediatamente
+  if (sysCode) sysCode.textContent = '';
+
+  // Barra de progreso — doble rAF garantiza primer paint antes de animar
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      if (progress) progress.style.width = '100%';
+    });
+  });
+
+  // Función global de ocultar — llamada desde auth gate
+  var _hidden = false;
+  window._hideSplash = function() {
+    if (_hidden) return;
+    _hidden = true;
+    splash.style.transition = 'opacity 0.32s ease';
+    splash.style.opacity = '0';
+    setTimeout(function() {
+      splash.style.display = 'none';
+      if (splash.parentNode) splash.parentNode.removeChild(splash);
+    }, 340);
+  };
+
+  // Safety timeout: 3s máximo — siempre se oculta pase lo que pase
+  setTimeout(window._hideSplash, 3000);
+})();
+
+
 
 // ══════════════════════════════════════════════════════════════
 // THEME ENGINE — Día / Noche / Auto
