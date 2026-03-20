@@ -5528,7 +5528,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.12';
+  const _APP_VERSION = 'v9.5.13';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12471,13 +12471,13 @@ const alm = (() => {
   // ── Helpers de sincronización ────────────────────────────────
   // Construye el snapshot del estado local para subir a Firebase
   function _buildLocalSnapshot() {
-    // FIX v9.5.12: escribir lastSyncAt real en cada snapshot.
-    // Sin esto, localTs siempre era null y el guard de timestamp nunca bloqueaba
-    // el falso toast "Actualizado desde otro dispositivo".
-    const now = new Date().toISOString();
-    State.set.user({ lastSyncAt: now });
+    // v9.5.13: lastSyncAt como timestamp numérico (ms) — comparación segura
+    // deviceId incluido en user para que onSnapshot detecte writes propios
+    const now      = Date.now();
+    const deviceId = window._DashweyDeviceId || 'unknown';
+    State.set.user({ lastSyncAt: now, lastDeviceId: deviceId });
     return {
-      user:             { ...State.get.user(), lastSyncAt: now },
+      user:             { ...State.get.user(), lastSyncAt: now, lastDeviceId: deviceId },
       proveedores:      State.get.proveedores(),
       productos:        State.get.productos(),
       historialPedidos: State.get.historialPedidos(),
@@ -12508,24 +12508,38 @@ const alm = (() => {
   try {
     const fb = window._DashweyFirebase;
     if (!fb?.enabled) return;
-    // No requerir fb.ready — el UID puede haberse actualizado tras login
     const uid = fb.uid || fb._auth?.currentUser?.uid;
     if (!uid) return;
+
+    // ── Device ID: identificador único por dispositivo ──────────
+    // Permite al onSnapshot ignorar snapshots causados por este mismo dispositivo
+    const deviceId = window._DashweyDeviceId;
 
     const remote = await fb.read('state');
     if (!remote) {
       // Primera vez en la nube — subir snapshot del estado local
       const ok = await fb.write('state', _buildLocalSnapshot());
-      if (ok) State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
+      if (ok) {
+        console.log('[SYNC] primer upload — estado local subido a Firebase');
+        State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
+      }
       return;
     }
 
-    // ── Comparar timestamps: si el remoto es más reciente, merge local ← remoto ──
-    const localSync  = State.get.user().lastSyncAt;
-    const remoteSync = remote.user?.lastSyncAt;
-    console.log('[SYNC] initialSync — localSync:', localSync, '| remoteSync:', remoteSync);
+    // ── Comparar timestamps numéricos ───────────────────────────
+    // Normalizar a número — soporta tanto ISO string como ms numérico
+    const _toMs = (v) => {
+      if (!v) return 0;
+      if (typeof v === 'number') return v;
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    };
 
-    if (remoteSync && (!localSync || remoteSync > localSync)) {
+    const localTs  = _toMs(State.get.user().lastSyncAt);
+    const remoteTs = _toMs(remote.user?.lastSyncAt);
+    console.log('[SYNC] initialSync — localTs:', localTs, '| remoteTs:', remoteTs);
+
+    if (remoteTs > localTs) {
       // Remoto más reciente → aplicar datos de la nube
       console.log('[SYNC] aplicando datos remotos (remoto más reciente)');
       const merged = Object.assign(
@@ -12538,58 +12552,53 @@ const alm = (() => {
       _renderAll();
       showToast('☁️ Datos sincronizados');
     } else {
-      // Local igual o más reciente → subir a la nube con lastSyncAt actualizado
-      console.log('[SYNC] subiendo estado local a Firebase');
-      fb.write('state', _buildLocalSnapshot()); // _buildLocalSnapshot ya actualiza lastSyncAt
+      // Local igual o más reciente → subir a Firebase
+      console.log('[SYNC] subiendo estado local a Firebase (local >= remoto)');
+      await fb.write('state', _buildLocalSnapshot());
     }
     State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
     State.set.user({ uid: fb.uid });
 
-    // ── Sync en tiempo real — escuchar cambios remotos ────────────
-    // Activa onSnapshot para recibir actualizaciones de otros dispositivos
-    let _lastLocalWrite = Date.now();
-    // Grace period: ignorar el primer disparo de onSnapshot (es la carga inicial de Firebase,
-    // no un cambio real de otro dispositivo). onSnapshot SIEMPRE dispara al suscribirse.
+    // ── Sync en tiempo real ─────────────────────────────────────
+    // Grace period: ignorar el primer disparo de onSnapshot (siempre se dispara
+    // al suscribirse — no es un cambio real de otro dispositivo).
     const _subscribeTs = Date.now();
-    // FIX v9.5.12: GRACE_MS 10s — cubre reloads lentos + Firebase init + SW restart.
-    // El disparo inicial de onSnapshot ocurre en los primeros 1-3s.
-    // Reloads post-update pueden tardar hasta 8s (limpiar caché + init).
-    const GRACE_MS = 10000;
-    const _origSave = window._DashweyStateSetHook;
+    const GRACE_MS     = 10000; // 10s — cubre reloads lentos + Firebase init
 
     fb.subscribe('state', remoteData => {
       const now = Date.now();
 
       // ── Guard 1: grace period post-suscripción ─────────────────
-      // onSnapshot SIEMPRE dispara al suscribirse — no es un cambio real.
       if (now - _subscribeTs < GRACE_MS) {
-        console.log('[SYNC] ignorado por grace period (', Math.round((now - _subscribeTs)/1000), 's <', GRACE_MS/1000, 's)');
+        console.log('[SYNC] grace period — ignorado (', Math.round((now - _subscribeTs)/1000), 's <', GRACE_MS/1000, 's)');
         return;
       }
 
-      // ── Guard 2: escritura local reciente (son nuestros propios datos) ──
-      if (now - _lastLocalWrite < 8000) {
-        console.log('[SYNC] ignorado — escritura local hace', Math.round((now - _lastLocalWrite)/1000), 's');
+      // ── Guard 2: snapshot propio — mismo deviceId ───────────────
+      // Si este onSnapshot fue causado por nuestra propia escritura, ignorar.
+      const remoteDevice = remoteData?.user?.lastDeviceId;
+      if (remoteDevice && remoteDevice === deviceId) {
+        console.log('[SYNC] ignorado — snapshot propio (deviceId:', deviceId, ')');
         return;
       }
 
-      // ── Guard 3: timestamp — comparar lastSyncAt ───────────────
-      const remoteTs = remoteData?.user?.lastSyncAt;
-      const localTs  = State.get.user().lastSyncAt;
-      console.log('[SYNC] remoteTs:', remoteTs, '| localTs:', localTs);
+      // ── Guard 3: timestamp — aplicar solo si el remoto es más nuevo ─
+      const rTs = _toMs(remoteData?.user?.lastSyncAt);
+      const lTs = _toMs(State.get.user().lastSyncAt);
+      console.log('[SYNC] remoteTs:', rTs, '| localTs:', lTs, '| remoteDevice:', remoteDevice, '| myDevice:', deviceId);
 
-      if (remoteTs && localTs && remoteTs <= localTs) {
-        console.log('[SYNC] ignorado — datos remotos no son más recientes');
+      if (rTs <= lTs) {
+        console.log('[SYNC] ignorado — datos remotos no más recientes (rTs <= lTs)');
         return;
       }
 
-      // ── Aplicar cambio real de otro dispositivo ────────────────
-      console.log('[SYNC] aplicando datos remotos — remoteTs > localTs ✅');
+      // ── Aplicar cambio real de otro dispositivo ─────────────────
+      console.log('[SYNC] aplicando datos de otro dispositivo ✅');
       State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
 
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remoteData)),
-        { settings: State.get.settings() } // settings siempre local
+        { settings: State.get.settings() }
       );
       Object.keys(merged).forEach(k => {
         if (typeof State.set[k] === 'function') State.set[k](merged[k]);
@@ -12597,25 +12606,44 @@ const alm = (() => {
 
       _renderAll();
       State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
-      console.log('[SYNC] applied ✅');
+      console.log('[SYNC] applied ✅ — from device:', remoteDevice);
       showToast('☁️ Actualizado desde otro dispositivo');
     });
 
-    // Hook: llamado por State.save() en cada escritura local.
-    // Actualiza _lastLocalWrite (guard 8s) Y actualiza lastSyncAt en State
-    // para que el guard de timestamp funcione en el próximo onSnapshot.
+    // ── Hook de escritura local ─────────────────────────────────
+    // Llamado por State.save() en cada escritura. Actualiza lastSyncAt y deviceId
+    // para que el onSnapshot propio sea identificable y rechazado por Guard 2.
     window._DashweyOnLocalWrite = () => {
-      _lastLocalWrite = Date.now();
-      const ts = new Date().toISOString();
-      State.set.user({ lastSyncAt: ts });
-      console.log('[SYNC] local write registrado — lastSyncAt:', ts);
+      const ts = Date.now();
+      State.set.user({ lastSyncAt: ts, lastDeviceId: deviceId });
+      console.log('[SYNC] local write — lastSyncAt:', ts, '| deviceId:', deviceId);
     };
- 
-  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); }
-  }
 
-  // Exponer para uso en authLogin/authRegister
+  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); }
+}
   window._DashweyInitialSync = _doInitialSync;
+
+
+  // ── Device ID — identificador único por dispositivo (persistente) ──
+  // Usado por el sistema de sync para ignorar snapshots propios (Guard 2).
+  // Se genera una única vez y se persiste en localStorage.
+  window._DashweyDeviceId = (() => {
+    try {
+      const KEY = 'dashwey_device_id';
+      let id = localStorage.getItem(KEY);
+      if (!id) {
+        // crypto.randomUUID() disponible en HTTPS y PWA — fallback seguro
+        id = typeof crypto?.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : ('dev_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36));
+        localStorage.setItem(KEY, id);
+      }
+      console.log('[SYNC] device:', id);
+      return id;
+    } catch(e) {
+      return 'dev_fallback_' + Date.now().toString(36);
+    }
+  })();
 
   // Ejecutar sync: si ya está listo, inmediatamente; si no, esperar evento
   if (_fb?.ready) {
