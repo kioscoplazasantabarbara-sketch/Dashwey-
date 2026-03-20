@@ -4318,6 +4318,8 @@ const State = (() => {
 
   let _pendingQueue  = [];   // escrituras offline pendientes
   let _isSyncing     = false;
+  let _isSaving      = false; // guard: evita writes concurrentes
+  let _saveTimer     = null;  // debounce timer
 
   // ── 1. Siempre local (síncrono) ────────────────────────────────
   function _writeLocal(data) {
@@ -4330,8 +4332,12 @@ const State = (() => {
     const fb = window._DashweyFirebase;
     if (!fb?.enabled || !fb?.ready) return false;
     if (!fb.isRegistered()) {
-      State.set.syncStatus({ mode: 'local', pendingWrites: 0, lastError: null });
+      // No mutar syncStatus aqui: evita save() loop
       return false;
+    }
+    // Asegurar que el data lleva deviceId actualizado (guard onSnapshot)
+    if (data?.user && window._DashweyDeviceId) {
+      data.user.lastDeviceId = window._DashweyDeviceId;
     }
     // Limpiar claves inválidas para Firestore (__ prefix, undefined, funciones)
     const _cleanForFirestore = (obj) => {
@@ -4347,30 +4353,30 @@ const State = (() => {
     };
     const cleanData = _cleanForFirestore(data);
     const ok = await fb.write('state', cleanData);
+    // syncStatus via direct state mutation (no save() call chain)
     if (ok) {
-      State.set.syncStatus({ mode: 'synced', pendingWrites: 0, lastError: null });
+      if (_state.syncStatus) _state.syncStatus = Object.assign(_state.syncStatus, { mode: 'synced', pendingWrites: 0, lastError: null });
+      if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
     } else {
-      State.set.syncStatus({ mode: 'error', lastError: 'write-failed' });
+      if (_state.syncStatus) _state.syncStatus = Object.assign(_state.syncStatus, { mode: 'error', lastError: 'write-failed' });
+      if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
     }
     return ok;
   }
 
   // ── 3. Cola offline → flush cuando vuelve la red ───────────────
   function _flushQueue() {
-    if (_isSyncing || !_pendingQueue.length) return;
+    if (_isSyncing || _isSaving || !_pendingQueue.length) return;
     const fb = window._DashweyFirebase;
     if (!fb?.enabled || !fb?.ready || !navigator.onLine) return;
+    if (!fb.isRegistered?.()) return;
     _isSyncing = true;
-    // Tomar el snapshot más reciente y actualizar lastSyncAt/lastDeviceId
-    // para que el onSnapshot del write sea identificable como propio (Guard 2)
+    // Usar el snapshot mas reciente de la cola
     const snapshot = _pendingQueue[_pendingQueue.length - 1];
+    // Estampar deviceId+ts DIRECTAMENTE en snapshot (sin State.set para no disparar save)
     if (snapshot?.user) {
-      const now      = Date.now();
-      const deviceId = window._DashweyDeviceId || 'unknown';
-      snapshot.user.lastSyncAt  = now;
-      snapshot.user.lastDeviceId = deviceId;
-      State.set.user({ lastSyncAt: now, lastDeviceId: deviceId });
-      console.log('[SYNC] flushQueue — actualizando lastSyncAt:', now, 'deviceId:', deviceId);
+      snapshot.user.lastSyncAt   = Date.now();
+      snapshot.user.lastDeviceId = window._DashweyDeviceId || 'unknown';
     }
     _writeFirebase(snapshot).then(ok => {
       if (ok) { _pendingQueue = []; }
@@ -4394,29 +4400,35 @@ const State = (() => {
     }
   }
 
-  let _state     = load();
-  let _saveTimer = null;
+  let _state = load();
+  // _saveTimer and _isSaving declared above in storage scope
 
-  // ── save — escribe local siempre, Firebase si puede ────────────
+  // -- save: escribe local siempre, Firebase con guards anti-loop
   function save() {
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
       _writeLocal(_state);
-      // Notificar al sistema de sync que este write es nuestro
-      if (typeof window._DashweyOnLocalWrite === 'function') { window._DashweyOnLocalWrite(); }
       const fb = window._DashweyFirebase;
-      if (fb?.enabled && fb.isRegistered?.()) {
-        if (navigator.onLine && fb.ready) {
-          // No marcar syncing en cada keystroke — solo si tarda >1.5s
-          const _syncTimer = setTimeout(() => {
-            State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
-          }, 1500);
-          _writeFirebase(_state).then(() => clearTimeout(_syncTimer)).catch(() => clearTimeout(_syncTimer));
-        } else {
-          // Offline — encolar
-          _pendingQueue.push(JSON.parse(JSON.stringify(_state)));
-          State.set.syncStatus({ mode: 'local', pendingWrites: _pendingQueue.length });
-        }
+      if (!fb?.enabled || !fb.isRegistered?.()) return;
+      if (!navigator.onLine || !fb.ready) {
+        // Offline: encolar solo el snapshot mas reciente
+        _pendingQueue = [JSON.parse(JSON.stringify(_state))];
+        State.set.syncStatus({ mode: 'local', pendingWrites: 1 });
+        return;
+      }
+      // Guard de concurrencia: no escribir si ya hay un write en curso
+      if (_isSaving) return;
+      _isSaving = true;
+      // Estampar deviceId+ts directamente en _state (sin State.set para no re-disparar save)
+      const _ts  = Date.now();
+      const _did = window._DashweyDeviceId || 'unknown';
+      if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
+      _writeLocal(_state); // persistir el timestamp
+      _writeFirebase(_state)
+        .then(() => { _isSaving = false; })
+        .catch(() => { _isSaving = false; });
+    }, 400);
+  }
       }
     }, 300);
   }
@@ -5537,7 +5549,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.14';
+  const _APP_VERSION = 'v9.5.15';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12493,10 +12505,9 @@ const alm = (() => {
   // Construye el snapshot del estado local para subir a Firebase
   function _buildLocalSnapshot() {
     // v9.5.13: lastSyncAt como timestamp numérico (ms) — comparación segura
-    // deviceId incluido en user para que onSnapshot detecte writes propios
+    // Estampar deviceId+ts directamente en snapshot (sin State.set para no disparar save)
     const now      = Date.now();
     const deviceId = window._DashweyDeviceId || 'unknown';
-    State.set.user({ lastSyncAt: now, lastDeviceId: deviceId });
     return {
       user:             { ...State.get.user(), lastSyncAt: now, lastDeviceId: deviceId },
       proveedores:      State.get.proveedores(),
@@ -12513,17 +12524,12 @@ const alm = (() => {
   }
   // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
   function _renderAll() {
-    // Financiero y badges siempre (ligeros, globales)
-    try { dash.renderFinanciero?.(); } catch(e) {}
-    try { alm.updateBadge?.(); } catch(e) {}
-    // Renders de módulos — siempre completos para mantener coherencia de datos
     try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
     try { tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
     try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
     try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
     try { alm.updateProvBar?.(); } catch(e) {}
-    try { alm.updateProvBar?.(); } catch(e) {}
-    try { alm.updateBadge(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
+    try { alm.updateBadge?.(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
   }
 
   // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
@@ -12563,15 +12569,18 @@ const alm = (() => {
     console.log('[SYNC] initialSync — localTs:', localTs, '| remoteTs:', remoteTs);
 
     if (remoteTs > localTs) {
-      // Remoto más reciente → aplicar datos de la nube
-      console.log('[SYNC] aplicando datos remotos (remoto más reciente)');
+      // Remoto mas reciente: aplicar datos de la nube
+      console.log('[SYNC] aplicando datos remotos (remoto mas reciente)');
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remote)),
         { settings: State.get.settings() }
       );
+      // Bloquear writes durante merge para no re-subir a Firebase lo que acabamos de bajar
+      _isSaving = true;
       Object.keys(merged).forEach(k => {
         if (typeof State.set[k] === 'function') State.set[k](merged[k]);
       });
+      _isSaving = false;
       _renderAll();
       showToast('☁️ Datos sincronizados');
     } else {
@@ -12615,32 +12624,35 @@ const alm = (() => {
         return;
       }
 
-      // ── Aplicar cambio real de otro dispositivo ─────────────────
-      console.log('[SYNC] aplicando datos de otro dispositivo ✅');
-      State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
+      // -- Guard: no aplicar si ya hay write local en curso (evita loop)
+      if (_isSaving) {
+        console.log('[SYNC] ignorado -- write local en curso (_isSaving)');
+        return;
+      }
+      console.log('[SYNC] aplicando datos de otro dispositivo');
 
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remoteData)),
         { settings: State.get.settings() }
       );
+      // Aplicar cada clave sin re-disparar save() hacia Firebase:
+      // Los setters van a localStorage (debounce 400ms) y el onSnapshot
+      // resultante sera filtrado por Guard2 (deviceId propio).
       Object.keys(merged).forEach(k => {
         if (typeof State.set[k] === 'function') State.set[k](merged[k]);
       });
 
       _renderAll();
-      State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
-      console.log('[SYNC] applied ✅ — from device:', remoteDevice);
+      console.log('[SYNC] applied -- from device:', remoteDevice);
       showToast('☁️ Actualizado desde otro dispositivo');
     });
 
     // ── Hook de escritura local ─────────────────────────────────
     // Llamado por State.save() en cada escritura. Actualiza lastSyncAt y deviceId
     // para que el onSnapshot propio sea identificable y rechazado por Guard 2.
-    window._DashweyOnLocalWrite = () => {
-      const ts = Date.now();
-      State.set.user({ lastSyncAt: ts, lastDeviceId: deviceId });
-      console.log('[SYNC] local write — lastSyncAt:', ts, '| deviceId:', deviceId);
-    };
+    // _DashweyOnLocalWrite: ya no necesita State.set.user (lo hace save() directamente)
+    // Se mantiene como hook vacio por compatibilidad con modulos externos
+    window._DashweyOnLocalWrite = () => {};
 
   } catch(e) { console.warn('[Sync] _doInitialSync error:', e); }
 }
