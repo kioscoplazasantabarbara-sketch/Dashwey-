@@ -25,7 +25,7 @@
   </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.3.5</title>
+<title>Dashwey v9.3.6</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3341,7 +3341,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.3.5</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.3.6</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -3350,7 +3350,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v9.3.5</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v9.3.6</div>
     </div>
   </div>
 
@@ -4631,7 +4631,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v9.3.5</div>
+        <div class="menu-ver">Dashwey v9.3.6</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -4688,7 +4688,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.3.5';
+  const _APP_VERSION = 'v9.3.6';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -5449,7 +5449,7 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
-    'v9.3.5': {
+    'v9.3.6': {
       title: 'Auditoría forense completa',
       items: [
         '🧹 ~160 líneas de código muerto eliminadas',
@@ -7851,6 +7851,22 @@ const alm = (() => {
   let _ordenSel = new Set();
   // ── Estado Orden Nueva ──
   let _ordenCarrito = {};
+  // Carrito persistente: se restaura al iniciar el módulo
+  (function _restoreCarrito() {
+    try {
+      var raw = localStorage.getItem('dashwey_carrito_v1');
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        // Se validan los prodIds después de que State esté listo
+        setTimeout(function() {
+          Object.keys(parsed).forEach(function(id) {
+            if (State.get.prod(id)) _ordenCarrito[id] = parsed[id];
+          });
+          _updateAcceptBtn(); updateBadge(); renderCatInline();
+        }, 100);
+      }
+    } catch(e) {}
+  })();
   let _ordenEstado  = 0;    // 0=reposo 1=catalogo (estado 2 eliminado en v8.8.2)
 
   // v8.9.0: Limpiar State.ordenItems al arrancar (ya no se usa en UI)
@@ -7960,12 +7976,145 @@ const alm = (() => {
   let _catInlineLpFired = false;
   let _catInlineLpTimer = null;
   let _catInlineLpEl    = null;
-  function _catInlineTap() {}
-  function _catInlineStep() {}
-  function _catInlineRefreshItem() {}
-  function _catInlineLpStart() {}
-  function _catInlineLpEnd() {}
-  function _openCatInlineCtxMenu() {}
+
+  // ── TAP: añade 1 caja al carrito y refresca el item ──────────
+  function _catInlineTap(prodId, evt) {
+    if (_catInlineLpFired) { _catInlineLpFired = false; return; }
+    if (!prodId) return;
+    const p = State.get.prod(prodId);
+    if (!p) return;
+    _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
+    _catInlineRefreshItem(prodId);
+    _updateAcceptBtn();
+    updateBadge();
+    _flyToCart(evt);
+    _saveCarritoLocal();
+    showToast(esc(p.nombre) + ' +1');
+  }
+
+  // ── STEP: ±1 caja desde los botones del stepper ──────────────
+  function _catInlineStep(prodId, dir) {
+    if (!prodId) return;
+    const cur = _ordenCarrito[prodId] || 0;
+    const next = Math.max(0, cur + dir);
+    if (next === 0) {
+      delete _ordenCarrito[prodId];
+    } else {
+      _ordenCarrito[prodId] = next;
+    }
+    _catInlineRefreshItem(prodId);
+    _updateAcceptBtn();
+    updateBadge();
+    _saveCarritoLocal();
+  }
+
+  // ── REFRESH: actualiza solo el item sin re-render completo ────
+  function _catInlineRefreshItem(prodId) {
+    const el = document.getElementById('aci-' + prodId);
+    if (!el) return;
+    const nc = _ordenCarrito[prodId] || 0;
+    const p  = State.get.prod(prodId);
+    if (!p) return;
+    // Reconstruir solo la parte derecha del item
+    const rightEl = el.querySelector('.alm-cat-right');
+    if (!rightEl) return;
+    if (nc > 0) {
+      el.classList.add('in-cart');
+      rightEl.innerHTML =
+        '<div class="alm-cat-badge" id="acb-' + prodId + '">' + nc + '</div>' +
+        '<div class="alm-cat-stepper">' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + prodId + '&apos;,-1)">−</button>' +
+          '<span class="alm-cat-qty" id="acq-' + prodId + '">' + nc + '</span>' +
+          '<button class="alm-cat-step" onclick="event.stopPropagation();App.alm._catInlineStep(&apos;' + prodId + '&apos;,1)">+</button>' +
+        '</div>';
+    } else {
+      el.classList.remove('in-cart');
+      const precioBase = p.precioCompra || 0;
+      rightEl.innerHTML = '<div class="alm-cat-price">' + feur(p.pvp||0) + '</div>';
+    }
+  }
+
+  // ── LONGPRESS: abre menú contextual del artículo ──────────────
+  function _catInlineLpStart(prodId, el, evt) {
+    _catInlineLpFired = false;
+    clearTimeout(_catInlineLpTimer);
+    _catInlineLpEl = el;
+    _catInlineLpTimer = setTimeout(function() {
+      _catInlineLpFired = true;
+      if (_catInlineLpEl) _catInlineLpEl.style.opacity = '0.7';
+      _openCatInlineCtxMenu(prodId, _catInlineLpEl);
+    }, 480);
+  }
+
+  function _catInlineLpEnd() {
+    clearTimeout(_catInlineLpTimer);
+    if (_catInlineLpEl) _catInlineLpEl.style.opacity = '';
+    _catInlineLpEl = null;
+  }
+
+  // ── MENÚ CONTEXTUAL del artículo (longpress) ──────────────────
+  function _openCatInlineCtxMenu(prodId, sourceEl) {
+    const p = State.get.prod(prodId); if (!p) return;
+    // Cerrar menú previo si existe
+    const prev = document.getElementById('cat-ctx-menu');
+    if (prev) prev.remove();
+    const rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
+    const menu = document.createElement('div');
+    menu.id = 'cat-ctx-menu';
+    menu.className = 'cat-float-menu';
+    menu.innerHTML =
+      '<button class="cat-float-btn" id="ctx-detail">' +
+        '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+        '<span>Detalle</span></button>' +
+      '<button class="cat-float-btn" id="ctx-editar">' +
+        '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+        '<span>Editar</span></button>' +
+      '<div class="cat-float-arrow"></div>';
+    // Posicionar antes de insertar
+    const estW = 200, estH = 62;
+    let left = rect ? rect.left + rect.width/2 - estW/2 : window.innerWidth/2 - estW/2;
+    let top  = rect ? rect.top - estH - 10 : window.innerHeight/2 - estH/2;
+    left = Math.max(8, Math.min(left, window.innerWidth - estW - 8));
+    top  = Math.max(60, top);
+    menu.style.left = left + 'px';
+    menu.style.top  = top + 'px';
+    document.body.appendChild(menu);
+    // Asignar listeners por ID
+    document.getElementById('ctx-detail').addEventListener('click', function() {
+      menu.remove(); App.alm.openDetailArt(prodId);
+    });
+    document.getElementById('ctx-editar').addEventListener('click', function() {
+      menu.remove(); App.alm.openEditArt(prodId);
+    });
+    // Cerrar al tocar fuera
+    function _closeCtx(e) {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('touchstart', _closeCtx, true); document.removeEventListener('click', _closeCtx, true); }
+    }
+    setTimeout(function() {
+      document.addEventListener('touchstart', _closeCtx, { capture: true, passive: true });
+      document.addEventListener('click', _closeCtx, { capture: true });
+    }, 50);
+  }
+
+  // ── CARRITO PERSISTENTE ───────────────────────────────────────
+  // Persiste _ordenCarrito en localStorage para sobrevivir cambios de proveedor
+  var _CARRITO_KEY = 'dashwey_carrito_v1';
+  function _saveCarritoLocal() {
+    try { localStorage.setItem(_CARRITO_KEY, JSON.stringify(_ordenCarrito)); } catch(e) {}
+  }
+  function _loadCarritoLocal() {
+    try {
+      var raw = localStorage.getItem(_CARRITO_KEY);
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        // Solo restaurar items cuyo prodId sigue existiendo
+        Object.keys(parsed).forEach(function(id) {
+          if (State.get.prod(id)) _ordenCarrito[id] = parsed[id];
+        });
+      }
+    } catch(e) {}
+  }
+
   function _catFilterInline(val) { App.alm.onMainSearch(val); }
   function _catFilterInlineFocus() { App.alm._permSearchFocus(); }
   function _catFilterInlineBlur()  { App.alm._permSearchBlur(); }
@@ -10408,6 +10557,7 @@ const alm = (() => {
 
     // Limpiar carrito
     _ordenCarrito = {};
+    try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
     _ordenEstado  = 0;
     _updateMainBtn();
     updateBadge();
@@ -10817,7 +10967,7 @@ const alm = (() => {
   }
 
   // _cerrarComprobacion: stub de compatibilidad (v8.8.1)
-  function _cerrarComprobacion() { _ordenEstado = 0; _ordenCarrito = {}; _updateMainBtn(); _renderOrdenNueva(); }
+  function _cerrarComprobacion() { _ordenEstado = 0; _ordenCarrito = {}; try{localStorage.removeItem('dashwey_carrito_v1');}catch(e){} _updateMainBtn(); _renderOrdenNueva(); }
 
   // ══ ESTADO 3: MODAL CONFIRMACIÓN CON BLUR ════════════════════
 
@@ -11035,7 +11185,7 @@ const alm = (() => {
 
   // ── What's New — mostrar una vez por versión ─────────────────
   setTimeout(() => {
-    try { App.ui.showWhatsNew('9.3.5'); } catch(_) {}
+    try { App.ui.showWhatsNew('9.3.6'); } catch(_) {}
   }, 1500); // delay para no interferir con el arranque
 
   // ── Idioma — aplicar al arrancar ──────────────────────────────
@@ -11753,7 +11903,7 @@ if (!window.App) {
     <div class="wn-header">
       <div class="wn-emoji">🎉</div>
       <div class="wn-title" id="wn-title">What's New in Dashwey</div>
-      <div class="wn-ver"  id="wn-ver">v9.3.5</div>
+      <div class="wn-ver"  id="wn-ver">v9.3.6</div>
     </div>
     <div class="wn-scroll" id="wn-scroll"></div>
     <button class="wn-close" onclick="App.ui.closeWhatsNew()">Cerrar</button>
