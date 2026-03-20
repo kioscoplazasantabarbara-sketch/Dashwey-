@@ -12,15 +12,18 @@
   <script>
   /* HEAD BOOTSTRAP — primer JS que corre, antes de cualquier otro */
 
-  /* 1. _hideSplash temprano — el splash puede estar en DOM antes del App script */
+  /* 1. _hideSplash stub temprano — será reemplazado por la versión real del splash dinámico.
+        Si se llama antes de que el splash exista, no hace nada (el splash dinámico
+        tiene su propio timeout de seguridad de 4s). */
   window._hideSplash = window._hideSplash || function() {
+    // Stub: el splash dinámico sobreescribirá esta función con la versión real.
+    // Solo actúa si el splash ya existe en el DOM (llamada muy tardía/rara).
     var s = document.getElementById('splash-screen');
-    if (!s || s._done) return; s._done = true;
+    if (!s || s._done) return;
+    s._done = true;
     s.style.transition = 'opacity 0.3s ease';
     s.style.opacity = '0';
-    setTimeout(function() {
-      if (s.parentNode) s.parentNode.removeChild(s);
-    }, 320);
+    setTimeout(function() { if (s.parentNode) s.parentNode.removeChild(s); }, 320);
   };
 
   /* 2. Safety net: App proxy para evitar errores si usuario toca antes de cargar */
@@ -47,7 +50,7 @@
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.4.3</title>
+<title>Dashwey v9.4.9</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2938,6 +2941,7 @@ body.dark .auth-card    { background: var(--surface); }
   ].join('');
 
   document.body.insertBefore(s, document.body.firstChild);
+  s._done = false; // flag de idempotencia para _hideSplash
 
   /* Animar barra — doble rAF para garantizar primer paint */
   requestAnimationFrame(function() {
@@ -2947,10 +2951,11 @@ body.dark .auth-card    { background: var(--surface); }
     });
   });
 
-  /* _hideSplash: llamable desde auth gate */
-  var _done = false;
+  /* _hideSplash: versión real — usa closure sobre `s` para no depender del DOM */
+  /* Sobreescribe el stub del HEAD. Idempotente: múltiples llamadas son seguras. */
   window._hideSplash = function() {
-    if (_done) return; _done = true;
+    if (s._done) return;
+    s._done = true;
     s.style.transition = 'opacity 0.3s ease';
     s.style.opacity = '0';
     setTimeout(function() {
@@ -2958,8 +2963,9 @@ body.dark .auth-card    { background: var(--surface); }
     }, 320);
   };
 
-  /* Safety: siempre ocultar a los 4s */
-  setTimeout(window._hideSplash, 4000);
+  /* Safety: ocultar a los 6s si auth gate no resolvió antes.
+     6s > 4s del timeout del gate → el gate siempre gana si Firebase responde. */
+  setTimeout(window._hideSplash, 6000);
 })();
 </script>
 
@@ -3848,7 +3854,7 @@ function _authTabSafe(tab) {
           <div style="width:30px;height:30px;border-radius:8px;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="15" height="15" fill="none" stroke="#2563EB" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:700;color:var(--ink)">Actualizaciones</div>
-            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.4.3</div>
+            <div id="update-status-txt" style="font-size:11px;color:var(--ink-soft);margin-top:1px">Versión actual: v9.4.9</div>
           </div>
           <button id="update-check-btn" onclick="App.ui.checkForUpdate()" style="background:var(--blue);color:#fff;border:none;border-radius:9px;padding:6px 12px;font-size:11px;font-weight:700;font-family:var(--font);cursor:pointer;flex-shrink:0">Comprobar</button>
         </div>
@@ -3857,7 +3863,7 @@ function _authTabSafe(tab) {
         </div>
       </div>
       <button class="sd-logout-btn" onclick="App.ui.closeSettings();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-      <div class="sd-ver" id="sd-ver">Dashwey v9.4.3</div>
+      <div class="sd-ver" id="sd-ver">Dashwey v9.4.9</div>
     </div>
   </div>
 
@@ -5481,7 +5487,7 @@ const ui = (() => {
       <div class="menu-footer" style="margin-top:16px">
         <button class="btn-logout" style="background:#FEF2F2;color:#DC2626;border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),200)">🗑️ Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,200)">Cerrar sesión</button>
-        <div class="menu-ver">Dashwey v9.4.3</div>
+        <div class="menu-ver">Dashwey v9.4.9</div>
       </div>
 `);
     document.getElementById('header').classList.add('menu-open');
@@ -5538,7 +5544,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.4.8';
+  const _APP_VERSION = 'v9.4.9';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11048,6 +11054,12 @@ const alm = (() => {
   }
 
   function _updateAcceptBtn() {
+    // Guard: solo mostrar el botón si estamos en tab 2 (Almacén)
+    if (typeof nav !== 'undefined' && nav._cTab !== 2) {
+      const btn = document.getElementById('alm-accept-fixed');
+      if (btn) btn.style.display = 'none';
+      return;
+    }
     const cnt  = Object.values(_ordenCarrito).reduce((s, n) => s + n, 0);
     const nArts = Object.keys(_ordenCarrito).length;
     const btn  = document.getElementById('alm-accept-fixed');
@@ -11361,9 +11373,14 @@ const alm = (() => {
     // Construir items desde _ordenCarrito
     const items = Object.entries(_ordenCarrito).map(([prodId, ncajas]) => {
       const p = State.get.prod(prodId);
+      // udscaja: unidades por caja — campo correcto del producto.
+      // NUNCA usar stockMinimo (es el nivel mínimo de stock, no uds/caja).
+      // getLV recupera el último valor guardado por el usuario para este producto.
+      const savedUds = getLV(prodId, { udscaja: p?.udscaja || p?.stockMinimo || 12 }).udscaja;
+      const udscaja  = p?.udscaja || savedUds || 12;
       return {
         prodId, provId: sel, ncajas,
-        udscaja: p?.stockMinimo || 12,
+        udscaja,
         precio:  p?.precioCompra || 0,
         pvp:     p?.pvp || 0,
         checked: false,
@@ -12115,8 +12132,8 @@ const alm = (() => {
 
   // ── What's New — mostrar una vez por versión ─────────────────
   setTimeout(() => {
-    try { App.ui.showWhatsNew('9.4.6'); } catch(_) {}
-  }, 1500); // delay para no interferir con el arranque
+    try { App.ui.showWhatsNew('v9.4.3'); } catch(_) {}
+  }, 2000); // delay aumentado para no interferir con auth gate
 
   // ── Idioma — aplicar al arrancar ──────────────────────────────
   try {
@@ -12213,10 +12230,11 @@ const alm = (() => {
       if (typeof window._hideSplash === 'function') setTimeout(window._hideSplash, 100);
     } else {
       // Pantalla oculta por CSS (display:none default)
-      // Si hay logout previo, mostrar login directamente sin esperar Firebase
-      if (_isLoggedOut) { showAuthScreen(); }
+      // NO mostrar auth-screen aquí aunque _isLoggedOut sea true.
+      // _onAuthGate reacciona a dashwey:auth-changed(!hasUser) y la muestra correctamente.
+      // Mostrarla antes provocaría flash visual si Firebase restaura sesión rápidamente.
 
-      // Timeout de seguridad: si Firebase no responde → modo local
+      // Timeout de seguridad: 5s (> tiempo normal Firebase ~1-2s, < splash safety 6s)
       let _gateResolved = false;
       const _gateTimeout = setTimeout(() => {
         if (_gateResolved) return;
@@ -12228,7 +12246,7 @@ const alm = (() => {
           if (_authScreen) { _authScreen.style.display = 'none'; }
           console.warn('[Dashwey] Auth timeout — modo local');
         }
-      }, 4000);
+      }, 5000);
 
       // Listener permanente en auth-changed
       // Se registra AHORA aunque Firebase no esté listo aún.
@@ -12336,17 +12354,23 @@ const alm = (() => {
     // ── Sync en tiempo real — escuchar cambios remotos ────────────
     // Activa onSnapshot para recibir actualizaciones de otros dispositivos
     let _lastLocalWrite = Date.now();
+    // Grace period: ignorar el primer disparo de onSnapshot (es la carga inicial de Firebase,
+    // no un cambio real de otro dispositivo). onSnapshot SIEMPRE dispara al suscribirse.
+    const _subscribeTs = Date.now();
+    const GRACE_MS = 4000; // 4s tras suscribirse = ignorar disparo inicial
     // Registrar cuándo escribimos nosotros para evitar re-aplicar nuestros propios cambios
     const _origSave = window._DashweyStateSetHook;
 
     fb.subscribe('state', remoteData => {
+      // Grace period: si llevamos menos de GRACE_MS suscritos, es el disparo inicial de Firebase
+      if (Date.now() - _subscribeTs < GRACE_MS) return;
       // Ignorar si los datos remotos son del mismo timestamp que el local
       const remoteTs  = remoteData?.user?.lastSyncAt;
       const localTs   = State.get.user().lastSyncAt;
       // Si el remoto es más reciente que lo que tenemos → aplicar
       if (remoteTs && localTs && remoteTs <= localTs) return;
-      // Si la última escritura local fue hace menos de 2s → ignorar (es nuestro propio write)
-      if (Date.now() - _lastLocalWrite < 2000) return;
+      // Si la última escritura local fue hace menos de 3s → ignorar (es nuestro propio write)
+      if (Date.now() - _lastLocalWrite < 3000) return;
 
       // sync: remoto recibido
       State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
@@ -12757,8 +12781,7 @@ if (!window.App) {
       .then(data => {
         if (!data) return;
         const remoteVer = data.version ? 'v' + data.version : data.build;
-        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null
-      .catch(e => console.warn('[Update] version check failed:', e));
+        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
         if (!remoteVer || !localVer) return;
         const banner = document.getElementById('update-banner');
         // Si la versión remota == local: ocultar banner y resetear guard
