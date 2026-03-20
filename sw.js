@@ -3,7 +3,7 @@
  * notification click → deep-link to module/card.
  */
 
-const CACHE_NAME   = 'dashwey-v9-5-25';
+const CACHE_NAME   = 'dashwey-v9-5-25-1';
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
