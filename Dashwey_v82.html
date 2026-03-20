@@ -56,7 +56,7 @@
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.10.1</title>
+<title>Dashwey v9.5.11</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1596,7 +1596,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 
 /* Modal aceptar — popup central */
 .aceptar-popup-overlay {
-  position:fixed; inset:0; z-index:600;
+  position:fixed; inset:0; z-index:9500;
   background:rgba(0,0,0,0.55);
   display:flex; align-items:center; justify-content:center;
   padding:20px;
@@ -5528,7 +5528,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.10.1';
+  const _APP_VERSION = 'v9.5.11';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -6858,6 +6858,8 @@ Estructura:
 
 Sé directo, usa números concretos, tono profesional pero cercano.`;
 
+    console.log('[STEP 5] Llamando ui.setFs...');
+    try {
     ui.setFs(`
       <div class="modal-header-dark">
         <div class="mhd-row">
@@ -8771,7 +8773,10 @@ const alm = (() => {
   let _selMode  = false;
   let _ordenSel = new Set();
   // ── Estado Orden Nueva ──
-  let _ordenCarrito = {};
+  let _ordenCarrito    = {};
+  // Snapshot inmutable del pedido en curso — se crea en _openAceptarPopupFromCarrito
+  // y se consume en _confirmarPedidoDesdeCarrito. Inmune a limpieza del carrito.
+  let _pedidoPendiente = null;
   // Carrito persistente: se restaura al iniciar el módulo
   (function _restoreCarrito() {
     try {
@@ -9188,8 +9193,9 @@ const alm = (() => {
     idx = ((idx % ids.length) + ids.length) % ids.length;
     // Limpiar cesta del proveedor anterior siempre al navegar con ‹ ›
     if (Object.keys(_ordenCarrito).length > 0) {
-      _ordenCarrito = {};
-      _ordenEstado  = 0;
+      _pedidoPendiente = null;  // snapshot invalidado al cambiar proveedor
+      _ordenCarrito    = {};
+      _ordenEstado     = 0;
       try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
     }
     // Cerrar popup de confirmar si estuviera abierto
@@ -9267,8 +9273,9 @@ const alm = (() => {
   function selProv(id) {
     // Limpiar cesta del proveedor anterior — la cesta es SIEMPRE dependiente del proveedor
     if (Object.keys(_ordenCarrito).length > 0) {
-      _ordenCarrito = {};
-      _ordenEstado  = 0;
+      _pedidoPendiente = null;  // snapshot invalidado al cambiar proveedor
+      _ordenCarrito    = {};
+      _ordenEstado     = 0;
       try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
     }
     // Cerrar popup de aceptar si estaba abierto
@@ -11269,7 +11276,7 @@ const alm = (() => {
     try { navigator.vibrate && navigator.vibrate([8, 20, 8]); } catch(e) {}
     const btn = document.getElementById('alm-accept-fixed');
     if (btn) {
-      if (btn.dataset.processing === '1') return; // guard doble-tap
+      if (btn.dataset.processing === '1') return;
       btn.dataset.processing = '1';
       btn.style.transform = 'scale(0.94)';
       setTimeout(() => { btn.style.transform = ''; btn.dataset.processing = '0'; }, 140);
@@ -11284,15 +11291,10 @@ const alm = (() => {
 
   // Guardar carrito en State y abrir popup de análisis — flujo directo sin estado 2
   function _guardarCarritoYPopup() {
-    // v8.9.0: flujo directo sin State.ordenItems
-    // El carrito (_ordenCarrito) ES la fuente de verdad → popup directo
-    const sel  = State.get.selectedProv();
+    const sel       = State.get.selectedProv();
     const acceptBtn = document.getElementById('alm-accept-fixed');
     if (acceptBtn) acceptBtn.style.display = 'none';
-
-    if (!Object.keys(_ordenCarrito).length) return; // carrito vacío, nada que hacer
-
-    // Abrir popup de análisis financiero con datos del carrito activo
+    if (!Object.keys(_ordenCarrito).length) return;
     _openAceptarPopupFromCarrito(sel);
   }
 
@@ -11458,7 +11460,25 @@ const alm = (() => {
 
   // Popup de análisis leyendo directamente de _ordenCarrito (v8.9.0)
   function _openAceptarPopupFromCarrito(sel) {
-    if (!Object.keys(_ordenCarrito).length) return;
+    const carritoKeys = Object.keys(_ordenCarrito);
+    console.log('[CONFIRM] _openAceptarPopupFromCarrito — sel:', sel, 'items:', carritoKeys.length);
+
+    if (!carritoKeys.length) {
+      console.warn('[CONFIRM] carrito vacío al abrir popup — abort');
+      return;
+    }
+
+    // ── Snapshot inmutable del carrito en este instante ──────────
+    // structuredClone garantiza copia profunda sin referencias compartidas.
+    // Desde este momento, _pedidoPendiente es la fuente de verdad del pedido.
+    // _ordenCarrito puede vaciarse sin afectar al flujo de confirmación.
+    const _carritoSnapshot = typeof structuredClone === 'function'
+      ? structuredClone(_ordenCarrito)
+      : JSON.parse(JSON.stringify(_ordenCarrito));
+
+    _pedidoPendiente = { sel, carrito: _carritoSnapshot, ts: Date.now() };
+    console.log('[CONFIRM] snapshot creado — items:', Object.keys(_carritoSnapshot).length, 'ts:', _pedidoPendiente.ts);
+
     const prov = State.get.prov(sel);
 
     // Construir items desde _ordenCarrito
@@ -11552,35 +11572,22 @@ const alm = (() => {
         '</div>' +
       '</div>';
 
-    overlay.addEventListener('click', e => { if(e.target===overlay) App.alm._cancelarPedidoCarrito(); });
-    document.body.appendChild(overlay);
-    // Registrar listeners directamente en los botones del popup
-    // NO usar this.click() — en Android WebView puede no disparar onclick inline.
-    // Ejecutar la acción directamente desde touchend.
-    const _btnConfirmar = overlay.querySelector('[onclick*="_confirmarPedidoDesdeCarrito"]');
-    const _btnCancelar  = overlay.querySelectorAll('[onclick*="_cancelarPedidoCarrito"]');
-
-    if (_btnConfirmar) {
-      _btnConfirmar.addEventListener('touchend', function(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        App.alm._confirmarPedidoDesdeCarrito();
-      }, { passive: false, once: true });
-    }
-    _btnCancelar.forEach(btn => {
-      btn.addEventListener('touchend', function(e) {
-        e.stopPropagation();
-        e.preventDefault();
-        App.alm._cancelarPedidoCarrito();
-      }, { passive: false, once: true });
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) App.alm._cancelarPedidoCarrito();
     });
+    document.body.appendChild(overlay);
+    // Los botones tienen touch-action:manipulation y onclick inline.
+    // touch-action:manipulation elimina el 300ms delay en Android.
+    // No se añaden touchend listeners — estos cancelaban el click con preventDefault.
   }
 
   // Cancelar pedido — limpia cesta completamente, nunca deja estado sucio
   function _cancelarPedidoCarrito() {
+    console.log('[CONFIRM] cancelar pedido — limpiando snapshot y carrito');
     document.getElementById('aceptar-popup-overlay')?.remove();
-    _ordenCarrito = {};
-    _ordenEstado  = 0;
+    _pedidoPendiente = null;   // snapshot descartado
+    _ordenCarrito    = {};
+    _ordenEstado     = 0;
     try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
     _updateAcceptBtn();
     updateBadge();
@@ -11590,54 +11597,105 @@ const alm = (() => {
   // Confirmar pedido desde carrito (v8.9.0) — lee _ordenCarrito, sin State.ordenItems
   let _confirmandoPedido = false;
   function _confirmarPedidoDesdeCarrito() {
-    if (_confirmandoPedido) return;
-    _confirmandoPedido = true;
-    document.getElementById('aceptar-popup-overlay')?.remove();
-    const sel  = State.get.selectedProv();
-    const prov = State.get.prov(sel);
-    if (!Object.keys(_ordenCarrito).length) { _confirmandoPedido = false; return; }
+    console.log('[CONFIRM] _confirmarPedidoDesdeCarrito() — flag:', _confirmandoPedido);
 
-    // Construir items desde _ordenCarrito
-    // FIX v9.5.10: usar p?.udscaja (igual que _openAceptarPopupFromCarrito).
-    // stockMinimo = nivel mínimo de stock, NO unidades por caja → stock calculado incorrecto.
-    const items = Object.entries(_ordenCarrito).map(([prodId, ncajas]) => {
-      const p = State.get.prod(prodId);
+    // ── Guard doble-tap ─────────────────────────────────────────
+    if (_confirmandoPedido) {
+      console.warn('[CONFIRM] BLOCKED — doble ejecución prevenida');
+      return;
+    }
+    _confirmandoPedido = true;
+
+    // ── Validación del snapshot inmutable ───────────────────────
+    // NUNCA usar _ordenCarrito aquí — puede haberse vaciado entre el
+    // momento en que se abrió el popup y el tap de confirmación.
+    if (!_pedidoPendiente) {
+      console.error('[CONFIRM] ERROR — _pedidoPendiente es null. ¿Se omitió _openAceptarPopupFromCarrito?');
+      _confirmandoPedido = false;
+      return;
+    }
+
+    const { sel, carrito: carritoSnap, ts } = _pedidoPendiente;
+    const snapKeys = Object.keys(carritoSnap);
+    console.log('[CONFIRM] snapshot age:', Date.now() - ts, 'ms | items:', snapKeys.length, snapKeys);
+
+    if (!snapKeys.length) {
+      console.error('[CONFIRM] ERROR — snapshot vacío. Pedido abortado.');
+      _pedidoPendiente   = null;
+      _confirmandoPedido = false;
+      return;
+    }
+
+    // ── Cerrar popup ────────────────────────────────────────────
+    document.getElementById('aceptar-popup-overlay')?.remove();
+
+    const prov = State.get.prov(sel);
+    console.log('[CONFIRM] prov:', prov?.nombre || '(sin nombre)', '| sel:', sel);
+
+    // ── Construir items desde el snapshot (inmutable) ───────────
+    const items = Object.entries(carritoSnap).map(([prodId, ncajas]) => {
+      const p        = State.get.prod(prodId);
       const savedUds = getLV(prodId, { udscaja: p?.udscaja || 12 }).udscaja;
-      return { prodId, ncajas,
-        udscaja: p?.udscaja || savedUds || 12,
-        precio:  p?.precioCompra || 0,
-        pvp:     p?.pvp || 0,
+      const udscaja  = p?.udscaja || savedUds || 12;
+      console.log('[CONFIRM]  item:', prodId, '| ncajas:', ncajas, '| udscaja:', udscaja, '| precio:', p?.precioCompra || 0);
+      return {
+        prodId, ncajas,
+        udscaja,
+        precio: p?.precioCompra || 0,
+        pvp:    p?.pvp || 0,
       };
     });
 
-    // Actualizar stock
+    // ── Actualizar stock ────────────────────────────────────────
     items.forEach(o => {
       const p = State.get.prod(o.prodId);
-      if (p) State.set.updateProd(o.prodId, { stockActual: (p.stockActual||0) + (o.ncajas||1)*(o.udscaja||1) });
+      if (p) {
+        const newStock = (p.stockActual || 0) + (o.ncajas || 1) * (o.udscaja || 1);
+        console.log('[CONFIRM]  stock', o.prodId, p.stockActual, '→', newStock);
+        State.set.updateProd(o.prodId, { stockActual: newStock });
+      } else {
+        console.warn('[CONFIRM]  producto no encontrado:', o.prodId);
+      }
     });
 
-    // Guardar en historial
+    // ── Guardar pedido en historial ─────────────────────────────
     const pedido = {
-      id:    'ped_' + Date.now(),
-      fecha: new Date().toISOString(),
+      id:     'ped_' + Date.now(),
+      fecha:  new Date().toISOString(),
       provId: sel,
-      items: items.map(o => ({ prodId:o.prodId, ncajas:o.ncajas, udscaja:o.udscaja, precio:o.precio, pvp:o.pvp }))
+      items:  items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja, precio: o.precio, pvp: o.pvp })),
     };
-    State.set.addPedido(pedido);
+    console.log('[CONFIRM] guardando pedido:', pedido.id, '| items:', pedido.items.length);
+    try {
+      State.set.addPedido(pedido);
+      console.log('[CONFIRM] addPedido ✅');
+    } catch (err) {
+      console.error('[CONFIRM] addPedido FAILED:', err.message);
+    }
 
-    // Limpiar carrito
-    _ordenCarrito = {};
-    try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
-    _ordenEstado  = 0;
-    _updateMainBtn();
-    updateBadge();
-    renderCatInline();
+    // ── Limpiar estado ──────────────────────────────────────────
+    _pedidoPendiente = null;   // consumido — limpiar el snapshot
+    _ordenCarrito    = {};
+    try { localStorage.removeItem('dashwey_carrito_v1'); } catch (e) {}
+    _ordenEstado     = 0;
+    console.log('[CONFIRM] estado limpiado');
 
-    // Mostrar resumen — reset flag antes de abrir la siguiente pantalla
+    try { _updateMainBtn();  } catch (e) { console.warn('[CONFIRM] _updateMainBtn:', e.message); }
+    try { updateBadge();     } catch (e) { console.warn('[CONFIRM] updateBadge:', e.message); }
+    try { renderCatInline(); } catch (e) { console.warn('[CONFIRM] renderCatInline:', e.message); }
+
+    // ── Mostrar resumen ─────────────────────────────────────────
     _confirmandoPedido = false;
-    setTimeout(() => _mostrarResumenPedido(pedido, prov), 200);
+    console.log('[CONFIRM] abriendo resumen en 200ms...');
+    setTimeout(() => {
+      try {
+        _mostrarResumenPedido(pedido, prov);
+        console.log('[CONFIRM] resumen abierto ✅');
+      } catch (err) {
+        console.error('[CONFIRM] _mostrarResumenPedido FAILED:', err.message);
+      }
+    }, 200);
   }
-
   // _activarComprobacion: stub de compatibilidad (estado 2 eliminado en v8.8.1)
   // Redirige al nuevo flujo directo sin pantalla de comprobación
   function _activarComprobacion() { _guardarCarritoYPopup(); }
@@ -12104,6 +12162,8 @@ const alm = (() => {
   }
 
   function _mostrarResumenPedido(pedido, prov) {
+    console.log('[STEP 5] _mostrarResumenPedido ENTERED — pedido.id:', pedido?.id, 'items:', pedido?.items?.length);
+    if (!pedido) { console.error('[STEP 5] ERROR: pedido es null/undefined'); return; }
     const items = pedido.items.map(o => {
       const p    = State.get.prod(o.prodId);
       const inv  = (o.ncajas||1)*(o.precio||0)*1.10;
@@ -12159,7 +12219,10 @@ const alm = (() => {
           <button class="btn-ok" onclick="App.ui.closeFs();App.alm.renderOrden()">Aceptar</button>
         </div>
       </div>`);
+    console.log('[STEP 5] ui.setFs OK, llamando ui.openFs()...');
     ui.openFs();
+    console.log('[STEP 5] ui.openFs OK — resumen visible');
+    } catch(err) { console.error('[STEP 5] ui error:', err.message, err.stack); }
   }
 
   // ── Render general ────────────────────────────────────────────
