@@ -40,23 +40,23 @@
     });
   }
 
-  /* 3. SW force-update: si hay SW activo con cache antigua, limpiar */
+  /* 3. SW: forzar check de actualización en cada carga.
+     IMPORTANTE: NO hacer skipWaiting automático aquí.
+     El skipWaiting automático causa un bucle infinito de reloads:
+     HEAD skipWaiting → controllerchange → reload → HEAD skipWaiting → ∞
+     El skipWaiting SOLO se hace desde doUpdate() cuando el usuario lo pide. */
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(function(regs) {
       regs.forEach(function(reg) {
-        /* Forzar check de actualización en cada carga */
         reg.update().catch(function(){});
-        /* Si hay SW en espera (versión nueva instalada), activarlo ya */
-        if (reg.waiting) {
-          reg.waiting.postMessage({ action: 'skipWaiting' });
-        }
+        // NO skipWaiting aquí — ver comentario arriba
       });
     }).catch(function(){});
   }
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.5.1</title>
+<title>Dashwey v9.5.7</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2595,16 +2595,15 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 .pedcal-tl-lbl  { font-size: 9px; font-weight: 700; color: var(--ink-soft);
                   text-transform: uppercase; letter-spacing: .4px; }
 .pedcal-tl-track {
-  flex: 1; margin: 0 8px 18px; height: 3px;
+  flex: 1; margin: 0 8px 12px; height: 2px;
   background: var(--border); border-radius: 2px; position: relative;
-  overflow: visible;
 }
 .pedcal-tl-track.live { background: linear-gradient(90deg, rgba(229,57,53,.6), rgba(37,99,235,.4)); }
 .pedcal-tl-track.done { background: var(--green); }
 .pedcal-tl-truck {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 18px; line-height: 1;
+  position: absolute; top: -10px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 20px; line-height: 1;
   filter: drop-shadow(0 1px 3px rgba(0,0,0,.15));
 }
 
@@ -2899,6 +2898,20 @@ body.dark .auth-card    { background: var(--surface); }
 /* ── SPLASH DINÁMICO ── Crea y controla el splash 100% desde JS
    Al ser JS puro, el SW cache no puede servir un HTML antiguo con splash viejo */
 (function() {
+  /* FIX v9.5.7 — Splash doble en reload post-update:
+     Si acabamos de recargar por doUpdate() en los últimos 8s,
+     no mostrar el splash (evita el efecto splash-app-splash). */
+  var _reloadTs = 0;
+  try { _reloadTs = parseInt(sessionStorage.getItem('dashwey_reload_ts') || '0', 10); } catch(_) {}
+  var _skipSplash = _reloadTs && (Date.now() - _reloadTs < 8000);
+  try { sessionStorage.setItem('dashwey_reload_ts', String(Date.now())); } catch(_) {}
+
+  if (_skipSplash) {
+    // Reload rápido (post-update): no splash, mostrar app directamente
+    window._hideSplash = function() {}; // noop — no hay splash que ocultar
+    return;
+  }
+
   /* Crear el elemento splash */
   var s = document.createElement('div');
   s.id = 'splash-screen';
@@ -3475,7 +3488,6 @@ function _authTabSafe(tab) {
             <button class="card-remove-btn" data-card-id="gastos-op" onclick="event.stopPropagation();App.dash.removeCard('gastos-op')" title="Quitar">×</button>
             <div class="card-title-wrap">
               <div class="card-title-text">💸 Gastos Operativos</div>
-              <div id="fin-gastos-card-sub" style="font-size:10px;color:var(--ink-soft);margin-top:1px;font-weight:500">Control de costes</div>
             </div>
             <div class="fade-sep"></div>
             <div class="fin-hero">
@@ -3541,20 +3553,18 @@ function _authTabSafe(tab) {
 
           <!-- ═ Tarjeta Calendario de Pedidos ═ -->
           <div class="card dash-draggable" data-card-id="pedidos-cal" id="dash-card-pedidos-cal">
-            <div class="drag-handle-hint"><span></span><span></span><span></span></div>
             <button class="card-remove-btn" data-card-id="pedidos-cal"
               onclick="App.dash.removeCard('pedidos-cal')" title="Quitar tarjeta">×</button>
-            <div class="card-title-wrap">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
               <div style="display:flex;align-items:center;gap:8px">
-                <span style="font-size:18px;line-height:1">🚚</span>
+                <span style="font-size:20px">🚚</span>
                 <div>
-                  <div class="card-title-text" style="font-size:13px">Pedidos Programados</div>
-                  <div style="font-size:10px;color:var(--ink-soft);margin-top:1px;font-weight:500">Próximas entregas</div>
+                  <div style="font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-.2px">Pedidos programados</div>
+                  <div style="font-size:11px;color:var(--ink-soft);margin-top:1px">Próximas entregas</div>
                 </div>
               </div>
             </div>
-            <div class="fade-sep"></div>
-            <div id="dash-pedidos-cal-list" style="padding-top:4px"></div>
+            <div id="dash-pedidos-cal-list"></div>
           </div>
 
           <!-- ═ Añadir tarjeta banner ═ -->
@@ -5530,7 +5540,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.5.1';
+  const _APP_VERSION = 'v9.5.7';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -5617,6 +5627,13 @@ const ui = (() => {
     const btn = document.getElementById('update-banner-btn');
     if (btn) { btn.textContent = 'Actualizando…'; btn.disabled = true; }
 
+    // FIX v9.5.7: marcar en sessionStorage que acabamos de actualizar.
+    // Esto bloquea el toast "Actualizado desde otro dispositivo" en el
+    // onSnapshot de Firebase que se dispara tras el reload.
+    try { sessionStorage.setItem('dashwey_just_updated', String(Date.now())); } catch(_) {}
+    // Limpiar el guard de versión pendiente para que no reaparezca el banner
+    try { sessionStorage.removeItem('dashwey_pending_ver'); } catch(_) {}
+
     // Limpiar TODA la caché y recargar
     const _doReload = () => {
       if ('caches' in window) {
@@ -5633,10 +5650,19 @@ const ui = (() => {
       navigator.serviceWorker.getRegistration()
         .then(reg => {
           if (reg?.waiting) {
-            // SW en espera → activar; controllerchange dispara reload
+            // SW en espera → activar; controllerchange dispara reload.
+            // FIX v9.5.7: usar un flag para que el safety-timeout NO dispare
+            // un segundo reload si controllerchange ya lo hizo.
+            let _reloadDone = false;
+            const _safeReload = () => { if (!_reloadDone) { _reloadDone = true; _doReload(); } };
+            // Safety net: si controllerchange no dispara en 2.5s, forzar reload
+            const _safeTimer = setTimeout(_safeReload, 2500);
+            // controllerchange lo cancelará antes si dispara normalmente
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+              clearTimeout(_safeTimer);
+              _safeReload();
+            }, { once: true });
             reg.waiting.postMessage({ action: 'skipWaiting' });
-            // Safety net: si controllerchange no dispara en 1.5s, forzar reload
-            setTimeout(_doReload, 1500);
           } else {
             // No hay SW en espera → limpiar caché y recargar directo
             _doReload();
@@ -7163,14 +7189,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (el('fin-gastos-fijos'))  el('fin-gastos-fijos').textContent  = _feur(fijos);
     if (el('fin-gastos-var'))    el('fin-gastos-var').textContent    = _feur(vars);
     if (el('fin-gastos-count'))  el('fin-gastos-count').textContent  = gastos.length;
-    // BUG 1 FIX v9.5.6 — Subtítulo de periodo en tarjeta
-    const _gsub = el('fin-gastos-card-sub');
-    if (_gsub) {
-      const _gper = State.get.period();
-      _gsub.textContent = (_gper.type === 'custom' && _gper.customStart && _gper.customEnd)
-        ? _gper.customStart.slice(0,10) + ' → ' + _gper.customEnd.slice(0,10)
-        : (_gper.label || 'Control de costes');
-    }
 
     // Lista top gastos (hasta 4)
     const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
@@ -7762,7 +7780,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         <div class="fin-modal-section">
           <div class="fin-modal-section-title">Nuevo gasto</div>
           <div style="display:flex;flex-direction:column;gap:10px">
-            <input id="fm-gasto-nombre" placeholder="Concepto (ej: Alquiler)" autocomplete="off" inputmode="text" style="height:44px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none">
+            <input id="fm-gasto-nombre" placeholder="Concepto (ej: Alquiler)" style="height:44px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none">
             <select id="fm-gasto-cat" class="gasto-cuenta-sel">
               ${CATS.map(c=>'<option>' + c + '</option>').join('')}
             </select>
@@ -7782,7 +7800,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
             </div>
             <div>
               <div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Fecha de pago</div>
-              <input id="fm-gasto-fecha" type="date" value="${hoy}" inputmode="none" style="height:44px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
+              <input id="fm-gasto-fecha" type="date" value="${hoy}" style="height:44px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
             </div>
             <div>
               <div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Cargo en cuenta <span style="font-weight:400">(opcional)</span></div>
@@ -7826,13 +7844,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       // Añadir gasto
       var addBtn = document.getElementById('btn-add-gasto');
       if (addBtn) addBtn.addEventListener('click', function() { App.dash._addGasto(); }, { once: true });
-
-      // BUG 3 FIX v9.5.6 — Evitar que el teclado del sistema aparezca
-      // automáticamente al abrir el modal. El foco va al nombre pero
-      // se hace blur inmediato para que el usuario active el teclado
-      // solo cuando toca explícitamente el input de texto.
-      var nomInput = document.getElementById('fm-gasto-nombre');
-      if (nomInput) { nomInput.blur(); nomInput.focus = function(){}; }
     }, 50);
   }
 
@@ -12388,8 +12399,13 @@ const alm = (() => {
   // ── Helpers de sincronización ────────────────────────────────
   // Construye el snapshot del estado local para subir a Firebase
   function _buildLocalSnapshot() {
+    // FIX v9.5.7: incluir lastSyncAt real en el snapshot.
+    // Sin esto, localTs siempre era null y el guard de timestamp nunca bloqueaba
+    // el falso toast "Actualizado desde otro dispositivo".
+    const now = new Date().toISOString();
+    State.set.user({ lastSyncAt: now }); // actualizar state local también
     return {
-      user:             State.get.user(),
+      user:             { ...State.get.user(), lastSyncAt: now },
       proveedores:      State.get.proveedores(),
       productos:        State.get.productos(),
       historialPedidos: State.get.historialPedidos(),
@@ -12459,17 +12475,37 @@ const alm = (() => {
     // Grace period: ignorar el primer disparo de onSnapshot (es la carga inicial de Firebase,
     // no un cambio real de otro dispositivo). onSnapshot SIEMPRE dispara al suscribirse.
     const _subscribeTs = Date.now();
-    const GRACE_MS = 4000; // 4s tras suscribirse = ignorar disparo inicial
+    // FIX v9.5.7: GRACE_MS aumentado de 4000 a 10000ms.
+    // 4s era insuficiente para reloads lentos (limpiar caché + restart SW + Firebase init).
+    // 10s garantiza que el disparo inicial de onSnapshot siempre quede dentro del grace period.
+    const GRACE_MS = 10000;
+    // FIX v9.5.7: detectar si acabamos de hacer doUpdate() en esta sesión.
+    // Si sí, extender el bloqueo otros 15s para evitar el falso "otro dispositivo".
+    const _justUpdatedTs = (() => {
+      try {
+        const t = parseInt(sessionStorage.getItem('dashwey_just_updated') || '0', 10);
+        if (t && Date.now() - t < 30000) {
+          // Limpiar el flag tras leerlo (uso único)
+          sessionStorage.removeItem('dashwey_just_updated');
+          return t;
+        }
+      } catch(_) {}
+      return 0;
+    })();
     // Registrar cuándo escribimos nosotros para evitar re-aplicar nuestros propios cambios
     const _origSave = window._DashweyStateSetHook;
 
     fb.subscribe('state', remoteData => {
       // Grace period: si llevamos menos de GRACE_MS suscritos, es el disparo inicial de Firebase
       if (Date.now() - _subscribeTs < GRACE_MS) return;
+      // FIX v9.5.7: bloqueo post-update — si acabamos de actualizar, ignorar onSnapshot 15s más
+      if (_justUpdatedTs && Date.now() - _justUpdatedTs < 15000) return;
       // Ignorar si los datos remotos son del mismo timestamp que el local
       const remoteTs  = remoteData?.user?.lastSyncAt;
       const localTs   = State.get.user().lastSyncAt;
       // Si el remoto es más reciente que lo que tenemos → aplicar
+      // FIX v9.5.7: si localTs es null (nunca sincronizado), tratar como "local es más antiguo"
+      // pero solo si _lastLocalWrite tiene más de 8s → evitar el toast en primera carga
       if (remoteTs && localTs && remoteTs <= localTs) return;
       // Si la última escritura local fue hace menos de 8s → ignorar (es nuestro propio write)
       if (Date.now() - _lastLocalWrite < 8000) return;
@@ -12817,11 +12853,17 @@ if (!window.App) {
   if ('serviceWorker' in navigator) {
     let _swReloadPending = false;
 
-    // controllerchange: el nuevo SW tomó control → recargar limpiamente
+    // controllerchange: el nuevo SW tomó control → recargar limpiamente.
+    // FIX v9.5.7: este listener es el fallback para controllerchange espontáneos
+    // (ej: otro tab hizo skipWaiting). El path normal (doUpdate) registra su
+    // propio listener {once:true} y cancela este con _swReloadPending.
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (_swReloadPending) return; // evitar doble reload
+      if (_swReloadPending) return; // doUpdate ya gestionó el reload
       _swReloadPending = true;
-      // Limpiar caché antes de recargar para garantizar assets frescos
+      // Marcar reload para que Firebase onSnapshot no dispare el toast
+      try { sessionStorage.setItem('dashwey_just_updated', String(Date.now())); } catch(_) {}
+      try { sessionStorage.setItem('dashwey_reload_ts', String(Date.now())); } catch(_) {}
+      // Limpiar caché y recargar
       const _reload = () => window.location.reload(true);
       if ('caches' in window) {
         caches.keys()
@@ -12876,6 +12918,13 @@ if (!window.App) {
   // ── Silent version check — solo muestra banner, no toca Settings ──
   let _lastRemoteVer = null; // guard en memoria: evita mostrar el mismo banner en bucle
   function _silentCheckUpdate() {
+    // FIX v9.5.7: no comprobar si acabamos de hacer doUpdate() en los últimos 15s.
+    // Evita que el auto-check periódico re-muestre el banner justo después de actualizar.
+    try {
+      const justUpdated = parseInt(sessionStorage.getItem('dashwey_just_updated') || '0', 10);
+      if (justUpdated && Date.now() - justUpdated < 15000) return;
+    } catch(_) {}
+
     const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
     fetch(baseUrl + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
@@ -12885,11 +12934,14 @@ if (!window.App) {
         const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
         if (!remoteVer || !localVer) return;
         const banner = document.getElementById('update-banner');
-        // Si la versión remota == local: ocultar banner y resetear guard
+        // Si la versión remota == local: ocultar banner y resetear todos los guards
         if (remoteVer === localVer) {
           if (banner) banner.classList.remove('visible');
-          _lastRemoteVer = null; // resetear para detectar futuras actualizaciones reales
-          sessionStorage.removeItem('dashwey_pending_ver');
+          _lastRemoteVer = null;
+          try {
+            sessionStorage.removeItem('dashwey_pending_ver');
+            sessionStorage.removeItem('dashwey_just_updated');
+          } catch(_) {}
           return;
         }
         // Guard persistente en sessionStorage: evita re-mostrar tras reload
@@ -12898,7 +12950,7 @@ if (!window.App) {
         // Guard en memoria: evita doble-show en la misma sesión
         if (remoteVer === _lastRemoteVer) return;
         _lastRemoteVer = remoteVer;
-        sessionStorage.setItem('dashwey_pending_ver', remoteVer);
+        try { sessionStorage.setItem('dashwey_pending_ver', remoteVer); } catch(_) {}
         // Mostrar banner
         if (banner && !banner.classList.contains('visible')) {
           const msg = document.getElementById('update-banner-msg');
@@ -12997,9 +13049,9 @@ if (!window.App) {
 
   let _y0 = 0, _x0 = 0, _t0 = 0, _active = false;
 
-  function _isAtTop(el) {
+  function _isAtBottom(el) {
     if (!el) return false;
-    return el.scrollTop <= SLACK;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= SLACK;
   }
 
   function _isSheetOpen() {
@@ -13013,7 +13065,7 @@ if (!window.App) {
     // Solo activar si el toque empieza sobre fs-content o fs-box
     const fsBox = document.getElementById('fs-box');
     if (!fsBox || !fsBox.contains(e.target)) { _active = false; return; }
-    _active    = _isAtTop(fc);
+    _active    = _isAtBottom(fc);
     _y0 = e.touches[0].clientY;
     _x0 = e.touches[0].clientX;
     _t0 = Date.now();
