@@ -1,9 +1,9 @@
-/* Dashwey Service Worker v9.5.24
+/* Dashwey Service Worker v9.5.25
  * Handles: cache, updates, push notifications (background + foreground),
  * notification click → deep-link to module/card.
  */
 
-const CACHE_NAME   = 'dashwey-v9-5-24';
+const CACHE_NAME   = 'dashwey-v9-5-25';
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
