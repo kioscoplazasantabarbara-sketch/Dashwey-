@@ -4402,6 +4402,7 @@ const State = (() => {
 
   let _state = load();
   // _saveTimer and _isSaving declared above in storage scope
+  let _lastSavedHash = ''; // fingerprint del ultimo estado guardado en Firebase
 
   // -- save: escribe local siempre, Firebase con guards anti-loop
   function save() {
@@ -4418,15 +4419,19 @@ const State = (() => {
       }
       // Guard de concurrencia: no escribir si ya hay un write en curso
       if (_isSaving) return;
+      // Guard de duplicados: no escribir si el estado no ha cambiado
+      const _hashable = JSON.stringify({ p: _state.productos, v: _state.proveedores, vt: _state.ventas });
+      if (_hashable === _lastSavedHash) return;
+      _lastSavedHash = _hashable;
       _isSaving = true;
       // Estampar deviceId+ts directamente en _state (sin State.set para no re-disparar save)
       const _ts  = Date.now();
       const _did = window._DashweyDeviceId || 'unknown';
       if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
-      _writeLocal(_state); // persistir el timestamp
+      _writeLocal(_state); // persistir timestamp
       _writeFirebase(_state)
         .then(() => { _isSaving = false; })
-        .catch(() => { _isSaving = false; });
+        .catch(() => { _isSaving = false; _lastSavedHash = ''; }); // reset hash on error
     }, 400);
   }
       }
@@ -5549,7 +5554,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.15';
+  const _APP_VERSION = 'v9.5.16';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -7241,10 +7246,12 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   // ── Render tarjeta Ingresos ────────────────────────────────
   function renderIngresosFin() {
+    // Guard: no modificar estado dentro del render
     const period  = State.get.period();
     const ventas  = State.get.ventas();
     const gastos  = State.get.gastosOp();
     const pedidos = State.get.historialPedidos();
+    if (typeof FinEngine === 'undefined') { console.warn('[FIN] FinEngine no disponible'); return; }
 
     // ── FinEngine: fuente única de cálculo ─────────────────────
     const now         = new Date();
@@ -7259,7 +7266,15 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const benefNeto   = FinEngine.beneficioNetoMesActual();
 
     // ── Delta vs mes anterior (FinEngine) ─────────────────────
-    const delta = FinEngine.deltaRevenue();
+    const _rawDelta = FinEngine.deltaRevenue();
+    const delta     = _rawDelta ?? 0; // null si no hay mes anterior
+    // FIX: totalPrev siempre definido (evita ReferenceError)
+    const totalPrev = (() => { try {
+      const d = new Date();
+      const r = { start: new Date(d.getFullYear(), d.getMonth()-1, 1), end: new Date(d.getFullYear(), d.getMonth(), 1) };
+      return typeof FinEngine.revenue === 'function' ? (FinEngine.revenue(r) ?? 0) : 0;
+    } catch(e) { return 0; } })();
+    console.log('[FIN] ingresos delta:', delta, 'totalPrev:', totalPrev);
 
     const el = (id) => document.getElementById(id);
     if (el('fin-ingresos-total')) el('fin-ingresos-total').textContent = _feur(totalIng);
@@ -10199,7 +10214,7 @@ const alm = (() => {
     const totalIva = totalCoste * 0.10;
     const total = totalCoste + totalIva;
     const fecha = new Date().toLocaleDateString('es-ES');
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;padding:40px;color:#1a1a1a;max-width:600px;margin:0 auto}h1{font-size:22px;font-weight:800;margin-bottom:4px}.sub{font-size:13px;color:#666;margin-bottom:30px}table{width:100%;border-collapse:collapse;margin:20px 0}th{text-align:left;padding:8px 10px;background:#1a1212;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.8px}td{padding:10px;border-bottom:1px solid #eee;font-size:13px}.tot{font-weight:700}.total-row{background:#f9f9f9}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}</style></head><body><h1>Dashwey · Factura de Compra</h1><div class="sub">${prov.icon} ${prov.nombre} · ${prov.telefono||''} · Fecha: ${fecha}</div><table><tr><th>Artículo</th><th>Cajas</th><th>€/caja</th><th>Subtotal</th></tr>${items.map(o=>{const p=State.get.prod(o.prodId);return`<tr><td>${p?.e||''} ${p?.nombre||''}</td><td>${o.ncajas}</td><td>${feur(o.precio)}</td><td class="tot">${feur(o.ncajas*o.precio)}</td></tr>`;}).join('')}</table><table><tr class="total-row"><td colspan="3">Base imponible</td><td class="tot">${feur(totalCoste)}</td></tr><tr class="total-row"><td colspan="3">IVA (10%)</td><td class="tot">${feur(totalIva)}</td></tr><tr style="background:#1a1212;color:#fff"><td colspan="3" style="padding:12px 10px;font-weight:700;font-size:15px">TOTAL</td><td style="padding:12px 10px;font-weight:800;font-size:15px">${feur(total)}</td></tr></table><div class="footer">${State.get.perfil().nombre} · Dashwey v8.0 · ${fecha}</div></body></html>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;padding:40px;color:#1a1a1a;max-width:600px;margin:0 auto}h1{font-size:22px;font-weight:800;margin-bottom:4px}.sub{font-size:13px;color:#666;margin-bottom:30px}table{width:100%;border-collapse:collapse;margin:20px 0}th{text-align:left;padding:8px 10px;background:#1a1212;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.8px}td{padding:10px;border-bottom:1px solid #eee;font-size:13px}.tot{font-weight:700}.total-row{background:#f9f9f9}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}</style></head><body><h1>Dashwey · Factura de Compra</h1><div class="sub">${prov.icon} ${prov.nombre} · ${prov.telefono||''} · Fecha: ${fecha}</div><table><tr><th>Artículo</th><th>Cajas</th><th>€/caja</th><th>Subtotal</th></tr>${items.map(o=>{const p=State.get.prod(o.prodId);return`<tr><td>${p?.e||''} ${p?.nombre||''}</td><td>${o.ncajas}</td><td>${feur(o.precio)}</td><td class="tot">${feur(o.ncajas*o.precio)}</td></tr>`;}).join('')}</table><table><tr class="total-row"><td colspan="3">Base imponible</td><td class="tot">${feur(totalCoste)}</td></tr><tr class="total-row"><td colspan="3">IVA (10%)</td><td class="tot">${feur(totalIva)}</td></tr><tr style="background:#1a1212;color:#fff"><td colspan="3" style="padding:12px 10px;font-weight:700;font-size:15px">TOTAL</td><td style="padding:12px 10px;font-weight:800;font-size:15px">${feur(total)}</td></tr></table><div class="footer">${State.get.perfil().nombre} · Dashwey ${typeof App !== "undefined" ? App.ui._getAppVersion() : ""} · ${fecha}</div></body></html>`;
     const blob = new Blob([html], {type:'text/html'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -12533,12 +12548,15 @@ const alm = (() => {
   }
 
   // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
+  let _syncRunning = false; // anti-race: evita _doInitialSync concurrente
   async function _doInitialSync() {
+  if (_syncRunning) { console.log('[SYNC] ya en curso, ignorando llamada duplicada'); return; }
+  _syncRunning = true;
   try {
     const fb = window._DashweyFirebase;
-    if (!fb?.enabled) return;
+    if (!fb?.enabled) { _syncRunning = false; return; }
     const uid = fb.uid || fb._auth?.currentUser?.uid;
-    if (!uid) return;
+    if (!uid) { _syncRunning = false; return; }
 
     // ── Device ID: identificador único por dispositivo ──────────
     // Permite al onSnapshot ignorar snapshots causados por este mismo dispositivo
@@ -12588,10 +12606,12 @@ const alm = (() => {
       console.log('[SYNC] subiendo estado local a Firebase (local >= remoto)');
       await fb.write('state', _buildLocalSnapshot());
     }
-    State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
-    State.set.user({ uid: fb.uid });
+    // FIX: mutacion directa sin pasar por save() para no re-disparar write
+    if (_state.syncStatus) Object.assign(_state.syncStatus, { mode: 'synced', pendingWrites: 0 });
+    if (_state.user && fb.uid) _state.user.uid = fb.uid;
+    if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
 
-    // ── Sync en tiempo real ─────────────────────────────────────
+    // -- Sync en tiempo real ─────────────────────────────────────
     // Grace period: ignorar el primer disparo de onSnapshot (siempre se dispara
     // al suscribirse — no es un cambio real de otro dispositivo).
     const _subscribeTs = Date.now();
@@ -12635,15 +12655,19 @@ const alm = (() => {
         JSON.parse(JSON.stringify(remoteData)),
         { settings: State.get.settings() }
       );
-      // Aplicar cada clave sin re-disparar save() hacia Firebase:
-      // Los setters van a localStorage (debounce 400ms) y el onSnapshot
-      // resultante sera filtrado por Guard2 (deviceId propio).
-      Object.keys(merged).forEach(k => {
-        if (typeof State.set[k] === 'function') State.set[k](merged[k]);
-      });
+      // FIX: bloquear save()->Firebase durante el merge para no re-subir
+      // lo que acabamos de bajar. Los setters escriben solo en localStorage.
+      _isSaving = true;
+      try {
+        Object.keys(merged).forEach(k => {
+          if (typeof State.set[k] === 'function') State.set[k](merged[k]);
+        });
+      } finally {
+        _isSaving = false;
+      }
 
       _renderAll();
-      console.log('[SYNC] applied -- from device:', remoteDevice);
+      console.log('[SYNC] applied from device:', remoteDevice);
       showToast('☁️ Actualizado desde otro dispositivo');
     });
 
@@ -12654,7 +12678,7 @@ const alm = (() => {
     // Se mantiene como hook vacio por compatibilidad con modulos externos
     window._DashweyOnLocalWrite = () => {};
 
-  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); }
+  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { _syncRunning = false; }
 }
   window._DashweyInitialSync = _doInitialSync;
 
