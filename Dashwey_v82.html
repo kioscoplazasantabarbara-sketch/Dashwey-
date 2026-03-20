@@ -56,7 +56,7 @@
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.23</title>
+<title>Dashwey v9.5.24</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -346,6 +346,55 @@ html[data-theme-transition] *::after {
   width: calc(100% - 28px);
 }
 .fin-add-btn:active { background: var(--bg); }
+
+
+/* ── TARJETA VISITAS COMERCIALES ──────────────────────────── */
+.visita-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border-bottom: 1px solid var(--border);
+}
+.visita-row:last-child { border-bottom: none; }
+.visita-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  margin-top: 2px;
+}
+.visita-dot.hoy    { background: var(--red); }
+.visita-dot.pronto { background: var(--orange); }
+.visita-dot.normal { background: var(--green); }
+.visita-dot.pasada { background: var(--ink-soft); }
+.visita-name  { font-size: 13px; font-weight: 600; color: var(--ink); }
+.visita-meta  { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.visita-date  { font-size: 11px; font-weight: 700; color: var(--ink-mid); text-align:right; flex-shrink:0; }
+.visita-badge {
+  font-size: 9px; font-weight: 700; padding: 2px 6px;
+  border-radius: 6px; display: inline-block; margin-top: 3px;
+}
+.visita-badge.hoy    { background:#FEE2E2; color:var(--red); }
+.visita-badge.pronto { background:#FEF3C7; color:#D97706; }
+.visita-badge.pasada { background:var(--bg); color:var(--ink-soft); }
+.visita-badge.ok     { background:#DCFCE7; color:#16A34A; }
+
+/* ── NOTIF PREFS PANEL ─────────────────────────────────────── */
+.notif-pref-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.notif-pref-row:last-child { border-bottom: none; }
+.notif-pref-icon {
+  width: 34px; height: 34px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+}
+.notif-pref-info { flex: 1; }
+.notif-pref-title { font-size: 14px; font-weight: 600; color: var(--ink); }
+.notif-pref-sub   { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.notif-time-inp {
+  height: 32px; border-radius: 8px;
+  border: 1.5px solid var(--border);
+  padding: 0 8px; font-size: 13px;
+  font-family: var(--font); color: var(--ink);
+  background: var(--bg); outline: none;
+}
 
 /* ── § 2. RESET BASE ── */
 *, *::before, *::after {
@@ -3570,6 +3619,26 @@ function _authTabSafe(tab) {
             <div id="dash-pedidos-cal-list"></div>
           </div>
 
+          <!-- ══ TARJETA: VISITAS COMERCIALES ══ -->
+          <div class="card dash-draggable" data-card-id="visitas-com" id="dash-card-visitas">
+            <button class="card-remove-btn" data-card-id="visitas-com"
+              onclick="App.dash.removeCard('visitas-com')" title="Quitar tarjeta">×</button>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:20px">🤝</span>
+                <div>
+                  <div style="font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-.2px">Visitas Comerciales</div>
+                  <div style="font-size:11px;color:var(--ink-soft);margin-top:1px">Próximas visitas y agentes</div>
+                </div>
+              </div>
+              <button onclick="event.stopPropagation();App.dash.openAddVisita()"
+                style="width:28px;height:28px;border-radius:50%;border:none;background:var(--red);
+                       color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;
+                       cursor:pointer;flex-shrink:0;font-family:var(--font)">+</button>
+            </div>
+            <div id="dash-visitas-list"></div>
+          </div>
+
           <!-- ═ Añadir tarjeta banner ═ -->
           <div class="dash-add-card-banner" id="dash-add-card-banner" onclick="App.dash.openCardManager()">
             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -4112,6 +4181,47 @@ window._DashweyFirebase = {
   },
 };
 
+// ── FCM Token — guardar en Firestore para push server-side ──────
+// Se activa solo cuando el usuario concede permiso de notificaciones.
+// Necesita VAPID key del proyecto Firebase para funcionar.
+// Sin VAPID key: falla silenciosamente, las notificaciones locales siguen funcionando.
+window._DashweyRegisterFCM = async function() {
+  if (!FIREBASE_ENABLED || !_db || !_uid) return null;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+  try {
+    // Importar firebase/messaging dinámicamente (solo si se necesita)
+    const { getMessaging, getToken } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js');
+    const messaging = getMessaging(_fbApp);
+    // VAPID_KEY: reemplazar con tu clave pública de Firebase Console
+    // Proyecto → Cloud Messaging → Certificados web push → Clave pública
+    const VAPID_KEY = 'YOUR_VAPID_KEY_HERE';
+    if (VAPID_KEY === 'YOUR_VAPID_KEY_HERE') {
+      console.info('[Dashwey/FCM] VAPID key no configurada — push server-side desactivado');
+      return null;
+    }
+    const sw = await navigator.serviceWorker.ready;
+    const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: sw });
+    if (token) {
+      // Guardar token en Firestore: usuarios/{uid}/fcmTokens/{deviceId}
+      const { doc: fbDoc, setDoc: fbSetDoc, serverTimestamp: fbTs } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const deviceId = window._DashweyDeviceId || 'unknown';
+      await fbSetDoc(
+        fbDoc(_db, 'usuarios', _uid, 'fcmTokens', deviceId),
+        { token, deviceId, updatedAt: fbTs(), platform: navigator.userAgent.slice(0,100) },
+        { merge: true }
+      );
+      console.info('[Dashwey/FCM] Token registrado:', token.slice(0,20)+'...');
+      return token;
+    }
+  } catch(e) {
+    // Silenciar errores de VAPID no configurada
+    if (!e?.message?.includes('VAPID')) {
+      console.warn('[Dashwey/FCM] getToken error:', e?.code || e?.message);
+    }
+  }
+  return null;
+};
+
 // Alias de compatibilidad: _DashwayFirebase (typo histórico) apunta al objeto real
 window._DashwayFirebase = window._DashweyFirebase;
 
@@ -4320,7 +4430,25 @@ const State = (() => {
       notifOn:      true,
       iaOn:         true,
       cierreHora:   '21:00',
-      negocioId:    'local',          // UUID del negocio en Firebase
+      negocioId:    'local',
+      // v9.5.24: preferencias granulares de notificaciones
+      notifPrefs: {
+        whatsNew:        true,   // actualizaciones de la app
+        cierreDiario:    true,   // informe cierre diario
+        informeMensual:  true,   // informe mensual
+        informeAnual:    true,   // informe anual
+        pedidoRealizado: true,   // pedido confirmado en almacén
+        entregaProxima:  true,   // entrega próxima (≤ 2 días)
+        visitaComercial: true,   // visita comercial próxima (≤ 2 días)
+        caducidad:       true,   // caducidad próxima de artículos
+        cierreHora:     '21:00', // hora informe cierre
+        mensualDia:          1,  // día del mes para informe mensual
+        anualMes:            1,  // mes para informe anual (enero=1)
+        anualDia:            1,  // día del mes para informe anual
+        entregaDias:         2,  // avisar N días antes de entrega
+        visitaDias:          2,  // avisar N días antes de visita
+        caducidadDias:      14,  // avisar si caduca en N días
+      },
     },
     perfil: {
       nombre:       'Mi Negocio',
@@ -4335,7 +4463,11 @@ const State = (() => {
     },
     baseCats: ['Bebidas','Cervezas','Snacks','Gominolas','Cafetería','Agua'],
     // ── Finanzas ────────────────────────────────────────────────
-    gastosCustomPeriod: null, // { start: ISO, end: ISO } | null = periodo mensual normal
+    gastosCustomPeriod: null,
+    // v9.5.24: visitas comerciales programadas
+    visitasComerciales: [
+      // { id, provId, fecha: ISO, agente, notas, estado: 'pendiente'|'cumplida'|'cancelada' }
+    ],
     cuentas: [
       { id:'c1', nombre:'Cuenta Principal', banco:'Banco', saldo:5200, color:'#2563EB', iban:'' },
       { id:'c2', nombre:'Caja Efectivo',    banco:'Efectivo', saldo:320, color:'#16A34A', iban:'' },
@@ -4514,7 +4646,9 @@ const State = (() => {
     activeContext:    () => (_state.user?.activeContext) || 'business',
     cuentas:          () => _state.cuentas || [],
     gastosOp:         () => _state.gastosOp || [],
-    gastosCustomPeriod: () => _state.gastosCustomPeriod || null,
+    gastosCustomPeriod:    () => _state.gastosCustomPeriod || null,
+    visitasComerciales:    () => _state.visitasComerciales || [],
+    notifPrefs:            () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
     prov: (id) => _state.proveedores.find(p => p.id === id),
     prod: (id) => _state.productos.find(p => p.id === id),
   };
@@ -4541,7 +4675,12 @@ const State = (() => {
     },  // no save: solo en memoria
     lastVal: (id, vals)    => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
     addCuenta:  (c)        => { _state.cuentas.push(c); save(); },
-    gastosCustomPeriod: (v) => { _state.gastosCustomPeriod = v; /* no save: UI-only */ },
+    gastosCustomPeriod:    (v) => { _state.gastosCustomPeriod = v; },
+    visitasComerciales:    (v) => { _state.visitasComerciales = v; save(); },
+    addVisita:             (v) => { if (!_state.visitasComerciales) _state.visitasComerciales = []; _state.visitasComerciales.push(v); save(); },
+    updateVisita:          (id, data) => { const v = (_state.visitasComerciales||[]).find(x=>x.id===id); if(v) { Object.assign(v,data); save(); } },
+    deleteVisita:          (id) => { _state.visitasComerciales = (_state.visitasComerciales||[]).filter(x=>x.id!==id); save(); },
+    notifPrefs:            (v) => { if (!_state.settings) _state.settings = {}; _state.settings.notifPrefs = Object.assign({}, _state.settings.notifPrefs||{}, v); save(); },
     setCuentas: (v)        => { _state.cuentas = v; save(); },
     updateCuenta: (id, v)  => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
     addGasto:   (g)        => { _state.gastosOp.push(g); save(); },
@@ -5520,10 +5659,13 @@ const ui = (() => {
       <!-- ── BLOQUE 3: Notificaciones e Inteligencia ── -->
       <div class="settings-section-label" style="margin-top:8px">Notificaciones e IA</div>
       <div class="settings-group">
-        <div class="settings-row">
+        <div class="settings-row" onclick="App.dash.openNotifPrefsPanel()" style="cursor:pointer">
           <div class="settings-row-icon" style="background:#ECFDF5">🔔</div>
-          <div class="settings-row-info"><div class="settings-row-title">Notificaciones</div><div class="settings-row-sub">Stock mínimo y alertas de caducidad</div></div>
-          <button class="settings-toggle ${s.notifOn?'on':''}" onclick="App.ui.toggleSetting('notifOn',this)"></button>
+          <div class="settings-row-info">
+            <div class="settings-row-title">Notificaciones</div>
+            <div class="settings-row-sub">Configura alertas personalizadas · ${s.notifOn?'Activas':'Inactivas'}</div>
+          </div>
+          <div class="settings-row-chev">›</div>
         </div>
         <div class="settings-row">
           <div class="settings-row-icon" style="background:#EFF6FF">✨</div>
@@ -5617,7 +5759,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.23';
+  const _APP_VERSION = 'v9.5.24';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -6450,6 +6592,26 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
+    'v9.5.24': {
+      sections: [
+        {
+          title: '🔔 Notificaciones inteligentes',
+          items: [
+            { icon: '🔔', name: '8 tipos de notificaciones', desc: 'Cierre diario, informe mensual/anual, pedidos, entregas, visitas, caducidad y novedades.' },
+            { icon: '⚙️', name: 'Panel de ajustes granular', desc: 'Activa cada tipo individualmente y personaliza horarios desde Ajustes.' },
+            { icon: '🤝', name: 'Visitas Comerciales', desc: 'Nueva tarjeta en Dashboard. Añade, gestiona y recibe alertas de visitas de proveedores.' },
+            { icon: '🚀', name: 'Deep-link desde notificación', desc: 'Al pulsar una notificación, la app navega al módulo o tarjeta correspondiente.' },
+          ]
+        },
+        {
+          title: '🔧 Mejoras técnicas',
+          items: [
+            { icon: '⚡', name: 'Scheduler local', desc: 'Las notificaciones funcionan sin backend — el dispositivo gestiona los horarios.' },
+            { icon: '🛡️', name: 'Firebase hardening', desc: 'Retry con backoff, sin spam de reconexión, listeners deduplicados.' },
+          ]
+        },
+      ]
+    },
     'v9.5.5.1': {
       title: 'Estabilidad y rendimiento',
       items: [
@@ -6519,6 +6681,10 @@ const ui = (() => {
       </div>`).join('');
     overlay.classList.add('open');
     localStorage.setItem(lsKey, '1');
+    // v9.5.24: notificación push de novedades (si app en background)
+    if (document.visibilityState === 'hidden') {
+      try { App.dash.notifWhatsNew(ver); } catch(_) {}
+    }
   }
 
   function closeWhatsNew() {
@@ -6690,6 +6856,7 @@ const dash = (() => {
 
     // ── Tarjetas financieras ──────────────────────────────────
     try { renderFinanciero(); } catch(e) {}
+    try { renderVisitasComerciales(); } catch(e) {} // v9.5.24
 
     // ── KPI Rings: Inversión (azul) · Beneficio Neto (oro) · ROI (verde) ──
     const roiMed = inv > 0 ? Math.round((beneficio / inv) * 100) : 0;
@@ -7128,11 +7295,12 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   })();
 
   // ── Card visibility (hidden via localStorage) ──────────────
-  const _CARD_IDS = ['kpis','ventas','top-roi','caducidades','pedidos-cal'];
+  const _CARD_IDS = ['kpis','ventas','top-roi','caducidades','pedidos-cal','visitas-com'];
   const _CARD_LABELS = {
     'kpis':'Salud Financiera','ventas':'Evolución de Ventas',
     'top-roi':'Top Rendimiento · ROI',
-    'caducidades':'Alertas de Riesgo','pedidos-cal':'Pedidos Programados'
+    'caducidades':'Alertas de Riesgo','pedidos-cal':'Pedidos Programados',
+    'visitas-com':'Visitas Comerciales',
   };
 
   function _getHidden() {
@@ -8262,7 +8430,530 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     App.ui.openFs();
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod };
+
+  // ══════════════════════════════════════════════════════════
+  // NOTIFICATION ENGINE v9.5.24
+  // Gestiona todos los tipos de notificaciones de Dashwey.
+  // Usa Notification API local + SW para background.
+  // FCM token se registra en Firestore para push server-side.
+  // ══════════════════════════════════════════════════════════
+
+  // ── Solicitar permiso de notificaciones ─────────────────
+  async function _notifRequestPermission() {
+    if (!('Notification' in window)) return false;
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
+    try {
+      const p = await Notification.requestPermission();
+      return p === 'granted';
+    } catch(e) { return false; }
+  }
+
+  // ── Enviar notificación local via SW o Notification API ─
+  function _notifSend(tipo, title, body, data = {}) {
+    const prefs = State.get.notifPrefs();
+    if (!prefs[tipo]) return; // tipo desactivado por usuario
+    if (!State.get.settings().notifOn) return; // notifOn global
+
+    const opts = {
+      body,
+      icon:  '/icon-192.png',
+      badge: '/icon-192.png',
+      tag:   'dashwey-' + tipo,
+      renotify: true,
+      data:  { tipo, url: '/', ...data },
+      vibrate: [100, 50, 100],
+    };
+
+    // Usar SW si está disponible (background + persistente)
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        action: 'SHOW_NOTIFICATION', title, opts,
+      });
+    } else if (Notification.permission === 'granted') {
+      try { new Notification(title, opts); } catch(e) {}
+    }
+  }
+
+  // ── Tipos de notificaciones ──────────────────────────────
+  function notifWhatsNew(version) {
+    _notifSend('whatsNew', '🎉 Dashwey actualizado — v' + version,
+      'Toca para ver las novedades de esta versión.',
+      { action: 'whatsNew', version });
+  }
+
+  function notifCierreDiario() {
+    const prefs  = State.get.notifPrefs();
+    if (!prefs.cierreDiario) return;
+    const period = State.get.period();
+    const ventas = State.get.ventas();
+    const hoy    = new Date(); hoy.setHours(0,0,0,0);
+    const mañana = new Date(hoy); mañana.setDate(hoy.getDate()+1);
+    const ventasHoy = ventas.filter(v => {
+      const d = new Date(v.fecha); return d >= hoy && d < mañana;
+    });
+    const total = ventasHoy.reduce((s,v) => s+(v.total||((v.qty||1)*(v.pvp||0))),0);
+    const n     = ventasHoy.length;
+    _notifSend('cierreDiario',
+      '🏪 Cierre de ' + new Date().toLocaleDateString('es-ES', {weekday:'long'}),
+      n + ' ticket' + (n!==1?'s':'') + ' · ' + total.toFixed(2) + ' € en ventas',
+      { action: 'dashboard', card: 'kpis' });
+  }
+
+  function notifInformeMensual() {
+    if (!State.get.notifPrefs().informeMensual) return;
+    const ing = typeof FinEngine !== 'undefined' ? FinEngine.revenueMesActual() : 0;
+    const mes = new Date().toLocaleDateString('es-ES', {month:'long'});
+    _notifSend('informeMensual',
+      '📊 Informe mensual — ' + mes,
+      'Ingresos: ' + ing.toFixed(2) + ' €. Toca para ver el análisis completo.',
+      { action: 'dashboard' });
+  }
+
+  function notifInformeAnual() {
+    if (!State.get.notifPrefs().informeAnual) return;
+    const year = new Date().getFullYear();
+    const start = new Date(year, 0, 1), end = new Date(year+1, 0, 1);
+    const ing = typeof FinEngine !== 'undefined' ? FinEngine.revenue({start,end}) : 0;
+    _notifSend('informeAnual',
+      '📅 Informe anual ' + year,
+      'Ingresos totales: ' + ing.toFixed(2) + ' €.',
+      { action: 'dashboard' });
+  }
+
+  function notifPedidoRealizado(pedido) {
+    if (!State.get.notifPrefs().pedidoRealizado) return;
+    const prov = State.get.prov(pedido.provId);
+    const n    = (pedido.items||[]).length;
+    _notifSend('pedidoRealizado',
+      '✅ Pedido confirmado — ' + (prov?.nombre || 'Proveedor'),
+      n + ' artículo' + (n!==1?'s':'') + ' · Toca para ver el resumen.',
+      { action: 'almacen', provId: pedido.provId });
+  }
+
+  function notifEntregaProxima(pedido, diasRestantes) {
+    if (!State.get.notifPrefs().entregaProxima) return;
+    const prefs = State.get.notifPrefs();
+    if (diasRestantes > prefs.entregaDias) return;
+    const prov = State.get.prov(pedido.provId);
+    const txt  = diasRestantes === 0 ? 'hoy' : 'en ' + diasRestantes + ' día' + (diasRestantes!==1?'s':'');
+    _notifSend('entregaProxima',
+      '🚚 Entrega próxima — ' + (prov?.nombre || ''),
+      'Entrega prevista ' + txt + '. Prepara el espacio de almacén.',
+      { action: 'dashboard', card: 'pedidos-cal' });
+  }
+
+  function notifVisitaComercial(visita) {
+    if (!State.get.notifPrefs().visitaComercial) return;
+    const prefs = State.get.notifPrefs();
+    const hoy   = new Date(); hoy.setHours(0,0,0,0);
+    const fv    = new Date(visita.fecha); fv.setHours(0,0,0,0);
+    const dias  = Math.round((fv - hoy) / (1000*3600*24));
+    if (dias > prefs.visitaDias || dias < 0) return;
+    const prov  = State.get.prov(visita.provId);
+    const txt   = dias === 0 ? 'hoy' : 'mañana';
+    _notifSend('visitaComercial',
+      '🤝 Visita comercial ' + txt,
+      (visita.agente || 'Agente') + ' — ' + (prov?.nombre || '') + '. ' + (visita.notas||''),
+      { action: 'dashboard', card: 'visitas-com' });
+  }
+
+  function notifCaducidadProxima() {
+    if (!State.get.notifPrefs().caducidad) return;
+    const prefs   = State.get.notifPrefs();
+    const dias    = prefs.caducidadDias || 14;
+    const hoy     = new Date(); hoy.setHours(0,0,0,0);
+    const limite  = new Date(hoy); limite.setDate(hoy.getDate() + dias);
+    const prods   = State.get.productos().filter(p => p.caducidad);
+    const proximos= prods.filter(p => {
+      const d = new Date(p.caducidad);
+      return d >= hoy && d <= limite;
+    });
+    const caducados = prods.filter(p => new Date(p.caducidad) < hoy);
+    if (!proximos.length && !caducados.length) return;
+    const total = proximos.length + caducados.length;
+    _notifSend('caducidad',
+      '⏰ ' + total + ' producto' + (total!==1?'s':'') + ' con caducidad próxima',
+      proximos.slice(0,2).map(p=>p.nombre).join(', ') + (total>2 ? ' y ' + (total-2) + ' más' : ''),
+      { action: 'almacen' });
+  }
+
+  // ── Scheduler: comprueba qué notificaciones disparar ────
+  let _notifSchedulerTimer = null;
+  function _notifSchedulerTick() {
+    if (!State.get.settings().notifOn) return;
+    if (Notification.permission !== 'granted') return;
+
+    const now    = new Date();
+    const prefs  = State.get.notifPrefs();
+
+    // Cierre diario: comparar hora actual con cierreHora
+    const [hh, mm] = (prefs.cierreHora || '21:00').split(':').map(Number);
+    if (now.getHours() === hh && now.getMinutes() === mm) {
+      const lsKey = 'dashwey_notif_cierre_' + now.toDateString();
+      if (!localStorage.getItem(lsKey)) {
+        localStorage.setItem(lsKey, '1');
+        notifCierreDiario();
+      }
+    }
+
+    // Informe mensual: día X del mes
+    if (now.getDate() === (prefs.mensualDia || 1) && now.getHours() === 9 && now.getMinutes() === 0) {
+      const lsKey = 'dashwey_notif_mensual_' + now.getFullYear() + '_' + now.getMonth();
+      if (!localStorage.getItem(lsKey)) {
+        localStorage.setItem(lsKey, '1');
+        notifInformeMensual();
+      }
+    }
+
+    // Informe anual: día X del mes Y
+    if (now.getMonth() + 1 === (prefs.anualMes || 1) &&
+        now.getDate()      === (prefs.anualDia  || 1) &&
+        now.getHours()     === 9 && now.getMinutes() === 0) {
+      const lsKey = 'dashwey_notif_anual_' + now.getFullYear();
+      if (!localStorage.getItem(lsKey)) {
+        localStorage.setItem(lsKey, '1');
+        notifInformeAnual();
+      }
+    }
+
+    // Entrega próxima: comprobar pedidos
+    _checkEntregasProximas();
+
+    // Visita comercial próxima
+    _checkVisitasProximas();
+
+    // Caducidad próxima (una vez al día a las 9:00)
+    if (now.getHours() === 9 && now.getMinutes() < 2) {
+      const lsKey = 'dashwey_notif_cad_' + now.toDateString();
+      if (!localStorage.getItem(lsKey)) {
+        localStorage.setItem(lsKey, '1');
+        notifCaducidadProxima();
+      }
+    }
+  }
+
+  function _checkEntregasProximas() {
+    const prefs = State.get.notifPrefs();
+    if (!prefs.entregaProxima) return;
+    const pedidos    = State.get.historialPedidos();
+    const proveedores = State.get.proveedores();
+    const hoy        = new Date(); hoy.setHours(0,0,0,0);
+    pedidos.slice(-20).forEach(ped => { // solo últimos 20
+      const prov = proveedores.find(p => p.id === ped.provId);
+      const de   = prov?.diasEntrega || [];
+      if (!de.length) return;
+      const base = new Date(ped.fecha);
+      for (let i=1; i<=14; i++) {
+        const d = new Date(base); d.setDate(base.getDate()+i);
+        const dow = d.getDay()===0 ? 6 : d.getDay()-1;
+        if (de.includes(dow)) {
+          d.setHours(0,0,0,0);
+          const dias = Math.round((d-hoy)/(1000*3600*24));
+          if (dias >= 0 && dias <= prefs.entregaDias) {
+            const lsKey = 'dashwey_notif_entrega_' + ped.id + '_' + d.toDateString();
+            if (!localStorage.getItem(lsKey)) {
+              localStorage.setItem(lsKey, '1');
+              notifEntregaProxima(ped, dias);
+            }
+          }
+          break;
+        }
+      }
+    });
+  }
+
+  function _checkVisitasProximas() {
+    const prefs = State.get.notifPrefs();
+    if (!prefs.visitaComercial) return;
+    const visitas = State.get.visitasComerciales();
+    const hoy     = new Date(); hoy.setHours(0,0,0,0);
+    visitas.filter(v => v.estado === 'pendiente').forEach(v => {
+      const fv = new Date(v.fecha); fv.setHours(0,0,0,0);
+      const dias = Math.round((fv - hoy) / (1000*3600*24));
+      if (dias >= 0 && dias <= prefs.visitaDias) {
+        const lsKey = 'dashwey_notif_visita_' + v.id + '_' + fv.toDateString();
+        if (!localStorage.getItem(lsKey)) {
+          localStorage.setItem(lsKey, '1');
+          notifVisitaComercial(v);
+        }
+      }
+    });
+  }
+
+  // Iniciar scheduler: corre cada 60 segundos
+  function _startNotifScheduler() {
+    if (_notifSchedulerTimer) clearInterval(_notifSchedulerTimer);
+    if (!('Notification' in window)) return;
+    _notifSchedulerTick(); // tick inmediato
+    _notifSchedulerTimer = setInterval(_notifSchedulerTick, 60_000);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // VISITAS COMERCIALES — render tarjeta
+  // ══════════════════════════════════════════════════════════
+  function renderVisitasComerciales() {
+    const el = document.getElementById('dash-visitas-list');
+    if (!el) return;
+    const visitas   = State.get.visitasComerciales();
+    const hoy       = new Date(); hoy.setHours(0,0,0,0);
+    const manana    = new Date(hoy); manana.setDate(hoy.getDate()+1);
+    const en7       = new Date(hoy); en7.setDate(hoy.getDate()+7);
+
+    // Filtrar: próximas (pendientes) + últimas 3 días pasadas
+    const ayer3 = new Date(hoy); ayer3.setDate(hoy.getDate()-3);
+    const activas = visitas
+      .filter(v => {
+        const fv = new Date(v.fecha); fv.setHours(0,0,0,0);
+        return fv >= ayer3;
+      })
+      .sort((a,b) => new Date(a.fecha) - new Date(b.fecha))
+      .slice(0,5);
+
+    if (!activas.length) {
+      el.innerHTML = '<div style="padding:12px 0 4px;font-size:12px;color:var(--ink-soft);text-align:center">Sin visitas programadas<br><span style="font-size:11px">Toca + para añadir una</span></div>';
+      return;
+    }
+
+    const DIAS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+    const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    el.innerHTML = activas.map(v => {
+      const prov = State.get.prov(v.provId);
+      const fv   = new Date(v.fecha); fv.setHours(0,0,0,0);
+      const dias = Math.round((fv - hoy) / (1000*3600*24));
+      let dotClass, badgeClass, badgeText;
+      if (v.estado === 'cumplida')   { dotClass='pasada'; badgeClass='ok';     badgeText='✓ Cumplida'; }
+      else if (v.estado==='cancelada'){dotClass='pasada'; badgeClass='pasada'; badgeText='Cancelada'; }
+      else if (dias < 0)             { dotClass='pasada'; badgeClass='pasada'; badgeText='Pasada'; }
+      else if (dias === 0)           { dotClass='hoy';    badgeClass='hoy';    badgeText='Hoy'; }
+      else if (dias === 1)           { dotClass='pronto'; badgeClass='pronto'; badgeText='Mañana'; }
+      else if (dias <= 7)            { dotClass='pronto'; badgeClass='pronto'; badgeText='En '+dias+' días'; }
+      else                           { dotClass='normal'; badgeClass='';       badgeText=''; }
+      const dateStr = DIAS[fv.getDay()] + ' ' + fv.getDate() + ' ' + MESES[fv.getMonth()];
+      return '<div class="visita-row">' +
+        '<div class="visita-dot '+dotClass+'"></div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="visita-name">' + esc(v.agente||'Sin agente') + '</div>' +
+          '<div class="visita-meta">' + esc(prov?.nombre||v.provId||'—') + (v.notas?' · '+esc(v.notas.slice(0,30)):'') + '</div>' +
+          (badgeText ? '<span class="visita-badge '+badgeClass+'">'+badgeText+'</span>' : '') +
+        '</div>' +
+        '<div style="text-align:right;flex-shrink:0">' +
+          '<div class="visita-date">'+dateStr+'</div>' +
+          (v.estado==='pendiente' && dias>=0 ?
+            '<button data-visita-ok="'+v.id+'" style="font-size:10px;color:var(--green);background:none;border:none;cursor:pointer;padding:2px 0;font-family:var(--font);display:block;width:100%">✓ Cumplida</button>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    // Delegación de eventos para marcar cumplida
+    el.onclick = (e) => {
+      const btn = e.target.closest('[data-visita-ok]');
+      if (btn) {
+        State.set.updateVisita(btn.dataset.visitaOk, { estado: 'cumplida' });
+        renderVisitasComerciales();
+      }
+    };
+  }
+
+  // ── Añadir visita (modal) ─────────────────────────────────
+  function openAddVisita() {
+    const provs   = State.get.proveedores();
+    const hoy     = new Date().toISOString().slice(0,10);
+    const provOpts= provs.map(p =>
+      '<option value="'+p.id+'">'+esc(p.icon||'🏪')+' '+esc(p.nombre)+'</option>'
+    ).join('');
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;z-index:99993;background:rgba(0,0,0,0.45);display:flex;align-items:flex-end';
+    modal.innerHTML = `
+      <div style="width:100%;background:var(--surface);border-radius:22px 22px 0 0;
+                  padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));font-family:var(--font)">
+        <div style="width:36px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 16px"></div>
+        <div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:16px">➕ Nueva visita comercial</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <select id="nv-prov" style="height:46px;border-radius:11px;border:1.5px solid var(--border);padding:0 12px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none">
+            <option value="">Seleccionar proveedor…</option>${provOpts}
+          </select>
+          <input id="nv-agente" placeholder="Nombre del agente comercial"
+            style="height:46px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none">
+          <div style="display:flex;gap:8px">
+            <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Fecha visita</label>
+              <input id="nv-fecha" type="date" value="${hoy}"
+                style="height:46px;border-radius:11px;border:1.5px solid var(--border);padding:0 12px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Hora</label>
+              <input id="nv-hora" type="time" value="10:00"
+                style="height:46px;border-radius:11px;border:1.5px solid var(--border);padding:0 12px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none;width:100%;box-sizing:border-box">
+            </div>
+          </div>
+          <input id="nv-notas" placeholder="Notas (opcional)"
+            style="height:46px;border-radius:11px;border:1.5px solid var(--border);padding:0 14px;font-size:14px;font-family:var(--font);color:var(--ink);background:var(--bg);outline:none">
+          <button id="nv-save"
+            style="height:50px;border-radius:13px;background:var(--red);color:#fff;border:none;font-size:15px;font-weight:700;font-family:var(--font);cursor:pointer">
+            Guardar visita
+          </button>
+        </div>
+      </div>`;
+
+    modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
+    document.getElementById('nv-save', modal)?.addEventListener?.('click', () => {});
+    modal.querySelector('#nv-save').addEventListener('click', () => {
+      const provId = modal.querySelector('#nv-prov').value;
+      const agente = modal.querySelector('#nv-agente').value.trim();
+      const fecha  = modal.querySelector('#nv-fecha').value;
+      const hora   = modal.querySelector('#nv-hora').value || '10:00';
+      const notas  = modal.querySelector('#nv-notas').value.trim();
+      if (!fecha) { if(typeof showToast==='function') showToast('⚠️ Introduce una fecha'); return; }
+      const iso = new Date(fecha + 'T' + hora).toISOString();
+      State.set.addVisita({
+        id:     'vis_'+Date.now(),
+        provId: provId||'',
+        agente: agente||'',
+        fecha:  iso,
+        notas:  notas,
+        estado: 'pendiente',
+      });
+      modal.remove();
+      renderVisitasComerciales();
+      if(typeof showToast==='function') showToast('✅ Visita guardada');
+    });
+    document.body.appendChild(modal);
+  }
+
+
+  // ── Panel de preferencias de notificaciones ──────────────
+  function openNotifPrefsPanel() {
+    const prefs  = State.get.notifPrefs();
+    const s      = State.get.settings();
+    const items = [
+      { key:'whatsNew',       icon:'🎉', bg:'#EEF2FF', title:'Novedades de la app',       sub:'Al actualizar Dashwey' },
+      { key:'cierreDiario',   icon:'🕐', bg:'#FEF3C7', title:'Informe de cierre diario',  sub:'Resumen al cierre del negocio', hasTime:true, timeKey:'cierreHora' },
+      { key:'informeMensual', icon:'📊', bg:'#F0FDF4', title:'Informe mensual',            sub:'El día ' + (prefs.mensualDia||1) + ' de cada mes' },
+      { key:'informeAnual',   icon:'📅', bg:'#F0F9FF', title:'Informe anual',              sub:'Resumen del año completo' },
+      { key:'pedidoRealizado',icon:'✅', bg:'#ECFDF5', title:'Pedido confirmado',          sub:'Al confirmar un pedido en Almacén' },
+      { key:'entregaProxima', icon:'🚚', bg:'#EFF6FF', title:'Entrega próxima',            sub: prefs.entregaDias + ' días antes de la entrega', hasNum:true, numKey:'entregaDias', numLabel:'días antes' },
+      { key:'visitaComercial',icon:'🤝', bg:'#FDF4FF', title:'Visita comercial',           sub: prefs.visitaDias + ' días antes de la visita',  hasNum:true, numKey:'visitaDias',  numLabel:'días antes' },
+      { key:'caducidad',      icon:'⏰', bg:'#FFF7ED', title:'Caducidad de artículos',    sub: 'Artículos que caducan en ' + prefs.caducidadDias + ' días', hasNum:true, numKey:'caducidadDias', numLabel:'días' },
+    ];
+
+    const rowsHtml = items.map(it => {
+      const on = !!prefs[it.key];
+      return '<div class="notif-pref-row">' +
+        '<div class="notif-pref-icon" style="background:'+it.bg+'">'+it.icon+'</div>' +
+        '<div class="notif-pref-info">' +
+          '<div class="notif-pref-title">'+it.title+'</div>' +
+          '<div class="notif-pref-sub">'+it.sub+'</div>' +
+          (it.hasTime ? '<input type="time" class="notif-time-inp" id="npc-time-'+it.key+'" value="'+(prefs[it.timeKey]||'21:00')+'" style="margin-top:6px" onchange="App.dash._notifPrefTimeChange(''+it.timeKey+'',this.value)">' : '') +
+          (it.hasNum  ? '<div style="display:flex;align-items:center;gap:6px;margin-top:6px"><input type="number" min="1" max="30" class="notif-time-inp" id="npc-num-'+it.key+'" value="'+(prefs[it.numKey]||2)+'" style="width:60px" onchange="App.dash._notifPrefNumChange(''+it.numKey+'',this.value)"><span style="font-size:11px;color:var(--ink-soft)">'+it.numLabel+'</span></div>' : '') +
+        '</div>' +
+        '<button onclick="App.dash._notifPrefToggle(''+it.key+'')" ' +
+          'style="flex-shrink:0;width:44px;height:26px;border-radius:13px;border:none;cursor:pointer;' +
+          'background:'+(on?'var(--red)':'var(--border)')+';transition:background .2s;position:relative" ' +
+          'id="npc-btn-'+it.key+'">' +
+          '<span style="position:absolute;top:3px;'+(on?'right:3px':'left:3px')+';width:20px;height:20px;border-radius:50%;background:#fff;transition:all .2s;box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
+        '</button>' +
+      '</div>';
+    }).join('');
+
+    const html = '<div class="modal-header-dark">' +
+      '<div class="mhd-row"><div><div class="mhd-title">🔔 Notificaciones</div><div class="mhd-sub">Personaliza qué y cuándo recibes alertas</div></div>' +
+      '<button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>' +
+      '<div style="padding-bottom:40px">' +
+        // Global toggle
+        '<div style="padding:16px 16px 0;display:flex;align-items:center;gap:12px">' +
+          '<div style="flex:1"><div style="font-size:14px;font-weight:700;color:var(--ink)">Todas las notificaciones</div>' +
+          '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">Activa o desactiva todas de golpe</div></div>' +
+          '<button onclick="App.dash._notifGlobalToggle(this)" ' +
+            'style="flex-shrink:0;width:48px;height:28px;border-radius:14px;border:none;cursor:pointer;' +
+            'background:'+(s.notifOn?'var(--red)':'var(--border)')+';position:relative" id="npc-global">' +
+            '<span style="position:absolute;top:4px;'+(s.notifOn?'right:4px':'left:4px')+';width:20px;height:20px;border-radius:50%;background:#fff;transition:all .2s;box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
+          '</button>' +
+        '</div>' +
+        '<div style="padding:12px 16px"><div style="height:1px;background:var(--border)"></div></div>' +
+        // Permission status
+        '<div id="npc-perm-status" style="padding:0 16px 12px;font-size:12px;color:var(--ink-soft)"></div>' +
+        // Items
+        '<div style="padding:0 16px">' + rowsHtml + '</div>' +
+        // Request permission button
+        '<div style="padding:16px">' +
+          '<button onclick="App.dash._notifRequestAndShow()" ' +
+            'style="width:100%;height:48px;border-radius:13px;background:var(--red);color:#fff;border:none;font-size:15px;font-weight:700;font-family:var(--font);cursor:pointer">' +
+            '🔔 Activar notificaciones' +
+          '</button>' +
+        '</div>' +
+      '</div>';
+
+    App.ui.setFs(html);
+    App.ui.openFs();
+
+    // Actualizar estado del permiso
+    setTimeout(() => {
+      const el = document.getElementById('npc-perm-status');
+      if (el) {
+        const p = Notification.permission;
+        el.textContent = p==='granted' ? '✅ Notificaciones activadas en este dispositivo' :
+                         p==='denied'  ? '❌ Bloqueadas en el navegador — actívalas en Ajustes del sistema' :
+                                         '⏳ Permiso no solicitado todavía';
+        el.style.color = p==='granted'?'var(--green)':p==='denied'?'var(--red)':'var(--ink-soft)';
+      }
+    }, 100);
+  }
+
+  function _notifGlobalToggle(btn) {
+    const on = !State.get.settings().notifOn;
+    State.set.settings({ notifOn: on });
+    if (btn) {
+      btn.style.background = on ? 'var(--red)' : 'var(--border)';
+      const dot = btn.querySelector('span');
+      if (dot) dot.style[on ? 'right' : 'left'] = '4px', dot.style[on ? 'left' : 'right'] = 'auto';
+    }
+    if (on) _startNotifScheduler();
+  }
+
+  function _notifPrefToggle(key) {
+    const prefs = State.get.notifPrefs();
+    const newVal = !prefs[key];
+    State.set.notifPrefs({ [key]: newVal });
+    // Update button visual
+    const btn = document.getElementById('npc-btn-'+key);
+    if (btn) {
+      btn.style.background = newVal ? 'var(--red)' : 'var(--border)';
+      const dot = btn.querySelector('span');
+      if (dot) { dot.style.right = newVal?'3px':'auto'; dot.style.left = newVal?'auto':'3px'; }
+    }
+    if (typeof showToast === 'function')
+      showToast(newVal ? '🔔 Activada: ' + key : '🔕 Desactivada');
+  }
+
+  function _notifPrefTimeChange(key, val) {
+    State.set.notifPrefs({ [key]: val });
+  }
+
+  function _notifPrefNumChange(key, val) {
+    const n = parseInt(val);
+    if (isNaN(n) || n < 1) return;
+    State.set.notifPrefs({ [key]: n });
+  }
+
+  async function _notifRequestAndShow() {
+    const ok = await _notifRequestPermission();
+    const el = document.getElementById('npc-perm-status');
+    if (el) {
+      el.textContent = ok ? '✅ Notificaciones activadas' : '❌ Permiso denegado';
+      el.style.color = ok ? 'var(--green)' : 'var(--red)';
+    }
+    if (ok) {
+      _startNotifScheduler();
+      if (typeof showToast === 'function') showToast('✅ Notificaciones activadas');
+      // Intentar registrar token FCM en Firestore (falla silenciosamente sin VAPID)
+      try { window._DashweyRegisterFCM?.(); } catch(_) {}
+    }
+  }
+
+
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow };
 })();
 
 // ══════════════════════════════════════════
@@ -8287,7 +8978,7 @@ function initDashDrag() {
   function restoreOrder() {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY_ORDER));
-      const validIds = ['kpis','ventas','top-roi','caducidades'];
+      const validIds = ['kpis','ventas','top-roi','caducidades','pedidos-cal','visitas-com'];
       const cont = document.getElementById('dash-cards-container');
       if(!cont) return;
       const order = saved ? saved.filter(id => validIds.includes(id)) : validIds;
@@ -11986,7 +12677,8 @@ const alm = (() => {
 
     try {
       State.set.addPedido(pedido);
-
+      // v9.5.24: notificación pedido confirmado
+      try { window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido } })); } catch(_) {}
     } catch (err) {
       console.error('[CONFIRM] addPedido FAILED:', err.message);
     }
@@ -12636,7 +13328,7 @@ const alm = (() => {
 
   // ── What's New — mostrar una vez por versión ─────────────────
   setTimeout(() => {
-    try { App.ui.showWhatsNew('v9.4.3'); } catch(_) {}
+    try { App.ui.showWhatsNew('v9.5.24'); } catch(_) {}
   }, 2000); // delay aumentado para no interferir con auth gate
 
   // ── Idioma — aplicar al arrancar ──────────────────────────────
@@ -12991,10 +13683,71 @@ const alm = (() => {
   }
 
   // ── Listener: re-render Dashboard al registrar una venta ────────
-  // Dispara inmediatamente cuando procesarPago() termina, sin esperar sync FB
   window.addEventListener('dashwey:venta-registrada', () => {
     dash.render();
     alm.renderOrden && alm.renderOrden();
+  });
+
+  // ── v9.5.24: Iniciar notification scheduler al arrancar ────────
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { dash._startNotifScheduler(); } catch(e) {}
+    // Registrar FCM token si Firebase está listo (sin bloquear arranque)
+    window.addEventListener('dashwey:firebase-ready', () => {
+      try { window._DashweyRegisterFCM?.(); } catch(_) {}
+    }, { once: true });
+  }
+
+  // ── v9.5.24: Deep-link desde notificación push ────────────────
+  // El SW envía DEEP_LINK cuando el usuario toca una notificación
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (!e.data || e.data.action !== 'DEEP_LINK') return;
+      const { deepAction, card } = e.data;
+      try {
+        if (deepAction === 'dashboard') {
+          nav.goTab(1);
+          if (card) {
+            // Scroll a la tarjeta específica
+            requestAnimationFrame(() => {
+              const el = document.querySelector('[data-card-id="'+card+'"]');
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+          }
+        } else if (deepAction === 'almacen') {
+          nav.goTab(2);
+        } else if (deepAction === 'tpv') {
+          nav.goTab(0);
+        } else if (deepAction === 'whatsNew') {
+          try { App.ui.showWhatsNew(e.data.version); } catch(_) {}
+        }
+      } catch(_) {}
+    });
+
+    // También procesar deep-link desde URL params (al abrir app nueva)
+    try {
+      const _urlParams = new URLSearchParams(location.search);
+      const _dlAction  = _urlParams.get('action');
+      const _dlCard    = _urlParams.get('card');
+      if (_dlAction) {
+        requestAnimationFrame(() => {
+          if (_dlAction === 'dashboard') { nav.goTab(1); }
+          else if (_dlAction === 'almacen') { nav.goTab(2); }
+          else if (_dlAction === 'tpv') { nav.goTab(0); }
+          if (_dlCard) {
+            setTimeout(() => {
+              const el = document.querySelector('[data-card-id="'+_dlCard+'"]');
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 500);
+          }
+        });
+      }
+    } catch(_) {}
+  }
+
+  // ── Hook: notificación al confirmar pedido ─────────────────────
+  window.addEventListener('dashwey:pedido-confirmado', (e) => {
+    try { dash.notifPedidoRealizado(e.detail?.pedido || {}); } catch(_) {}
+    try { dash.renderVisitasComerciales(); } catch(_) {}
   });
 
   // ── PUNTO 4: limpiarBD — borra ventas, pedidos y resetea stock demo ──
