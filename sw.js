@@ -1,8 +1,15 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v9.5.26
-   FIX: Cache busting agresivo para splash en mobile/PWA/iOS
+   Dashwey Service Worker v9.5.27
+   
+   CAMBIOS v9.5.27:
+   - FIX CRÍTICO: SHOW_NOTIFICATION verifica permiso antes de mostrar.
+     Elimina TypeError "No notification permission has been granted"
+     que aparecía en consola cuando el usuario no había concedido permiso.
+   - FIX: push handler también guarda contra permiso no concedido.
+   - Versión de cache incrementada a dashwey-v9-5-27.
+   - SW_UPDATED notifica versión '9.5.27' a todos los clientes.
 
-   ESTRATEGIA DE CACHE:
+   ESTRATEGIA DE CACHE (sin cambios respecto a v9.5.26):
    - HTML principal: SIEMPRE network-first (nunca cache-only)
    - version.txt: siempre red, sin cache
    - Assets estáticos: cache-first con fallback
@@ -10,7 +17,7 @@
    - skipWaiting: inmediato siempre (no esperar navegación)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME   = 'dashwey-v9-5-26';  /* FIX: incrementar con CADA deploy */
+const CACHE_NAME   = 'dashwey-v9-5-27';  /* v9.5.27: incrementar con CADA deploy */
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
@@ -25,7 +32,7 @@ const PRECACHE_URLS = [
    en el siguiente fetch, no en la siguiente navegación completa.
    Esto garantiza que mobile/PWA actualice sin necesitar reload manual. */
 self.addEventListener('install', e => {
-  self.skipWaiting(); /* FIX v9.5.26: activación inmediata, no esperar */
+  self.skipWaiting(); /* activación inmediata, no esperar */
   e.waitUntil(
     caches.open(CACHE_NAME)
       .then(c => c.addAll(PRECACHE_URLS).catch(() => { /* ignorar fallos de precache */ }))
@@ -33,8 +40,8 @@ self.addEventListener('install', e => {
 });
 
 /* ── Activate: LIMPIAR TODAS las caches antiguas ───────────────────
-   FIX v9.5.26: eliminar cualquier cache dashwey-* que no sea la actual.
-   Esto fuerza que mobile/iOS recargue el HTML y el splash frescos. */
+   Eliminar cualquier cache dashwey-* que no sea la actual.
+   Fuerza que mobile/iOS recargue el HTML y el splash frescos. */
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
@@ -54,7 +61,7 @@ self.addEventListener('activate', e => {
       .then(() => {
         self.clients.matchAll({ type: 'window' }).then(clients => {
           clients.forEach(client => {
-            client.postMessage({ action: 'SW_UPDATED', version: '9.5.26' });
+            client.postMessage({ action: 'SW_UPDATED', version: '9.5.27' });
           });
         });
       })
@@ -82,16 +89,37 @@ self.addEventListener('message', e => {
     return;
   }
 
-  /* SHOW_NOTIFICATION: mostrar notificación local desde el cliente */
+  /* SHOW_NOTIFICATION: mostrar notificación local desde el cliente.
+     v9.5.27 FIX CRÍTICO: verificar permiso de notificaciones ANTES de
+     llamar showNotification. Sin este guard, el SW lanza TypeError:
+     "Failed to execute 'showNotification' on 'ServiceWorkerRegistration':
+     No notification permission has been granted for this origin."
+     El cliente ya debería haber verificado el permiso, pero el SW también
+     lo comprueba como segunda línea de defensa. */
   if (e.data.action === 'SHOW_NOTIFICATION') {
     const { title, opts } = e.data;
     if (!title) return;
+
+    /* Verificar permiso — self.Notification puede no existir en todos los SW */
+    const permission = (typeof Notification !== 'undefined')
+      ? Notification.permission
+      : 'denied';
+
+    if (permission !== 'granted') {
+      /* Permiso no concedido: ignorar silenciosamente sin lanzar error */
+      console.info('[SW] SHOW_NOTIFICATION ignorado — permiso:', permission);
+      return;
+    }
+
     e.waitUntil(
       self.registration.showNotification(title, {
         icon:    'icon-192.png',
         badge:   'icon-192.png',
         vibrate: [100, 50, 100],
         ...opts,
+      }).catch(err => {
+        /* Capturar cualquier error residual para evitar unhandled rejection */
+        console.warn('[SW] showNotification error:', err && err.message);
       })
     );
     return;
@@ -115,7 +143,21 @@ self.addEventListener('push', e => {
     data:     payload.data   || {},
   };
 
-  e.waitUntil(self.registration.showNotification(title, opts));
+  /* v9.5.27 FIX: push FCM también guarda contra permiso no concedido */
+  const permission = (typeof Notification !== 'undefined')
+    ? Notification.permission
+    : 'denied';
+
+  if (permission !== 'granted') {
+    console.info('[SW] push ignorado — permiso:', permission);
+    return;
+  }
+
+  e.waitUntil(
+    self.registration.showNotification(title, opts).catch(err => {
+      console.warn('[SW] push showNotification error:', err && err.message);
+    })
+  );
 });
 
 /* ── Notification click: deep-link al módulo correcto ────────────── */
@@ -161,12 +203,12 @@ self.addEventListener('fetch', e => {
   }
 
   /* HTML principal: SIEMPRE network-first, cache como fallback offline.
-     FIX v9.5.26: no-store en la petición para evitar caché HTTP del browser.
+     no-store en la petición para evitar caché HTTP del browser.
      Esto garantiza que el splash dinámico (en el HTML) sea siempre el nuevo. */
   if (url.pathname.endsWith(HTML_URL) || url.pathname.endsWith('/')) {
     e.respondWith(
       fetch(e.request, {
-        cache: 'no-store',  /* FIX: forzar red, ignorar caché HTTP */
+        cache: 'no-store',  /* forzar red, ignorar caché HTTP */
       })
         .then(res => {
           if (res && res.status === 200) {
