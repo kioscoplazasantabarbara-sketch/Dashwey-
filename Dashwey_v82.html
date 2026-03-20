@@ -56,7 +56,7 @@
 </script>
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>Dashwey v9.5.12</title>
+<title>Dashwey v9.5.22</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3957,10 +3957,10 @@ window._DashweyFirebase = {
   },
 
   // Escribe (merge) un documento completo en una colección
-  async write(coleccion, data) {
+  // Incluye retry con backoff exponencial (max 2 reintentos)
+  async write(coleccion, data, _attempt = 0) {
     if (!FIREBASE_ENABLED || !_db || !_uid) return false;
     try {
-      // Eliminar funciones y valores no serializables antes de enviar a Firestore
       const clean = JSON.parse(JSON.stringify(data, (key, val) =>
         typeof val === 'function' ? undefined : val
       ));
@@ -3971,21 +3971,52 @@ window._DashweyFirebase = {
       );
       return true;
     } catch(e) {
-      console.warn('[Dashwey/FB] write error:', e);
+      // Errores de red/blocked: no reintentar indefinidamente
+      const isNetErr = e?.code === 'unavailable' || e?.message?.includes('network') ||
+                       e?.message?.includes('blocked') || e?.name === 'FirebaseError';
+      if (isNetErr && _attempt < 2) {
+        // Backoff: 1.5s, 3s — solo para errores de red, no de permisos
+        await new Promise(r => setTimeout(r, 1500 * (_attempt + 1)));
+        if (!this.ready) return false; // si se desconectó, no reintentar
+        return this.write(coleccion, data, _attempt + 1);
+      }
+      // No loguear ERR_BLOCKED (viene de extensiones — no es un bug)
+      if (!e?.message?.includes('ERR_BLOCKED')) {
+        console.warn('[Dashwey/FB] write error:', e?.code || e?.message);
+      }
       return false;
     }
   },
 
   // Escucha cambios en tiempo real — para sincronización multi-dispositivo
+  // Solo un listener activo por colección (previene duplicados en login/logout)
+  _unsubscribers: {},
   subscribe(coleccion, callback) {
     if (!FIREBASE_ENABLED || !_db || !_uid) return () => {};
+    // Cancelar listener anterior de esta colección si existe
+    if (typeof this._unsubscribers[coleccion] === 'function') {
+      try { this._unsubscribers[coleccion](); } catch(_) {}
+    }
     try {
-      return onSnapshot(
+      const unsub = onSnapshot(
         this._ref(_uid, coleccion),
+        { includeMetadataChanges: false }, // solo cambios remotos confirmados
         snap => snap.exists() && callback(snap.data()),
-        e => console.warn('[Dashwey/FB] subscribe error:', e)
+        e => {
+          // Silenciar errores de red (ERR_BLOCKED, unavailable) — no son bugs
+          if (!e?.message?.includes('ERR_BLOCKED') && e?.code !== 'unavailable') {
+            console.warn('[Dashwey/FB] subscribe error:', e?.code || e?.message);
+          }
+        }
       );
+      this._unsubscribers[coleccion] = unsub;
+      return unsub;
     } catch(e) { return () => {}; }
+  },
+  // Cancela todos los listeners activos (llamar en logout)
+  unsubscribeAll() {
+    Object.values(this._unsubscribers).forEach(fn => { try { fn(); } catch(_) {} });
+    this._unsubscribers = {};
   },
 
   // ── Auth ────────────────────────────────────────────────────────
@@ -4031,11 +4062,13 @@ window._DashweyFirebase = {
   async logout() {
     if (!FIREBASE_ENABLED || !_auth) return;
     try {
+      // Cancelar todos los listeners Firestore antes de salir (evita writes fantasma)
+      this.unsubscribeAll?.();
       // Marcar logout intencional para que al arrancar muestre login
       try { localStorage.setItem('dashwey_logged_out', '1'); } catch(_) {}
       await signOut(_auth);
     } catch(e) {
-      console.warn('[Dashwey] logout error:', e);
+      console.warn('[Dashwey] logout error:', e?.code || e?.message);
     }
   },
 
@@ -4353,23 +4386,29 @@ const State = (() => {
     };
     const cleanData = _cleanForFirestore(data);
     const ok = await fb.write('state', cleanData);
-    // syncStatus via direct state mutation (no save() call chain)
-    if (ok) {
-      if (_state.syncStatus) _state.syncStatus = Object.assign(_state.syncStatus, { mode: 'synced', pendingWrites: 0, lastError: null });
-      if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
-    } else {
-      if (_state.syncStatus) _state.syncStatus = Object.assign(_state.syncStatus, { mode: 'error', lastError: 'write-failed' });
-      if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
+    // Mutar syncStatus directamente en _state (sin State.set → sin save() → sin loop)
+    // updateSyncBadge es solo DOM, no dispara save()
+    if (_state.syncStatus) {
+      _state.syncStatus.mode        = ok ? 'synced' : 'error';
+      _state.syncStatus.pendingWrites = 0;
+      _state.syncStatus.lastError   = ok ? null : 'write-failed';
+    }
+    if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) {
+      try { Utils.updateSyncBadge(ok ? 'synced' : 'error'); } catch(_) {}
     }
     return ok;
   }
 
   // ── 3. Cola offline → flush cuando vuelve la red ───────────────
+  let _lastFlushAt = 0; // anti-spam: mínimo 5s entre intentos
   function _flushQueue() {
     if (_isSyncing || _isSaving || !_pendingQueue.length) return;
     const fb = window._DashweyFirebase;
     if (!fb?.enabled || !fb?.ready || !navigator.onLine) return;
     if (!fb.isRegistered?.()) return;
+    const now = Date.now();
+    if (now - _lastFlushAt < 5000) return; // throttle 5s
+    _lastFlushAt = now;
     _isSyncing = true;
     // Usar el snapshot mas reciente de la cola
     const snapshot = _pendingQueue[_pendingQueue.length - 1];
@@ -4407,7 +4446,7 @@ const State = (() => {
   // -- save: escribe local siempre, Firebase con guards anti-loop
   function save() {
     clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(() => {
+    _saveTimer = setTimeout(() => { if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
       _writeLocal(_state);
       const fb = window._DashweyFirebase;
       if (!fb?.enabled || !fb.isRegistered?.()) return;
@@ -4420,7 +4459,10 @@ const State = (() => {
       // Guard de concurrencia: no escribir si ya hay un write en curso
       if (_isSaving) return;
       // Guard de duplicados: no escribir si el estado no ha cambiado
-      const _hashable = JSON.stringify({ p: _state.productos, v: _state.proveedores, vt: _state.ventas });
+      const _hashable = JSON.stringify({
+        p: _state.productos, v: _state.proveedores, vt: _state.ventas,
+        c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre
+      });
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
       _isSaving = true;
@@ -4432,7 +4474,7 @@ const State = (() => {
       _writeFirebase(_state)
         .then(() => { _isSaving = false; })
         .catch(() => { _isSaving = false; _lastSavedHash = ''; }); // reset hash on error
-    }, 400);
+    }, 800);
   }
 
   // Getters
@@ -5557,7 +5599,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.21';
+  const _APP_VERSION = 'v9.5.22';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12545,7 +12587,7 @@ const alm = (() => {
       historialPedidos: State.get.historialPedidos(),
       mermas:           State.get.mermas(),
       ventas:           State.get.ventas(),
-      ordenItems:       State.get.ordenItems(),
+      // ordenItems: legacy — excluido del sync (no se usa en UI desde v8.9.0)
       selectedProv:     State.get.selectedProv(),
       period:           State.get.period(),
       settings:         State.get.settings(),
@@ -12602,23 +12644,25 @@ const alm = (() => {
 
 
     if (remoteTs > localTs) {
-      // Remoto mas reciente: aplicar datos de la nube
-
+      // Remoto más reciente: aplicar datos de la nube
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remote)),
         { settings: State.get.settings() }
       );
-      // Bloquear writes durante merge para no re-subir a Firebase lo que acabamos de bajar
+      // Bloquear writes durante merge para no re-subir lo que bajamos
       window._DashweySavingCtrl.isSaving = true;
-      Object.keys(merged).forEach(k => {
-        if (typeof State.set[k] === 'function') State.set[k](merged[k]);
-      });
-      window._DashweySavingCtrl.isSaving = false;
+      try {
+        Object.keys(merged).forEach(k => {
+          if (typeof State.set[k] === 'function') State.set[k](merged[k]);
+        });
+      } finally {
+        window._DashweySavingCtrl.isSaving = false;
+      }
       _renderAll();
       showToast('☁️ Datos sincronizados');
-    } else {
-      // Local igual o más reciente → subir a Firebase
-
+      // NO subir de vuelta — ya tenemos los datos remotos
+    } else if (localTs > 0) {
+      // Local más reciente → subir a Firebase (solo si hay datos reales)
       await fb.write('state', _buildLocalSnapshot());
     }
     // Actualizar syncStatus y uid via State API (sin disparar save())
@@ -12631,7 +12675,7 @@ const alm = (() => {
     // Grace period: ignorar el primer disparo de onSnapshot (siempre se dispara
     // al suscribirse — no es un cambio real de otro dispositivo).
     const _subscribeTs = Date.now();
-    const GRACE_MS     = 10000; // 10s — cubre reloads lentos + Firebase init
+    const GRACE_MS     = 3000; // 3s — grace period post-suscripción (era 10s, reducido)
 
     fb.subscribe('state', remoteData => {
       const now = Date.now();
