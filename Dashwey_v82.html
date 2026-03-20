@@ -3085,7 +3085,8 @@ function _authRegisterSafe() {
   fb.register(email,pass).then(res=>{
     if(res.ok){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}}
     else{if(err)err.textContent=res.error;if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
-  });
+  })
+      .catch(e => { if(err) err.textContent='Error de conexión'; if(btn){btn.disabled=false;btn.textContent='Crear cuenta';} });
 }
 function _authSkipSafe() {
   if (window.App && window.App.ui && window.App.ui.authSkip) { App.ui.authSkip(); return; }
@@ -4344,7 +4345,8 @@ const State = (() => {
     _writeFirebase(snapshot).then(ok => {
       if (ok) { _pendingQueue = []; }
       _isSyncing = false;
-    });
+    })
+        .catch(() => { _isSyncing = false; });
   }
 
   // Escuchar reconexión
@@ -4380,7 +4382,7 @@ const State = (() => {
           const _syncTimer = setTimeout(() => {
             State.set.syncStatus({ mode: 'syncing', pendingWrites: 0 });
           }, 1500);
-          _writeFirebase(_state).then(() => clearTimeout(_syncTimer));
+          _writeFirebase(_state).then(() => clearTimeout(_syncTimer)).catch(() => clearTimeout(_syncTimer));
         } else {
           // Offline — encolar
           _pendingQueue.push(JSON.parse(JSON.stringify(_state)));
@@ -5506,7 +5508,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.4.3';
+  const _APP_VERSION = 'v9.4.4';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -5588,7 +5590,26 @@ const ui = (() => {
       }
     };
 
-    if ('serviceWorker' in navigator) {
+  
+  // ═══════════════════════════════════════════════════════════
+  // GLOBAL ERROR HANDLERS — Captura silenciosa de errores
+  // Evita crashes y ayuda en diagnóstico
+  // ═══════════════════════════════════════════════════════════
+  window.addEventListener('error', function(e) {
+    const msg = e?.message || 'Unknown error';
+    const src = e?.filename ? e.filename.split('/').pop() : '';
+    const ln  = e?.lineno || '?';
+    console.warn('[Dashwey] Uncaught error:', msg, src + ':' + ln);
+    // No mostrar toasts por errores internos — solo log
+  });
+
+  window.addEventListener('unhandledrejection', function(e) {
+    const reason = e?.reason?.message || e?.reason || 'Unhandled promise rejection';
+    console.warn('[Dashwey] Unhandled rejection:', reason);
+    e.preventDefault(); // evita log en consola del navegador
+  });
+
+  if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistration()
         .then(reg => {
           if (reg?.waiting) {
@@ -5635,7 +5656,7 @@ const ui = (() => {
       Notification.requestPermission().then(p => {
         if(p === 'granted') { closeFs(); showToast(`✅ Informe programado a las ${hora}`); }
         else showToast('⚠️ Activa notificaciones en el navegador');
-      });
+      }).catch(() => showToast('⚠️ Notificaciones no disponibles'));
     } else { closeFs(); showToast('⚠️ Navegador sin soporte de notificaciones'); }
   }
 
@@ -5643,7 +5664,7 @@ const ui = (() => {
     if('Notification' in window) {
       Notification.requestPermission().then(p => {
         if(p === 'granted') {
-          new Notification('🏪 Dashwey — Prueba', { body: 'Las notificaciones de cierre están activas ✅', tag:'dashwey-test' });
+          new Notification('🏪 Dashwey — Prueba', { body: 'Las notificaciones de cierre están activas ✅', tag:'dashwey-test' }).catch(() => {});
           showToast('🔔 Notificación de prueba enviada');
         } else showToast('⚠️ Activa notificaciones en el navegador');
       });
@@ -5818,6 +5839,7 @@ const ui = (() => {
 
   // Registro
   async function authRegister() {
+    try {
     const email = document.getElementById('auth-email-reg').value.trim();
     const pass  = document.getElementById('auth-pass-reg').value;
     const pass2 = document.getElementById('auth-pass-reg2').value;
@@ -5840,7 +5862,12 @@ const ui = (() => {
     } else {
       err.textContent = res.error;
       btn.disabled = false; btn.textContent = 'Crear cuenta';
+    }    } catch(e) {
+      const errEl = document.getElementById('auth-err-reg');
+      if (errEl) errEl.textContent = 'Error inesperado. Inténtalo de nuevo.';
+      console.warn('[Auth] register error:', e);
     }
+
   }
 
   // Saltar auth — usar solo local (v8.8.4)
@@ -5857,13 +5884,15 @@ const ui = (() => {
 
   // Cerrar sesión — v8.8.4
   async function authLogout() {
+    try {
     const fb = window._DashweyFirebase;
     if (fb?.enabled) await fb.logout();
     showToast('Sesión cerrada');
     // Mostrar pantalla login inmediatamente
     const s = _authScreen();
     if (s) { s.style.display = 'flex'; s.classList.remove('hidden'); }
-  }
+      } catch(e) { console.warn('[Auth] logout error:', e); }
+}
 
   // Pantalla de cambio de contraseña
   function openSeguridad() {
@@ -5908,6 +5937,7 @@ const ui = (() => {
   }
 
   async function changePassword() {
+    try {
     const p1 = document.getElementById('sec-pass1')?.value;
     const p2 = document.getElementById('sec-pass2')?.value;
     const err = document.getElementById('sec-err');
@@ -5917,7 +5947,12 @@ const ui = (() => {
     const res = await window._DashweyFirebase.changePassword(p1);
     if (res.ok) { closeFs(); showToast('✅ Contraseña actualizada'); }
     else { if(err) err.textContent = res.error; }
-  }
+      } catch(e) {
+      const errEl = document.getElementById('sec-err');
+      if (errEl) errEl.textContent = 'Error al cambiar contraseña.';
+      console.warn('[Auth] changePassword error:', e);
+    }
+}
 
   function exportarDatos() {
     const perfil  = State.get.perfil();
@@ -6147,7 +6182,7 @@ const ui = (() => {
       Notification.requestPermission().then(p => {
         if (p==='granted') { sdSubClose(); showToast(`✅ Informe a las ${hora}`); }
         else showToast('⚠️ Activa notificaciones en el navegador');
-      });
+      }).catch(() => showToast('⚠️ Notificaciones no disponibles'));
     } else { sdSubClose(); showToast(`✅ Guardado — ${hora}`); }
   }
   function sdSubOpenSeguridad() {
@@ -6401,6 +6436,9 @@ const nav = (() => {
   });
 
   function goTab(i) {
+    // Guard: no re-render si ya estamos en esta tab
+    if (_currentTab === i) return;
+    _currentTab = i;
     // ── Cerrar todos los overlays abiertos antes de navegar ─────
     // Garantiza que modales, FS, SAC o tickets sheets no queden
     // huérfanos al cambiar de tab desde la barra de navegación.
@@ -8407,11 +8445,14 @@ const tpv = (() => {
     _renderProds();
   }
 
+  let _searchDebTimer = null;
   function onSearch(val) {
     _searchQ = val;
     const box = document.getElementById('tpv-search-box');
     if (box) box.classList.toggle('has-text', !!val);
-    _renderProds();
+    // Debounce 180ms — evita re-render en cada keystroke
+    clearTimeout(_searchDebTimer);
+    _searchDebTimer = setTimeout(() => _renderProds(), 180);
   }
 
   function clearSearch() {
@@ -8575,9 +8616,13 @@ const tpv = (() => {
   }
 
   // ── PROCESAR PAGO ─────────────────────────────────────────────
+  let _procesandoPago = false;
   function procesarPago(metodo) {
+    if (_procesandoPago) return;
+    _procesandoPago = true;
+    setTimeout(() => { _procesandoPago = false; }, 2000); // reset tras 2s
     const items = cartItems();
-    if (!items.length) { showToast('El carrito está vacío'); return; }
+    if (!items.length) { _procesandoPago = false; showToast('El carrito está vacío'); return; }
     const tot   = cartTotal();
     const fecha = new Date().toISOString();
     const negocioId = State.get.settings().negocioId || 'local';
@@ -10993,7 +11038,11 @@ const alm = (() => {
     }
   }
 
-  function onMainSearch(val) { _permSearch(val); }
+  let _almSearchTimer = null;
+  function onMainSearch(val) {
+    clearTimeout(_almSearchTimer);
+    _almSearchTimer = setTimeout(() => _permSearch(val), 200);
+  }
   function _permSearch(val) {
     const q    = val.trim();
     const qLow = q.toLowerCase();
@@ -11371,7 +11420,11 @@ const alm = (() => {
   }
 
   // Confirmar pedido desde carrito (v8.9.0) — lee _ordenCarrito, sin State.ordenItems
+  let _confirmandoPedido = false;
   function _confirmarPedidoDesdeCarrito() {
+    if (_confirmandoPedido) return;
+    _confirmandoPedido = true;
+    setTimeout(() => { _confirmandoPedido = false; }, 3000);
     document.getElementById('aceptar-popup-overlay')?.remove();
     const sel  = State.get.selectedProv();
     const prov = State.get.prov(sel);
@@ -11963,7 +12016,7 @@ const alm = (() => {
       Notification.requestPermission().then(p => {
         if(p === 'granted') _checkCaducidades(true);
         else showToast('⚠️ Permiso denegado para notificaciones');
-      });
+      }).catch(() => {});
     } else {
       showToast('⚠️ Activa notificaciones en ajustes del navegador');
     }
@@ -12229,8 +12282,11 @@ const alm = (() => {
   }
   // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
   function _renderAll() {
-    try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
+    // Financiero y badges siempre (ligeros, globales)
     try { dash.renderFinanciero?.(); } catch(e) {}
+    try { alm.updateBadge?.(); } catch(e) {}
+    // Renders de módulos — siempre completos para mantener coherencia de datos
+    try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
     try { tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
     try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
     try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
@@ -12239,6 +12295,7 @@ const alm = (() => {
 
   // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
   async function _doInitialSync() {
+  try {
     const fb = window._DashweyFirebase;
     if (!fb?.enabled) return;
     // No requerir fb.ready — el UID puede haberse actualizado tras login
@@ -12309,7 +12366,9 @@ const alm = (() => {
 
     // Exponer hook para saber cuándo nosotros escribimos
     window._DashweyOnLocalWrite = () => { _lastLocalWrite = Date.now(); };
-  }
+ 
+  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); }
+  }}
 
   // Exponer para uso en authLogin/authRegister
   window._DashweyInitialSync = _doInitialSync;
@@ -12680,6 +12739,7 @@ if (!window.App) {
           }
         }, 5 * 60 * 1000);
       })
+      .catch(err => console.warn('[Dashwey SW]', err))
       .catch(err => console.warn('[Dashwey SW]', err));
   }
 
@@ -12692,7 +12752,8 @@ if (!window.App) {
       .then(data => {
         if (!data) return;
         const remoteVer = data.version ? 'v' + data.version : data.build;
-        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
+        const localVer  = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null
+      .catch(e => console.warn('[Update] version check failed:', e));
         if (!remoteVer || !localVer) return;
         const banner = document.getElementById('update-banner');
         // Si la versión remota == local: ocultar banner y resetear guard
@@ -12743,8 +12804,10 @@ if (!window.App) {
       <button id="pwa-dismiss" style="background:rgba(0,0,0,0.07);color:rgba(26,28,36,0.45);border:none;border-radius:8px;width:26px;height:26px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0">×</button>`;
     document.body.appendChild(b);
     document.getElementById('pwa-install').onclick = async () => {
-      if (_prompt) { _prompt.prompt(); await _prompt.userChoice; _prompt = null; }
-      b.remove();
+      try {
+        if (_prompt) { _prompt.prompt(); await _prompt.userChoice; _prompt = null; }
+        b.remove();
+      } catch(e) { b.remove(); }
     };
     document.getElementById('pwa-dismiss').onclick = () => b.remove();
   }
