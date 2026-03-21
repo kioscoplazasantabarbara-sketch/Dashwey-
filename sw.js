@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v9.5.50
+   Dashwey Service Worker v9.5.51
    FIX DEFINITIVO DOBLE SPLASH
 
    CAUSA RAÍZ DEL DOBLE SPLASH:
@@ -9,7 +9,7 @@
    El nuevo SW se activaba después y la página se recargaba con el nuevo
    HTML → el usuario veía dos splashes (el viejo del cache + el nuevo).
 
-   SOLUCIÓN v9.5.50:
+   SOLUCIÓN v9.5.51:
    1. El HTML NUNCA se cachea — siempre viene de la red.
       Sin HTML en cache = sin posibilidad de servir versión vieja.
    2. En activate: se envía SW_RELOAD a todos los clientes para que
@@ -17,7 +17,7 @@
    3. Limpieza agresiva: eliminar TODAS las caches antiguas en install
       (no solo en activate) para mayor agresividad.
 
-   ESTRATEGIA DE CACHE v9.5.50:
+   ESTRATEGIA DE CACHE v9.5.51:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
    - version.txt: siempre red, sin cache
    - Assets estáticos (iconos): cache-first con fallback
@@ -27,7 +27,7 @@
    - skipWaiting: inmediato siempre
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME   = 'dashwey-v9-5-50';
+const CACHE_NAME   = 'dashwey-v9-5-51';
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
@@ -38,7 +38,7 @@ const PRECACHE_URLS = [
 ];
 
 /* ── Install ────────────────────────────────────────────────────────
-   v9.5.50: skipWaiting inmediato + limpieza agresiva de caches viejas
+   v9.5.51: skipWaiting inmediato + limpieza agresiva de caches viejas
    ya en install (no esperar a activate) para cubrir el caso donde
    el SW viejo sigue activo y sirve HTML antiguo. */
 self.addEventListener('install', e => {
@@ -49,7 +49,7 @@ self.addEventListener('install', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v9.5.50] Install: eliminando cache antigua:', k);
+          console.log('[SW v9.5.51] Install: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -59,9 +59,9 @@ self.addEventListener('install', e => {
 });
 
 /* ── Activate ───────────────────────────────────────────────────────
-   v9.5.50: claim + reload de TODOS los clientes.
+   v9.5.51: claim + reload de TODOS los clientes.
    El reload fuerza que los clientes descarguen el HTML fresco de la red
-   (nunca del cache, ya que el HTML no se cachea en v9.5.50).
+   (nunca del cache, ya que el HTML no se cachea en v9.5.51).
    Guard: solo recargar si el cliente está en la URL de la app. */
 self.addEventListener('activate', e => {
   e.waitUntil(
@@ -69,7 +69,7 @@ self.addEventListener('activate', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v9.5.50] Activate: eliminando cache antigua:', k);
+          console.log('[SW v9.5.51] Activate: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -192,11 +192,11 @@ self.addEventListener('notificationclick', e => {
 });
 
 /* ── Fetch ──────────────────────────────────────────────────────────
-   v9.5.50 ESTRATEGIA DE CACHE:
+   v9.5.51 ESTRATEGIA DE CACHE:
 
    HTML principal → NETWORK-ONLY (nunca se cachea)
    ─────────────────────────────────────────────────────────────────
-   CAMBIO CRÍTICO v9.5.50: el HTML YA NO SE GUARDA en cache.
+   CAMBIO CRÍTICO v9.5.51: el HTML YA NO SE GUARDA en cache.
    Razón: si el HTML se guarda en cache, el SW siguiente puede servir
    el HTML viejo (con splash viejo) durante el gap entre install y
    activate. Al no cachear HTML, siempre viene de la red → siempre
@@ -216,7 +216,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  /* HTML principal: NETWORK-ONLY — NUNCA se cachea en v9.5.50.
+  /* HTML principal: NETWORK-ONLY — NUNCA se cachea en v9.5.51.
      Offline: respuesta de error legible en lugar de HTML viejo. */
   if (url.pathname.endsWith(HTML_URL) || url.pathname.endsWith('/')) {
     e.respondWith(
