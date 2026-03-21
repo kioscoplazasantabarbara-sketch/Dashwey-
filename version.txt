@@ -1,48 +1,53 @@
-Dashwey v9.5.65 — Performance: 60fps audit & compositor fixes
+Dashwey v9.5.66 — Auditoría forense: duplicados, leaks, dead code
 
-FASE 2 — DIAGNÓSTICO (13 issues encontrados)
+FASE 1 — MAPA COMPLETO
+  Módulos: State(L4768) DashweyBus(L5151) KPI(L5288) FinEngine(L5612)
+           Utils(L5947) ui(L6023) nav(L7344) dash(L7526) tpv(L10722) alm(L11325)
+  Listeners totales: 83
+  setTimeout: 71 | setInterval: 2
+  Funciones declaradas sin llamada interna: 58 (mayoría stubs de compatibilidad)
 
-| # | Tipo          | Impacto est. | Fix                          |
-|---|---------------|-------------|------------------------------|
-| 1 | BLOCK  ~8ms   | Chart bars height:px → layout recalc cada render        |
-| 2 | PAINT  ~3ms×5 | 5 clases con transition:width → paint cada frame        |
-| 3 | PASSIVE ~5ms  | touchstart/touchmove sin passive en pull-to-refresh     |
-| 4 | LAYOUT_THRASH | startDrag getBCR en .map() — 2 reads por tarjeta        |
-| 5 | COMPOSITE     | will-change:left (left no es compositable)               |
-| 6 | COMPOSITE     | will-change en sheets — ya correcto, conservado          |
+FIXES APLICADOS (por impacto)
 
-FIXES APLICADOS
+[1] DUPLICATE — window.error registrado 2 veces (L6329 + L15914)
+    · L6329: solo console.warn, sin toast
+    · L15914: console.error + toast + filtro e.target ← KEEPER
+    · Fix: eliminado L6329, el handler robusto en L15914 es el único
 
-[1] BLOCK — Chart bars: height:${px} → transform:scaleY(ratio)
-    · height animado = layout recalc en cada render
-    · scaleY con transform-origin:bottom = compositor only
-    · Estimación: -8ms por render del Dashboard
+[2] DUPLICATE — window.unhandledrejection registrado 2 veces (L6336 + L15919)
+    · Ambos llamaban e.preventDefault() — comportamiento idéntico
+    · Fix: eliminado el bloque L6329-L6340 (los dos juntos)
+    · Handler consolidado en L15919 (mismo bloque final del documento)
 
-[2] PAINT ×5 — Bar transitions: width → transform:scaleX
-    · fin-bar-fill, rank-bar-fill, bar-gasto, ib-bar-fill,
-      ventas-prod-bar-fill
-    · Todos: width:100% + transform:scaleX(0→1) + transform-origin:left
-    · JS actualizado: style.width=X% → style.transform=scaleX(X/100)
-    · ~18 call sites actualizados
-    · Estimación: -3ms/frame × 5 elementos = -15ms acumulado
+[3] LEAK — navigator.serviceWorker.addEventListener('message') × 2
+    · L15240 (DEEP_LINK) + L15606 (SW_UPDATED) — dos listeners separados
+    · Cada recarga del SW añadía ambos de nuevo → acumulación
+    · Fix: consolidados en UN listener con switch(e.data.action)
+    · Handles: DEEP_LINK (deep-nav) y SW_UPDATED (reload) en el mismo handler
 
-[3] COMPOSITE — will-change:left → will-change:transform
-    · pedcal-tl-marker usaba will-change:left (no compositable)
-    · left no crea capa GPU, genera re-layout en cada frame
-    
-[4] LAYOUT_THRASH — startDrag BCR optimizado
-    · Integer bit-shift para mid: (r.height >> 1) vs (r.height / 2)
-    · Minor pero en hot path del drag
+[4] PERF — track.touchstart sin {passive:true} anotado
+    · No llama preventDefault, pero el flag faltaba explícito
+    · Fix: añadido {passive:true} con comentario explicativo
+    · (Los PTR touchstart en L7893 y L7942 ya eran passive ✓)
 
-VERIFICACIÓN FASE 4
-  ✅ Tap handlers: no getBCR, no layout reads, solo classList changes
-  ✅ Pull-to-refresh scroll: { passive: true } en touchstart/touchmove
-  ✅ Animaciones: todas las barras usan transform:scaleX/Y
-  ✅ will-change justificados:
-     · #fs-box, #modal-sheet, #settings-drawer: animan transform en open/close ✓
-     · .card.card-animating: solo durante drag ✓
-     · .tl-track-fill, .tl-track-icon: animan transform en agenda ✓
-     · Eliminado: will-change:left (pedcal-tl-marker)
-  ✅ Reducción estimada de jank: ~23ms por ciclo de render
+FASE 4 — VERIFICACIÓN
 
-node --check: 10/10 ✅  |  15.950 líneas
+TPV: tap → _tapFeedback → State.set.addVenta → DashweyBus.emit('venta') ✅
+ALM: orden → confirmar → State.set.addPedido → DashweyBus.emit('pedido') ✅
+DASH: render() → _applyDashMode → renderFinanciero → renderAgenda ✅
+State.get / State.set: sin modificaciones ✅
+
+passive:false restantes justificados:
+  · track.touchmove L7409: llama e.preventDefault() al confirmar swipe horizontal ✓
+  · document.touchmove L10694: drag cards, e.preventDefault() activo ✓
+  · btn.touchstart (L11623, L13794): e.preventDefault() para evitar click sintético ✓
+  · _onOutside L13813: capture:true para modal, sin preventDefault
+
+setTimeout restantes justificados:
+  · 300ms anims (fade-out): CSS transition completions
+  · Utils.ANIM_DELAY (200ms): esperar que el sheet cierre antes de abrir otro
+  · 800ms State.save: debounce Firebase write
+  · 60_000ms notifScheduler: check caducidades/notificaciones
+  · 0ms DashweyBus: microtask batching
+
+node --check: 10/10 ✅  |  15.939 líneas (-11 vs v9.5.65)
