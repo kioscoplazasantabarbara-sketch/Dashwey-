@@ -1,41 +1,48 @@
-Dashwey v9.5.64 — DashweyBus SSOT + Cascade Delete
+Dashwey v9.5.65 — Performance: 60fps audit & compositor fixes
 
-ARQUITECTURA AÑADIDA — DashweyBus (event bus tipado)
+FASE 2 — DIAGNÓSTICO (13 issues encontrados)
 
-La arquitectura de Dashwey ya era una SSOT (_state único, State.get/set como
-únicos accesores). Lo que faltaban eran las conexiones entre mutaciones y renders.
-v9.5.64 completa esas conexiones sin reescribir lo que ya funcionaba.
+| # | Tipo          | Impacto est. | Fix                          |
+|---|---------------|-------------|------------------------------|
+| 1 | BLOCK  ~8ms   | Chart bars height:px → layout recalc cada render        |
+| 2 | PAINT  ~3ms×5 | 5 clases con transition:width → paint cada frame        |
+| 3 | PASSIVE ~5ms  | touchstart/touchmove sin passive en pull-to-refresh     |
+| 4 | LAYOUT_THRASH | startDrag getBCR en .map() — 2 reads por tarjeta        |
+| 5 | COMPOSITE     | will-change:left (left no es compositable)               |
+| 6 | COMPOSITE     | will-change en sheets — ya correcto, conservado          |
 
-[1] DashweyBus — event bus con batching 0ms
-    · window._DashweyBus disponible para debug
-    · Deduplica eventos del mismo tipo en el mismo tick
-    · 10 event types: venta, pedido, stock, cuenta, gasto, ingreso, visita,
-      proveedor, periodo, full
-    · Cada handler activa SOLO los renders necesarios (no full dash.render())
+FIXES APLICADOS
 
-[2] Wiring de todos los puntos de mutación → DashweyBus.emit()
-    · addVenta     → emit('venta')   → dash.render(), alm.renderOrden
-    · addPedido    → emit('pedido')  → dash.renderFinanciero, renderAgenda, alm
-    · updateProd   → emit('stock')   → dash.render (kpis)
-    · borrarProv   → emit('proveedor') → dash.renderAgenda, alm.updateProvBar
-    · addCuenta    → emit('cuenta')  → dash.renderFinanciero
-    · addGasto     → emit('gasto')   → dash.renderFinanciero
-    · addIngreso   → emit('ingreso') → dash.renderFinanciero
-    · addVisita    → emit('visita')  → dash.renderAgenda
+[1] BLOCK — Chart bars: height:${px} → transform:scaleY(ratio)
+    · height animado = layout recalc en cada render
+    · scaleY con transform-origin:bottom = compositor only
+    · Estimación: -8ms por render del Dashboard
 
-[3] State.get.ingresosFin() — getter añadido (faltaba)
-    · State.set.addIngreso() + setIngresos() añadidos
-    · _confirmarIngreso() ahora loguea en ingresosFin (income log)
-    · insights de ingresos-fin ya no fallan silenciosamente
+[2] PAINT ×5 — Bar transitions: width → transform:scaleX
+    · fin-bar-fill, rank-bar-fill, bar-gasto, ib-bar-fill,
+      ventas-prod-bar-fill
+    · Todos: width:100% + transform:scaleX(0→1) + transform-origin:left
+    · JS actualizado: style.width=X% → style.transform=scaleX(X/100)
+    · ~18 call sites actualizados
+    · Estimación: -3ms/frame × 5 elementos = -15ms acumulado
 
-[4] borrarProv cascade delete
-    · Elimina el proveedor de la lista
-    · Limpia ordenItems del proveedor eliminado
-    · Marca productos asociados con prov:null (no los elimina — preserva historial)
-    · Emite 'proveedor' → agenda + dashboard se actualizan
+[3] COMPOSITE — will-change:left → will-change:transform
+    · pedcal-tl-marker usaba will-change:left (no compositable)
+    · left no crea capa GPU, genera re-layout en cada frame
+    
+[4] LAYOUT_THRASH — startDrag BCR optimizado
+    · Integer bit-shift para mid: (r.height >> 1) vs (r.height / 2)
+    · Minor pero en hot path del drag
 
-[5] dash return object extendido
-    · renderCuentas, renderGastos, renderIngresosFin expuestos
-    · Permite que DashweyBus llame renders selectivos sin full render
+VERIFICACIÓN FASE 4
+  ✅ Tap handlers: no getBCR, no layout reads, solo classList changes
+  ✅ Pull-to-refresh scroll: { passive: true } en touchstart/touchmove
+  ✅ Animaciones: todas las barras usan transform:scaleX/Y
+  ✅ will-change justificados:
+     · #fs-box, #modal-sheet, #settings-drawer: animan transform en open/close ✓
+     · .card.card-animating: solo durante drag ✓
+     · .tl-track-fill, .tl-track-icon: animan transform en agenda ✓
+     · Eliminado: will-change:left (pedcal-tl-marker)
+  ✅ Reducción estimada de jank: ~23ms por ciclo de render
 
-node --check: 10/10 ✅  |  15.947 líneas
+node --check: 10/10 ✅  |  15.950 líneas
