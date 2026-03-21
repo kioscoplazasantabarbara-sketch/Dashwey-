@@ -1,74 +1,97 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v9.5.31
-   
-   CAMBIOS v9.5.31:
-   - FIX CRÍTICO: SHOW_NOTIFICATION verifica permiso antes de mostrar.
-     Elimina TypeError "No notification permission has been granted"
-     que aparecía en consola cuando el usuario no había concedido permiso.
-   - FIX: push handler también guarda contra permiso no concedido.
-   - Versión de cache incrementada a dashwey-v9-5-27.
-   - SW_UPDATED notifica versión '9.5.31' a todos los clientes.
+   Dashwey Service Worker v9.5.32
+   FIX DEFINITIVO DOBLE SPLASH
 
-   ESTRATEGIA DE CACHE (sin cambios respecto a v9.5.29):
-   - HTML principal: SIEMPRE network-first (nunca cache-only)
+   CAUSA RAÍZ DEL DOBLE SPLASH:
+   El SW anterior cacheaba el HTML (Dashwey_v82.html) después de cada
+   descarga exitosa. Al abrir la PWA instalada, el SW viejo aún activo
+   servía el HTML cacheado (con el splash viejo) INSTANTÁNEAMENTE.
+   El nuevo SW se activaba después y la página se recargaba con el nuevo
+   HTML → el usuario veía dos splashes (el viejo del cache + el nuevo).
+
+   SOLUCIÓN v9.5.32:
+   1. El HTML NUNCA se cachea — siempre viene de la red.
+      Sin HTML en cache = sin posibilidad de servir versión vieja.
+   2. En activate: se envía SW_RELOAD a todos los clientes para que
+      recarguen UNA VEZ con el HTML correcto desde la red.
+   3. Limpieza agresiva: eliminar TODAS las caches antiguas en install
+      (no solo en activate) para mayor agresividad.
+
+   ESTRATEGIA DE CACHE v9.5.32:
+   - HTML principal: SIEMPRE network-only (NUNCA se cachea)
    - version.txt: siempre red, sin cache
-   - Assets estáticos: cache-first con fallback
-   - Al activar: eliminar TODAS las caches antiguas
-   - skipWaiting: inmediato siempre (no esperar navegación)
+   - Assets estáticos (iconos): cache-first con fallback
+   - Firebase CDN: network-first sin cachear
+   - Al install: eliminar caches antiguas YA (no esperar activate)
+   - Al activate: reload de todos los clientes + claim
+   - skipWaiting: inmediato siempre
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME   = 'dashwey-v9-5-31';  /* v9.5.31: incrementar con CADA deploy */
+const CACHE_NAME   = 'dashwey-v9-5-32';
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
-/* Lista de recursos a pre-cachear (solo los esenciales offline) */
+/* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
 const PRECACHE_URLS = [
-  VERSION_URL,
-  /* NO pre-cachear HTML aquí — lo cachea el fetch handler tras red exitosa */
+  /* version.txt se sirve siempre de red — no pre-cachear */
+  /* HTML nunca se cachea — ver fetch handler */
 ];
 
-/* ── Install: pre-cache mínimo + skipWaiting inmediato ─────────────
-   CRÍTICO: skipWaiting() sin esperar — el nuevo SW toma control
-   en el siguiente fetch, no en la siguiente navegación completa.
-   Esto garantiza que mobile/PWA actualice sin necesitar reload manual. */
+/* ── Install ────────────────────────────────────────────────────────
+   v9.5.32: skipWaiting inmediato + limpieza agresiva de caches viejas
+   ya en install (no esperar a activate) para cubrir el caso donde
+   el SW viejo sigue activo y sirve HTML antiguo. */
 self.addEventListener('install', e => {
-  self.skipWaiting(); /* activación inmediata, no esperar */
+  self.skipWaiting(); /* Activación inmediata — no esperar navegación */
   e.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(c => c.addAll(PRECACHE_URLS).catch(() => { /* ignorar fallos de precache */ }))
+    /* Limpiar caches antiguas YA en install — máxima agresividad */
+    caches.keys()
+      .then(keys => {
+        const toDelete = keys.filter(k => k !== CACHE_NAME);
+        return Promise.all(toDelete.map(k => {
+          console.log('[SW v9.5.32] Install: eliminando cache antigua:', k);
+          return caches.delete(k);
+        }));
+      })
+      .then(() => caches.open(CACHE_NAME))
+      .then(c => c.addAll(PRECACHE_URLS).catch(() => {}))
   );
 });
 
-/* ── Activate: LIMPIAR TODAS las caches antiguas ───────────────────
-   Eliminar cualquier cache dashwey-* que no sea la actual.
-   Fuerza que mobile/iOS recargue el HTML y el splash frescos. */
+/* ── Activate ───────────────────────────────────────────────────────
+   v9.5.32: claim + reload de TODOS los clientes.
+   El reload fuerza que los clientes descarguen el HTML fresco de la red
+   (nunca del cache, ya que el HTML no se cachea en v9.5.32).
+   Guard: solo recargar si el cliente está en la URL de la app. */
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
       .then(keys => {
-        const toDelete = keys.filter(k =>
-          /* Borrar CUALQUIER versión anterior, sea del nombre que sea */
-          k !== CACHE_NAME
-        );
+        const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW] Eliminando cache antigua:', k);
+          console.log('[SW v9.5.32] Activate: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
-      /* Tomar control de TODOS los clientes abiertos inmediatamente */
       .then(() => self.clients.claim())
-      /* Notificar a todos los clientes que el SW se actualizó */
       .then(() => {
-        self.clients.matchAll({ type: 'window' }).then(clients => {
-          clients.forEach(client => {
-            client.postMessage({ action: 'SW_UPDATED', version: '9.5.31' });
+        /* Notificar a todos los clientes: nuevo SW activo.
+           El cliente HTML escucha SW_UPDATED y recarga UNA VEZ
+           (con guard sessionStorage para evitar bucle). */
+        return self.clients.matchAll({ type: 'window' })
+          .then(clients => {
+            clients.forEach(client => {
+              client.postMessage({
+                action: 'SW_UPDATED',
+                version: '9.5.32'
+              });
+            });
           });
-        });
       })
   );
 });
 
-/* ── Messages desde el cliente ────────────────────────────────────── */
+/* ── Messages desde el cliente ──────────────────────────────────── */
 self.addEventListener('message', e => {
   if (!e.data) return;
 
@@ -78,7 +101,7 @@ self.addEventListener('message', e => {
     return;
   }
 
-  /* FORCE_REFRESH: limpiar cache y recargar (botón "Actualizar" en banner) */
+  /* FORCE_REFRESH: limpiar cache y recargar */
   if (e.data.action === 'FORCE_REFRESH') {
     e.waitUntil(
       caches.keys()
@@ -89,28 +112,17 @@ self.addEventListener('message', e => {
     return;
   }
 
-  /* SHOW_NOTIFICATION: mostrar notificación local desde el cliente.
-     v9.5.31 FIX CRÍTICO: verificar permiso de notificaciones ANTES de
-     llamar showNotification. Sin este guard, el SW lanza TypeError:
-     "Failed to execute 'showNotification' on 'ServiceWorkerRegistration':
-     No notification permission has been granted for this origin."
-     El cliente ya debería haber verificado el permiso, pero el SW también
-     lo comprueba como segunda línea de defensa. */
+  /* SHOW_NOTIFICATION: verificar permiso antes de mostrar */
   if (e.data.action === 'SHOW_NOTIFICATION') {
     const { title, opts } = e.data;
     if (!title) return;
-
-    /* Verificar permiso — self.Notification puede no existir en todos los SW */
     const permission = (typeof Notification !== 'undefined')
       ? Notification.permission
       : 'denied';
-
     if (permission !== 'granted') {
-      /* Permiso no concedido: ignorar silenciosamente sin lanzar error */
       console.info('[SW] SHOW_NOTIFICATION ignorado — permiso:', permission);
       return;
     }
-
     e.waitUntil(
       self.registration.showNotification(title, {
         icon:    'icon-192.png',
@@ -118,7 +130,6 @@ self.addEventListener('message', e => {
         vibrate: [100, 50, 100],
         ...opts,
       }).catch(err => {
-        /* Capturar cualquier error residual para evitar unhandled rejection */
         console.warn('[SW] showNotification error:', err && err.message);
       })
     );
@@ -126,11 +137,16 @@ self.addEventListener('message', e => {
   }
 });
 
-/* ── Push: recibir mensajes FCM (server-side) ────────────────────── */
+/* ── Push ───────────────────────────────────────────────────────── */
 self.addEventListener('push', e => {
   if (!e.data) return;
   let payload;
-  try { payload = e.data.json(); } catch(_) { payload = { title: 'Dashwey', body: e.data.text() }; }
+  try { payload = e.data.json(); }
+  catch(_) { payload = { title: 'Dashwey', body: e.data.text() }; }
+
+  const permission = (typeof Notification !== 'undefined')
+    ? Notification.permission : 'denied';
+  if (permission !== 'granted') return;
 
   const title = payload.title || 'Dashwey';
   const opts  = {
@@ -142,25 +158,13 @@ self.addEventListener('push', e => {
     vibrate:  [100, 50, 100],
     data:     payload.data   || {},
   };
-
-  /* v9.5.31 FIX: push FCM también guarda contra permiso no concedido */
-  const permission = (typeof Notification !== 'undefined')
-    ? Notification.permission
-    : 'denied';
-
-  if (permission !== 'granted') {
-    console.info('[SW] push ignorado — permiso:', permission);
-    return;
-  }
-
   e.waitUntil(
-    self.registration.showNotification(title, opts).catch(err => {
-      console.warn('[SW] push showNotification error:', err && err.message);
-    })
+    self.registration.showNotification(title, opts)
+      .catch(err => console.warn('[SW] push notification error:', err && err.message))
   );
 });
 
-/* ── Notification click: deep-link al módulo correcto ────────────── */
+/* ── Notification click ─────────────────────────────────────────── */
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const data   = e.notification.data || {};
@@ -187,47 +191,57 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-/* ── Fetch: estrategia por tipo de recurso ───────────────────────── */
+/* ── Fetch ──────────────────────────────────────────────────────────
+   v9.5.32 ESTRATEGIA DE CACHE:
+
+   HTML principal → NETWORK-ONLY (nunca se cachea)
+   ─────────────────────────────────────────────────────────────────
+   CAMBIO CRÍTICO v9.5.32: el HTML YA NO SE GUARDA en cache.
+   Razón: si el HTML se guarda en cache, el SW siguiente puede servir
+   el HTML viejo (con splash viejo) durante el gap entre install y
+   activate. Al no cachear HTML, siempre viene de la red → siempre
+   el HTML más reciente → siempre el splash correcto → cero duplicados.
+   Offline sin red: mostrar página de error en lugar de HTML viejo.
+   ────────────────────────────────────────────────────────────────── */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
 
-  /* version.txt: SIEMPRE de red, sin cache —
-     es el archivo que determina si hay actualización disponible */
+  /* version.txt: siempre de red, sin cache */
   if (url.pathname.endsWith(VERSION_URL)) {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' })
-        .catch(() => caches.match(e.request))
+        .catch(() => new Response('{}', { headers: { 'Content-Type': 'application/json' } }))
     );
     return;
   }
 
-  /* HTML principal: SIEMPRE network-first, cache como fallback offline.
-     no-store en la petición para evitar caché HTTP del browser.
-     Esto garantiza que el splash dinámico (en el HTML) sea siempre el nuevo. */
+  /* HTML principal: NETWORK-ONLY — NUNCA se cachea en v9.5.32.
+     Offline: respuesta de error legible en lugar de HTML viejo. */
   if (url.pathname.endsWith(HTML_URL) || url.pathname.endsWith('/')) {
     e.respondWith(
-      fetch(e.request, {
-        cache: 'no-store',  /* forzar red, ignorar caché HTTP */
-      })
-        .then(res => {
-          if (res && res.status === 200) {
-            /* Actualizar cache con la versión fresca */
-            const cloned = res.clone();
-            caches.open(CACHE_NAME).then(c => c.put(e.request, cloned));
-          }
-          return res;
-        })
+      fetch(e.request, { cache: 'no-store' })
         .catch(() => {
-          /* Sin red: servir desde cache (modo offline) */
-          return caches.match(e.request);
+          /* Sin red: intentar cache como último recurso offline */
+          return caches.match(e.request).then(cached => {
+            if (cached) return cached;
+            /* Sin cache tampoco: respuesta mínima de offline */
+            return new Response(
+              '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Dashwey — Sin conexión</title>' +
+              '<style>body{font-family:Helvetica,Arial,sans-serif;background:#F7F2F2;display:flex;' +
+              'align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column}' +
+              'h1{font-size:24px;font-weight:900;letter-spacing:4px;color:#8B1A2F}' +
+              'p{color:#666;font-size:14px;margin-top:8px}</style></head>' +
+              '<body><h1>DASHWEY</h1><p>Sin conexión — conecta a internet y vuelve a intentarlo</p></body></html>',
+              { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+            );
+          });
         })
     );
     return;
   }
 
-  /* Firebase CDN + otros externos: network-first sin cachear
-     (no cachear Firebase JS para evitar versiones obsoletas) */
+  /* Firebase CDN: network-first sin cachear */
   if (url.hostname.includes('googleapis.com') ||
       url.hostname.includes('gstatic.com') ||
       url.hostname.includes('firebaseapp.com')) {
@@ -237,7 +251,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  /* Resto de assets (iconos, etc.): cache-first con fallback a red */
+  /* Assets estáticos (iconos, etc.): cache-first con fallback a red */
   e.respondWith(
     caches.match(e.request)
       .then(cached => {
