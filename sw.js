@@ -1,15 +1,15 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v9.5.29
+   Dashwey Service Worker v9.5.30
    
-   CAMBIOS v9.5.29:
+   CAMBIOS v9.5.30:
    - FIX CRÍTICO: SHOW_NOTIFICATION verifica permiso antes de mostrar.
      Elimina TypeError "No notification permission has been granted"
      que aparecía en consola cuando el usuario no había concedido permiso.
    - FIX: push handler también guarda contra permiso no concedido.
    - Versión de cache incrementada a dashwey-v9-5-27.
-   - SW_UPDATED notifica versión '9.5.29' a todos los clientes.
+   - SW_UPDATED notifica versión '9.5.30' a todos los clientes.
 
-   ESTRATEGIA DE CACHE (sin cambios respecto a v9.5.27):
+   ESTRATEGIA DE CACHE (sin cambios respecto a v9.5.29):
    - HTML principal: SIEMPRE network-first (nunca cache-only)
    - version.txt: siempre red, sin cache
    - Assets estáticos: cache-first con fallback
@@ -17,7 +17,7 @@
    - skipWaiting: inmediato siempre (no esperar navegación)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME   = 'dashwey-v9-5-29';  /* v9.5.29: incrementar con CADA deploy */
+const CACHE_NAME   = 'dashwey-v9-5-30';  /* v9.5.30: incrementar con CADA deploy */
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
@@ -61,7 +61,7 @@ self.addEventListener('activate', e => {
       .then(() => {
         self.clients.matchAll({ type: 'window' }).then(clients => {
           clients.forEach(client => {
-            client.postMessage({ action: 'SW_UPDATED', version: '9.5.29' });
+            client.postMessage({ action: 'SW_UPDATED', version: '9.5.30' });
           });
         });
       })
@@ -90,7 +90,7 @@ self.addEventListener('message', e => {
   }
 
   /* SHOW_NOTIFICATION: mostrar notificación local desde el cliente.
-     v9.5.29 FIX CRÍTICO: verificar permiso de notificaciones ANTES de
+     v9.5.30 FIX CRÍTICO: verificar permiso de notificaciones ANTES de
      llamar showNotification. Sin este guard, el SW lanza TypeError:
      "Failed to execute 'showNotification' on 'ServiceWorkerRegistration':
      No notification permission has been granted for this origin."
@@ -143,7 +143,7 @@ self.addEventListener('push', e => {
     data:     payload.data   || {},
   };
 
-  /* v9.5.29 FIX: push FCM también guarda contra permiso no concedido */
+  /* v9.5.30 FIX: push FCM también guarda contra permiso no concedido */
   const permission = (typeof Notification !== 'undefined')
     ? Notification.permission
     : 'denied';
