@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.95 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.96 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.95
+  /* HEAD BOOTSTRAP v9.5.96
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -44,7 +44,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v9-5-95";
+      var CURRENT_CACHE = "dashwey-v9-5-96";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.95"><!-- v9.5.95: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.95"><!-- v9.5.95: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=9.5.96"><!-- v9.5.96: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.96"><!-- v9.5.96: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v9.5.95</title>
+<title>Dashwey v9.5.96</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6926,7 +6926,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.95';
+  const _APP_VERSION = 'v9.5.96';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12144,6 +12144,7 @@ const alm = (() => {
   let _confirmandoPedido  = false;
   // Timer de debounce para busqueda inline — declarado aqui para evitar TDZ
   let _almSearchTimer     = null;
+  let _catRenderTimer     = null; // v9.5.96: debounce del innerHTML de renderCatInline
   // Carrito persistente: se restaura al iniciar el módulo
   (function _restoreCarrito() {
     try {
@@ -14608,12 +14609,34 @@ const alm = (() => {
     }
   }
 
+  // v9.5.96: onMainSearch — separar filtro (inmediato) de DOM write (debounce)
+  //
+  // PROBLEMA ANTERIOR: renderCatInline() reconstruye todo el innerHTML del catálogo
+  // en cada keystroke. En catálogos de 50+ artículos genera 8-20ms de bloqueo
+  // por letra → jank perceptible en Android Chrome.
+  //
+  // SOLUCIÓN: el filtro _catInlineQ se actualiza inmediatamente (sin cambio),
+  // pero el re-render del DOM se debounce 80ms con _catRenderTimer independiente.
+  // Esto elimina el burst de renders durante escritura rápida.
+  //
+  // POR QUÉ 80ms:
+  //  - < 1 frame perceptible (16.6ms) de latencia máxima acumulada
+  //  - _catInlineRefreshItem ya tiene guard `if (!el) return` → inofensivo
+  //    si se llama durante la ventana de debounce (el elemento puede no existir aún)
+  //  - _almSearchTimer (dropdown _permSearch, 200ms) NO se toca — timer separado
+  //
+  // INVARIANTE: _catInlineQ siempre tiene el valor del último keystroke antes
+  // del render → el resultado final es idéntico, solo se omiten renders intermedios.
   function onMainSearch(val) {
-    clearTimeout(_almSearchTimer);
-    // Actualizar filtro inline inmediatamente (sin debounce) para respuesta visual
+    // 1. Filtro inmediato — _catInlineRefreshItem y otros usan este valor
     _catInlineQ = val;
-    renderCatInline();
-    // Sugerencias dropdown con debounce
+
+    // 2. Re-render del DOM — debounce 80ms para evitar burst de innerHTML
+    clearTimeout(_catRenderTimer);
+    _catRenderTimer = setTimeout(() => { renderCatInline(); }, 80);
+
+    // 3. Dropdown de sugerencias — debounce independiente 200ms (sin cambio)
+    clearTimeout(_almSearchTimer);
     _almSearchTimer = setTimeout(() => _permSearch(val), 200);
   }
   function _permSearch(val) {
@@ -14706,7 +14729,9 @@ const alm = (() => {
     if (clear) clear.style.display = 'none';
     if (sugEl) sugEl.style.display = 'none';
     if (sb)    sb.classList.remove('sug-open');
-    // Resetear filtro del catálogo inline
+    // v9.5.96: cancelar render pendiente — clear debe mostrar catálogo completo inmediatamente
+    clearTimeout(_catRenderTimer);
+    clearTimeout(_almSearchTimer);
     _catInlineQ = '';
     renderCatInline();
   }
