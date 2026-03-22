@@ -1,96 +1,84 @@
-Dashwey v9.5.89
+Dashwey v9.5.88
 
-[REFACTOR DE ESTADO — ELIMINACIÓN DE VARIABLES ZOMBIE Y CÓDIGO MUERTO]
-
-═══════════════════════════════════════════
-ANÁLISIS DE ESTADO PREVIO
-═══════════════════════════════════════════
-
-Metodología:
-  · Lectura completa del estado de todos los módulos (State, nav, dash, tpv, alm)
-  · Mapeo de cada variable: declaraciones, lecturas, escrituras
-  · Identificación de variables con writes pero sin reads útiles
-  · Identificación de elementos DOM nunca visibles pero siempre actualizados
-
-Sistemas de estado auditados:
-  · State: _pendingQueue, _isSaving, _isSyncing, _saveTimer, _lastSavedHash → OK
-  · nav: _cTab, _sx/_sy, _drag, _vetoed, _rafId → OK
-  · dash: _ventasMode → ZOMBIE
-  · tpv: _cart, _catActiva, _searchQ, _ticketActivo, _dockExpanded → OK
-  · alm: _ordenCarrito, _pedidoPendiente, _confirmandoPedido, _selMode, ... → ver cambios
-
-Sistemas paralelos intencionales (NO modificados):
-  · _ordenCarrito (carrito activo) ≠ State.get.ordenItems() (orden programada legacy)
-  · Coexistencia diseñada — distintas vistas del almacén
+[BUGS CRÍTICOS — AUDITORÍA GLOBAL DE ESTABILIDAD]
 
 ═══════════════════════════════════════════
-CAMBIOS APLICADOS
+FIXES APLICADOS (ordenados por prioridad)
 ═══════════════════════════════════════════
 
-[1] _ordenEstado — ELIMINADO (7 asignaciones todas a 0, nunca a otro valor)
-    Historia: Estado del catálogo — valores 0/1/2. Estado 2 eliminado en v8.8.1,
-    estado 1 (sheet catálogo) eliminado en v8.8.2. Desde entonces solo recibía = 0.
-    La rama if(_ordenEstado === 1) fue eliminada en v9.5.88 (fix C1).
-    Ahora se elimina la variable completa y sus 6 asignaciones residuales.
-    Afectado: _cerrarComprobacion() stub — asignación eliminada, función intacta.
+[C1] CRÍTICO — ALM: rama _ordenEstado===1 era código muerto
+     Problema:
+       _onAcceptBtnTap() tenía una bifurcación:
+         if (_ordenEstado === 1) { _cerrarCatalogo(); setTimeout(..., 300) }
+         else { _guardarCarritoYPopup() }
+       _ordenEstado NUNCA se asigna a 1 (el estado 1 se eliminó en v8.8.2).
+       La rama if nunca ejecutaba. La rama else siempre ejecutaba.
+       Ambas ramas liberaban btn.dataset.processing en momentos distintos,
+       creando una ventana de inconsistencia en el guard de doble-tap.
+     Fix:
+       · Rama if(_ordenEstado===1) completamente eliminada
+       · Flujo directo: _guardarCarritoYPopup() + processing='0'
+       · Código más claro, sin estado zombi
 
-[2] _ordenSheetEl — ELIMINADO (solo se asignaba null, nunca se leía)
-    Historia: referencia al DOM del sheet de catálogo, eliminado en v8.8.3.
-    Desde entonces: let _ordenSheetEl = null, asignación = null en _cerrarCatalogo.
-    No afecta ningún flujo activo.
+[C3] CRÍTICO — TPV: procesarPago sin try/finally
+     Problema:
+       Si State.set.addVenta() o State.set.updateProd() lanzaban una excepción
+       (localStorage lleno, corrupción de datos, etc.), _procesandoPago quedaba
+       en true para siempre. El TPV quedaba completamente bloqueado hasta
+       recargar la app — ninguna venta posible.
+     Fix:
+       · Pasos 3-6 envueltos en try/catch/finally
+       · catch: showToast con mensaje de error, no falla silenciosamente
+       · finally: _procesandoPago = false — siempre se libera, sin excepción
+       · La IIFE de Firebase (paso 5) ya tenía try/catch propio — intacta
 
-[3] _lpTimer — ELIMINADO (declarado pero el timer real es _catInlineLpTimer)
-    El nombre correcto del timer de longpress del catálogo es _catInlineLpTimer
-    (7 referencias activas, lógica completa). _lpTimer era una declaración
-    duplicada que nunca recibió ninguna asignación útil posterior.
+[A1] ALTO — ALM: _closeCtx acumulaba listeners en cada longpress
+     Problema:
+       _openCatInlineCtxMenu() registraba dos listeners en document
+       (touchstart + click) para cerrar el menú contextual al tocar fuera.
+       Si el usuario cerraba el menú desde un botón interno (Editar/Borrar/etc.),
+       el removeEventListener manual NUNCA corría — los listeners se acumulaban
+       indefinidamente (memory leak + handlers stale).
+     Fix:
+       · { once: true } en ambos listeners
+       · El listener se auto-elimina tras el primer evento (toque fuera)
+       · Si el menú se cierra desde un botón interno, el rAF ya no dispara
+         porque el menú está removed del DOM antes del click/touchstart externo
 
-[4] _lpActiveEl — ELIMINADO (el elemento activo real es _catInlineLpEl)
-    Mismo patrón: _catInlineLpEl (3 referencias activas) es el correcto.
-    _lpActiveEl solo tenía su declaración inicial.
-
-[5] _ventasMode — ELIMINADO (declarado, nunca leído en ninguna función)
-    let _ventasMode = 'ingresos' — declarada como preparación para un
-    selector de modo ventas. Nunca se implementó el selector ni se leyó
-    la variable. Eliminada para reducir ruido en el estado del módulo dash.
-
-[6] pill-badge, cesta-badge, pill-total, cesta-total — ELIMINADOS del HTML
-    Cuatro <span> con style="display:none" permanente — nunca visibles.
-    Vestigios del sistema de orden legacy. El dock actual (alm-dock-info)
-    usa sus propios elementos (alm-dock-art, alm-dock-price).
-
-[7] calcPillTotals() — ELIMINADA
-    Función que calculaba totales para los pills legacy (ahora eliminados).
-    Solo era llamada desde updateBadge. Sin pills en el DOM, la función
-    era código muerto puro. updateBadge ahora usa directamente _ordenCarrito
-    para el dock info bar (ya lo hacía — la sección de pills era adicional).
+[A6] ALTO — Global: _silentCheckUpdate sin .catch()
+     Problema:
+       La cadena fetch(version.txt).then().then() sin .catch().
+       En modo offline o con red cortada, generaba unhandledRejection
+       en consola. No bloqueante pero indicador de error no controlado.
+     Fix:
+       · .catch(() => null) después del primer .then()
+       · Si la red falla → data = null → función retorna silenciosamente
+       · Ningún unhandledRejection
 
 ═══════════════════════════════════════════
-ESTADO DEL SISTEMA TRAS REFACTOR
+BUGS DESCARTADOS TRAS REANÁLISIS
 ═══════════════════════════════════════════
 
-Variables de estado activas por módulo:
+C2 (ordenItems vs _ordenCarrito): Son sistemas PARALELOS intencionales.
+   · _ordenCarrito = carrito de compra actual (flujo principal)
+   · State.get.ordenItems() = orden programada legacy (botón PRÓXIMA ENTREGA)
+   No hay conflicto — son vistas diferentes del mismo almacén.
 
-State:    _pendingQueue, _isSaving, _isSyncing, _saveTimer, _lastSavedHash, _state
-nav:      _cTab, _sx, _sy, _tx, _vw, _drag, _vetoed, _rafId, _touchStartTime
-dash:     (sin variables de módulo — todo computado desde State)
-tpv:      _cart, _catActiva, _searchQ, _ticketActivo, _dockExpanded, _procesandoPago
-alm:      _selMode, _ordenSel, _ordenCarrito, _pedidoPendiente, _confirmandoPedido,
-          _almSearchTimer, _catInlineQ, _catInlineLpFired, _catInlineLpTimer,
-          _catInlineLpEl, _catInlineLpStartX, _catInlineLpStartY,
-          _cataloSel, _prodPhotoData
+C4 (_confirmandoPedido + dataset.processing): Ya coordinados en v9.5.87.
+   Ambos guards se liberan en finally. La coexistencia es técnica pero funcional.
 
-Diferencia: -56 líneas de código muerto, estado más predecible
+A4 (dashwey:firebase-ready doble): Ambos usan { once: true }.
+   Un listener para _doInitialSync, otro para FCM token — propósitos distintos.
 
-[SW]       CACHE_NAME: dashwey-v9-5-88 → dashwey-v9-5-89
-[manifest] v=9.5.88 → v=9.5.89
-[HTML]     _APP_VERSION: v9.5.88 → v9.5.89 | 16.751 líneas (−56 vs v9.5.88)
+[SW]       CACHE_NAME: dashwey-v9-5-87 → dashwey-v9-5-88
+[manifest] v=9.5.87 → v=9.5.88
+[HTML]     _APP_VERSION: v9.5.87 → v9.5.88 | 16.808 líneas
 
 ═══════════════════════════════════════════
 QA
 ═══════════════════════════════════════════
-□ updateBadge: dock ALM muestra EN CESTA y TOTAL A PAGAR correctamente
-□ Longpress en artículo del catálogo → menú contextual aparece
-□ Botón "Aceptar pedido" → popup de confirmación sin cambios
-□ Confirmar pedido → carrito se vacía, badge se resetea
-□ TPV → cobrar venta → sin bloqueo de _procesandoPago
-□ Navegación entre tabs → sin regresiones
+[C1] Botón "Aceptar pedido" → popup aparece directamente (sin setTimeout 300ms)
+[C3] TPV: hacer una venta con datos corruptos en State → no se bloquea, muestra error
+[C3] TPV: venta normal → cobrar → TPV listo para siguiente venta inmediatamente
+[A1] Longpress en artículo → menú contextual → tap "Editar" → menú cierra → nuevo longpress → menú abre (sin duplicados)
+[A6] Modo avión → ningún unhandledRejection en consola
