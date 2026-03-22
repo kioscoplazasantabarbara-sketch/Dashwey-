@@ -1,33 +1,100 @@
-Dashwey v9.5.90
+Dashwey v9.5.91
 
-[BUG CRÍTICO — BOTÓN "ACEPTAR PEDIDO" NO MUESTRA EL POPUP]
+[SELECTOR DE PERIODO GLOBAL + EDITAR PROVEEDOR — CRIMSON STYLE]
 
-Causa raíz:
-  El CSS de .aceptar-popup-overlay y .aceptar-popup NUNCA existió en el archivo.
-  El overlay se creaba correctamente en JS y se insertaba en el DOM, pero sin CSS:
-    · Sin position:fixed → el div quedaba in-flow (invisible al ser height:0)
-    · Sin background → fondo transparente aunque tuviera dimensiones
-    · Sin z-index → debajo de todos los otros elementos
-  El popup existía en el DOM pero era completamente invisible.
-  El botón desaparecía porque _guardarCarritoYPopup() lo ocultaba después del
-  "éxito" del try/catch — técnicamente el popup se insertó, pero nadie lo veía.
+═══════════════════════════════════════════
+ARQUITECTURA: Utils.openPeriodSheet
+═══════════════════════════════════════════
 
-Fix aplicado:
-  CSS completo añadido para .aceptar-popup-overlay y .aceptar-popup:
-  · position:fixed; inset:0; z-index:9985 — cubre toda la pantalla
-  · background:rgba(0,0,0,0.45) — fondo semitransparente oscuro
-  · display:flex; align-items:flex-end — popup anclado en la parte inferior
-  · .aceptar-popup: border-radius:22px 22px 0 0 — sheet redondeado arriba
-  · Animación fadeInOverlay (overlay) + slideUpPopup (popup) — 0.22-0.28s
+Problema anterior:
+  3 implementaciones distintas del mismo patrón picker de fechas/periodo:
+  1. openGlobalPeriodPicker → #dash-period-sheet (HTML + CSS dps-*)
+  2. _openGastosPeriodPicker → modal dinámico con ~80 líneas de inline styles
+  3. _openVisitasPeriodPicker → modal dinámico con ~60 líneas de inline styles
+  + nuevo selector en openEditProv (v9.5.91 parcial)
 
-[SW]       CACHE_NAME: dashwey-v9-5-88 → dashwey-v9-5-90
-[manifest] v=9.5.88 → v=9.5.90
-[HTML]     _APP_VERSION: v9.5.88 → v9.5.90 | 16.839 líneas
+Solución: Utils.openPeriodSheet(config)
+  · Componente único que reutiliza el #dash-period-sheet existente
+  · Configurable: título, opciones, opción activa, callbacks
+  · Soporta: selección rápida (presets) + rango personalizado (fechas)
+  · Accesible desde cualquier módulo: Utils.openPeriodSheet({...})
+  · Sin duplicidad de HTML, CSS ni lógica
 
-QA:
-□ Añadir artículos al carrito → botón "Aceptar pedido (N bultos)" visible
-□ Tap en botón → popup de análisis aparece desde abajo (sheet animation)
-□ Popup muestra: score, inversión, venta estimada, margen, ROI
-□ Tap "Confirmar pedido" → pedido guardado, carrito limpio
-□ Tap "Cancelar" → popup cierra, botón desaparece (carrito limpio)
-□ Tap fuera del popup (fondo oscuro) → cierra = igual que Cancelar
+API pública:
+  Utils.openPeriodSheet({
+    title,          // Título del sheet (ej: "Periodo de gastos")
+    opts,           // Array de { t, i, l, s } — tipo, icono, label, sublabel
+    current,        // Opción actualmente seleccionada
+    customDesde,    // Valor inicial campo "Desde" (datetime-local)
+    customHasta,    // Valor inicial campo "Hasta"
+    customLabel,    // Texto del botón "Aplicar" en modo custom
+    onSelect(t),    // Callback al seleccionar una opción predefinida
+    onCustom(d,h),  // Callback al aplicar rango personalizado
+  })
+
+  Utils._onPeriodSheetSel(t)  // Llamado desde onclick de dps-opt
+
+═══════════════════════════════════════════
+MÓDULOS MIGRADOS
+═══════════════════════════════════════════
+
+[1] openGlobalPeriodPicker (Dashboard)
+    Antes: generaba las opciones inline y abría el sheet directamente
+    Después: delega en Utils.openPeriodSheet con _DPS_OPTS
+    Funcionalidad idéntica — mismo comportamiento
+
+[2] _openGastosPeriodPicker (Dashboard/Gastos)
+    Antes: creaba un modal dinámico con ~80 líneas de inline styles
+    Después: usa Utils.openPeriodSheet con opciones propias
+    gastos-period-modal ya no se crea — .remove() en _applyGastosPeriod
+    es no-op (compatible)
+
+[3] _openVisitasPeriodPicker (Dashboard/Agenda)
+    Antes: creaba modal dinámico + lógica de custom form inline
+    Después: usa Utils.openPeriodSheet con 7 opciones
+    _applyVisitasPeriodCustom ahora acepta params directos (desde, hasta)
+    visitas-period-modal ya no se crea — .remove() es no-op
+
+[4] Selector periodicidad en openEditProv (ALM)
+    Antes: grid de 4 chips inline + campos de fecha dentro del formulario
+    Después: botón .pe-period-btn → abre Utils.openPeriodSheet
+    _openProvPeriodSheet: 6 opciones específicas de proveedor
+    _refreshProvPeriodBtn: actualiza label y resumen tras selección
+
+═══════════════════════════════════════════
+CSS: EDITAR PROVEEDOR — CRIMSON STYLE
+═══════════════════════════════════════════
+
+Clases nuevas (solo afectan al componente Editar Proveedor):
+  .pe-section-title    — etiqueta de sección con acento crimson + barra lateral
+  .pe-section          — contenedor de sección con borde sutil
+  .day-chip            — chip de día de la semana (7 chips en fila)
+  .day-chip.on-order   — activo en días de pedido (crimson)
+  .day-chip.on-deliv   — activo en días de entrega (verde)
+  .day-grid            — fila flex de chips
+  .pe-period-btn       — botón que abre el selector global de periodo
+  .pe-period-btn-lbl   — label del periodo seleccionado
+  .pe-period-summary   — resumen del periodo (pill crimson, oculto si vacío)
+  CSS periodos (pe-period-grid, pe-period-opt, etc.) eliminados — no usados
+
+[SW]       CACHE_NAME: dashwey-v9-5-91
+[manifest] v=9.5.91
+[HTML]     _APP_VERSION: v9.5.91 | 16.997 líneas
+
+═══════════════════════════════════════════
+QA
+═══════════════════════════════════════════
+□ Dashboard → tap en "Este mes ▾" → abre #dash-period-sheet con opciones del dashboard
+□ Seleccionar "Esta semana" → dashboard se actualiza, sheet se cierra
+□ Seleccionar "Personalizado" → aparece form de fechas → "Aplicar" → dashboard actualiza
+□ Tarjeta Gastos → tap en el pill de periodo → abre sheet con opciones de gastos
+□ Aplicar "Trimestre" → gastos se filtran al periodo seleccionado
+□ Tarjeta Agenda → tap en "Próximos 7 días" → abre sheet con opciones de visitas
+□ Seleccionar "Hoy" → agenda filtra solo visitas de hoy
+□ ALM → Editar proveedor → sección "Periodicidad" → botón "Semanal / Seleccionar"
+□ Tap en botón → abre sheet con 6 opciones de periodicidad
+□ Seleccionar "Quincenal" → botón muestra "Cada 15 días"
+□ Seleccionar "Rango de fechas" → aparece form custom → Aplicar → resumen visible
+□ Guardar proveedor → periodicidad guardada en State
+□ Días de pedido/entrega → chips se activan en crimson/verde al tocar
+□ Sin regresiones en TPV ni navegación
