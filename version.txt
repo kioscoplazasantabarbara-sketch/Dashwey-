@@ -1,84 +1,33 @@
-Dashwey v9.5.88
+Dashwey v9.5.90
 
-[BUGS CRÍTICOS — AUDITORÍA GLOBAL DE ESTABILIDAD]
+[BUG CRÍTICO — BOTÓN "ACEPTAR PEDIDO" NO MUESTRA EL POPUP]
 
-═══════════════════════════════════════════
-FIXES APLICADOS (ordenados por prioridad)
-═══════════════════════════════════════════
+Causa raíz:
+  El CSS de .aceptar-popup-overlay y .aceptar-popup NUNCA existió en el archivo.
+  El overlay se creaba correctamente en JS y se insertaba en el DOM, pero sin CSS:
+    · Sin position:fixed → el div quedaba in-flow (invisible al ser height:0)
+    · Sin background → fondo transparente aunque tuviera dimensiones
+    · Sin z-index → debajo de todos los otros elementos
+  El popup existía en el DOM pero era completamente invisible.
+  El botón desaparecía porque _guardarCarritoYPopup() lo ocultaba después del
+  "éxito" del try/catch — técnicamente el popup se insertó, pero nadie lo veía.
 
-[C1] CRÍTICO — ALM: rama _ordenEstado===1 era código muerto
-     Problema:
-       _onAcceptBtnTap() tenía una bifurcación:
-         if (_ordenEstado === 1) { _cerrarCatalogo(); setTimeout(..., 300) }
-         else { _guardarCarritoYPopup() }
-       _ordenEstado NUNCA se asigna a 1 (el estado 1 se eliminó en v8.8.2).
-       La rama if nunca ejecutaba. La rama else siempre ejecutaba.
-       Ambas ramas liberaban btn.dataset.processing en momentos distintos,
-       creando una ventana de inconsistencia en el guard de doble-tap.
-     Fix:
-       · Rama if(_ordenEstado===1) completamente eliminada
-       · Flujo directo: _guardarCarritoYPopup() + processing='0'
-       · Código más claro, sin estado zombi
+Fix aplicado:
+  CSS completo añadido para .aceptar-popup-overlay y .aceptar-popup:
+  · position:fixed; inset:0; z-index:9985 — cubre toda la pantalla
+  · background:rgba(0,0,0,0.45) — fondo semitransparente oscuro
+  · display:flex; align-items:flex-end — popup anclado en la parte inferior
+  · .aceptar-popup: border-radius:22px 22px 0 0 — sheet redondeado arriba
+  · Animación fadeInOverlay (overlay) + slideUpPopup (popup) — 0.22-0.28s
 
-[C3] CRÍTICO — TPV: procesarPago sin try/finally
-     Problema:
-       Si State.set.addVenta() o State.set.updateProd() lanzaban una excepción
-       (localStorage lleno, corrupción de datos, etc.), _procesandoPago quedaba
-       en true para siempre. El TPV quedaba completamente bloqueado hasta
-       recargar la app — ninguna venta posible.
-     Fix:
-       · Pasos 3-6 envueltos en try/catch/finally
-       · catch: showToast con mensaje de error, no falla silenciosamente
-       · finally: _procesandoPago = false — siempre se libera, sin excepción
-       · La IIFE de Firebase (paso 5) ya tenía try/catch propio — intacta
+[SW]       CACHE_NAME: dashwey-v9-5-88 → dashwey-v9-5-90
+[manifest] v=9.5.88 → v=9.5.90
+[HTML]     _APP_VERSION: v9.5.88 → v9.5.90 | 16.839 líneas
 
-[A1] ALTO — ALM: _closeCtx acumulaba listeners en cada longpress
-     Problema:
-       _openCatInlineCtxMenu() registraba dos listeners en document
-       (touchstart + click) para cerrar el menú contextual al tocar fuera.
-       Si el usuario cerraba el menú desde un botón interno (Editar/Borrar/etc.),
-       el removeEventListener manual NUNCA corría — los listeners se acumulaban
-       indefinidamente (memory leak + handlers stale).
-     Fix:
-       · { once: true } en ambos listeners
-       · El listener se auto-elimina tras el primer evento (toque fuera)
-       · Si el menú se cierra desde un botón interno, el rAF ya no dispara
-         porque el menú está removed del DOM antes del click/touchstart externo
-
-[A6] ALTO — Global: _silentCheckUpdate sin .catch()
-     Problema:
-       La cadena fetch(version.txt).then().then() sin .catch().
-       En modo offline o con red cortada, generaba unhandledRejection
-       en consola. No bloqueante pero indicador de error no controlado.
-     Fix:
-       · .catch(() => null) después del primer .then()
-       · Si la red falla → data = null → función retorna silenciosamente
-       · Ningún unhandledRejection
-
-═══════════════════════════════════════════
-BUGS DESCARTADOS TRAS REANÁLISIS
-═══════════════════════════════════════════
-
-C2 (ordenItems vs _ordenCarrito): Son sistemas PARALELOS intencionales.
-   · _ordenCarrito = carrito de compra actual (flujo principal)
-   · State.get.ordenItems() = orden programada legacy (botón PRÓXIMA ENTREGA)
-   No hay conflicto — son vistas diferentes del mismo almacén.
-
-C4 (_confirmandoPedido + dataset.processing): Ya coordinados en v9.5.87.
-   Ambos guards se liberan en finally. La coexistencia es técnica pero funcional.
-
-A4 (dashwey:firebase-ready doble): Ambos usan { once: true }.
-   Un listener para _doInitialSync, otro para FCM token — propósitos distintos.
-
-[SW]       CACHE_NAME: dashwey-v9-5-87 → dashwey-v9-5-88
-[manifest] v=9.5.87 → v=9.5.88
-[HTML]     _APP_VERSION: v9.5.87 → v9.5.88 | 16.808 líneas
-
-═══════════════════════════════════════════
-QA
-═══════════════════════════════════════════
-[C1] Botón "Aceptar pedido" → popup aparece directamente (sin setTimeout 300ms)
-[C3] TPV: hacer una venta con datos corruptos en State → no se bloquea, muestra error
-[C3] TPV: venta normal → cobrar → TPV listo para siguiente venta inmediatamente
-[A1] Longpress en artículo → menú contextual → tap "Editar" → menú cierra → nuevo longpress → menú abre (sin duplicados)
-[A6] Modo avión → ningún unhandledRejection en consola
+QA:
+□ Añadir artículos al carrito → botón "Aceptar pedido (N bultos)" visible
+□ Tap en botón → popup de análisis aparece desde abajo (sheet animation)
+□ Popup muestra: score, inversión, venta estimada, margen, ROI
+□ Tap "Confirmar pedido" → pedido guardado, carrito limpio
+□ Tap "Cancelar" → popup cierra, botón desaparece (carrito limpio)
+□ Tap fuera del popup (fondo oscuro) → cierra = igual que Cancelar
