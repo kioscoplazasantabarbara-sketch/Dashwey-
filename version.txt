@@ -1,76 +1,49 @@
-Dashwey v9.5.102
+Dashwey v9.5.103
 
-[SISTEMA DE PERIODOS — Arquitectura definitiva]
-
-═══════════════════════════════════════
-HISTORIA DEL PROBLEMA
-═══════════════════════════════════════
-
-v9.5.91: Se unificó el selector visual de periodo (sheet compartido) ✅
-         Decisión correcta — un solo componente UI para todos los módulos.
-         Error de implementación: los onclicks del HTML estático del sheet
-         quedaron hardcodeados a App.dash.* y la lógica de módulos se mezcló.
-
-v9.5.101/102: Fixes incrementales que añadieron Utils.* a onclicks del HTML.
-         Causa: const en <script> no se añade a window automáticamente.
-         Resultado: ReferenceError: Utils is not defined en cada tap.
+[ESTABILIZACIÓN — Limpieza de errores de consola]
 
 ═══════════════════════════════════════
-SOLUCIÓN DEFINITIVA — 3 principios
+ERRORES RESUELTOS
 ═══════════════════════════════════════
 
-PRINCIPIO 1: Cero Utils.* en atributos HTML estáticos
-  Los onclicks del HTML se evalúan en window scope.
-  Utils es const (no va a window). App sí va (tiene window.App safety net).
-  → Todos los onclicks del sheet usan App.dash.* o literales.
+ERROR 1 — "Utils no se inicializó correctamente" (consola al arranque)
+  CAUSA RAÍZ:
+    Utils es const declarada DENTRO del App IIFE (línea 6651).
+    El safety net externo (script distinto) no puede acceder a const
+    de otro script — typeof Utils devuelve undefined → disparaba el error.
+    window.Utils = Utils en el safety net externo nunca funcionó.
+  FIX:
+    window.Utils = Utils movido al interior del App IIFE, justo después
+    de que el Utils IIFE se ejecuta (línea ~6870) — mismo scope, acceso garantizado.
+    Safety net externo simplificado: solo actúa si window.Utils es falsy.
 
-PRINCIPIO 2: Event delegation en lugar de onclick por elemento
-  Los dps-opt se generaban con onclick="Utils._onPeriodSheetSel('x')" × N.
-  → Reemplazado por UN solo scroll.onclick delegado + data-t en cada opt.
-  Beneficio: sin atributos onclick en HTML dinámico, sin dependencia de scope.
-
-PRINCIPIO 3: Lógica de módulo via _periodConfig, no via handler fijo
-  App.dash._applyPeriodSheet() lee sheet._periodConfig.onCustom si existe.
-  Si no existe, fallback a applyGlobalCustom() (Dashboard).
-  → El sheet es neutral. Cada módulo inyecta su lógica al abrir.
-
-═══════════════════════════════════════
-CAMBIOS APLICADOS
-═══════════════════════════════════════
-
-HTML sheet (DOM estático):
-  overlay onclick → App.dash.closeGlobalPeriodPicker() (ya en window via window.App)
-  applyBtn onclick → App.dash._applyPeriodSheet() (nuevo, delegado)
-
-openPeriodSheet (Utils):
-  dps-opt: sin onclick attr → data-t + scroll.onclick delegado
-  applyBtn: solo actualiza el label, sin binding onclick dinámico
-
-App.dash (nuevas funciones):
-  _applyPeriodSheet(): lee config.onCustom, delega o usa applyGlobalCustom
-  closeGlobalPeriodPicker(): limpia _periodConfig en todas las rutas
-
-HTML sub-items estáticos:
-  Utils.ANIM_DELAY → 220 (literal) en 3 onclicks estáticos del nav drawer
-
-window.Utils:
-  window.Utils = Utils añadido como safety net (para uso interno JS, no HTML)
-
-Proveedores (OPTS_PROV):
-  'personalizado' eliminado — requería campos DOM inexistentes
-  5 tipos operativos: diario · semanal · quincenal · mensual · custom
-
-[SW]  CACHE_NAME: dashwey-v9-5-102
-[HTML] _APP_VERSION: v9.5.102
+ERROR 2 — "Password field is not contained in a form" (x3)
+  CAUSA:
+    Los inputs type="password" de login y registro estaban sueltos
+    dentro de divs, sin <form> contenedor.
+    El browser no puede asociar correctamente las credenciales para
+    autocompletado ni guardar contraseñas.
+  FIX:
+    Panel login: email + password + botón envueltos en <form onsubmit="...">
+    Panel register: email + pass + pass2 + botón envueltos en <form>
+    Botones cambiados a type="submit" — Enter funciona nativamente.
+    onkeydown="Enter" eliminados de los inputs (el form lo gestiona).
 
 ═══════════════════════════════════════
-QA
+ESTADO DE CONSOLA ESPERADO
 ═══════════════════════════════════════
-□ Abrir selector Dashboard → cero errores en consola
-□ Seleccionar Hoy/Semana/Mes/Año → label actualiza, cards renderizan
-□ Seleccionar Personalizado → form de fechas aparece → Aplicar → correcto
-□ Tocar fondo del sheet → cierra limpio, sin errores
-□ Proveedor → Periodicidad → 5 opciones → seleccionar cualquiera → sin errores
-□ Proveedor → Rango de fechas → Aplicar → guarda, botón muestra rango
-□ Cerrar sheet Proveedor → abrir sheet Dashboard → sin herencia de config
-□ Nav drawer → Informe Financiero / Catálogo / Editar proveedor → sin errores
+
+ANTES:
+  ❌ [Dashwey] Utils no se inicializó correctamente
+  ❌ DOM: Password field not in form (x3)
+  ⚪ Banner not shown (normal — comportamiento del browser)
+  ⚪ POST firestore ERR_BLOCKED_BY_CLIENT (AdBlocker externo)
+
+DESPUÉS:
+  ✅ Cero errores de Dashwey
+  ✅ Cero warnings de DOM
+  ⚪ Banner not shown (idem — no es código nuestro)
+  ⚪ POST firestore blocked (idem — extensión del browser)
+
+[SW]  CACHE_NAME: dashwey-v9-5-103
+[HTML] _APP_VERSION: v9.5.103
