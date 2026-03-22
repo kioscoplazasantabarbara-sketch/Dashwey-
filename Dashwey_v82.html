@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.84 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.87 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.84
+  /* HEAD BOOTSTRAP v9.5.87
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -44,7 +44,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v9-5-84";
+      var CURRENT_CACHE = "dashwey-v9-5-87";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.84"><!-- v9.5.84: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.84"><!-- v9.5.84: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=9.5.87"><!-- v9.5.87: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.87"><!-- v9.5.87: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v9.5.84</title>
+<title>Dashwey v9.5.87</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6632,7 +6632,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.84';
+  const _APP_VERSION = 'v9.5.87';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14441,30 +14441,66 @@ const alm = (() => {
     renderCatInline();
   }
 
+  // v9.5.87: _onAcceptBtnTap corregido
+  // BUG ANTERIOR:
+  //   1. triggerHaptic('error') — haptic de error al abrir un pedido correcto
+  //   2. processing se liberaba en 140ms pero la acción corría inmediatamente
+  //      → posible doble tap antes de que el popup apareciera
+  //   3. _guardarCarritoYPopup ocultaba el botón antes de validar (ver ese fix)
+  // FIX:
+  //   · Haptic 'medium' (confirmación, no error)
+  //   · processing se libera SOLO al completar el flujo, no con setTimeout
+  //   · Guard de doble-tap correcto
   function _onAcceptBtnTap() {
-    Utils.triggerHaptic('error'); // validation error
     const btn = document.getElementById('alm-accept-fixed');
-    if (btn) {
-      if (btn.dataset.processing === '1') return;
-      btn.dataset.processing = '1';
-      btn.style.transform = 'scale(0.94)';
-      setTimeout(() => { btn.style.transform = ''; btn.dataset.processing = '0'; }, 140);
-    }
+    if (!btn || btn.dataset.processing === '1') return;
+
+    // Bloquear doble-tap hasta completar
+    btn.dataset.processing = '1';
+    btn.style.transform = 'scale(0.94)';
+    requestAnimationFrame(() => { btn.style.transform = ''; });
+
+    Utils.triggerHaptic('medium'); // confirmación, no error
+
+    // Ejecutar flujo según estado del catálogo
     if (_ordenEstado === 1) {
       _cerrarCatalogo();
-      setTimeout(() => _guardarCarritoYPopup(), 300);
+      setTimeout(() => {
+        _guardarCarritoYPopup();
+        btn.dataset.processing = '0'; // liberar DESPUÉS del popup
+      }, 300);
     } else {
       _guardarCarritoYPopup();
+      btn.dataset.processing = '0'; // liberar DESPUÉS del popup
     }
   }
 
-  // Guardar carrito en State y abrir popup de análisis — flujo directo sin estado 2
+  // v9.5.87: _guardarCarritoYPopup — flujo corregido
+  // BUG ANTERIOR: el botón se ocultaba ANTES de verificar el carrito y abrir el popup.
+  // Si el carrito estaba vacío o el popup fallaba, el botón quedaba oculto sin acción.
+  // FIX: verificar primero, ocultar solo después de que el popup se abra.
   function _guardarCarritoYPopup() {
-    const sel       = State.get.selectedProv();
+    const sel = State.get.selectedProv();
+
+    // PRIMERO: validar que hay artículos antes de tocar la UI
+    if (!Object.keys(_ordenCarrito).length) {
+      // Carrito vacío — no ocultar el botón, solo informar
+      showToast('⚠️ El carrito está vacío');
+      return;
+    }
+
+    // SEGUNDO: abrir el popup (puede fallar — nunca ocultar antes)
+    try {
+      _openAceptarPopupFromCarrito(sel);
+    } catch (err) {
+      console.error('[ACCEPT] _openAceptarPopupFromCarrito FAILED:', err);
+      showToast('⚠️ Error al abrir el resumen del pedido');
+      return; // botón permanece visible para reintentar
+    }
+
+    // TERCERO: solo si el popup se abrió — ocultar el botón
     const acceptBtn = document.getElementById('alm-accept-fixed');
     if (acceptBtn) acceptBtn.style.display = 'none';
-    if (!Object.keys(_ordenCarrito).length) return;
-    _openAceptarPopupFromCarrito(sel);
   }
 
   function _openCatCtxMenu(id) {
@@ -14751,14 +14787,16 @@ const alm = (() => {
     // No se añaden touchend listeners — estos cancelaban el click con preventDefault.
   }
 
-  // Cancelar pedido — limpia cesta completamente, nunca deja estado sucio
+  // v9.5.87: _cancelarPedidoCarrito — liberar processing además de limpiar estado
   function _cancelarPedidoCarrito() {
-
     document.getElementById('aceptar-popup-overlay')?.remove();
-    _pedidoPendiente = null;   // snapshot descartado
+    _pedidoPendiente = null;
     _ordenCarrito    = {};
     _ordenEstado     = 0;
     try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
+    // Liberar guard de doble-tap del botón aceptar
+    const btn = document.getElementById('alm-accept-fixed');
+    if (btn) btn.dataset.processing = '0';
     _updateAcceptBtn();
     updateBadge();
     renderCatInline();
@@ -14775,6 +14813,8 @@ const alm = (() => {
       return;
     }
     _confirmandoPedido = true;
+    // v9.5.87: también liberar btn.dataset.processing al confirmar
+    const _acceptFixedBtn = document.getElementById('alm-accept-fixed');
     // FIX: finally garantiza liberacion del flag incluso en excepciones
     try {
 
@@ -14869,7 +14909,11 @@ const alm = (() => {
       }
     }, 200);
     } catch(e) { console.error('[CONFIRM] unexpected error:', e); }
-    finally { _confirmandoPedido = false; }
+    finally {
+      _confirmandoPedido = false;
+      // v9.5.87: liberar guard del botón aceptar (por si quedó bloqueado)
+      if (_acceptFixedBtn) _acceptFixedBtn.dataset.processing = '0';
+    }
   }
   // _activarComprobacion: stub de compatibilidad (estado 2 eliminado en v8.8.1)
   // Redirige al nuevo flujo directo sin pantalla de comprobación

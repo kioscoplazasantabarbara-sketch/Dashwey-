@@ -1,84 +1,80 @@
-Dashwey v9.5.84
+Dashwey v9.5.87
 
-[BUG FIXES — VISUAL/UX GLOBAL Y ALMACÉN]
+[BUG CRÍTICO — BOTÓN "ACEPTAR PEDIDO" NO EJECUTA ACCIÓN]
 
-══════════════════════════════════════════
-MÓDULO GLOBAL
-══════════════════════════════════════════
+═══════════════════════════════════════════
+DIAGNÓSTICO FORENSE — CAUSA RAÍZ
+═══════════════════════════════════════════
 
-[1A] BUG Header — 2 líneas edge-to-edge visibles
-     Causa raíz:
-     · #header tenía border-bottom: 1px solid rgba(220,20,60,0.08)
-     · Y además box-shadow: 0 1px 0 rgba(220,20,60,0.06) — segunda línea separada
-     · Ambas pintaban al mismo tiempo: línea semitransparente + sombra visible
-     Fix: eliminado box-shadow, mantenido solo border-bottom con color neutro rgba(0,0,0,0.06)
+Síntoma: al pulsar "Aceptar pedido" el botón desaparece sin ejecutar nada.
+Al hacer scroll el botón reaparece. Al pulsarlo de nuevo → mismo resultado.
 
-[1B] BUG Header — Icono de ajustes (engranaje/avatar)
-     Causa raíz: el botón mostraba un avatar circular con inicial o foto de perfil
-     Fix: reemplazado por hamburger menu — SVG de 3 barras horizontales (22×22px)
-     · Rectángulos en y=5, y=10, y=15 con fill:var(--ink) — escala con el tema
-     · border-radius:10px en el botón, background:none — integrado visualmente
-     · onclick sigue abriendo App.ui.openSettings() — funcionalidad intacta
+Bug #1 (PRINCIPAL) — _guardarCarritoYPopup:
+  ANTES:
+    acceptBtn.style.display = 'none';       // ← OCULTA EL BOTÓN PRIMERO
+    if (!Object.keys(_ordenCarrito).length) return; // ← valida después
+    _openAceptarPopupFromCarrito(sel);
 
-[1C] JS Avatar — desactivado para no corromper el hamburger
-     El JS de _loadProfilePhoto intentaba insertar foto/inicial en el botón
-     Fix: código de avatar desactivado — el hamburguer es fijo e inmutable
+  El botón se ocultaba ANTES de verificar el carrito y ANTES de abrir el popup.
+  Cualquier fallo silencioso en _openAceptarPopupFromCarrito dejaba el UI con:
+    · Botón oculto (display:none puesto)
+    · Popup que nunca apareció
+    · Pedido sin procesar
+  El scroll llamaba _updateAcceptBtn → botón reaparecía → ciclo sin fin.
 
-[2A] BUG Buscador — cuadrado dentro del cajón al pulsar
-     Causa raíz: input type="search" en Android Chrome activa un borde/outline
-     nativo del sistema + muestra el botón de limpiar propio del browser
-     Fix: type="search" → type="text" + -webkit-appearance:none + appearance:none
-     en el input #alm-perm-search
+Bug #2 — _onAcceptBtnTap:
+  · Haptic era 'error' (vibración de error al hacer un pedido correcto)
+  · Guard de doble-tap (processing) se liberaba con setTimeout(140ms)
+    independientemente de si la acción completó o falló
+  · La acción (_guardarCarritoYPopup) corría sincrónicamente (0ms)
+    mientras el guard se liberaba en 140ms → ventana de doble-tap
 
-[2B] BUG Buscador — X duplicada
-     Causa raíz: el browser renderizaba su propio botón ::-webkit-search-cancel-button
-     simultáneamente con el botón personalizado #alm-perm-clear
-     Fix CSS global:
-     .sac-input::-webkit-search-cancel-button,
-     .sac-input::-webkit-search-decoration,
-     input[type="search"]::-webkit-search-cancel-button { display:none }
+Bug #3 — _cancelarPedidoCarrito:
+  · Al cancelar el popup, btn.dataset.processing quedaba en '1' para siempre
+  · Si el usuario reabría el carrito sin recargar, el botón no respondía
 
-[2C] BUG Buscador — "Añadir X" aparece encima del botón "Añadir artículo"
-     Causa raíz: al buscar, renderCatInline() añadía inline una fila
-     "Añadir X como nuevo artículo" al final del catálogo, Y a la vez
-     _permSearch() añadía otra en el dropdown de sugerencias → duplicado visual
-     Fix: eliminada la entrada inline de renderCatInline — solo queda en el dropdown
+Bug #4 — _confirmarPedidoDesdeCarrito:
+  · btn.dataset.processing no se liberaba en el bloque finally
+  · Si el finally se alcanzaba por excepción, el botón quedaba bloqueado
 
-══════════════════════════════════════════
-MÓDULO ALMACÉN
-══════════════════════════════════════════
+═══════════════════════════════════════════
+FIXES APLICADOS
+═══════════════════════════════════════════
 
-[3] BUG Selector cantidad — número duplicado (1 + badge con número)
-    Causa raíz: _buildCatInlineItem generaba cuando nc > 0:
-    · <div class="alm-cat-badge">nc</div> — número en pill rojo encima
-    · <span class="alm-cat-qty">nc</span> — número dentro del stepper
-    Ambos mostraban el mismo valor → "1" + "1" en la misma celda
-    Fix: eliminado alm-cat-badge de _buildCatInlineItem y _catInlineRefreshItem
-    Queda solo el stepper (− N +) que ya muestra el número claramente
+[1] _guardarCarritoYPopup — orden corregido
+    DESPUÉS:
+      1. PRIMERO: validar carrito → si vacío, toast + return (botón visible)
+      2. SEGUNDO: abrir popup en try/catch → si falla, toast + return (botón visible)
+      3. TERCERO: solo si popup abrió → ocultar botón
+    El botón NUNCA desaparece si la acción no se completa.
 
-[4] BUG Scroll pedido — "Aceptar pedido X bultos" visible al scroll extremo
-    Causa raíz: #alm-accept-fixed no tenía position:fixed en el CSS
-    El JS hacía display:block + bottom:Xpx via inline style, pero sin
-    position:fixed el elemento quedaba in-flow y aparecía al final del scroll
-    Fix: añadido CSS completo para #alm-accept-fixed y .alm-accept-btn:
-    · position:fixed; left:12px; right:12px; z-index:151
-    · El JS sigue calculando bottom = offsetHeight(bottom-tabs) — correcto
+[2] _onAcceptBtnTap — guard y haptic corregidos
+    · triggerHaptic('error') → triggerHaptic('medium') — confirmación positiva
+    · processing = '0' se libera DESPUÉS de _guardarCarritoYPopup(), no con setTimeout
+    · Ambas ramas (if _ordenEstado===1 / else) liberan el guard al completar
 
-[SW]       CACHE_NAME: dashwey-v9-5-83 → dashwey-v9-5-84
-[manifest] v=9.5.83 → v=9.5.84
-[HTML]     _APP_VERSION: v9.5.83 → v9.5.84 | 16.758 líneas
+[3] _cancelarPedidoCarrito — liberar processing al cancelar
+    · btn.dataset.processing = '0' al cancelar el popup
+    · El botón vuelve a ser funcional si el usuario cancela y quiere reintentar
 
-══════════════════════════════════════════
-QA — VALIDACIÓN
-══════════════════════════════════════════
-□ Header: una sola línea separadora (no dos)
-□ Header: icono hamburger (3 barras) en lugar de avatar
-□ Tap en hamburger → abre panel de ajustes
-□ Buscador ALM: tap en campo → sin cuadrado interior, sin X duplicada
-□ Escribir en buscador → sugerencias en dropdown (una sola vez "Añadir X")
-□ Catálogo: artículo sin carrito → muestra precio
-□ Tap en artículo → añade al carrito → muestra stepper "− 1 +" (sin badge duplicado)
-□ Stepper +/− → actualiza el número correctamente
-□ Scroll hasta el fondo con artículos en carrito → "Aceptar pedido" NO aparece en el flow
-□ "Aceptar pedido X bultos" visible solo como botón flotante sobre la navbar
-□ Tap en "Aceptar pedido" → flujo de confirmación normal
+[4] _confirmarPedidoDesdeCarrito — liberar processing en finally
+    · _acceptFixedBtn cacheado al inicio
+    · processing = '0' liberado en el bloque finally
+    · Garantiza liberación incluso en excepciones inesperadas
+
+[SW]       CACHE_NAME: dashwey-v9-5-84 → dashwey-v9-5-87
+[manifest] v=9.5.84 → v=9.5.87
+[HTML]     _APP_VERSION: v9.5.84 → v9.5.87 | 16.803 líneas
+
+═══════════════════════════════════════════
+QA — FLUJO COMPLETO A VALIDAR
+═══════════════════════════════════════════
+□ Añadir artículos al carrito → botón "Aceptar pedido (N bultos)" visible
+□ Tap en botón → aparece popup de análisis del pedido
+□ Botón NO desaparece antes de que el popup aparezca
+□ Tap "Confirmar pedido" → pedido guardado, carrito limpio, botón desaparece
+□ Tap "Cancelar" → popup cierra, botón reaparece (carrito limpio)
+□ Tap botón → popup → cancelar → botón reaparece → tap de nuevo → popup OK
+□ Sin scroll necesario para recuperar el botón en ningún caso
+□ Haptic: vibración suave al pulsar (no vibración de error)
+□ Doble tap rápido → solo una acción ejecutada (guard funcional)
