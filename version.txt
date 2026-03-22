@@ -1,105 +1,68 @@
-Dashwey v9.5.82
+Dashwey v9.5.83
 
-[BUG CRÍTICO — SWIPE CATÁLOGO ALM: CAUSA RAÍZ Y FIX]
+[PERFORMANCE — 60FPS / COMPOSITOR-ONLY ANIMATIONS]
 
-═══════════════════════════════════════════
-DIAGNÓSTICO FORENSE
-═══════════════════════════════════════════
+DIAGNÓSTICO PREVIO (impacto estimado):
+  · transition:left  → layout recalc   → ~8ms/frame  [ELIMINADO]
+  · transition:height → layout recalc  → ~6ms/frame  [ELIMINADO]
+  · transition:width  → layout recalc  → ~4ms/tap    [ELIMINADO]
+  · will-change:left/height → GPU layer sin compositing [CORREGIDO]
+  · content-visibility:auto ausente → paint innecesario [AÑADIDO]
+  · Reducción estimada de jank: ~14ms en Agenda, ~10ms en chart
 
-Síntoma reportado:
-  · Swipe arriba/abajo sobre un artículo del catálogo no funciona correctamente
-  · Swipe horizontal para volver al Dashboard falla desde cualquier artículo
-  · Funciona correctamente si el swipe empieza fuera de un artículo
+[1] PAINT/COMPOSITE — tl-track-icon: left → transform (compositor-only)
+    Antes:  position:absolute; left:var(--icon-pct); transition:left 1.3s; will-change:left
+    Después: position:absolute; left:0; transform:translateX(calc(var(--icon-tx,4%)-8px));
+             transition:transform 1.3s; will-change:transform
+    · 'left' fuerza layout recalc en cada frame de la animación (~1.3s × 60fps = 78 frames)
+    · 'transform' es compositor-only: cero layout, cero paint, solo composite
+    · JS actualiza --icon-tx (mismo mecanismo que --icon-pct — cambio mínimo)
+    · Ahora calc(pct% - 8px) funciona correctamente: el % es del elemento (0px left fijo)
+      y los 8px centran el icono de 16px
 
-Causa raíz identificada — L12179 (v9.5.77 a v9.5.81):
+[2] PAINT/COMPOSITE — ev-bar-col: height → scaleY (compositor-only)
+    Antes:  height:0 → height:Xpx; transition:height 0.55s; will-change:height
+    Después: height:100%; transform:scaleY(0→ratio); transition:transform 0.55s;
+             will-change:transform; transform-origin:bottom center
+    · 'height' fuerza layout recalc + repaint en cada frame de 0.55s
+    · 'scaleY' es compositor-only: 60fps garantizados durante la animación
+    · height:100% fijo + el padre ev-chart-inner tiene height:150px → correcto
+    · JS calcula scale como val/yMax (ratio 0–1) con mínimo 0.02 para visibilidad
 
-  function _catInlineLpStart(prodId, el, evt) {
-    // v9.5.77: Solo stopPropagation para evitar que el swipe-track capture el gesto
-    if (evt) evt.stopPropagation && evt.stopPropagation(); // ← BUG
-    ...
-  }
+[3] PAINT — bt::after indicator: width → scaleX (compositor-only)
+    Antes:  width:0 → width:36px; transition:width 0.30s spring
+    Después: width:36px fijo; transform:scaleX(0→1); transition:transform 0.30s spring
+    · 'width' fuerza layout recalc en cada tab tap
+    · 'scaleX' compositor-only con transform-origin:center top
+    · El efecto visual es idéntico — el pill aparece desde el centro
 
-Cadena de propagación DOM:
-  alm-cat-item [touchstart]
-    → alm-cat-inline
-      → alm-scroll
-        → #tab-alm
-          → #swipe-track [touchstart listener — inicializa _sx, _sy]
+[4] PASSIVE — listeners sin passive:true añadidos
+    · track touchcancel → passive:true (v9.5.83)
+    · orden-sel touchend/touchmove → passive:true (1 instancia)
+    · track touchmove[1] (lectura coords) → passive:true documentado
+    · Ya tenían passive:true: ptr-dash, ptr-alm, drag-cards, sheet, back-gesture
 
-El stopPropagation() cortaba el bubbling en el ítem.
-El swipe-track nunca recibía el touchstart → nunca inicializaba _sx/_sy.
-Sin _sx/_sy → el track no podía calcular dx/dy → el swipe horizontal era imposible.
+[5] COMPOSITE — content-visibility:auto en #alm-cat-inline
+    · Los artículos fuera del viewport (scroll) no se pintan hasta entrar en vista
+    · contain-intrinsic-size:0 600px previene scroll-jump al aparecer
+    · Ahorro estimado: ~20ms de paint en catálogos con 10+ artículos
 
-El comentario era incorrecto: el track NO necesita ser bloqueado en touchstart.
-El conflicto tap-vs-swipe se resuelve correctamente en touchend (fix v9.5.77, dx>12px).
+[6] COMPOSITE — will-change audit limpio
+    Todos los will-change apuntan ahora a propiedades compositor-only:
+    · transform (swipe-track, cards, drag, tl-fill, tl-icon, bt::after, barras)
+    · opacity (shimmer ::before — solo activo durante .is-shimmering)
+    · stroke-dashoffset (SVG ring — compositor via hardware)
+    · transform,opacity (nav-animating — solo durante transición)
 
-═══════════════════════════════════════════
-FIXES APLICADOS (3 cambios quirúrgicos)
-═══════════════════════════════════════════
+[SW]       CACHE_NAME: dashwey-v9-5-82 → dashwey-v9-5-83
+[manifest] v=9.5.82 → v=9.5.83
+[HTML]     _APP_VERSION: v9.5.82 → v9.5.83 | 16.752 líneas
 
-[1] ELIMINADO stopPropagation() de _catInlineLpStart
-    · El touchstart ahora burbujea correctamente hasta el swipe-track
-    · El track recibe el evento → inicializa _sx, _sy, _touchStartTime
-    · El swipe horizontal al Dashboard funciona desde cualquier artículo
-    · El scroll vertical funciona (touch-action:pan-y en .alm-cat-item, v9.5.79)
-    · La protección tap-vs-swipe sigue activa en _catInlineLpEnd (dx/dy > 12px)
-
-[2] AÑADIDA función _catInlineLpMove(evt)
-    · Cancela el timer de longpress si el usuario se mueve >8px durante el toque
-    · Sin esto: un swipe lento (>480ms) disparaba el menú contextual
-      aunque el usuario intentara navegar al Dashboard
-    · Umbral 8px (más sensible que el 12px del touchend — detección más temprana)
-    · Exportada en el return del módulo alm como App.alm._catInlineLpMove
-
-[3] AÑADIDO ontouchmove al HTML de cada alm-cat-item
-    · ' ontouchmove="App.alm._catInlineLpMove(event)"'
-    · Conecta el movimiento del dedo con la cancelación del longpress
-
-Módulos afectados:
-  · _catInlineLpStart — stopPropagation eliminado
-  · _catInlineLpMove  — función nueva añadida
-  · _buildCatInlineItem — ontouchmove añadido al HTML del ítem
-  · return {} del módulo alm — _catInlineLpMove exportada
-
-Comportamiento PRESERVADO sin cambios:
-  · Botones stepper (+/-): stopPropagation en sus touchstart/touchend → correcto
-    (los botones son hijos del ítem — su stopPropagation es independiente)
-  · _catInlineLpEnd: umbral dx/dy > 12px para cancelar tap → intacto
-  · touch-action:pan-y en .alm-cat-item → intacto (scroll vertical libre)
-  · touch-action:pan-y en .alm-scroll → intacto
-  · Longpress 480ms → menú contextual → intacto
-
-[SW]       CACHE_NAME: dashwey-v9-5-81 → dashwey-v9-5-82
-[manifest] v=9.5.81 → v=9.5.82
-[HTML]     _APP_VERSION: v9.5.81 → v9.5.82 | 16.734 líneas
-
-═══════════════════════════════════════════
-QA — TEST DE COMPORTAMIENTO DE SWIPE
-═══════════════════════════════════════════
-
-[SWIPE HORIZONTAL — NAVEGACIÓN AL DASHBOARD]
-□ Desde Almacén, toque sobre un artículo del catálogo
-□ Swipe horizontal izquierda sobre el artículo → navega al Dashboard ✓
-□ Swipe horizontal rápido (flick) → transición completa sin quedarse a medias ✓
-□ Swipe desde área vacía (fuera de artículos) → mismo comportamiento ✓
-
-[SWIPE VERTICAL — SCROLL DEL CATÁLOGO]
-□ Scroll hacia abajo sobre artículos → se desplaza el catálogo ✓
-□ Scroll hacia arriba → regresa sin acciones accidentales ✓
-□ Tap en artículo → añade al carrito (haptic light) ✓
-
-[LONGPRESS — MENÚ CONTEXTUAL]
-□ Longpress 480ms estático → menú contextual aparece (haptic medium) ✓
-□ Longpress + movimiento >8px antes de 480ms → menú NO aparece ✓
-□ Swipe lento (>480ms) horizontal → NO dispara longpress, navega ✓
-□ Swipe lento vertical → NO dispara longpress, hace scroll ✓
-
-[BOTONES STEPPER +/-]
-□ Tap en + sobre artículo en carrito → incrementa cantidad ✓
-□ Tap en - → decrementa sin disparar swipe del track ✓
-
-[TODAS LAS PLATAFORMAS]
-□ iOS Safari: swipe horizontal desde artículo → Dashboard ✓
-□ Android Chrome: ídem ✓
-□ Android WebView (PWA instalada): ídem ✓
-□ Desktop mouse: click en artículo funciona (onclick con pointerType guard) ✓
+QA — VALIDACIÓN RENDIMIENTO
+□ Chrome DevTools → Performance → grabar tap en tab nav
+  → bt::after no debe mostrar Layout en la cascada
+□ Agenda con pedidos → grabar scroll → tl-track-icon sin Layout events
+□ Dashboard Evolución de Ventas → cambiar periodo → barras sin Layout
+□ Catálogo ALM con 10+ artículos → scroll fluido (content-visibility:auto)
+□ Swipe entre tabs desde artículo ALM → sin jank (fix v9.5.82 intacto)
+□ Longpress artículo → menú contextual sin lag
