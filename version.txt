@@ -1,43 +1,75 @@
-Dashwey v9.5.75
+Dashwey v9.5.76
 
-[AUDITORÍA FORENSE — 7 FIXES DE PRODUCCIÓN]
+[STABILITY & PERFORMANCE — 9 FIXES + FASE 4 PREMIUM]
 
-[1] BUG — _APP_VERSION desactualizado (L6463)
-    · _APP_VERSION = 'v9.5.73' en archivo v9.5.74
-    · checkForUpdate() comparaba contra versión incorrecta
-    · Fix: actualizado a 'v9.5.74' (versión real del binario)
+[1] FREEZE — drag touchmove bloqueaba scroll global (L11180)
+    · passive:false + preventDefault() corría SIEMPRE, incluso sin drag activo
+    · Cada touchmove en tab Dashboard bloqueaba el hilo principal
+    · Fix: preventDefault() con guard — solo cuando _active===true (drag confirmado)
+    · Justificación passive:false mantenida: requerido por iOS para cancelar scroll
 
-[2] BUG — showWhatsNew hardcoded a versión anterior (L15283)
-    · init() llamaba showWhatsNew('v9.5.73') explícito
-    · Usuario veía changelog de versión anterior al abrir la app
-    · Fix: reemplazado por App.ui._getAppVersion() — nunca más desincronizado
+[2] PERF — doble renderVentas en DashweyBus.on('venta') (L15668)
+    · dash.render() ya incluye renderVentas() internamente
+    · Handler llamaba render() + renderVentas() → doble render por cada venta
+    · Fix: eliminada llamada redundante a renderVentas() en el handler
 
-[3] PERF — _shimmerAllCards generaba N setTimeout por card (L8968)
-    · _CARD_IDS = 8 elementos → 8 setTimeout dentro del rAF forEach
-    · Fix: un único setTimeout global al delay máximo total
-      De 8 macrotask timers a 1 solo cleanup
+[3] PERF — emit('pedido') + emit('stock') en mismo tick → 8 renders (L13128)
+    · pedido → renderFinanciero + renderAgenda + renderOrden + updateBadge
+    · stock → dash.render() completo (incluye renderFinanciero, renderVentas...)
+    · Resultado: renderFinanciero×2, renderOrden×2 en cada pedido confirmado
+    · Fix: evento compuesto 'pedido_stock' — un único flujo de render por tick
 
-[4] PERF — _animateCardAppear usaba setTimeout(340) magic number
-    · Fix: addEventListener('animationend', ..., {once:true})
-      Cleanup exacto al final real de la animación CSS
+[4] LEAK — will-change:left en .pedcal-tl-marker (L3311)
+    · 'left' no es propiedad compositable → GPU layer permanente sin compositing
+    · Fix: will-change:transform — propiedad compositable, cero overhead
 
-[5] DEAD_CODE — renderNS() vacía exportada en API pública del módulo alm
-    · function renderNS() {} sin cuerpo — legacy eliminado en versiones anteriores
-    · Fix: eliminada del return del módulo (stub interno preservado)
+[5] PERF — touchcancel drag sin passive (L11201)
+    · cancelDrag() no llama preventDefault — passive:false innecesario
+    · Fix: {passive:true} añadido
 
-[6] DUPLICATE — Listener vacío dashwey:venta-registrada (L15708)
-    · window.addEventListener sin ninguna acción dentro
-    · Manejado completamente por DashweyBus.on('venta')
-    · Fix: eliminado — DashweyBus es SSOT
+[6] VERIFIED OK — dashwey:firebase-ready ×3
+    · L5155: sin {once} correcto — _flushQueue debe correr en cada reconexión
+    · L15648: {once:true} correcto — _doInitialSync una sola vez
+    · L15716: {once:true} correcto — FCM register una sola vez
 
-[7] STATE — _openIngresoSheet setTimeout anidado aplanado (L9555)
-    · setTimeout(ANIM_DELAY) contenía setTimeout(50) para esperar DOM
-    · Fix: requestAnimationFrame() reemplaza setTimeout(50)
-      rAF garantiza DOM pintado antes de adjuntar listeners. Estructura plana.
+[7] PERF — setTimeout(80) en _openCardInsights (L10961)
+    · Registraba listeners externos con delay arbitrario de 80ms
+    · Fix: doble rAF garantiza DOM pintado antes de registrar listeners
+    · Frame-perfect, sin magic number
 
-[SW]       CACHE_NAME: dashwey-v9-5-74 → dashwey-v9-5-75
-[SW]       postMessage version: '9.5.74' → '9.5.75'
-[manifest] start_url + iconos: v=9.5.74 → v=9.5.75
-[HTML]     7 fixes quirúrgicos — 16.434 líneas
+[8] DEAD_CODE — _shimmerCard(cardId, durationMs) nunca llamada (L8955)
+    · Función reemplazada por _shimmerAllCards() en v9.5.75
+    · Fix: eliminada del código
 
-Líneas: 16.434  |  Fixes: 7/7 ✅
+[9] FASE 4 — FLUIDEZ Y ANIMACIONES PREMIUM
+    · [9a] .card transition: ease→spring — sensación elástica en tap
+    · [9b] .fin-card-tap:active — transition explícita 0.08s spring
+    · [9c] .tpv-hot-btn:active scale 0.91→0.93 — menos agresivo, más natural
+    · [9d] #bottom-tabs.nav-animating — GPU layer bajo demanda (no permanente)
+    · [9e] Gesture Lock umbral diagonal 2.2→1.8 — detecta scroll vertical antes
+           Elimina conflictos en gestos diagonales ~45°
+    · [9f] haptic 'medium' en confirmarPedido — feedback táctil premium
+
+[passive:false restantes — todos justificados]
+    · L7614: swipe-track touchmove — preventDefault requerido para cancelar scroll
+             durante swipe horizontal confirmado (_drag && !_vetoed guard activo)
+    · L12119: ctx menu touchstart — preventDefault evita click sintético duplicado
+    · L14293: alm ctx menu touchstart — idem
+
+[setTimeout restantes >300ms — todos justificados]
+    · 300ms ×5: ocultar auth screen (match transition CSS) 
+    · 600ms: label refresh feedback (decorativo)
+    · 700ms/800ms: pull-to-refresh indicators (animación)
+    · 320ms ×2: post-scroll/post-check (animación intencional)
+    · 300ms ×3: remove() tras CSS transition / theme transition
+    · 500ms/1500ms: reload tras SW update (esperar control)
+    · 1200ms: banner PWA install (no UI crítica)
+    · 3000ms: _checkCaducidades startup (no UI crítica)
+    · 2000ms: Firebase retry delay (async, no UI)
+
+[SW]       CACHE_NAME: dashwey-v9-5-75 → dashwey-v9-5-76
+[SW]       postMessage version: '9.5.75' → '9.5.76'
+[manifest] start_url + iconos: v=9.5.75 → v=9.5.76
+[HTML]     _APP_VERSION: v9.5.74 → v9.5.76
+
+Líneas: 16.457  |  Fixes: 9 (+6 sub-fixes Fase 4) ✅
