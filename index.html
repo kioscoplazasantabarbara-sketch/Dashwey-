@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.105
+  /* HEAD BOOTSTRAP v9.5.106
      Sin splash activo en HEAD. La función real _hideSplash() se define
      más adelante en el body y SOBRESCRIBE este stub automáticamente.
      Stub aquí solo para que el auth gate no falle si JS corre antes. */
@@ -45,7 +45,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-0-1";
+      var CURRENT_CACHE = "dashwey-v1-0-2";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -56,10 +56,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.0.1"><!-- v1.0.1: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.0.1"><!-- v1.0.1: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.0.2"><!-- v1.0.2: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.0.2"><!-- v1.0.2: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.0.1</title>
+<title>Dashwey v1.0.2</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7232,7 +7232,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.0.1';
+  const _APP_VERSION = 'v1.0.2';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -8036,6 +8036,18 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
+    'v1.0.2': {
+      sections: [
+        {
+          title: '🔔 Notificaciones de actualización',
+          items: [
+            { icon: '📲', name: 'Aviso nativo en Android', desc: 'Cuando hay una nueva versión de Dashwey disponible recibirás una notificación directamente en Android, aunque la app esté minimizada o cerrada.' },
+            { icon: '👆', name: 'Toca para actualizar', desc: 'Al tocar la notificación se abre la app con el banner de actualización listo para aplicar.' },
+            { icon: '🎛️', name: 'Respeta tus preferencias', desc: 'La notificación solo se envía si tienes activadas las notificaciones de novedades en Ajustes.' },
+          ]
+        },
+      ]
+    },
     'v1.0.1': {
       sections: [
         {
@@ -16631,6 +16643,16 @@ const alm = (() => {
               nav.goTab(0);
             } else if (deepAction === 'whatsNew') {
               try { App.ui.showWhatsNew(e.data.version); } catch(_) {}
+            } else if (deepAction === 'update') {
+              // v9.5.106: tocar notificación de update → mostrar banner actualización
+              try {
+                const banner = document.getElementById('update-banner');
+                if (banner) {
+                  const msg = document.getElementById('update-banner-msg');
+                  if (msg && e.data.version) msg.textContent = '🆕 Nueva versión: v' + e.data.version;
+                  banner.classList.add('visible');
+                }
+              } catch(_) {}
             }
           } catch(_) {}
           break;
@@ -17042,7 +17064,9 @@ if (!window.Utils) {
       .catch(err => console.warn('[Dashwey SW]', err));
   }
 
-  // ── Silent version check — solo muestra banner, no toca Settings ──
+  // ── Silent version check — muestra banner + notificación Android ──
+  // v9.5.106: cuando hay update disponible, además del banner en pantalla,
+  // se envía notificación nativa Android (funciona con app en background).
   let _lastRemoteVer = null; // guard en memoria: evita mostrar el mismo banner en bucle
   function _silentCheckUpdate() {
     const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
@@ -17069,14 +17093,61 @@ if (!window.Utils) {
         if (remoteVer === _lastRemoteVer) return;
         _lastRemoteVer = remoteVer;
         sessionStorage.setItem('dashwey_pending_ver', remoteVer);
-        // Mostrar banner
+        // Mostrar banner en pantalla
         if (banner && !banner.classList.contains('visible')) {
           const msg = document.getElementById('update-banner-msg');
           if (msg) msg.textContent = '🆕 Nueva versión: ' + remoteVer;
           banner.classList.add('visible');
         }
+        // v9.5.106: notificación nativa Android — funciona en background
+        // Solo si la app está en background (visible = no interrumpir al usuario)
+        // Si está en foreground ya ve el banner — no duplicar.
+        _notifUpdate(remoteVer);
       })
       .catch(() => {}); // silencioso
+  }
+
+  // ── _notifUpdate — notificación nativa de update disponible ─────────
+  // v9.5.106: envía al SW via SHOW_NOTIFICATION (funciona con app minimizada).
+  // Guard: solo si permisos concedidos + notifOn + app en background.
+  // En foreground el banner ya es suficiente — evitar doble aviso.
+  function _notifUpdate(remoteVer) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      const settings = State.get.settings();
+      if (!settings.notifOn) return; // notifOn global desactivado
+      const prefs = State.get.notifPrefs();
+      if (!prefs.whatsNew) return; // tipo whatsNew desactivado por usuario
+    } catch(_) { return; }
+
+    // Si la app está en foreground: el banner ya es visible — no notificar
+    // Si está en background: la notificación es el único aviso posible
+    if (document.visibilityState === 'visible') return;
+
+    const title = '🆕 Dashwey ' + remoteVer + ' disponible';
+    const body  = 'Abre la app para actualizar ahora.';
+    const opts  = {
+      body,
+      icon:     '/Dashwey-/icon-192.png',
+      badge:    '/Dashwey-/icon-192.png',
+      tag:      'dashwey-update',   // reemplaza notificación anterior del mismo tipo
+      renotify: true,
+      vibrate:  [100, 50, 100],
+      data:     { action: 'update', version: remoteVer, url: '/' },
+    };
+
+    // Vía SW (background-safe, persistente)
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      try {
+        navigator.serviceWorker.controller.postMessage({
+          action: 'SHOW_NOTIFICATION', title, opts,
+        });
+      } catch(_) {}
+    } else {
+      // Fallback directo si SW no está activo
+      try { new Notification(title, opts); } catch(_) {}
+    }
   }
 
   /* ── 2. Banner de instalación Android/Chrome — v9.5.27 ─────────────

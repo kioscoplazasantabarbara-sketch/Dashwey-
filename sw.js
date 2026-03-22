@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.0.1
-   Cache: dashwey-v1-0-1
+   Dashwey Service Worker v1.0.2
+   Cache: dashwey-v1-0-2
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-0-1';
+const CACHE_NAME  = 'dashwey-v1-0-2';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -31,7 +31,7 @@ self.addEventListener('install', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v1.0.1] Install: eliminando cache antigua:', k);
+          console.log('[SW v1.0.2] Install: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -42,31 +42,47 @@ self.addEventListener('install', e => {
 
 /* ── Activate ───────────────────────────────────────────────────────
    claim + limpieza final + notificar SW_UPDATED a todos los clientes.
-   El cliente HTML escucha SW_UPDATED y recarga UNA VEZ con guard. */
+   El cliente HTML escucha SW_UPDATED y recarga UNA VEZ con guard.
+   v9.5.106: si no hay clientes activos (app cerrada), mostrar
+   notificación nativa Android directamente desde el SW. */
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v1.0.1] Activate: eliminando cache antigua:', k);
+          console.log('[SW v1.0.2] Activate: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
       .then(() => self.clients.claim())
-      .then(() => {
-        /* Notificar a todos los clientes: nuevo SW activo.
-           El cliente HTML escucha SW_UPDATED y recarga UNA VEZ
-           (con guard _swReloadPending para evitar bucle). */
-        return self.clients.matchAll({ type: 'window' })
-          .then(clients => {
-            clients.forEach(client => {
-              client.postMessage({
-                action: 'SW_UPDATED',
-                version: '1.0.1'
-              });
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then(clients => {
+        if (clients.length > 0) {
+          /* Hay clientes activos — notificar para que recarguen */
+          clients.forEach(client => {
+            client.postMessage({
+              action: 'SW_UPDATED',
+              version: '1.0.2'
             });
           });
+        } else {
+          /* App cerrada — notificación nativa Android directamente desde SW */
+          /* Solo si el permiso fue concedido previamente (no se puede pedir desde SW) */
+          const permission = (typeof Notification !== 'undefined')
+            ? Notification.permission : 'denied';
+          if (permission === 'granted') {
+            self.registration.showNotification('🆕 Dashwey v1.0.2 disponible', {
+              body:     'Abre la app para aplicar la actualización.',
+              icon:     'icon-192.png',
+              badge:    'icon-192.png',
+              tag:      'dashwey-update',
+              renotify: true,
+              vibrate:  [100, 50, 100],
+              data:     { action: 'update', version: '1.0.2', url: '/' },
+            }).catch(() => {});
+          }
+        }
       })
   );
 });
