@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v9.5.99
+   Dashwey Service Worker v9.5.100
    FIX DEFINITIVO DOBLE SPLASH
 
    CAUSA RAÍZ DEL DOBLE SPLASH:
@@ -17,7 +17,7 @@
    3. Limpieza agresiva: eliminar TODAS las caches antiguas en install
       (no solo en activate) para mayor agresividad.
 
-   ESTRATEGIA DE CACHE v9.5.99:
+   ESTRATEGIA DE CACHE v9.5.100:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
    - version.txt: siempre red, sin cache
    - Assets estáticos (iconos): cache-first con fallback
@@ -27,7 +27,7 @@
    - skipWaiting: inmediato siempre
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME   = 'dashwey-v9-5-99';
+const CACHE_NAME   = 'dashwey-v9-5-100';
 const HTML_URL     = 'Dashwey_v82.html';
 const VERSION_URL  = 'version.txt';
 
@@ -38,7 +38,7 @@ const PRECACHE_URLS = [
 ];
 
 /* ── Install ────────────────────────────────────────────────────────
-   v9.5.99: skipWaiting inmediato + limpieza agresiva de caches viejas
+   v9.5.100: skipWaiting inmediato + limpieza agresiva de caches viejas
    ya en install (no esperar a activate) para cubrir el caso donde
    el SW viejo sigue activo y sirve HTML antiguo. */
 self.addEventListener('install', e => {
@@ -49,7 +49,7 @@ self.addEventListener('install', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v9.5.99] Install: eliminando cache antigua:', k);
+          console.log('[SW v9.5.100] Install: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -59,7 +59,7 @@ self.addEventListener('install', e => {
 });
 
 /* ── Activate ───────────────────────────────────────────────────────
-   v9.5.99: claim + reload de TODOS los clientes.
+   v9.5.100: claim + reload de TODOS los clientes.
    El reload fuerza que los clientes descarguen el HTML fresco de la red
    (nunca del cache, ya que el HTML no se cachea en v9.5.73).
    Guard: solo recargar si el cliente está en la URL de la app. */
@@ -69,7 +69,7 @@ self.addEventListener('activate', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v9.5.99] Activate: eliminando cache antigua:', k);
+          console.log('[SW v9.5.100] Activate: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -83,7 +83,7 @@ self.addEventListener('activate', e => {
             clients.forEach(client => {
               client.postMessage({
                 action: 'SW_UPDATED',
-                version: '9.5.99'
+                version: '9.5.100'
               });
             });
           });
@@ -192,7 +192,7 @@ self.addEventListener('notificationclick', e => {
 });
 
 /* ── Fetch ──────────────────────────────────────────────────────────
-   v9.5.99 ESTRATEGIA DE CACHE:
+   v9.5.100 ESTRATEGIA DE CACHE:
 
    HTML principal → NETWORK-ONLY (nunca se cachea)
    ─────────────────────────────────────────────────────────────────
