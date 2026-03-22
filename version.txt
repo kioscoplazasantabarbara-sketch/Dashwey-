@@ -1,75 +1,77 @@
-Dashwey v9.5.76
+Dashwey v9.5.77
 
-[STABILITY & PERFORMANCE — 9 FIXES + FASE 4 PREMIUM]
+[BUG FIXES & UI UNIFICATION — 3 MÓDULOS]
 
-[1] FREEZE — drag touchmove bloqueaba scroll global (L11180)
-    · passive:false + preventDefault() corría SIEMPRE, incluso sin drag activo
-    · Cada touchmove en tab Dashboard bloqueaba el hilo principal
-    · Fix: preventDefault() con guard — solo cuando _active===true (drag confirmado)
-    · Justificación passive:false mantenida: requerido por iOS para cancelar scroll
+[1] BUG CRÍTICO — ALM Cajón catálogo: scroll bloqueado + tap accidental
+    · _catInlineLpStart() llamaba evt.preventDefault() SIEMPRE en ontouchstart
+    · Bloqueaba el scroll vertical dentro del área del catálogo de proveedor
+    · Sin detección de movimiento → swipe horizontal/vertical disparaba _catInlineTap()
+    · Resultado: añadía productos accidentalmente al hacer scroll
+    · Fix A: eliminado preventDefault() del touchstart — scroll vertical libre
+    · Fix B: tracking de coordenadas (_catInlineLpStartX/Y) en touchstart
+    · Fix C: en _catInlineLpEnd, guard de swipe >12px en X o Y cancela el tap
+    · Resultado: scroll vertical fluido + tap preciso + longpress intacto
 
-[2] PERF — doble renderVentas en DashweyBus.on('venta') (L15668)
-    · dash.render() ya incluye renderVentas() internamente
-    · Handler llamaba render() + renderVentas() → doble render por cada venta
-    · Fix: eliminada llamada redundante a renderVentas() en el handler
+[2] BUG CRÍTICO — Navbar: tap en botones no fiable desde haptic feedback
+    · onclick="Utils.triggerHaptic('light'); App.nav.goTab(X)" causaba doble haptic
+    · goTab() ya tiene su propio triggerHaptic('light') internamente
+    · En iOS Safari, el click sintético puede cancelarse si el swipe-track consume
+      el gesto antes de que el <button> lo reciba (race condition touch → click)
+    · Fix: reemplazado onclick por ontouchend con swipe guard (<10px horizontal)
+    · onclick mantenido como fallback para ratón (pointerType !== 'touch')
+    · haptic eliminado del inline — único punto en goTab()
+    · Resultado: tap instantáneo, sin doble haptic, sin cancelaciones
 
-[3] PERF — emit('pedido') + emit('stock') en mismo tick → 8 renders (L13128)
-    · pedido → renderFinanciero + renderAgenda + renderOrden + updateBadge
-    · stock → dash.render() completo (incluye renderFinanciero, renderVentas...)
-    · Resultado: renderFinanciero×2, renderOrden×2 en cada pedido confirmado
-    · Fix: evento compuesto 'pedido_stock' — un único flujo de render por tick
+[3] DASHBOARD — Tarjeta Evolución de Ventas: mejoras visuales
+    [3a] Anillos SVG: porcentaje de arco visible debajo de cada delta
+         · Nuevo elemento .ev-ring-pct con valor calculado (safeRatio × 100)
+         · CSS: 10px, 600 weight, color var(--ink-soft), opacity 0.75
+    [3b] Gráfico de barras: eje Y alineado + grid lines + CLS fix
+         · ev-chart-inner: align-items:stretch para alineación correcta de Y
+         · ev-chart-y: min-width 36px, padding-top:1px, flex-shrink:0
+         · ev-chart-bars::before: grid lines horizontales (repeating-linear-gradient)
+         · Dark mode: grid lines con rgba(255,255,255,0.05)
+         · ev-chart-x: margin-left:42px (36px Y + 6px gap)
+         · ev-bar-col: min-height:3px, z-index:1 sobre grid lines, transición mejorada
+         · ev-chart-wrap: min-height:176px — elimina CLS al cargar
+    [3c] Unificación visual de tarjetas
+         · bn-card (Beneficio Neto): onclick insights añadido al bn-label-text
+         · top-articulos: card-title-wrap + card-title-text + fade-sep añadidos
+         · Todas las tarjetas ahora tienen header consistente + insights dropdown
+    [3d] Prevención de parpadeos (glitches)
+         · contain:layout en #ev-rings-row, #ev-chart-bars, #dash-top-articulos,
+           #dash-caducidades, #fin-modal-cuentas-list — aísla reflows de render
 
-[4] LEAK — will-change:left en .pedcal-tl-marker (L3311)
-    · 'left' no es propiedad compositable → GPU layer permanente sin compositing
-    · Fix: will-change:transform — propiedad compositable, cero overhead
+[SW]       CACHE_NAME: dashwey-v9-5-76 → dashwey-v9-5-77
+[manifest] start_url + iconos: v=9.5.76 → v=9.5.77
+[HTML]     _APP_VERSION: v9.5.76 → v9.5.77
 
-[5] PERF — touchcancel drag sin passive (L11201)
-    · cancelDrag() no llama preventDefault — passive:false innecesario
-    · Fix: {passive:true} añadido
+Líneas: 16.539  |  Fixes: 3 bugs + 4 mejoras visuales ✅
 
-[6] VERIFIED OK — dashwey:firebase-ready ×3
-    · L5155: sin {once} correcto — _flushQueue debe correr en cada reconexión
-    · L15648: {once:true} correcto — _doInitialSync una sola vez
-    · L15716: {once:true} correcto — FCM register una sola vez
+─────────────────────────────────────────
+QA — PASOS DE VALIDACIÓN EN DISPOSITIVO REAL
+─────────────────────────────────────────
+[ALM]
+□ Abrir Almacén → seleccionar proveedor → scroll vertical libre en catálogo
+□ Swipe horizontal sobre un item → NO debe añadir al carrito
+□ Swipe vertical sobre un item → scroll fluido sin tap accidental
+□ Tap preciso en item → añade 1 bulto con haptic light
+□ Longpress 480ms → menú contextual con haptic medium
 
-[7] PERF — setTimeout(80) en _openCardInsights (L10961)
-    · Registraba listeners externos con delay arbitrario de 80ms
-    · Fix: doble rAF garantiza DOM pintado antes de registrar listeners
-    · Frame-perfect, sin magic number
+[NAVBAR]
+□ Tap rápido en TPV / DASHBOARD / ALMACÉN → navegación instantánea
+□ Swipe horizontal sobre la navbar → NO debe navegar (guard 10px)
+□ Haptic: un solo pulso 'light' por tap (no doble)
+□ Ratón (desktop): click en botones funciona normalmente
 
-[8] DEAD_CODE — _shimmerCard(cardId, durationMs) nunca llamada (L8955)
-    · Función reemplazada por _shimmerAllCards() en v9.5.75
-    · Fix: eliminada del código
-
-[9] FASE 4 — FLUIDEZ Y ANIMACIONES PREMIUM
-    · [9a] .card transition: ease→spring — sensación elástica en tap
-    · [9b] .fin-card-tap:active — transition explícita 0.08s spring
-    · [9c] .tpv-hot-btn:active scale 0.91→0.93 — menos agresivo, más natural
-    · [9d] #bottom-tabs.nav-animating — GPU layer bajo demanda (no permanente)
-    · [9e] Gesture Lock umbral diagonal 2.2→1.8 — detecta scroll vertical antes
-           Elimina conflictos en gestos diagonales ~45°
-    · [9f] haptic 'medium' en confirmarPedido — feedback táctil premium
-
-[passive:false restantes — todos justificados]
-    · L7614: swipe-track touchmove — preventDefault requerido para cancelar scroll
-             durante swipe horizontal confirmado (_drag && !_vetoed guard activo)
-    · L12119: ctx menu touchstart — preventDefault evita click sintético duplicado
-    · L14293: alm ctx menu touchstart — idem
-
-[setTimeout restantes >300ms — todos justificados]
-    · 300ms ×5: ocultar auth screen (match transition CSS) 
-    · 600ms: label refresh feedback (decorativo)
-    · 700ms/800ms: pull-to-refresh indicators (animación)
-    · 320ms ×2: post-scroll/post-check (animación intencional)
-    · 300ms ×3: remove() tras CSS transition / theme transition
-    · 500ms/1500ms: reload tras SW update (esperar control)
-    · 1200ms: banner PWA install (no UI crítica)
-    · 3000ms: _checkCaducidades startup (no UI crítica)
-    · 2000ms: Firebase retry delay (async, no UI)
-
-[SW]       CACHE_NAME: dashwey-v9-5-75 → dashwey-v9-5-76
-[SW]       postMessage version: '9.5.75' → '9.5.76'
-[manifest] start_url + iconos: v=9.5.75 → v=9.5.76
-[HTML]     _APP_VERSION: v9.5.74 → v9.5.76
-
-Líneas: 16.457  |  Fixes: 9 (+6 sub-fixes Fase 4) ✅
+[DASHBOARD]
+□ Tarjeta Evolución de Ventas:
+  □ Anillos: porcentaje % visible debajo de cada delta (ej. "73%")
+  □ Gráfico: barras visibles con grid lines horizontales de referencia
+  □ Eje Y: etiquetas alineadas verticalmente con las barras
+  □ Eje X: etiquetas de período sin solapamiento
+  □ Tooltip: aparece al tocar/hover una barra
+□ Tarjeta Beneficio Neto: tap en título → abre insights dropdown
+□ Tarjeta Top Artículos: header visible + tap → insights dropdown
+□ Cambio de período → todas las tarjetas se actualizan sin parpadeo
+□ Pull-to-refresh → shimmer en todas las tarjetas, sin saltos de layout
