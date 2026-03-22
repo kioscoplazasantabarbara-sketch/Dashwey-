@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.101 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.102 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.101
+  /* HEAD BOOTSTRAP v9.5.102
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.101"><!-- v9.5.101: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.101"><!-- v9.5.101: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=9.5.102"><!-- v9.5.102: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.102"><!-- v9.5.102: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v9.5.101</title>
+<title>Dashwey v9.5.102</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3040,7 +3040,7 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
   font-size: 14px; font-weight: 600; cursor: pointer;
 }
 
-/* v9.5.101: clases adicionales para formularios y reportes ALM/Dashboard */
+/* v9.5.102: clases adicionales para formularios y reportes ALM/Dashboard */
 
 /* openOrdenReport — alertas */
 .alm-alert-box {
@@ -6785,22 +6785,12 @@ const Utils = (() => {
         </div>
       </div>`).join('');
 
-    // Botón apply del form personalizado → usa callback si existe
+    // v9.5.102: solo actualizar el label del botón Apply
+    // La acción la gestiona Utils._onPeriodSheetApply() via atributo HTML
+    // que lee sheet._periodConfig.onCustom en tiempo real → sin binding dinámico
     const applyBtn = document.querySelector('#dps-custom-form .dps-apply-btn');
     if (applyBtn) {
       applyBtn.textContent = config.customLabel || 'Aplicar periodo';
-      applyBtn.onclick = () => {
-        if (config.onCustom) {
-          const desde = document.getElementById('dps-desde')?.value;
-          const hasta = document.getElementById('dps-hasta')?.value;
-          if (!desde || !hasta) { showToast('⚠️ Selecciona ambas fechas'); return; }
-          if (new Date(hasta) <= new Date(desde)) { showToast('⚠️ La fecha final debe ser posterior'); return; }
-          config.onCustom(desde, hasta);
-          closeSheet();
-        } else {
-          App.dash.applyGlobalCustom();
-        }
-      };
     }
 
     // Reset form personalizado
@@ -6813,14 +6803,8 @@ const Utils = (() => {
     if (pHasta && config.customHasta) pHasta.value = config.customHasta;
     else if (pHasta && !pHasta.value) pHasta.value = toLocal(now);
 
-    // Cerrar al fondo
-    sheet.onclick = e => { if (e.target === sheet) closeSheet(); };
-    function closeSheet() {
-      sheet.classList.remove('open');
-      sheet._periodConfig = null;
-      document.getElementById('dash-title-period-chevron')
-        ?.style.setProperty?.('transform', '');
-    }
+    // v9.5.102: el cierre por overlay usa Utils._onPeriodSheetClose() (atributo HTML)
+    // No necesitamos un handler dinámico adicional — evita doble binding
 
     document.getElementById('dash-title-period-chevron')
       ?.style.setProperty?.('transform', 'rotate(180deg)');
@@ -6845,7 +6829,7 @@ const Utils = (() => {
     form?.classList.remove('show');
 
     if (config?.onSelect) {
-      // v9.5.101: cerrar sheet ANTES de llamar onSelect → sin race condition
+      // v9.5.102: cerrar sheet ANTES de llamar onSelect → sin race condition
       sheet.classList.remove('open');
       document.getElementById('dash-title-period-chevron')
         ?.style.setProperty?.('transform', '');
@@ -6857,7 +6841,39 @@ const Utils = (() => {
     }
   }
 
-  return { feur, showToast, esc, getLV, haptic, triggerHaptic, ANIM_DELAY, TOAST_DURATION, DRAG_THRESHOLD, DEBOUNCE_KB, SPIN_DURATION, updateSyncBadge, openPeriodSheet, _onPeriodSheetSel };
+  // v9.5.102: _onPeriodSheetClose — cierre genérico del sheet (overlay tap o back)
+  // Delega en config.onClose si existe, o cierra limpiamente sin efectos laterales
+  function _onPeriodSheetClose() {
+    const sheet = document.getElementById('dash-period-sheet');
+    if (!sheet) return;
+    const config = sheet._periodConfig;
+    sheet.classList.remove('open');
+    sheet._periodConfig = null;
+    document.getElementById('dash-title-period-chevron')
+      ?.style.setProperty?.('transform', '');
+    // Si el contexto era Dashboard, no hace falta acción adicional
+    // Si era otro módulo (proveedor, gastos, visitas) simplemente cancela
+  }
+
+  // v9.5.102: _onPeriodSheetApply — botón Apply del form personalizado
+  // Lee los valores del form y delega en config.onCustom o en App.dash como fallback
+  function _onPeriodSheetApply() {
+    const sheet = document.getElementById('dash-period-sheet');
+    const config = sheet?._periodConfig;
+    const desde = document.getElementById('dps-desde')?.value;
+    const hasta = document.getElementById('dps-hasta')?.value;
+    if (!desde || !hasta) { showToast('⚠️ Selecciona ambas fechas'); return; }
+    if (new Date(hasta) <= new Date(desde)) { showToast('⚠️ La fecha final debe ser posterior'); return; }
+    if (config?.onCustom) {
+      config.onCustom(desde, hasta);
+      _onPeriodSheetClose();
+    } else {
+      // Fallback: Dashboard global
+      App.dash.applyGlobalCustom();
+    }
+  }
+
+  return { feur, showToast, esc, getLV, haptic, triggerHaptic, ANIM_DELAY, TOAST_DURATION, DRAG_THRESHOLD, DEBOUNCE_KB, SPIN_DURATION, updateSyncBadge, openPeriodSheet, _onPeriodSheetSel, _onPeriodSheetClose, _onPeriodSheetApply };
 })();
 
 // ── Helpers de cálculo compartidos ────────────────────────────────────
@@ -7109,7 +7125,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.101';
+  const _APP_VERSION = 'v9.5.102';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11178,8 +11194,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function closeGlobalPeriodPicker() {
     const sheet = document.getElementById('dash-period-sheet');
     if (!sheet) return;
-    /* v9.5.29: usar sistema CSS unificado — solo quitar clase .open */
     sheet.classList.remove('open');
+    sheet._periodConfig = null; // v9.5.102: limpiar siempre para evitar config stale
     document.getElementById('dash-title-period-chevron')
       ?.style.setProperty?.('transform', '');
   }
@@ -13011,13 +13027,14 @@ const alm = (() => {
   function _openProvPeriodSheet(pid) {
     const p = State.get.prov(pid); if (!p) return;
     const periodo = p.periodicidad || { tipo: 'semanal' };
+    // v9.5.102: 'personalizado' eliminado — requería campos DOM (pe-cada-dias etc.)
+    // que no existen en el sheet. Los 5 tipos restantes cubren todos los casos reales.
     const OPTS_PROV = [
-      { t:'diario',       i:'📅', l:'Diario',        s:'Pedido cada día' },
-      { t:'semanal',      i:'📆', l:'Semanal',        s:'Una vez por semana' },
-      { t:'mensual',      i:'🗓️', l:'Mensual',       s:'Una vez al mes' },
-      { t:'quincenal',    i:'🔁', l:'Quincenal',      s:'Cada 15 días' },
-      { t:'personalizado',i:'⚙️', l:'Personalizado', s:'Rango y frecuencia personalizados' },
-      { t:'custom',       i:'📏', l:'Rango de fechas',s:'Fechas exactas de inicio y fin' },
+      { t:'diario',    i:'📅', l:'Diario',          s:'Pedido cada día' },
+      { t:'semanal',   i:'📆', l:'Semanal',          s:'Una vez por semana' },
+      { t:'quincenal', i:'🔁', l:'Quincenal',        s:'Cada 15 días' },
+      { t:'mensual',   i:'🗓️', l:'Mensual',         s:'Una vez al mes' },
+      { t:'custom',    i:'📏', l:'Rango de fechas',  s:'Fechas exactas de inicio y fin' },
     ];
     const now = new Date();
     const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
@@ -13053,13 +13070,14 @@ const alm = (() => {
 
   // v9.5.91: _periodoResumen — genera texto legible del periodo
 
+  // v9.5.102: _periodoResumen — 5 tipos válidos (personalizado eliminado)
   function _periodoResumen(periodo) {
     if (!periodo) return '';
     switch (periodo.tipo) {
-      case 'diario':   return 'Cada día';
-      case 'semanal':  return 'Cada semana';
-      case 'mensual':    return 'Cada mes';
-      case 'quincenal':  return 'Cada 15 días';
+      case 'diario':    return 'Cada día';
+      case 'semanal':   return 'Cada semana';
+      case 'quincenal': return 'Cada 15 días';
+      case 'mensual':   return 'Cada mes';
       case 'custom': {
         const partes = [];
         if (periodo.fechaInicio) {
@@ -13070,20 +13088,7 @@ const alm = (() => {
           const fin = new Date(periodo.fechaFin).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
           partes.push('hasta ' + fin);
         }
-        return partes.join(' ') || 'Rango personalizado';
-      }
-      case 'personalizado': {
-        const partes = [];
-        if (periodo.cadaDias) partes.push('Cada ' + periodo.cadaDias + ' día' + (periodo.cadaDias != 1 ? 's' : ''));
-        if (periodo.fechaInicio) {
-          const ini = new Date(periodo.fechaInicio).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
-          partes.push('desde ' + ini);
-        }
-        if (periodo.fechaFin) {
-          const fin = new Date(periodo.fechaFin).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
-          partes.push('hasta ' + fin);
-        }
-        return partes.join(' · ') || '';
+        return partes.join(' ') || 'Rango de fechas';
       }
       default: return '';
     }
@@ -13098,14 +13103,10 @@ const alm = (() => {
     const trel = document.getElementById('pe-trel')?.value?.trim();
     if (!n) { showToast('⚠️ Escribe el nombre'); return; }
 
-    // v9.5.91: guardar periodicidad personalizada si los campos tienen valores
+    // v9.5.102: periodicidad se guarda en tiempo real vía _refreshProvPeriodBtn
+    // saveProvEdit solo persiste lo ya guardado en State — sin leer campos DOM inexistentes
     const p = State.get.prov(id);
     const periodoBase = p?.periodicidad || { tipo: 'semanal' };
-    if (periodoBase.tipo === 'personalizado') {
-      periodoBase.cadaDias    = document.getElementById('pe-cada-dias')?.value || '';
-      periodoBase.fechaInicio = document.getElementById('pe-fecha-ini')?.value || '';
-      periodoBase.fechaFin    = document.getElementById('pe-fecha-fin')?.value || '';
-    }
 
     State.set.updateProv(id, {
       nombre: n, telefono: tel, agente: ag, repartidor: rep, telReparto: trel,
@@ -14284,7 +14285,7 @@ const alm = (() => {
         pvpRecBtn.title = 'PVP recomendado: ' + feur(pvpOpt) + ' (30% margen)';
       }
     }
-    const bs = 'alm-ia-apply-btn'; // v9.5.101: clase CSS en lugar de inline style
+    const bs = 'alm-ia-apply-btn'; // v9.5.102: clase CSS en lugar de inline style
     const tip = margen < 15 && pvp > 0
       ? 'PVP mínimo rentable: <strong>' + feur(pvpMin) + '</strong> &nbsp;·&nbsp; PVP óptimo (30%): <strong>' + feur(pvpOpt) + '</strong><br>' +
         '<button class="' + bs + '" onclick="App.alm._applyRecomPvpVal(' + pvpOpt + ')">Aplicar ' + feur(pvpOpt) + '</button>'
@@ -17240,7 +17241,7 @@ window.addEventListener('unhandledrejection', function(e) {
 </script>
 
 <!-- GLOBAL PERIOD PICKER SHEET (v9.5.25) -->
-<div id="dash-period-sheet" onclick="if(event.target===this)App.dash.closeGlobalPeriodPicker()">
+<div id="dash-period-sheet" onclick="if(event.target===this)Utils._onPeriodSheetClose()">
   <div id="dash-period-sheet-inner">
     <div class="dps-handle"></div>
     <div class="dps-header" id="dps-sheet-header">Seleccionar periodo</div>
@@ -17258,7 +17259,7 @@ window.addEventListener('unhandledrejection', function(e) {
           <input type="datetime-local" class="dps-custom-inp" id="dps-hasta">
         </div>
       </div>
-      <button class="dps-apply-btn" onclick="App.dash.applyGlobalCustom()">Aplicar periodo</button>
+      <button class="dps-apply-btn" onclick="Utils._onPeriodSheetApply()">Aplicar periodo</button>
     </div>
   </div>
 </div>

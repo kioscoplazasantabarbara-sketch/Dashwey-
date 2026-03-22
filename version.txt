@@ -1,72 +1,77 @@
-Dashwey v9.5.101
+Dashwey v9.5.102
 
-[BUG FIX — 2 issues]
+[SISTEMA DE PERIODOS — Corrección de Unificación]
 
-═══════════════════════════════════════════
-BUG 1 — Periodicidad del pedido (proveedores)
-═══════════════════════════════════════════
+═══════════════════════════════════════════════════════════
+DIAGNÓSTICO: 3 bugs estructurales (no uno)
+═══════════════════════════════════════════════════════════
 
-SÍNTOMA:
-  Al seleccionar "Quincenal" o "Rango de fechas" en el editor
-  de proveedor, el botón mostraba "Seleccionar periodicidad"
-  y el resumen quedaba vacío, como si no se hubiera seleccionado nada.
+BUG A — Sheet DOM con onclicks hardcodeados a App.dash.*
+  El overlay (#dash-period-sheet) tenía:
+    onclick="App.dash.closeGlobalPeriodPicker()"  ← siempre Dashboard
+    onclick="App.dash.applyGlobalCustom()"         ← siempre Dashboard
+  Cuando Proveedores (u otro módulo) abría el sheet:
+  · Tocar el fondo cerraba vía App.dash.* ignorando el config del módulo
+  · Apply llamaba applyGlobalCustom() en vez de config.onCustom
+  openPeriodSheet() sobreescribía applyBtn.onclick ✅ pero el overlay
+  es atributo HTML estático — JS nunca lo tocaba → siempre App.dash.*
 
-CAUSA:
-  _periodoResumen() gestionaba 4 de 6 opciones disponibles en OPTS_PROV.
-  Los casos 'quincenal' y 'custom' caían al default → retornaban ''.
+BUG B — 'personalizado' en Proveedores esperaba DOM que no existe
+  OPTS_PROV ofrecía la opción 'personalizado' que en saveProvEdit
+  intentaba leer pe-cada-dias / pe-fecha-ini / pe-fecha-fin.
+  Esos IDs no existen en ningún HTML del sheet → siempre cadaDias:''
+  La opción era inutilizable silenciosamente.
 
-  OPTS_PROV declaraba:   diario · semanal · mensual · quincenal · personalizado · custom
-  _periodoResumen cubría: diario · semanal · mensual ·                personalizado
-  FALTABAN:                                            quincenal ·                 custom
+BUG C — closeGlobalPeriodPicker no limpiaba _periodConfig
+  Al cerrar el sheet por overlay, App.dash.closeGlobalPeriodPicker()
+  solo quitaba .open pero dejaba sheet._periodConfig con el config
+  del contexto anterior → la siguiente apertura heredaba config stale.
 
-FIX (línea ~13053):
-  Añadidos los dos casos faltantes:
-    case 'quincenal' → 'Cada 15 días'
-    case 'custom'    → 'Desde DD MMM hasta DD MMM' (o 'Rango personalizado')
+═══════════════════════════════════════════════════════════
+SOLUCIÓN: UI compartida, lógica separada por módulo
+═══════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════
-BUG 2 — Selector de periodo "Análisis de hoy" no actualizaba
-═══════════════════════════════════════════
+FIX A — Desacoplar el DOM del sheet de App.dash.*
+  Nuevas funciones en Utils (módulo neutral):
+    Utils._onPeriodSheetClose() — lee sheet._periodConfig, cierra limpiamente
+    Utils._onPeriodSheetApply() — lee config.onCustom, delega correctamente
+  DOM del sheet ahora apunta a estas funciones genéricas:
+    onclick="Utils._onPeriodSheetClose()"  (overlay)
+    onclick="Utils._onPeriodSheetApply()"  (botón Apply)
+  openPeriodSheet() ya no sobreescribe onclick del botón Apply
+  (lo hace la función Utils en tiempo real via _periodConfig)
 
-SÍNTOMA:
-  Al seleccionar cualquier periodo desde el sheet del Dashboard
-  (Hoy, Esta semana, etc.), el label del botón inline "Análisis de X"
-  no actualizaba, y el dashboard podía no re-renderizarse.
+FIX B — Eliminar opción sin UI de OPTS_PROV
+  'personalizado' eliminado de OPTS_PROV — requería campos DOM inexistentes
+  5 tipos operativos: diario · semanal · quincenal · mensual · custom(rango)
+  saveProvEdit limpiado — ya no intenta leer pe-cada-dias ni pe-fecha-*
+  La periodicidad se guarda en tiempo real vía _refreshProvPeriodBtn
 
-CAUSA RAÍZ: Race condition en el orden de operaciones entre
-  Utils._onPeriodSheetSel y App.dash.selGlobalPeriod.
+FIX C — closeGlobalPeriodPicker limpia _periodConfig
+  Añadido sheet._periodConfig = null en closeGlobalPeriodPicker()
+  Garantiza que cada apertura del sheet empiece desde estado limpio
+  sin importar qué módulo cerró el sheet anteriormente
 
-  Flujo previo (problemático):
-  1. _onPeriodSheetSel: llama config.onSelect(t)
-  2.   → selGlobalPeriod(t): guarda State, llama _updateGlobalPeriodLabel, cierra sheet
-  3. _onPeriodSheetSel: cierra sheet OTRA VEZ + limpia _periodConfig → segunda call redundante
+═══════════════════════════════════════════════════════════
+PRINCIPIO APLICADO
+═══════════════════════════════════════════════════════════
 
-  Problema adicional: selGlobalPeriod verificaba si cerrar el sheet
-  con closeGlobalPeriodPicker() sin comprobar si ya estaba cerrado.
+  UN solo componente visual (UI compartida)         ✅ mantenido
+  Lógica separada por módulo via config callbacks   ✅ restaurado
+  NO mezclar comportamiento entre módulos           ✅ garantizado
 
-FIX A — _onPeriodSheetSel (línea ~6847):
-  Orden corregido: cerrar sheet + limpiar _periodConfig ANTES de
-  llamar config.onSelect(t) → onSelect ya no encuentra el sheet abierto,
-  elimina el doble-cierre y la segunda llamada a rotate(180deg).
+[SW]       CACHE_NAME: dashwey-v9-5-101 → dashwey-v9-5-102
+[HTML]     _APP_VERSION: v9.5.101 → v9.5.102 | 17.267 líneas
 
-FIX B — selGlobalPeriod (línea ~11187):
-  - Toggle .sel usa getAttribute('onclick') (consistente con _onPeriodSheetSel)
-  - _updateGlobalPeriodLabel se llama siempre, independientemente del estado del sheet
-  - closeGlobalPeriodPicker solo se llama si el sheet sigue abierto (guard .contains('open'))
-  - Orden: State.set → _updateGlobalPeriodLabel → (cierre condicional) → render()
-
-[SW]       CACHE_NAME: dashwey-v9-5-100 → dashwey-v9-5-101
-[HTML]     _APP_VERSION: v9.5.100 → v9.5.101 | 17.260 líneas aprox.
-
-═══════════════════════════════════════════
+═══════════════════════════════════════════════════════════
 QA
-═══════════════════════════════════════════
-□ Proveedor → editar → Periodicidad → Quincenal → botón muestra "Cada 15 días"
-□ Proveedor → editar → Periodicidad → Rango de fechas → botón muestra "Desde X hasta Y"
-□ Proveedor → editar → Periodicidad → Semanal/Mensual → sin regresión
-□ Dashboard → "Análisis de Hoy" → seleccionar "Hoy" → label cambia a "Hoy"
-□ Dashboard → seleccionar "Esta semana" → label cambia y cards se actualizan
-□ Dashboard → seleccionar "Personalizado" → form aparece, aplicar → label y datos correctos
-□ Dashboard → seleccionar "Este mes" → vuelta al estado original sin errores
-□ Sin doble-cierre del sheet (no hay animación de chevron doble)
+═══════════════════════════════════════════════════════════
+□ Dashboard → selector de periodo → Hoy/Semana/Mes/Año → label actualiza + cards renderizan
+□ Dashboard → Personalizado → fechas → Aplicar → label y datos correctos
+□ Dashboard → tocar fondo del sheet → se cierra, NO afecta datos
+□ Proveedor → Periodicidad → Diario/Semanal/Quincenal/Mensual → botón muestra texto correcto
+□ Proveedor → Periodicidad → Rango de fechas → fechas → Aplicar → guarda correcto
+□ Proveedor → tocar fondo del sheet → se cierra sin guardar ni afectar Dashboard
+□ Guardar proveedor → periodicidad persiste correctamente
+□ Abrir sheet Dashboard tras cerrar sheet Proveedor → config limpio, no herencia
 □ Sin errores en consola
