@@ -1,68 +1,84 @@
-Dashwey v9.5.83
+Dashwey v9.5.84
 
-[PERFORMANCE — 60FPS / COMPOSITOR-ONLY ANIMATIONS]
+[BUG FIXES — VISUAL/UX GLOBAL Y ALMACÉN]
 
-DIAGNÓSTICO PREVIO (impacto estimado):
-  · transition:left  → layout recalc   → ~8ms/frame  [ELIMINADO]
-  · transition:height → layout recalc  → ~6ms/frame  [ELIMINADO]
-  · transition:width  → layout recalc  → ~4ms/tap    [ELIMINADO]
-  · will-change:left/height → GPU layer sin compositing [CORREGIDO]
-  · content-visibility:auto ausente → paint innecesario [AÑADIDO]
-  · Reducción estimada de jank: ~14ms en Agenda, ~10ms en chart
+══════════════════════════════════════════
+MÓDULO GLOBAL
+══════════════════════════════════════════
 
-[1] PAINT/COMPOSITE — tl-track-icon: left → transform (compositor-only)
-    Antes:  position:absolute; left:var(--icon-pct); transition:left 1.3s; will-change:left
-    Después: position:absolute; left:0; transform:translateX(calc(var(--icon-tx,4%)-8px));
-             transition:transform 1.3s; will-change:transform
-    · 'left' fuerza layout recalc en cada frame de la animación (~1.3s × 60fps = 78 frames)
-    · 'transform' es compositor-only: cero layout, cero paint, solo composite
-    · JS actualiza --icon-tx (mismo mecanismo que --icon-pct — cambio mínimo)
-    · Ahora calc(pct% - 8px) funciona correctamente: el % es del elemento (0px left fijo)
-      y los 8px centran el icono de 16px
+[1A] BUG Header — 2 líneas edge-to-edge visibles
+     Causa raíz:
+     · #header tenía border-bottom: 1px solid rgba(220,20,60,0.08)
+     · Y además box-shadow: 0 1px 0 rgba(220,20,60,0.06) — segunda línea separada
+     · Ambas pintaban al mismo tiempo: línea semitransparente + sombra visible
+     Fix: eliminado box-shadow, mantenido solo border-bottom con color neutro rgba(0,0,0,0.06)
 
-[2] PAINT/COMPOSITE — ev-bar-col: height → scaleY (compositor-only)
-    Antes:  height:0 → height:Xpx; transition:height 0.55s; will-change:height
-    Después: height:100%; transform:scaleY(0→ratio); transition:transform 0.55s;
-             will-change:transform; transform-origin:bottom center
-    · 'height' fuerza layout recalc + repaint en cada frame de 0.55s
-    · 'scaleY' es compositor-only: 60fps garantizados durante la animación
-    · height:100% fijo + el padre ev-chart-inner tiene height:150px → correcto
-    · JS calcula scale como val/yMax (ratio 0–1) con mínimo 0.02 para visibilidad
+[1B] BUG Header — Icono de ajustes (engranaje/avatar)
+     Causa raíz: el botón mostraba un avatar circular con inicial o foto de perfil
+     Fix: reemplazado por hamburger menu — SVG de 3 barras horizontales (22×22px)
+     · Rectángulos en y=5, y=10, y=15 con fill:var(--ink) — escala con el tema
+     · border-radius:10px en el botón, background:none — integrado visualmente
+     · onclick sigue abriendo App.ui.openSettings() — funcionalidad intacta
 
-[3] PAINT — bt::after indicator: width → scaleX (compositor-only)
-    Antes:  width:0 → width:36px; transition:width 0.30s spring
-    Después: width:36px fijo; transform:scaleX(0→1); transition:transform 0.30s spring
-    · 'width' fuerza layout recalc en cada tab tap
-    · 'scaleX' compositor-only con transform-origin:center top
-    · El efecto visual es idéntico — el pill aparece desde el centro
+[1C] JS Avatar — desactivado para no corromper el hamburger
+     El JS de _loadProfilePhoto intentaba insertar foto/inicial en el botón
+     Fix: código de avatar desactivado — el hamburguer es fijo e inmutable
 
-[4] PASSIVE — listeners sin passive:true añadidos
-    · track touchcancel → passive:true (v9.5.83)
-    · orden-sel touchend/touchmove → passive:true (1 instancia)
-    · track touchmove[1] (lectura coords) → passive:true documentado
-    · Ya tenían passive:true: ptr-dash, ptr-alm, drag-cards, sheet, back-gesture
+[2A] BUG Buscador — cuadrado dentro del cajón al pulsar
+     Causa raíz: input type="search" en Android Chrome activa un borde/outline
+     nativo del sistema + muestra el botón de limpiar propio del browser
+     Fix: type="search" → type="text" + -webkit-appearance:none + appearance:none
+     en el input #alm-perm-search
 
-[5] COMPOSITE — content-visibility:auto en #alm-cat-inline
-    · Los artículos fuera del viewport (scroll) no se pintan hasta entrar en vista
-    · contain-intrinsic-size:0 600px previene scroll-jump al aparecer
-    · Ahorro estimado: ~20ms de paint en catálogos con 10+ artículos
+[2B] BUG Buscador — X duplicada
+     Causa raíz: el browser renderizaba su propio botón ::-webkit-search-cancel-button
+     simultáneamente con el botón personalizado #alm-perm-clear
+     Fix CSS global:
+     .sac-input::-webkit-search-cancel-button,
+     .sac-input::-webkit-search-decoration,
+     input[type="search"]::-webkit-search-cancel-button { display:none }
 
-[6] COMPOSITE — will-change audit limpio
-    Todos los will-change apuntan ahora a propiedades compositor-only:
-    · transform (swipe-track, cards, drag, tl-fill, tl-icon, bt::after, barras)
-    · opacity (shimmer ::before — solo activo durante .is-shimmering)
-    · stroke-dashoffset (SVG ring — compositor via hardware)
-    · transform,opacity (nav-animating — solo durante transición)
+[2C] BUG Buscador — "Añadir X" aparece encima del botón "Añadir artículo"
+     Causa raíz: al buscar, renderCatInline() añadía inline una fila
+     "Añadir X como nuevo artículo" al final del catálogo, Y a la vez
+     _permSearch() añadía otra en el dropdown de sugerencias → duplicado visual
+     Fix: eliminada la entrada inline de renderCatInline — solo queda en el dropdown
 
-[SW]       CACHE_NAME: dashwey-v9-5-82 → dashwey-v9-5-83
-[manifest] v=9.5.82 → v=9.5.83
-[HTML]     _APP_VERSION: v9.5.82 → v9.5.83 | 16.752 líneas
+══════════════════════════════════════════
+MÓDULO ALMACÉN
+══════════════════════════════════════════
 
-QA — VALIDACIÓN RENDIMIENTO
-□ Chrome DevTools → Performance → grabar tap en tab nav
-  → bt::after no debe mostrar Layout en la cascada
-□ Agenda con pedidos → grabar scroll → tl-track-icon sin Layout events
-□ Dashboard Evolución de Ventas → cambiar periodo → barras sin Layout
-□ Catálogo ALM con 10+ artículos → scroll fluido (content-visibility:auto)
-□ Swipe entre tabs desde artículo ALM → sin jank (fix v9.5.82 intacto)
-□ Longpress artículo → menú contextual sin lag
+[3] BUG Selector cantidad — número duplicado (1 + badge con número)
+    Causa raíz: _buildCatInlineItem generaba cuando nc > 0:
+    · <div class="alm-cat-badge">nc</div> — número en pill rojo encima
+    · <span class="alm-cat-qty">nc</span> — número dentro del stepper
+    Ambos mostraban el mismo valor → "1" + "1" en la misma celda
+    Fix: eliminado alm-cat-badge de _buildCatInlineItem y _catInlineRefreshItem
+    Queda solo el stepper (− N +) que ya muestra el número claramente
+
+[4] BUG Scroll pedido — "Aceptar pedido X bultos" visible al scroll extremo
+    Causa raíz: #alm-accept-fixed no tenía position:fixed en el CSS
+    El JS hacía display:block + bottom:Xpx via inline style, pero sin
+    position:fixed el elemento quedaba in-flow y aparecía al final del scroll
+    Fix: añadido CSS completo para #alm-accept-fixed y .alm-accept-btn:
+    · position:fixed; left:12px; right:12px; z-index:151
+    · El JS sigue calculando bottom = offsetHeight(bottom-tabs) — correcto
+
+[SW]       CACHE_NAME: dashwey-v9-5-83 → dashwey-v9-5-84
+[manifest] v=9.5.83 → v=9.5.84
+[HTML]     _APP_VERSION: v9.5.83 → v9.5.84 | 16.758 líneas
+
+══════════════════════════════════════════
+QA — VALIDACIÓN
+══════════════════════════════════════════
+□ Header: una sola línea separadora (no dos)
+□ Header: icono hamburger (3 barras) en lugar de avatar
+□ Tap en hamburger → abre panel de ajustes
+□ Buscador ALM: tap en campo → sin cuadrado interior, sin X duplicada
+□ Escribir en buscador → sugerencias en dropdown (una sola vez "Añadir X")
+□ Catálogo: artículo sin carrito → muestra precio
+□ Tap en artículo → añade al carrito → muestra stepper "− 1 +" (sin badge duplicado)
+□ Stepper +/− → actualiza el número correctamente
+□ Scroll hasta el fondo con artículos en carrito → "Aceptar pedido" NO aparece en el flow
+□ "Aceptar pedido X bultos" visible solo como botón flotante sobre la navbar
+□ Tap en "Aceptar pedido" → flujo de confirmación normal
