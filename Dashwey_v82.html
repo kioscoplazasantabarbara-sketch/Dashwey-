@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.73 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.74 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.73
+  /* HEAD BOOTSTRAP v9.5.74
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -44,7 +44,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v9-5-51";
+      var CURRENT_CACHE = "dashwey-v9-5-74";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.51"><!-- v9.5.73: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.51"><!-- v9.5.73: cache-bust icon -->
-<link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.51">
-<title>Dashwey v9.5.73</title>
+<link rel="manifest" href="./manifest.json?v=9.5.74"><!-- v9.5.74: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.74"><!-- v9.5.74: cache-bust icon -->
+<link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
+<title>Dashwey v9.5.74</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -854,6 +854,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
   background: rgba(139,20,60,0.04);
   pointer-events: none;
   animation: shimmerFade 0.48s ease-out both;
+  animation-delay: var(--shimmer-delay, 0ms); /* v9.5.74: stagger via CSS var */
   will-change: opacity; /* isolated GPU layer */
 }
 /* Legacy .card-shimmer class — kept for compatibility */
@@ -5352,7 +5353,7 @@ const DashweyBus = (() => {
 
   // emitSync: immediate, no batching (for critical UI paths)
   function emitSync(event, payload) {
-    (_handlers[event] || []).forEach(h => { try { h(payload); } catch(e) { console.warn('[Bus]', ev, e); } });
+    (_handlers[event] || []).forEach(h => { try { h(payload); } catch(e) { console.warn('[Bus]', event, e); } });
   }
 
   return { on, off, emit, emitSync };
@@ -7724,8 +7725,6 @@ const dash = (() => {
   function render() {
     // v9.5.73: shimmer en todas las tarjetas durante render
     _shimmerAllCards(320);
-    // v9.5.73: aplicar modo de dashboard tras render
-    setTimeout(_applyDashMode, 380);
     // v9.5.25: sincronizar label del selector de periodo en el título
     try {
       const _p = State.get.period();
@@ -7801,6 +7800,8 @@ const dash = (() => {
       }
     }
 
+    // Aplicar modo dashboard al final del render (cache guard interno evita trabajo redundante)
+    _applyDashMode();
   }
 
 
@@ -7808,17 +7809,14 @@ const dash = (() => {
   function refresh() {
     // v9.5.73: shimmer solo en pull-to-refresh (user-triggered, no en cada render)
     _shimmerAllCards(280);
-    render();
-    // Micro-feedback en label de periodo al completar
-    setTimeout(() => {
-      const lbl = document.getElementById('dash-title-period-lbl');
-      if (lbl) {
-        lbl.classList.add('refresh-feedback');
-        setTimeout(() => lbl.classList.remove('refresh-feedback'), 600);
-      }
-      // Re-aplicar modo dashboard con datos frescos
-      _applyDashMode();
-    }, 340);
+    render(); // _applyDashMode llamado al final de render()
+    // Micro-feedback en label de periodo (animación decorativa, 600ms total)
+    // v9.5.74: aplanado — un único setTimeout, sin anidado
+    const lbl = document.getElementById('dash-title-period-lbl');
+    if (lbl) {
+      requestAnimationFrame(() => lbl.classList.add('refresh-feedback'));
+      setTimeout(() => lbl.classList.remove('refresh-feedback'), 600);
+    }
     showToast('↻ Dashboard actualizado');
   }
 
@@ -8967,9 +8965,18 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
   // Shimmer en todas las tarjetas (refresh universal)
+  // v9.5.74: un único rAF — cero macrotask timers por tarjeta
   function _shimmerAllCards(durationMs) {
-    _CARD_IDS.forEach((id, i) => {
-      setTimeout(() => _shimmerCard(id, durationMs), i * 40); // stagger 40ms
+    requestAnimationFrame(() => {
+      const cont = document.getElementById('dash-cards-container');
+      if (!cont) return;
+      _CARD_IDS.forEach((id, i) => {
+        const card = cont.querySelector(`[data-card-id="${id}"]`);
+        if (!card) return;
+        card.style.setProperty('--shimmer-delay', `${i * 40}ms`);
+        card.classList.add('is-shimmering');
+        setTimeout(() => card.classList.remove('is-shimmering'), durationMs + i * 40 + 200);
+      });
     });
   }
 
@@ -10417,7 +10424,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       </div>`;
 
     modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
-    document.getElementById('nv-save', modal)?.addEventListener?.('click', () => {});
     modal.querySelector('#nv-save').addEventListener('click', () => {
       const provId = modal.querySelector('#nv-prov').value;
       const agente = modal.querySelector('#nv-agente').value.trim();
@@ -10786,10 +10792,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         </div>
       </div>`;
 
-    // Cerrar tocando fondo
-    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-    // Mostrar form personalizado si se toca esa opción
+    // Click unificado: cerrar fondo + mostrar form personalizado
     modal.addEventListener('click', e => {
+      if (e.target === modal) { modal.remove(); return; }
       const item = e.target.closest('[onclick*="custom"]');
       if (item) {
         const form = modal.querySelector('#vp-custom-form');
