@@ -1,77 +1,76 @@
 Dashwey v9.5.102
 
-[SISTEMA DE PERIODOS — Corrección de Unificación]
+[SISTEMA DE PERIODOS — Arquitectura definitiva]
 
-═══════════════════════════════════════════════════════════
-DIAGNÓSTICO: 3 bugs estructurales (no uno)
-═══════════════════════════════════════════════════════════
+═══════════════════════════════════════
+HISTORIA DEL PROBLEMA
+═══════════════════════════════════════
 
-BUG A — Sheet DOM con onclicks hardcodeados a App.dash.*
-  El overlay (#dash-period-sheet) tenía:
-    onclick="App.dash.closeGlobalPeriodPicker()"  ← siempre Dashboard
-    onclick="App.dash.applyGlobalCustom()"         ← siempre Dashboard
-  Cuando Proveedores (u otro módulo) abría el sheet:
-  · Tocar el fondo cerraba vía App.dash.* ignorando el config del módulo
-  · Apply llamaba applyGlobalCustom() en vez de config.onCustom
-  openPeriodSheet() sobreescribía applyBtn.onclick ✅ pero el overlay
-  es atributo HTML estático — JS nunca lo tocaba → siempre App.dash.*
+v9.5.91: Se unificó el selector visual de periodo (sheet compartido) ✅
+         Decisión correcta — un solo componente UI para todos los módulos.
+         Error de implementación: los onclicks del HTML estático del sheet
+         quedaron hardcodeados a App.dash.* y la lógica de módulos se mezcló.
 
-BUG B — 'personalizado' en Proveedores esperaba DOM que no existe
-  OPTS_PROV ofrecía la opción 'personalizado' que en saveProvEdit
-  intentaba leer pe-cada-dias / pe-fecha-ini / pe-fecha-fin.
-  Esos IDs no existen en ningún HTML del sheet → siempre cadaDias:''
-  La opción era inutilizable silenciosamente.
+v9.5.101/102: Fixes incrementales que añadieron Utils.* a onclicks del HTML.
+         Causa: const en <script> no se añade a window automáticamente.
+         Resultado: ReferenceError: Utils is not defined en cada tap.
 
-BUG C — closeGlobalPeriodPicker no limpiaba _periodConfig
-  Al cerrar el sheet por overlay, App.dash.closeGlobalPeriodPicker()
-  solo quitaba .open pero dejaba sheet._periodConfig con el config
-  del contexto anterior → la siguiente apertura heredaba config stale.
+═══════════════════════════════════════
+SOLUCIÓN DEFINITIVA — 3 principios
+═══════════════════════════════════════
 
-═══════════════════════════════════════════════════════════
-SOLUCIÓN: UI compartida, lógica separada por módulo
-═══════════════════════════════════════════════════════════
+PRINCIPIO 1: Cero Utils.* en atributos HTML estáticos
+  Los onclicks del HTML se evalúan en window scope.
+  Utils es const (no va a window). App sí va (tiene window.App safety net).
+  → Todos los onclicks del sheet usan App.dash.* o literales.
 
-FIX A — Desacoplar el DOM del sheet de App.dash.*
-  Nuevas funciones en Utils (módulo neutral):
-    Utils._onPeriodSheetClose() — lee sheet._periodConfig, cierra limpiamente
-    Utils._onPeriodSheetApply() — lee config.onCustom, delega correctamente
-  DOM del sheet ahora apunta a estas funciones genéricas:
-    onclick="Utils._onPeriodSheetClose()"  (overlay)
-    onclick="Utils._onPeriodSheetApply()"  (botón Apply)
-  openPeriodSheet() ya no sobreescribe onclick del botón Apply
-  (lo hace la función Utils en tiempo real via _periodConfig)
+PRINCIPIO 2: Event delegation en lugar de onclick por elemento
+  Los dps-opt se generaban con onclick="Utils._onPeriodSheetSel('x')" × N.
+  → Reemplazado por UN solo scroll.onclick delegado + data-t en cada opt.
+  Beneficio: sin atributos onclick en HTML dinámico, sin dependencia de scope.
 
-FIX B — Eliminar opción sin UI de OPTS_PROV
-  'personalizado' eliminado de OPTS_PROV — requería campos DOM inexistentes
-  5 tipos operativos: diario · semanal · quincenal · mensual · custom(rango)
-  saveProvEdit limpiado — ya no intenta leer pe-cada-dias ni pe-fecha-*
-  La periodicidad se guarda en tiempo real vía _refreshProvPeriodBtn
+PRINCIPIO 3: Lógica de módulo via _periodConfig, no via handler fijo
+  App.dash._applyPeriodSheet() lee sheet._periodConfig.onCustom si existe.
+  Si no existe, fallback a applyGlobalCustom() (Dashboard).
+  → El sheet es neutral. Cada módulo inyecta su lógica al abrir.
 
-FIX C — closeGlobalPeriodPicker limpia _periodConfig
-  Añadido sheet._periodConfig = null en closeGlobalPeriodPicker()
-  Garantiza que cada apertura del sheet empiece desde estado limpio
-  sin importar qué módulo cerró el sheet anteriormente
+═══════════════════════════════════════
+CAMBIOS APLICADOS
+═══════════════════════════════════════
 
-═══════════════════════════════════════════════════════════
-PRINCIPIO APLICADO
-═══════════════════════════════════════════════════════════
+HTML sheet (DOM estático):
+  overlay onclick → App.dash.closeGlobalPeriodPicker() (ya en window via window.App)
+  applyBtn onclick → App.dash._applyPeriodSheet() (nuevo, delegado)
 
-  UN solo componente visual (UI compartida)         ✅ mantenido
-  Lógica separada por módulo via config callbacks   ✅ restaurado
-  NO mezclar comportamiento entre módulos           ✅ garantizado
+openPeriodSheet (Utils):
+  dps-opt: sin onclick attr → data-t + scroll.onclick delegado
+  applyBtn: solo actualiza el label, sin binding onclick dinámico
 
-[SW]       CACHE_NAME: dashwey-v9-5-101 → dashwey-v9-5-102
-[HTML]     _APP_VERSION: v9.5.101 → v9.5.102 | 17.267 líneas
+App.dash (nuevas funciones):
+  _applyPeriodSheet(): lee config.onCustom, delega o usa applyGlobalCustom
+  closeGlobalPeriodPicker(): limpia _periodConfig en todas las rutas
 
-═══════════════════════════════════════════════════════════
+HTML sub-items estáticos:
+  Utils.ANIM_DELAY → 220 (literal) en 3 onclicks estáticos del nav drawer
+
+window.Utils:
+  window.Utils = Utils añadido como safety net (para uso interno JS, no HTML)
+
+Proveedores (OPTS_PROV):
+  'personalizado' eliminado — requería campos DOM inexistentes
+  5 tipos operativos: diario · semanal · quincenal · mensual · custom
+
+[SW]  CACHE_NAME: dashwey-v9-5-102
+[HTML] _APP_VERSION: v9.5.102
+
+═══════════════════════════════════════
 QA
-═══════════════════════════════════════════════════════════
-□ Dashboard → selector de periodo → Hoy/Semana/Mes/Año → label actualiza + cards renderizan
-□ Dashboard → Personalizado → fechas → Aplicar → label y datos correctos
-□ Dashboard → tocar fondo del sheet → se cierra, NO afecta datos
-□ Proveedor → Periodicidad → Diario/Semanal/Quincenal/Mensual → botón muestra texto correcto
-□ Proveedor → Periodicidad → Rango de fechas → fechas → Aplicar → guarda correcto
-□ Proveedor → tocar fondo del sheet → se cierra sin guardar ni afectar Dashboard
-□ Guardar proveedor → periodicidad persiste correctamente
-□ Abrir sheet Dashboard tras cerrar sheet Proveedor → config limpio, no herencia
-□ Sin errores en consola
+═══════════════════════════════════════
+□ Abrir selector Dashboard → cero errores en consola
+□ Seleccionar Hoy/Semana/Mes/Año → label actualiza, cards renderizan
+□ Seleccionar Personalizado → form de fechas aparece → Aplicar → correcto
+□ Tocar fondo del sheet → cierra limpio, sin errores
+□ Proveedor → Periodicidad → 5 opciones → seleccionar cualquiera → sin errores
+□ Proveedor → Rango de fechas → Aplicar → guarda, botón muestra rango
+□ Cerrar sheet Proveedor → abrir sheet Dashboard → sin herencia de config
+□ Nav drawer → Informe Financiero / Catálogo / Editar proveedor → sin errores

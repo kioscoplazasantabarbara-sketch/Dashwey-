@@ -6771,8 +6771,9 @@ const Utils = (() => {
     const now = new Date();
     const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
 
+    // v9.5.102b: sin onclick attr — event delegation via data-t para evitar Utils en scope global
     scroll.innerHTML = config.opts.map(o => `
-      <div class="dps-opt${current===o.t?' sel':''}" onclick="Utils._onPeriodSheetSel('${o.t}')">
+      <div class="dps-opt${current===o.t?' sel':''}" data-t="${o.t}">
         <div class="dps-opt-icon">${o.i || '📅'}</div>
         <div style="flex:1">
           <div class="dps-opt-lbl">${o.l}</div>
@@ -6784,6 +6785,12 @@ const Utils = (() => {
           </svg>
         </div>
       </div>`).join('');
+    // Delegate click — UN solo listener reemplaza N onclicks inline
+    scroll.onclick = e => {
+      const opt = e.target.closest('[data-t]');
+      if (!opt) return;
+      _onPeriodSheetSel(opt.dataset.t);
+    };
 
     // v9.5.102: solo actualizar el label del botón Apply
     // La acción la gestiona Utils._onPeriodSheetApply() via atributo HTML
@@ -6873,7 +6880,7 @@ const Utils = (() => {
     }
   }
 
-  return { feur, showToast, esc, getLV, haptic, triggerHaptic, ANIM_DELAY, TOAST_DURATION, DRAG_THRESHOLD, DEBOUNCE_KB, SPIN_DURATION, updateSyncBadge, openPeriodSheet, _onPeriodSheetSel, _onPeriodSheetClose, _onPeriodSheetApply };
+  return { feur, showToast, esc, getLV, haptic, triggerHaptic, ANIM_DELAY, TOAST_DURATION, DRAG_THRESHOLD, DEBOUNCE_KB, SPIN_DURATION, updateSyncBadge, openPeriodSheet, _onPeriodSheetSel };
 })();
 
 // ── Helpers de cálculo compartidos ────────────────────────────────────
@@ -6993,7 +7000,7 @@ const ui = (() => {
           <div class="sub-item" onclick="App.nav.goTabFS(1)">Ir al Dashboard</div>
           <div class="sub-item" onclick="App.dash.openGlobalPeriodPicker()">Cambiar periodo</div>
           <div class="sub-item" style="font-weight:600;color:var(--red)" onclick="App.ui.closeFs();setTimeout(App.dash.openDashSettings,120)">Modo y tarjetas fijas</div>
-          <div class="sub-item" onclick="if(App.canAccess('view_ia_report')){App.ui.closeFs();setTimeout(App.dash.openIAReport,Utils.ANIM_DELAY);}else{showToast('Sin permisos para este módulo');}">Informe Financiero del mes</div>
+          <div class="sub-item" onclick="if(App.canAccess('view_ia_report')){App.ui.closeFs();setTimeout(App.dash.openIAReport,220);}else{showToast('Sin permisos para este módulo');}">Informe Financiero del mes</div>
           <div class="sub-item" onclick="if(App.canAccess('export_data')){App.ui.exportarDatos();}else{showToast('Solo el propietario puede exportar');}">Exportar datos</div>
         </div>
         <div class="settings-row" onclick="App.ui.toggleSub('alm')">
@@ -7006,8 +7013,8 @@ const ui = (() => {
         <div class="sub-menu" id="sm-alm">
           <div class="sub-item" onclick="App.nav.goTabFS(2)">Ir al Almacén</div>
           <div class="sub-item" onclick="App.alm.openNuevoArtFs();App.ui.closeFs()">Nuevo artículo</div>
-          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(App.alm.openCatalogoPicker,Utils.ANIM_DELAY)">📋 Catálogo</div>
-          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditProv(),Utils.ANIM_DELAY)">✏️ Editar proveedor</div>
+          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(App.alm.openCatalogoPicker,220)">📋 Catálogo</div>
+          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditProv(),220)">✏️ Editar proveedor</div>
           <div class="sub-item" onclick="App.alm.setupCaducidadNotif()">Caducidades</div>
         </div>
       </div>
@@ -11234,6 +11241,23 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     render(); // re-render completo del dashboard
   }
 
+  // v9.5.102b: _applyPeriodSheet — handler del botón Apply del sheet
+  // Delega en config.onCustom (módulo que abrió el sheet) o en applyGlobalCustom
+  function _applyPeriodSheet() {
+    const sheet = document.getElementById('dash-period-sheet');
+    const config = sheet?._periodConfig;
+    const desde = document.getElementById('dps-desde')?.value;
+    const hasta = document.getElementById('dps-hasta')?.value;
+    if (!desde || !hasta) { showToast('⚠️ Selecciona ambas fechas'); return; }
+    if (new Date(hasta) <= new Date(desde)) { showToast('⚠️ La fecha final debe ser posterior'); return; }
+    if (config?.onCustom) {
+      config.onCustom(desde, hasta);
+      closeGlobalPeriodPicker();
+    } else {
+      applyGlobalCustom();
+    }
+  }
+
   // Aplicar periodo personalizado (con hora)
   function applyGlobalCustom() {
     const f = document.getElementById('dps-desde')?.value;
@@ -11487,7 +11511,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin }; // v9.5.73
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin }; // v9.5.73
 })();
 
 // ══════════════════════════════════════════
@@ -17249,7 +17273,7 @@ window.addEventListener('unhandledrejection', function(e) {
 </script>
 
 <!-- GLOBAL PERIOD PICKER SHEET (v9.5.25) -->
-<div id="dash-period-sheet" onclick="if(event.target===this)Utils._onPeriodSheetClose()">
+<div id="dash-period-sheet" onclick="if(event.target===this)App.dash.closeGlobalPeriodPicker()">
   <div id="dash-period-sheet-inner">
     <div class="dps-handle"></div>
     <div class="dps-header" id="dps-sheet-header">Seleccionar periodo</div>
@@ -17267,7 +17291,7 @@ window.addEventListener('unhandledrejection', function(e) {
           <input type="datetime-local" class="dps-custom-inp" id="dps-hasta">
         </div>
       </div>
-      <button class="dps-apply-btn" onclick="Utils._onPeriodSheetApply()">Aplicar periodo</button>
+      <button class="dps-apply-btn" onclick="App.dash._applyPeriodSheet()">Aplicar periodo</button>
     </div>
   </div>
 </div>
