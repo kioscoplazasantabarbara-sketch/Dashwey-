@@ -1,129 +1,72 @@
-Dashwey v9.5.95
+Dashwey v9.5.101
 
-[AUDITORÍA DE RENDIMIENTO — FASE 1-4]
-
-═══════════════════════════════════════════
-FASE 1 — AUDITORÍA COMPLETA (17.068 líneas)
-═══════════════════════════════════════════
-
-RENDER:
-  ✅ innerHTML en hot paths: 9 funciones — renderCatInline es la crítica
-     (reconstruye HTML completo en cada keystroke sin debounce del DOM write)
-  ✅ Layout thrashing: 8 getBoundingClientRect — todos en handlers de tap/longpress,
-     no en scroll. El único riesgo real (L14597 offsetHeight) ya usa rAF.
-  ✅ box-shadow animado: 22 transiciones sobre box-shadow — todas en :active (tap),
-     no en scroll. Impacto bajo: ocurre 1 frame, no continuo.
-  ⚠️  PAINT no-compositor: 3 sistemas de toggle con transition:left → CORREGIDO
-  ✅ Imágenes sin dimensiones: 4 instancias en renderizado dinámico (ta-thumb,
-     alm-cat-thumb) — todas dentro de divs con dimensiones fijas por CSS.
-
-JAVASCRIPT:
-  ✅ Funciones blocking: _renderProds YA usa DocumentFragment + list.innerHTML=''
-     antes del appendChild → correcto. renderCatInline usa innerHTML directo pero
-     content-visibility:auto limita el scope de paint.
-  ✅ JSON.parse/stringify: solo en cold paths (localStorage init, Firebase sync).
-     No en hot paths (tap, scroll, search).
-  ✅ passive listeners: de los 19 detectados sin passive declarado explícitamente,
-     15 YA tienen {passive:true}. Los 4 restantes del swipe-track REQUIEREN
-     preventDefault() para el swipe horizontal → no pueden ser passive.
-  ✅ setTimeout para UI: los 16 detectados son post-animación (300ms para display:none
-     tras fade-out) — correcto. Los rAF ya están en su lugar.
-  ✅ String concat html+=: 6 instancias, todas en build de strings en memoria
-     antes del único innerHTML assignment → sin DOM thrash.
-
-MEMORIA:
-  ✅ 23 document.addEventListener sin removeEventListener → analizados individualmente:
-     - Los de tap/longpress del catálogo ALM usan {once:true} → auto-cleanup
-     - Los de drag de cards están en el módulo init (una sola vez)
-     - Los de pull-to-refresh son permanentes por diseño (app SPA sin unmount)
-  ✅ createElement: 29 instancias — todas tienen .remove() asociado o son
-     appended a contenedores que se vacían con innerHTML=''
-
-CSS:
-  ✅ will-change: 20 usos — todos scoped a clases dinámicas (.is-shimmering,
-     .card-animating, .nav-animating) que JS añade/elimina. Cero overhead en reposo.
-  ✅ Selectores alta especificidad: 0 selectores ID+clase en elementos frecuentes.
-  ⚠️  transition:left en toggles → CORREGIDO
+[BUG FIX — 2 issues]
 
 ═══════════════════════════════════════════
-FASE 2 — TABLA DE ISSUES
+BUG 1 — Periodicidad del pedido (proveedores)
 ═══════════════════════════════════════════
 
-# | Tipo    | Línea | Impacto      | Fix
-1 | PAINT   | 3098  | 2-5ms/toggle | transition:left → transform:translateX
-2 | PAINT   | 3484  | 2-5ms/toggle | .settings-toggle::after mismo fix
-3 | PAINT   | 2613  | 2-5ms/toggle | .sd-toggle::after mismo fix
+SÍNTOMA:
+  Al seleccionar "Quincenal" o "Rango de fechas" en el editor
+  de proveedor, el botón mostraba "Seleccionar periodicidad"
+  y el resumen quedaba vacío, como si no se hubiera seleccionado nada.
+
+CAUSA:
+  _periodoResumen() gestionaba 4 de 6 opciones disponibles en OPTS_PROV.
+  Los casos 'quincenal' y 'custom' caían al default → retornaban ''.
+
+  OPTS_PROV declaraba:   diario · semanal · mensual · quincenal · personalizado · custom
+  _periodoResumen cubría: diario · semanal · mensual ·                personalizado
+  FALTABAN:                                            quincenal ·                 custom
+
+FIX (línea ~13053):
+  Añadidos los dos casos faltantes:
+    case 'quincenal' → 'Cada 15 días'
+    case 'custom'    → 'Desde DD MMM hasta DD MMM' (o 'Rango personalizado')
 
 ═══════════════════════════════════════════
-FASE 3 — FIXES APLICADOS
+BUG 2 — Selector de periodo "Análisis de hoy" no actualizaba
 ═══════════════════════════════════════════
 
-Fix único: transition:left → transform:translateX en 3 familias de toggle
+SÍNTOMA:
+  Al seleccionar cualquier periodo desde el sheet del Dashboard
+  (Hoy, Esta semana, etc.), el label del botón inline "Análisis de X"
+  no actualizaba, y el dashboard podía no re-renderizarse.
 
-Los toggles de settings (cm-toggle, settings-toggle, sd-toggle) animaban la
-propiedad CSS 'left', que fuerza layout recalculation + paint en cada frame.
+CAUSA RAÍZ: Race condition en el orden de operaciones entre
+  Utils._onPeriodSheetSel y App.dash.selGlobalPeriod.
 
-ANTES: transition: left 0.22s var(--ease) → browser recalcula layout en cada frame
-DESPUÉS: transition: transform 0.22s var(--ease) → compositor-only, 0ms layout
+  Flujo previo (problemático):
+  1. _onPeriodSheetSel: llama config.onSelect(t)
+  2.   → selGlobalPeriod(t): guarda State, llama _updateGlobalPeriodLabel, cierra sheet
+  3. _onPeriodSheetSel: cierra sheet OTRA VEZ + limpia _periodConfig → segunda call redundante
 
-Cambios exactos:
-  .cm-knob:                 left:3px/21px → transform:translateX(0)/translateX(18px)
-  .cm-toggle.on .cm-knob:   left:21px     → transform:translateX(18px)
-  .settings-toggle::after:  left:3px/21px → mismo patrón
-  .settings-toggle.on::after: left:21px   → translateX(18px)
-  .sd-toggle::after:        left:3px/21px → mismo patrón
-  .sd-toggle.on::after:     left:21px     → translateX(18px)
+  Problema adicional: selGlobalPeriod verificaba si cerrar el sheet
+  con closeGlobalPeriodPicker() sin comprobar si ya estaba cerrado.
 
-will-change:transform añadido a los 3 elementos animados (scoped al pseudo-elemento,
-no al toggle contenedor → GPU layer solo donde se necesita).
+FIX A — _onPeriodSheetSel (línea ~6847):
+  Orden corregido: cerrar sheet + limpiar _periodConfig ANTES de
+  llamar config.onSelect(t) → onSelect ya no encuentra el sheet abierto,
+  elimina el doble-cierre y la segunda llamada a rotate(180deg).
 
-═══════════════════════════════════════════
-FASE 4 — VERIFICACIÓN
-═══════════════════════════════════════════
+FIX B — selGlobalPeriod (línea ~11187):
+  - Toggle .sel usa getAttribute('onclick') (consistente con _onPeriodSheetSel)
+  - _updateGlobalPeriodLabel se llama siempre, independientemente del estado del sheet
+  - closeGlobalPeriodPicker solo se llama si el sheet sigue abierto (guard .contains('open'))
+  - Orden: State.set → _updateGlobalPeriodLabel → (cierre condicional) → render()
 
-1. Tap handlers >16ms:
-   - procesarPago: síncrono puro, ~2-4ms (State.set + DashweyBus.emit)
-   - addCart: ~0.5ms (solo actualiza _cart + re-render del item)
-   - _onAcceptBtnTap: ~0.2ms (solo sets dataset.processing + llama función)
-   Ninguno supera 16ms.
-
-2. Scroll pasivo:
-   - alm-scroll-el: -webkit-overflow-scrolling:touch + touch-action:pan-y ✅
-   - tpv-prod-scroll: overflow-y:auto nativo ✅
-   - Todos los touchmove de scroll son passive:true ✅
-
-3. Animaciones compositor-only:
-   - swipe-track: transform:translateX ✅
-   - cards drag: transform:translate ✅
-   - shimmer: opacity ✅
-   - toggles: transform:translateX ✅ (NUEVO)
-   - bottom-tabs: transform:translateY ✅
-   - modales/sheets: transform:translateY ✅
-
-4. will-change justificados:
-   - #swipe-track: permanente — siempre en movimiento por swipe
-   - .card-animating: temporal — clase añadida/removida por JS
-   - .nav-animating: temporal — solo durante transición de tabs
-   - .is-shimmering: temporal — solo durante loading
-   - ev-bars, ev-rings: permanente — gráfico interactivo en Dashboard
-   - toggles ::after: temporal — solo durante toggle activo (NUEVO)
-
-5. Reducción estimada de jank:
-   - Toggles de settings: -3ms/toggle (eliminado layout pass)
-   - Consistencia 60fps en: swipe, drag, animaciones de modal
-   - Sin regresiones detectadas en funcionalidad
-
-[SW]       CACHE_NAME: dashwey-v9-5-94 → dashwey-v9-5-95
-[manifest] v=9.5.94 → v=9.5.95
-[HTML]     _APP_VERSION: v9.5.94 → v9.5.95 | 17.068 líneas
+[SW]       CACHE_NAME: dashwey-v9-5-100 → dashwey-v9-5-101
+[HTML]     _APP_VERSION: v9.5.100 → v9.5.101 | 17.260 líneas aprox.
 
 ═══════════════════════════════════════════
 QA
 ═══════════════════════════════════════════
-□ Settings → activar toggle → animación fluida sin flash/jank
-□ Settings → toggle on/off rápido → sin salto visual
-□ Dark mode → toggles funcionan igual
-□ Swipe entre tabs → 60fps (no afectado)
-□ Drag de tarjetas Dashboard → 60fps (no afectado)
-□ Búsqueda TPV/ALM → sin parpadeo (fix v9.5.94 activo)
-□ Teclado baja al cambiar tab (fix v9.5.93 activo)
+□ Proveedor → editar → Periodicidad → Quincenal → botón muestra "Cada 15 días"
+□ Proveedor → editar → Periodicidad → Rango de fechas → botón muestra "Desde X hasta Y"
+□ Proveedor → editar → Periodicidad → Semanal/Mensual → sin regresión
+□ Dashboard → "Análisis de Hoy" → seleccionar "Hoy" → label cambia a "Hoy"
+□ Dashboard → seleccionar "Esta semana" → label cambia y cards se actualizan
+□ Dashboard → seleccionar "Personalizado" → form aparece, aplicar → label y datos correctos
+□ Dashboard → seleccionar "Este mes" → vuelta al estado original sin errores
+□ Sin doble-cierre del sheet (no hay animación de chevron doble)
+□ Sin errores en consola

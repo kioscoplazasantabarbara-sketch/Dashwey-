@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.100 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.101 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.100
+  /* HEAD BOOTSTRAP v9.5.101
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.100"><!-- v9.5.100: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.100"><!-- v9.5.100: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=9.5.101"><!-- v9.5.101: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.101"><!-- v9.5.101: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v9.5.100</title>
+<title>Dashwey v9.5.101</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3040,7 +3040,7 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
   font-size: 14px; font-weight: 600; cursor: pointer;
 }
 
-/* v9.5.100: clases adicionales para formularios y reportes ALM/Dashboard */
+/* v9.5.101: clases adicionales para formularios y reportes ALM/Dashboard */
 
 /* openOrdenReport — alertas */
 .alm-alert-box {
@@ -6845,11 +6845,12 @@ const Utils = (() => {
     form?.classList.remove('show');
 
     if (config?.onSelect) {
-      config.onSelect(t);
+      // v9.5.101: cerrar sheet ANTES de llamar onSelect → sin race condition
       sheet.classList.remove('open');
-      sheet._periodConfig = null;
       document.getElementById('dash-title-period-chevron')
         ?.style.setProperty?.('transform', '');
+      sheet._periodConfig = null;
+      config.onSelect(t);
     } else {
       // Fallback: comportamiento original del dashboard
       App.dash.selGlobalPeriod(t);
@@ -7108,7 +7109,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.100';
+  const _APP_VERSION = 'v9.5.101';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11191,22 +11192,29 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       year:'Este año', custom:'Personalizado',
     };
 
-    // Actualizar visual de selección
-    document.querySelectorAll('.dps-opt').forEach(el =>
-      el.classList.toggle('sel', el.onclick?.toString().includes(`'${t}'`))
-    );
-
     const form = document.getElementById('dps-custom-form');
     if (t === 'custom') {
+      // Marcar visual antes de mostrar el form
+      document.querySelectorAll('.dps-opt').forEach(el =>
+        el.classList.toggle('sel', el.getAttribute('onclick')?.includes(`'${t}'`))
+      );
       form?.classList.add('show');
       return; // esperar a que el usuario confirme fechas
     }
     form?.classList.remove('show');
 
-    // Guardar en State y re-renderizar
-    State.set.period({ type: t, label: LABELS[t], offset: 0 });
-    _updateGlobalPeriodLabel(LABELS[t]);
-    closeGlobalPeriodPicker();
+    // Guardar en State — ANTES de cerrar el sheet para evitar race condition
+    const label = LABELS[t] || t;
+    State.set.period({ type: t, label, offset: 0 });
+
+    // Actualizar label del botón inline en el título del Dashboard
+    // Funciona tanto si el sheet está abierto como si ya fue cerrado por _onPeriodSheetSel
+    _updateGlobalPeriodLabel(label);
+
+    // Cerrar sheet solo si sigue abierto (puede haber sido cerrado ya por _onPeriodSheetSel)
+    const sheet = document.getElementById('dash-period-sheet');
+    if (sheet?.classList.contains('open')) closeGlobalPeriodPicker();
+
     render(); // re-render completo del dashboard
   }
 
@@ -13050,7 +13058,20 @@ const alm = (() => {
     switch (periodo.tipo) {
       case 'diario':   return 'Cada día';
       case 'semanal':  return 'Cada semana';
-      case 'mensual':  return 'Cada mes';
+      case 'mensual':    return 'Cada mes';
+      case 'quincenal':  return 'Cada 15 días';
+      case 'custom': {
+        const partes = [];
+        if (periodo.fechaInicio) {
+          const ini = new Date(periodo.fechaInicio).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
+          partes.push('Desde ' + ini);
+        }
+        if (periodo.fechaFin) {
+          const fin = new Date(periodo.fechaFin).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
+          partes.push('hasta ' + fin);
+        }
+        return partes.join(' ') || 'Rango personalizado';
+      }
       case 'personalizado': {
         const partes = [];
         if (periodo.cadaDias) partes.push('Cada ' + periodo.cadaDias + ' día' + (periodo.cadaDias != 1 ? 's' : ''));
@@ -14263,7 +14284,7 @@ const alm = (() => {
         pvpRecBtn.title = 'PVP recomendado: ' + feur(pvpOpt) + ' (30% margen)';
       }
     }
-    const bs = 'alm-ia-apply-btn'; // v9.5.100: clase CSS en lugar de inline style
+    const bs = 'alm-ia-apply-btn'; // v9.5.101: clase CSS en lugar de inline style
     const tip = margen < 15 && pvp > 0
       ? 'PVP mínimo rentable: <strong>' + feur(pvpMin) + '</strong> &nbsp;·&nbsp; PVP óptimo (30%): <strong>' + feur(pvpOpt) + '</strong><br>' +
         '<button class="' + bs + '" onclick="App.alm._applyRecomPvpVal(' + pvpOpt + ')">Aplicar ' + feur(pvpOpt) + '</button>'
