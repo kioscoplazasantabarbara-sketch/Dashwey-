@@ -1,47 +1,105 @@
-Dashwey v9.5.81
+Dashwey v9.5.82
 
-[HEADER ALM — PROVEEDOR ACTIVO CLICKABLE]
+[BUG CRÍTICO — SWIPE CATÁLOGO ALM: CAUSA RAÍZ Y FIX]
 
-[1] HTML — Header ALM unificado (alm-page-header + alm-prov-bar → 1 sola sección)
-    Antes:
-    · alm-page-header: "Almacén" + "Control de stock y pedidos" (fijo)
-    · alm-prov-bar: elemento separado con icono + "Proveedor activo" + nombre + ▼
-    · Dos secciones ocupando espacio doble en el scroll área
-    Después:
-    · Un único alm-page-header con:
-      - Título: "Almacén" (sin cambios)
-      - Subtítulo: "Proveedor activo: [Nombre] ▾" — todo en una línea
-        · "Proveedor activo:" en color ink-mid (gris)
-        · [Nombre] en negrita crimson, clickable → abre openProvPicker()
-        · ▾ SVG chevron crimson como indicador de interacción
-    · El catálogo y buscador suben automáticamente al ocupar menos espacio
-    · alm-prov-bar → display:none (CSS)
+═══════════════════════════════════════════
+DIAGNÓSTICO FORENSE
+═══════════════════════════════════════════
 
-[2] JS — updateProvBar() actualizado
-    · Ahora actualiza #alm-prov-name dentro del botón del subtítulo
-    · #alm-prov-icon se mantiene como span oculto (compatibilidad)
-    · #alm-prov-change-btn se mantiene como button oculto (compatibilidad)
-    · Todas las funciones que llaman updateProvBar() funcionan igual:
-      selProv(), shiftProv(), saveProvEdit(), borrarProv(), etc.
+Síntoma reportado:
+  · Swipe arriba/abajo sobre un artículo del catálogo no funciona correctamente
+  · Swipe horizontal para volver al Dashboard falla desde cualquier artículo
+  · Funciona correctamente si el swipe empieza fuera de un artículo
 
-[3] CSS
-    · alm-page-header: padding-bottom 14px→12px (barra eliminada)
-    · #alm-prov-sub-btn:active → opacity:0.65 + translateY(1px) microfeedback
-    · alm-prov-bar → display:none (CSS cleanup)
+Causa raíz identificada — L12179 (v9.5.77 a v9.5.81):
 
-[SW]       CACHE_NAME: dashwey-v9-5-80 → dashwey-v9-5-81
-[manifest] v=9.5.80 → v=9.5.81
-[HTML]     _APP_VERSION: v9.5.80 → v9.5.81 | 16.710 líneas
+  function _catInlineLpStart(prodId, el, evt) {
+    // v9.5.77: Solo stopPropagation para evitar que el swipe-track capture el gesto
+    if (evt) evt.stopPropagation && evt.stopPropagation(); // ← BUG
+    ...
+  }
 
-─────────────────────────────────────────
-QA — PASOS DE VALIDACIÓN
-─────────────────────────────────────────
-□ Header ALM: "Proveedor activo: Coca-Cola CCEP ▾" visible como subtítulo
-□ Tap en nombre proveedor → abre sheet selector de proveedor
-□ Seleccionar proveedor diferente → subtítulo se actualiza con el nuevo nombre
-□ shiftProv (← ›) en sub-nav → nombre en subtítulo se actualiza
-□ Buscador y catálogo: visible directamente sin scrollear (espacio liberado)
-□ Pull-to-refresh → nombre de proveedor correcto tras refresh
-□ Microfeedback: tap en nombre → ligero desplazamiento visual y opacity
-□ Navegación entre tabs → sin regresiones
-□ Dashboard KPIs y TPV → sincronización intacta
+Cadena de propagación DOM:
+  alm-cat-item [touchstart]
+    → alm-cat-inline
+      → alm-scroll
+        → #tab-alm
+          → #swipe-track [touchstart listener — inicializa _sx, _sy]
+
+El stopPropagation() cortaba el bubbling en el ítem.
+El swipe-track nunca recibía el touchstart → nunca inicializaba _sx/_sy.
+Sin _sx/_sy → el track no podía calcular dx/dy → el swipe horizontal era imposible.
+
+El comentario era incorrecto: el track NO necesita ser bloqueado en touchstart.
+El conflicto tap-vs-swipe se resuelve correctamente en touchend (fix v9.5.77, dx>12px).
+
+═══════════════════════════════════════════
+FIXES APLICADOS (3 cambios quirúrgicos)
+═══════════════════════════════════════════
+
+[1] ELIMINADO stopPropagation() de _catInlineLpStart
+    · El touchstart ahora burbujea correctamente hasta el swipe-track
+    · El track recibe el evento → inicializa _sx, _sy, _touchStartTime
+    · El swipe horizontal al Dashboard funciona desde cualquier artículo
+    · El scroll vertical funciona (touch-action:pan-y en .alm-cat-item, v9.5.79)
+    · La protección tap-vs-swipe sigue activa en _catInlineLpEnd (dx/dy > 12px)
+
+[2] AÑADIDA función _catInlineLpMove(evt)
+    · Cancela el timer de longpress si el usuario se mueve >8px durante el toque
+    · Sin esto: un swipe lento (>480ms) disparaba el menú contextual
+      aunque el usuario intentara navegar al Dashboard
+    · Umbral 8px (más sensible que el 12px del touchend — detección más temprana)
+    · Exportada en el return del módulo alm como App.alm._catInlineLpMove
+
+[3] AÑADIDO ontouchmove al HTML de cada alm-cat-item
+    · ' ontouchmove="App.alm._catInlineLpMove(event)"'
+    · Conecta el movimiento del dedo con la cancelación del longpress
+
+Módulos afectados:
+  · _catInlineLpStart — stopPropagation eliminado
+  · _catInlineLpMove  — función nueva añadida
+  · _buildCatInlineItem — ontouchmove añadido al HTML del ítem
+  · return {} del módulo alm — _catInlineLpMove exportada
+
+Comportamiento PRESERVADO sin cambios:
+  · Botones stepper (+/-): stopPropagation en sus touchstart/touchend → correcto
+    (los botones son hijos del ítem — su stopPropagation es independiente)
+  · _catInlineLpEnd: umbral dx/dy > 12px para cancelar tap → intacto
+  · touch-action:pan-y en .alm-cat-item → intacto (scroll vertical libre)
+  · touch-action:pan-y en .alm-scroll → intacto
+  · Longpress 480ms → menú contextual → intacto
+
+[SW]       CACHE_NAME: dashwey-v9-5-81 → dashwey-v9-5-82
+[manifest] v=9.5.81 → v=9.5.82
+[HTML]     _APP_VERSION: v9.5.81 → v9.5.82 | 16.734 líneas
+
+═══════════════════════════════════════════
+QA — TEST DE COMPORTAMIENTO DE SWIPE
+═══════════════════════════════════════════
+
+[SWIPE HORIZONTAL — NAVEGACIÓN AL DASHBOARD]
+□ Desde Almacén, toque sobre un artículo del catálogo
+□ Swipe horizontal izquierda sobre el artículo → navega al Dashboard ✓
+□ Swipe horizontal rápido (flick) → transición completa sin quedarse a medias ✓
+□ Swipe desde área vacía (fuera de artículos) → mismo comportamiento ✓
+
+[SWIPE VERTICAL — SCROLL DEL CATÁLOGO]
+□ Scroll hacia abajo sobre artículos → se desplaza el catálogo ✓
+□ Scroll hacia arriba → regresa sin acciones accidentales ✓
+□ Tap en artículo → añade al carrito (haptic light) ✓
+
+[LONGPRESS — MENÚ CONTEXTUAL]
+□ Longpress 480ms estático → menú contextual aparece (haptic medium) ✓
+□ Longpress + movimiento >8px antes de 480ms → menú NO aparece ✓
+□ Swipe lento (>480ms) horizontal → NO dispara longpress, navega ✓
+□ Swipe lento vertical → NO dispara longpress, hace scroll ✓
+
+[BOTONES STEPPER +/-]
+□ Tap en + sobre artículo en carrito → incrementa cantidad ✓
+□ Tap en - → decrementa sin disparar swipe del track ✓
+
+[TODAS LAS PLATAFORMAS]
+□ iOS Safari: swipe horizontal desde artículo → Dashboard ✓
+□ Android Chrome: ídem ✓
+□ Android WebView (PWA instalada): ídem ✓
+□ Desktop mouse: click en artículo funciona (onclick con pointerType guard) ✓
