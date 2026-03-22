@@ -2,7 +2,7 @@
 <html lang="es" style="background:#F7F2F2">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.87 -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v9.5.88 -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
@@ -13,7 +13,7 @@
 <meta name="application-name" content="Dashwey">
 <meta name="theme-color" content="#F7F2F2">
   <script>
-  /* HEAD BOOTSTRAP v9.5.87
+  /* HEAD BOOTSTRAP v9.5.88
      Sin splash. La app arranca directamente.
      Stub window._hideSplash para compatibilidad con auth gate. */
 
@@ -44,7 +44,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v9-5-87";
+      var CURRENT_CACHE = "dashwey-v9-5-88";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -55,10 +55,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=9.5.87"><!-- v9.5.87: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.87"><!-- v9.5.87: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=9.5.88"><!-- v9.5.88: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=9.5.88"><!-- v9.5.88: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v9.5.87</title>
+<title>Dashwey v9.5.88</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6632,7 +6632,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v9.5.87';
+  const _APP_VERSION = 'v9.5.88';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11875,43 +11875,54 @@ const tpv = (() => {
       }))
     };
 
-    // 3. Guardar venta en State local
-    State.set.addVenta({ ...ventaPayload });
+    // v9.5.88: try/finally garantiza que _procesandoPago se libera siempre.
+    // Sin esto, si State.set.addVenta o updateProd lanzan excepción, el TPV
+    // queda bloqueado en _procesandoPago=true hasta recargar la app.
+    try {
 
-    // 4. Descontar stock real de cada producto
-    items.forEach(i => {
-      const p = State.get.prod(i.p.id);
-      if (p) State.set.updateProd(i.p.id, {
-        stockActual: (p.stockActual || 0) - i.q,
-        ventas: (p.ventas || 0) + i.q
+      // 3. Guardar venta en State local
+      State.set.addVenta({ ...ventaPayload });
+
+      // 4. Descontar stock real de cada producto
+      items.forEach(i => {
+        const p = State.get.prod(i.p.id);
+        if (p) State.set.updateProd(i.p.id, {
+          stockActual: (p.stockActual || 0) - i.q,
+          ventas: (p.ventas || 0) + i.q
+        });
       });
-    });
 
-    // 5. Persistir en Firebase de forma asíncrona (no bloquea UI)
-    (async () => {
-      try {
-        const FB = window._DashweyFirebase;
-        if (FB && FB.enabled && FB.ready) {
-          const cur = await FB.read('ventas') || { lista: [] };
-          const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
-          await FB.write('ventas', { lista });
-          await FB.write('productos', { lista: State.get.productos() });
-        }
-      } catch(e) { console.warn('[Dashwey/TPV] FB error:', e); }
-    })();
+      // 5. Persistir en Firebase de forma asíncrona (no bloquea UI)
+      (async () => {
+        try {
+          const FB = window._DashweyFirebase;
+          if (FB && FB.enabled && FB.ready) {
+            const cur = await FB.read('ventas') || { lista: [] };
+            const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
+            await FB.write('ventas', { lista });
+            await FB.write('productos', { lista: State.get.productos() });
+          }
+        } catch(e) { console.warn('[Dashwey/TPV] FB error:', e); }
+      })();
 
-    // 6. Cerrar ticket y limpiar
-    if (_ticketActivo) { State.set.deleteTicket(_ticketActivo); _ticketActivo = null; }
-    _cart = {};
-    if (_dockExpanded) toggleDock();
-    Utils.triggerHaptic('medium'); // venta completada
-    closeCobro();
-    render();
-    _procesandoPago = false; // reset fiable: flujo síncrono completado
-    // v9.5.73: DashweyBus event — targeted re-render, no full refresh
-    DashweyBus.emit('venta', { total: tot, metodo });
-    window.dispatchEvent(new CustomEvent('dashwey:venta-registrada')); // legacy compat
-    showToast('Cobrado ' + feur(tot) + ' · ' + metodo);
+      // 6. Cerrar ticket y limpiar
+      if (_ticketActivo) { State.set.deleteTicket(_ticketActivo); _ticketActivo = null; }
+      _cart = {};
+      if (_dockExpanded) toggleDock();
+      Utils.triggerHaptic('medium');
+      closeCobro();
+      render();
+      DashweyBus.emit('venta', { total: tot, metodo });
+      window.dispatchEvent(new CustomEvent('dashwey:venta-registrada'));
+      showToast('Cobrado ' + feur(tot) + ' · ' + metodo);
+
+    } catch(err) {
+      console.error('[TPV] procesarPago ERROR:', err);
+      showToast('⚠️ Error al registrar la venta. Inténtalo de nuevo.');
+    } finally {
+      // Siempre liberar el guard — el TPV nunca queda bloqueado
+      _procesandoPago = false;
+    }
   }
 
   // ── Venta manual ─────────────────────────────────────────────
@@ -12325,17 +12336,16 @@ const alm = (() => {
     menu.style.top  = top + 'px';
     document.body.appendChild(menu);
 
-    // Cerrar al tocar fuera
+    // v9.5.88: once:true — el listener se auto-elimina tras el primer evento.
+    // Antes: removeEventListener manual solo corría al tocar fuera del menú.
+    // Si el usuario cerraba el menú desde un botón interno, el listener
+    // quedaba registrado para siempre (memory leak + comportamiento erróneo).
     function _closeCtx(e) {
-      if (!menu.contains(e.target)) {
-        menu.remove();
-        document.removeEventListener('touchstart', _closeCtx, true);
-        document.removeEventListener('click', _closeCtx, true);
-      }
+      if (!menu.contains(e.target)) menu.remove();
     }
     requestAnimationFrame(function() {
-      document.addEventListener('touchstart', _closeCtx, { capture: true, passive: true });
-      document.addEventListener('click', _closeCtx, { capture: true });
+      document.addEventListener('touchstart', _closeCtx, { capture: true, passive: true, once: true });
+      document.addEventListener('click',      _closeCtx, { capture: true, once: true });
     });
   }
 
@@ -14460,19 +14470,13 @@ const alm = (() => {
     btn.style.transform = 'scale(0.94)';
     requestAnimationFrame(() => { btn.style.transform = ''; });
 
-    Utils.triggerHaptic('medium'); // confirmación, no error
+    Utils.triggerHaptic('medium');
 
-    // Ejecutar flujo según estado del catálogo
-    if (_ordenEstado === 1) {
-      _cerrarCatalogo();
-      setTimeout(() => {
-        _guardarCarritoYPopup();
-        btn.dataset.processing = '0'; // liberar DESPUÉS del popup
-      }, 300);
-    } else {
-      _guardarCarritoYPopup();
-      btn.dataset.processing = '0'; // liberar DESPUÉS del popup
-    }
+    // v9.5.88: rama _ordenEstado===1 eliminada — _ordenEstado nunca llega a 1.
+    // El estado 1 (sheet catálogo) fue eliminado en v8.8.2.
+    // Flujo directo: abrir popup de confirmación.
+    _guardarCarritoYPopup();
+    btn.dataset.processing = '0';
   }
 
   // v9.5.87: _guardarCarritoYPopup — flujo corregido
@@ -16420,6 +16424,7 @@ if (!window.App) {
     const baseUrl = location.href.split('?')[0].replace(/[^/]+$/, '');
     fetch(baseUrl + 'version.txt?_t=' + Date.now(), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
+      .catch(() => null) // v9.5.88: red cortada o SW offline — no lanzar unhandledRejection
       .then(data => {
         if (!data) return;
         const remoteVer = data.version ? 'v' + data.version : data.build;

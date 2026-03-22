@@ -1,80 +1,84 @@
-Dashwey v9.5.87
+Dashwey v9.5.88
 
-[BUG CRÍTICO — BOTÓN "ACEPTAR PEDIDO" NO EJECUTA ACCIÓN]
-
-═══════════════════════════════════════════
-DIAGNÓSTICO FORENSE — CAUSA RAÍZ
-═══════════════════════════════════════════
-
-Síntoma: al pulsar "Aceptar pedido" el botón desaparece sin ejecutar nada.
-Al hacer scroll el botón reaparece. Al pulsarlo de nuevo → mismo resultado.
-
-Bug #1 (PRINCIPAL) — _guardarCarritoYPopup:
-  ANTES:
-    acceptBtn.style.display = 'none';       // ← OCULTA EL BOTÓN PRIMERO
-    if (!Object.keys(_ordenCarrito).length) return; // ← valida después
-    _openAceptarPopupFromCarrito(sel);
-
-  El botón se ocultaba ANTES de verificar el carrito y ANTES de abrir el popup.
-  Cualquier fallo silencioso en _openAceptarPopupFromCarrito dejaba el UI con:
-    · Botón oculto (display:none puesto)
-    · Popup que nunca apareció
-    · Pedido sin procesar
-  El scroll llamaba _updateAcceptBtn → botón reaparecía → ciclo sin fin.
-
-Bug #2 — _onAcceptBtnTap:
-  · Haptic era 'error' (vibración de error al hacer un pedido correcto)
-  · Guard de doble-tap (processing) se liberaba con setTimeout(140ms)
-    independientemente de si la acción completó o falló
-  · La acción (_guardarCarritoYPopup) corría sincrónicamente (0ms)
-    mientras el guard se liberaba en 140ms → ventana de doble-tap
-
-Bug #3 — _cancelarPedidoCarrito:
-  · Al cancelar el popup, btn.dataset.processing quedaba en '1' para siempre
-  · Si el usuario reabría el carrito sin recargar, el botón no respondía
-
-Bug #4 — _confirmarPedidoDesdeCarrito:
-  · btn.dataset.processing no se liberaba en el bloque finally
-  · Si el finally se alcanzaba por excepción, el botón quedaba bloqueado
+[BUGS CRÍTICOS — AUDITORÍA GLOBAL DE ESTABILIDAD]
 
 ═══════════════════════════════════════════
-FIXES APLICADOS
+FIXES APLICADOS (ordenados por prioridad)
 ═══════════════════════════════════════════
 
-[1] _guardarCarritoYPopup — orden corregido
-    DESPUÉS:
-      1. PRIMERO: validar carrito → si vacío, toast + return (botón visible)
-      2. SEGUNDO: abrir popup en try/catch → si falla, toast + return (botón visible)
-      3. TERCERO: solo si popup abrió → ocultar botón
-    El botón NUNCA desaparece si la acción no se completa.
+[C1] CRÍTICO — ALM: rama _ordenEstado===1 era código muerto
+     Problema:
+       _onAcceptBtnTap() tenía una bifurcación:
+         if (_ordenEstado === 1) { _cerrarCatalogo(); setTimeout(..., 300) }
+         else { _guardarCarritoYPopup() }
+       _ordenEstado NUNCA se asigna a 1 (el estado 1 se eliminó en v8.8.2).
+       La rama if nunca ejecutaba. La rama else siempre ejecutaba.
+       Ambas ramas liberaban btn.dataset.processing en momentos distintos,
+       creando una ventana de inconsistencia en el guard de doble-tap.
+     Fix:
+       · Rama if(_ordenEstado===1) completamente eliminada
+       · Flujo directo: _guardarCarritoYPopup() + processing='0'
+       · Código más claro, sin estado zombi
 
-[2] _onAcceptBtnTap — guard y haptic corregidos
-    · triggerHaptic('error') → triggerHaptic('medium') — confirmación positiva
-    · processing = '0' se libera DESPUÉS de _guardarCarritoYPopup(), no con setTimeout
-    · Ambas ramas (if _ordenEstado===1 / else) liberan el guard al completar
+[C3] CRÍTICO — TPV: procesarPago sin try/finally
+     Problema:
+       Si State.set.addVenta() o State.set.updateProd() lanzaban una excepción
+       (localStorage lleno, corrupción de datos, etc.), _procesandoPago quedaba
+       en true para siempre. El TPV quedaba completamente bloqueado hasta
+       recargar la app — ninguna venta posible.
+     Fix:
+       · Pasos 3-6 envueltos en try/catch/finally
+       · catch: showToast con mensaje de error, no falla silenciosamente
+       · finally: _procesandoPago = false — siempre se libera, sin excepción
+       · La IIFE de Firebase (paso 5) ya tenía try/catch propio — intacta
 
-[3] _cancelarPedidoCarrito — liberar processing al cancelar
-    · btn.dataset.processing = '0' al cancelar el popup
-    · El botón vuelve a ser funcional si el usuario cancela y quiere reintentar
+[A1] ALTO — ALM: _closeCtx acumulaba listeners en cada longpress
+     Problema:
+       _openCatInlineCtxMenu() registraba dos listeners en document
+       (touchstart + click) para cerrar el menú contextual al tocar fuera.
+       Si el usuario cerraba el menú desde un botón interno (Editar/Borrar/etc.),
+       el removeEventListener manual NUNCA corría — los listeners se acumulaban
+       indefinidamente (memory leak + handlers stale).
+     Fix:
+       · { once: true } en ambos listeners
+       · El listener se auto-elimina tras el primer evento (toque fuera)
+       · Si el menú se cierra desde un botón interno, el rAF ya no dispara
+         porque el menú está removed del DOM antes del click/touchstart externo
 
-[4] _confirmarPedidoDesdeCarrito — liberar processing en finally
-    · _acceptFixedBtn cacheado al inicio
-    · processing = '0' liberado en el bloque finally
-    · Garantiza liberación incluso en excepciones inesperadas
-
-[SW]       CACHE_NAME: dashwey-v9-5-84 → dashwey-v9-5-87
-[manifest] v=9.5.84 → v=9.5.87
-[HTML]     _APP_VERSION: v9.5.84 → v9.5.87 | 16.803 líneas
+[A6] ALTO — Global: _silentCheckUpdate sin .catch()
+     Problema:
+       La cadena fetch(version.txt).then().then() sin .catch().
+       En modo offline o con red cortada, generaba unhandledRejection
+       en consola. No bloqueante pero indicador de error no controlado.
+     Fix:
+       · .catch(() => null) después del primer .then()
+       · Si la red falla → data = null → función retorna silenciosamente
+       · Ningún unhandledRejection
 
 ═══════════════════════════════════════════
-QA — FLUJO COMPLETO A VALIDAR
+BUGS DESCARTADOS TRAS REANÁLISIS
 ═══════════════════════════════════════════
-□ Añadir artículos al carrito → botón "Aceptar pedido (N bultos)" visible
-□ Tap en botón → aparece popup de análisis del pedido
-□ Botón NO desaparece antes de que el popup aparezca
-□ Tap "Confirmar pedido" → pedido guardado, carrito limpio, botón desaparece
-□ Tap "Cancelar" → popup cierra, botón reaparece (carrito limpio)
-□ Tap botón → popup → cancelar → botón reaparece → tap de nuevo → popup OK
-□ Sin scroll necesario para recuperar el botón en ningún caso
-□ Haptic: vibración suave al pulsar (no vibración de error)
-□ Doble tap rápido → solo una acción ejecutada (guard funcional)
+
+C2 (ordenItems vs _ordenCarrito): Son sistemas PARALELOS intencionales.
+   · _ordenCarrito = carrito de compra actual (flujo principal)
+   · State.get.ordenItems() = orden programada legacy (botón PRÓXIMA ENTREGA)
+   No hay conflicto — son vistas diferentes del mismo almacén.
+
+C4 (_confirmandoPedido + dataset.processing): Ya coordinados en v9.5.87.
+   Ambos guards se liberan en finally. La coexistencia es técnica pero funcional.
+
+A4 (dashwey:firebase-ready doble): Ambos usan { once: true }.
+   Un listener para _doInitialSync, otro para FCM token — propósitos distintos.
+
+[SW]       CACHE_NAME: dashwey-v9-5-87 → dashwey-v9-5-88
+[manifest] v=9.5.87 → v=9.5.88
+[HTML]     _APP_VERSION: v9.5.87 → v9.5.88 | 16.808 líneas
+
+═══════════════════════════════════════════
+QA
+═══════════════════════════════════════════
+[C1] Botón "Aceptar pedido" → popup aparece directamente (sin setTimeout 300ms)
+[C3] TPV: hacer una venta con datos corruptos en State → no se bloquea, muestra error
+[C3] TPV: venta normal → cobrar → TPV listo para siguiente venta inmediatamente
+[A1] Longpress en artículo → menú contextual → tap "Editar" → menú cierra → nuevo longpress → menú abre (sin duplicados)
+[A6] Modo avión → ningún unhandledRejection en consola
