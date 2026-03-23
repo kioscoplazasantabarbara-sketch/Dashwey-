@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
    Dashwey Service Worker v1.2.7-dev
-   Cache: dashwey-v1-2-7-dev
+   Cache: dashwey-v1-2-9-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-2-7-dev';
+const CACHE_NAME  = 'dashwey-v1-2-9-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -63,7 +63,7 @@ self.addEventListener('activate', e => {
           clients.forEach(client => {
             client.postMessage({
               action: 'SW_UPDATED',
-              version: '1.2.7-dev'
+              version: '1.2.9-dev'
             });
           });
         } else {
@@ -79,7 +79,7 @@ self.addEventListener('activate', e => {
               tag:      'dashwey-update',
               renotify: true,
               vibrate:  [100, 50, 100],
-              data:     { action: 'update', version: '1.2.7-dev', url: '/' },
+              data:     { action: 'update', version: '1.2.9-dev', url: '/' },
             }).catch(() => {});
           }
         }
