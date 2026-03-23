@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-4-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-5-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.4-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.4-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.5-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.5-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.4-dev</title>
+<title>Dashwey v1.2.5-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2060,17 +2060,27 @@ input:focus, select:focus, textarea:focus {
 .cobro-pay-tarjeta:active { background: var(--red-d); transform: scale(0.97); }
 .cobro-cancel { background: rgba(0,0,0,0.06); color: var(--ink-mid); border: none; border-radius: 16px; font-size: 14px; font-weight: 600; height: 48px; margin: 0 24px 24px; cursor: pointer; }
 
-/* Tickets sheet */
-#tickets-sheet { position: fixed; inset: 0; z-index: 9990; display: none; }
-#tickets-sheet.open { display: block; }
+/* Tickets sheet — v1.2.5: migrado a opacity+transform (mismo sistema que fs-overlay/cobro) */
+#tickets-sheet {
+  position: fixed; inset: 0; z-index: 9990;
+  display: flex; align-items: flex-end;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.26s var(--ease);
+}
+#tickets-sheet.open { pointer-events: auto; opacity: 1; }
 #tickets-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
 #tickets-panel {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  background: var(--surface); border-radius: var(--r-xl) var(--r-xl) 0 0;
-  border-top: 1px solid var(--border); max-height: 72vh;
+  position: relative; bottom: 0; left: 0; right: 0; width: 100%;
+  background: var(--surface); border-radius: var(--sheet-radius);
+  border-top: var(--sheet-border); max-height: 72vh;
   display: flex; flex-direction: column;
-  box-shadow: 0 -8px 32px rgba(0,0,0,0.10);
+  box-shadow: var(--sheet-shadow);
+  transform: translateY(100%);
+  transition: transform var(--sheet-duration) var(--sheet-spring);
+  will-change: transform;
 }
+#tickets-sheet.open #tickets-panel { transform: translateY(0); }
 .tickets-handle { width: 36px; height: 4px; border-radius: 4px; background: rgba(0,0,0,0.15); margin: 12px auto 0; flex-shrink: 0; }
 .tickets-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .tickets-title { font-size: 16px; font-weight: 700; color: var(--ink); }
@@ -7538,7 +7548,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.4-dev';
+  const _APP_VERSION = 'v1.2.5-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -8342,6 +8352,18 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
+    'v1.2.5-dev': {
+      sections: [
+        {
+          title: '✨ Animación de sheets unificada',
+          items: [
+            { icon: '🎞️', name: 'Tickets con spring nativo', desc: 'El sheet de tickets ya usa el mismo spring que el resto de la app. Entra y sale con la misma animación fluida que aceptar pedido.' },
+            { icon: '🔄', name: 'Cierre animado', desc: 'Al cerrar el sheet de tickets, el panel desliza suavemente hacia abajo antes de desaparecer. Sin cortes abruptos.' },
+            { icon: '🎯', name: 'Doble rAF garantizado', desc: 'La apertura usa dos frames de animación separados — el mismo sistema que todos los sheets principales. Sin flicker en ningún caso.' },
+          ]
+        },
+      ]
+    },
     'v1.2.4-dev': {
       sections: [
         {
@@ -12856,11 +12878,35 @@ const tpv = (() => {
   function openTickets() {
     _saveCurrentToTicket();
     _renderTicketsList();
-    document.getElementById('tickets-sheet')?.classList.add('open');
+    // v1.2.5: doble rAF — garantiza animación spring sin flickering (mismo sistema que openFs)
+    const sh = document.getElementById('tickets-sheet');
+    if (!sh) return;
+    const panel = document.getElementById('tickets-panel');
+    if (panel && (panel.style.transform || panel.style.transition)) {
+      panel.style.transform = '';
+      panel.style.transition = '';
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        sh.classList.add('open');
+      });
+    });
   }
 
   function closeTickets() {
-    document.getElementById('tickets-sheet')?.classList.remove('open');
+    // v1.2.5: animación de cierre — panel desliza abajo antes de ocultar
+    const sh    = document.getElementById('tickets-sheet');
+    const panel = document.getElementById('tickets-panel');
+    if (!sh || !sh.classList.contains('open')) return;
+    if (panel) {
+      panel.style.transition = `transform 0.22s cubic-bezier(0.4,0,1,1)`;
+      panel.style.transform  = 'translateY(100%)';
+    }
+    sh.classList.remove('open');
+    // Limpiar inline styles tras la transición
+    setTimeout(() => {
+      if (panel) { panel.style.transition = ''; panel.style.transform = ''; }
+    }, 280);
   }
 
   function _renderTicketsList() {
