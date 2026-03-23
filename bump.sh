@@ -18,7 +18,7 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── 1. Leer versión actual desde version.json ──────────────────
-CURRENT=$(grep '"version"' "$DIR/version.json" | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
 echo "📌 Versión actual: $CURRENT"
 
 # ── 2. Calcular nueva versión ──────────────────────────────────
