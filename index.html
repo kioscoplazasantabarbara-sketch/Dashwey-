@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-1-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-3-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.1-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.1-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.3-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.3-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.1-dev</title>
+<title>Dashwey v1.2.3-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7253,22 +7253,63 @@ function getLV(id,defaults) { return Utils.getLV(id,defaults); }
 const ui = (() => {
 
   function setFs(html) { (document.getElementById('fs-content')||{}).innerHTML = html; }
-  // v1.1.2: openFs(level) — level: 'full' (default 90vh) | 'half' (50vh)
+
+  // v1.2.3: openFs garantiza la animación spring en todos los casos SIN flickering.
+  //
+  // CAUSA DEL FLICKERING (v1.2.2):
+  //   box.style.transform = '' y box.style.transition = '' provocaban
+  //   un repaint del #fs-box en su posición CSS base (translateY(100%))
+  //   visible durante 1 frame → flash blanco/negro antes de la animación.
+  //
+  // SOLUCIÓN:
+  //   1. Solo limpiar inline styles si realmente existen (el swipe los añade)
+  //   2. Doble rAF: primero asegurar estado inicial, luego añadir .open
+  //      Esto garantiza que el browser pinta el estado "cerrado" ANTES de
+  //      disparar la transición, sin ningún frame intermedio visible.
   function openFs(level) {
-    const box = document.getElementById('fs-box');
-    if (box) {
-      box.classList.toggle('sheet-half', level === 'half');
+    const overlay  = document.getElementById('fs-overlay');
+    const backdrop = document.getElementById('fs-backdrop');
+    const box      = document.getElementById('fs-box');
+    if (!overlay || !box) return;
+    if (overlay.classList.contains('open')) return; // ya abierto — no re-trigger
+
+    // Nivel half/full — sin impacto visual, solo max-height
+    box.classList.toggle('sheet-half', level === 'half');
+
+    // Limpiar inline styles del swipe SOLO si existen (evita repaint innecesario)
+    if (box.style.transform || box.style.transition) {
+      box.style.transform  = '';
+      box.style.transition = '';
     }
-    document.getElementById('fs-overlay').classList.add('open');
-    document.getElementById('fs-backdrop').classList.add('open');
+
+    // Doble rAF: frame N limpia, frame N+1 anima
+    // Sin el doble rAF, el cambio de clase .open puede ocurrir
+    // en el mismo batch que los inline style changes → sin transición
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        overlay.classList.add('open');
+        if (backdrop) backdrop.classList.add('open');
+      });
+    });
   }
-  function closeFs()   {
-    document.getElementById('fs-overlay').classList.remove('open');
-    document.getElementById('fs-backdrop').classList.remove('open');
-    document.getElementById('header').classList.remove('menu-open');
-    document.getElementById('fs-box').classList.remove('fs-settings');
-    // Limpiar SAC si estaba abierto en este formulario
-    if(typeof App !== 'undefined' && App.alm && App.alm._sacCloseAll) App.alm._sacCloseAll();
+  function closeFs() {
+    const overlay  = document.getElementById('fs-overlay');
+    const backdrop = document.getElementById('fs-backdrop');
+    const box      = document.getElementById('fs-box');
+
+    if (!overlay || !overlay.classList.contains('open')) return; // ya cerrado
+
+    // Quitar .open → dispara la transición de salida (translateY 0→100%, opacity 1→0)
+    overlay.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('open');
+    document.getElementById('header')?.classList.remove('menu-open');
+
+    // Limpiar clase half y SAC tras la transición (no durante — evita layout jank)
+    const CLOSE_DUR = 300; // ms — ligeramente mayor que --sheet-duration (280ms)
+    setTimeout(() => {
+      if (box) box.classList.remove('fs-settings', 'sheet-half');
+      if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
+    }, CLOSE_DUR);
   }
   function closeFsOvl(e) { const box = document.getElementById('fs-box'); if(box && !box.contains(e.target)) closeFs(); }
 
@@ -7497,7 +7538,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.1-dev';
+  const _APP_VERSION = 'v1.2.3-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -8301,6 +8342,29 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
+    'v1.2.3-dev': {
+      sections: [
+        {
+          title: '🐛 Fix flickering en aceptar pedido',
+          items: [
+            { icon: '✅', name: 'Sin flicker al abrir sheets', desc: 'Corregida la causa del parpadeo introducido en v1.2.2. El panel de confirmación de pedido ya abre sin flash previo.' },
+            { icon: '⚡', name: 'Doble rAF para animación limpia', desc: 'openFs() ahora usa dos frames de animación separados. El browser pinta el estado inicial antes de disparar la transición — sin frames intermedios visibles.' },
+          ]
+        },
+      ]
+    },
+    'v1.2.2-dev': {
+      sections: [
+        {
+          title: '✨ Animación unificada de sheets',
+          items: [
+            { icon: '🎞️', name: 'Animación garantizada en todos los formularios', desc: 'Corregida la causa raíz por la que proveedores y editar artículos perdían la animación. Ahora todos los sheets usan el mismo spring sin excepción.' },
+            { icon: '🔄', name: 'Cierre también animado', desc: 'Al cerrar un formulario, el panel desliza hacia abajo y el fondo se desvanece. La experiencia de cierre es tan fluida como la de apertura.' },
+            { icon: '🧹', name: 'Sin transforms residuales', desc: 'Tras cerrar un sheet con gesto, el transform inline se limpia correctamente. El siguiente formulario siempre entra desde cero.' },
+          ]
+        },
+      ]
+    },
     'v1.2.1-dev': {
       sections: [
         {
@@ -18065,12 +18129,17 @@ if (!window.Utils) {
   }
 
   function _commitClose() {
-    // Restaurar transición y cerrar
-    if (_fsBox) {
-      _fsBox.style.transition = '';
-      _fsBox.style.transform  = '';
-    }
+    // El swipe ya animó el box fuera de pantalla con style.transform.
+    // closeFs() quita .open (backdrop fade), luego limpiamos el transform residual
+    // para que el próximo openFs() arranque desde translateY(100%) limpio.
     try { App?.ui?.closeFs?.(); } catch(_) {}
+    // Limpiar transform inline tras la transición del overlay (300ms)
+    setTimeout(() => {
+      if (_fsBox) {
+        _fsBox.style.transition = '';
+        _fsBox.style.transform  = '';
+      }
+    }, 320);
   }
 
   function _snapBack() {
