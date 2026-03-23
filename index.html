@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-6-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-7-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.6-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.6-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.7-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.7-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.6-dev</title>
+<title>Dashwey v1.2.7-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7481,7 +7481,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.6-dev';
+  const _APP_VERSION = 'v1.2.7-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -8285,15 +8285,15 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
-    'v1.2.6-dev': {
+    'v1.2.7-dev': {
       sections: [
         {
-          title: '✨ UX refinement — Fluidez y limpieza',
+          title: '🔙 Back button profesional',
           items: [
-            { icon: '🤫', name: 'Sin vibración al navegar', desc: 'Eliminada la vibración al cambiar entre TPV, Dashboard y Almacén. El haptic se reserva solo para acciones importantes.' },
-            { icon: '📋', name: 'Sheets abren en compacto', desc: 'Los formularios y paneles abren ahora al 50% de pantalla. Desde ahí puedes expandir hasta el 75% o cerrar deslizando.' },
-            { icon: '🎞️', name: 'Spring más natural', desc: 'La animación de apertura de sheets usa una curva más suave, sin el rebote agresivo anterior. Sensación más sólida y nativa.' },
-            { icon: '🧹', name: 'Dashboard más limpio', desc: 'Eliminadas las tarjetas Beneficio Neto e Ingresos. El layout se reajusta automáticamente.' },
+            { icon: '✋', name: 'Sin cierres accidentales', desc: 'El gesto atrás ya no cierra la app si hay un sheet o modal abierto. Primero cierra lo que esté abierto.' },
+            { icon: '📋', name: 'Prioridad correcta', desc: 'Modal → Sheet → Tickets → Settings → Cobro. Cada back cierra la capa más alta activa, nunca salta niveles.' },
+            { icon: '⚠️', name: 'Aviso antes de salir', desc: 'En pantalla principal, el primer back muestra "Pulsa atrás de nuevo para salir". El segundo back en 2 segundos cierra la app.' },
+            { icon: '🔄', name: 'Reset al cerrar sheet', desc: 'Cerrar un sheet con back no activa el contador de doble-back. El guard de salida solo se activa desde pantalla principal.' },
           ]
         },
       ]
@@ -18354,126 +18354,116 @@ if (!window.Utils) {
 </script>
 
 <script>
-/* ═══ ANDROID BACK BUTTON — Hardware back + gesture v1.1.0 ══════════
+/* ═══ ANDROID BACK BUTTON — Hardware back + gesture v1.2.7 ══════════
    Intercepta el botón/gesto back de Android para:
      1. Cerrar modal/sheet activo → sin salir de la app
-     2. Si no hay overlay → salir solo si no hay historial de navegación
+     2. Si no hay overlay → mostrar aviso "Pulsa atrás de nuevo"
+     3. Segundo back en <2s → cerrar app
 
    DOS IMPLEMENTACIONES en paralelo (se activa la disponible):
      A) Capacitor App.addListener('backButton') — APK nativa
      B) history.pushState + popstate              — PWA / web fallback
 
-   PRIORIDAD de capas (igual que edge swipe):
-     fs-overlay > settings-drawer > whats-new-overlay >
-     tpv-cobro-sheet > dash-period-sheet > nada
+   PRIORIDAD de capas (mayor a menor):
+     modal-overlay > fs-overlay > tickets-sheet > settings-drawer >
+     whats-new-overlay > tpv-cobro-sheet > dash-period-sheet
 
-   REGLA CRÍTICA: si no hay ningún overlay abierto y el usuario lleva
-   más de 1s en la app, NO salir — solo hacer haptic de aviso.
-   Esto evita salir accidentalmente con un back rápido.
+   REGLA CRÍTICA: sin overlay → doble back en 2s para salir.
+   Primer back muestra toast. Segundo back cierra la app.
    ═══════════════════════════════════════════════════════════════════ */
 (function() {
-  // ── Lógica compartida de "¿qué capa está activa?" ──────────────
-  function _getTopLayer() {
-    if (document.getElementById('fs-overlay')?.classList.contains('open'))        return 'fs';
-    if (document.getElementById('settings-drawer')?.classList.contains('open'))   return 'settings';
-    if (document.getElementById('whats-new-overlay')?.classList.contains('open')) return 'whatsnew';
-    if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open'))   return 'cobro';
-    if (document.getElementById('dash-period-sheet')?.classList.contains('open')) return 'periodpicker';
+  // ── Tabla de capas: [id, clase-open, fn-cierre] ─────────────────
+  // Orden = prioridad (primero = más alta)
+  const _LAYERS = [
+    ['modal-overlay',      'open', function() { try { App?.ui?.closeModal?.(); } catch(e) {} }],
+    ['fs-overlay',         'open', function() { try { App?.ui?.closeFs?.(); } catch(e) {} }],
+    ['tickets-sheet',      'open', function() { try { App?.tpv?.closeTickets?.(); } catch(e) {} }],
+    ['settings-drawer',    'open', function() { try { App?.ui?.closeSettings?.(); } catch(e) {} }],
+    ['whats-new-overlay',  'open', function() { try { App?.ui?.closeWhatsNew?.(); } catch(e) {} }],
+    ['tpv-cobro-sheet',    'open', function() { try { App?.tpv?.closeCobro?.(); } catch(e) {} }],
+    ['dash-period-sheet',  'open', function() { try { App?.dash?.closeGlobalPeriodPicker?.(); } catch(e) {} }],
+  ];
+
+  function _getCloseFn() {
+    for (var i = 0; i < _LAYERS.length; i++) {
+      var el = document.getElementById(_LAYERS[i][0]);
+      if (el && el.classList.contains(_LAYERS[i][1])) return _LAYERS[i][2];
+    }
     return null;
   }
 
-  function _closeTopLayer(layer) {
-    try {
-      if (layer === 'fs')           App?.ui?.closeFs?.();
-      if (layer === 'settings')     App?.ui?.closeSettings?.();
-      if (layer === 'whatsnew')     App?.ui?.closeWhatsNew?.();
-      if (layer === 'cobro')        App?.tpv?.closeCobro?.();
-      if (layer === 'periodpicker') App?.dash?.closeGlobalPeriodPicker?.();
-    } catch(e) {}
-  }
-
-  // ── Handler central de back ─────────────────────────────────────
-  let _appStartTime = Date.now();
-  let _backPressedOnce = false;
-  let _backPressTimer  = null;
+  // ── Estado del doble-back ────────────────────────────────────────
+  var _backPressedOnce = false;
+  var _backPressTimer  = null;
 
   function _handleBack(canExit) {
-    const layer = _getTopLayer();
+    var closeFn = _getCloseFn();
 
-    if (layer) {
-      // Hay overlay abierto → cerrarlo, no salir
-      Utils?.triggerHaptic?.('light');
-      _closeTopLayer(layer);
-      // Reponer el estado de historial para el siguiente back
+    if (closeFn) {
+      // Overlay abierto → cerrar, NO salir
+      closeFn();
       if (canExit === false) history.pushState({ dashwey: true }, '');
+      // Cerrar un sheet no activa el guard de doble-back
+      _backPressedOnce = false;
+      clearTimeout(_backPressTimer);
       return;
     }
 
-    // Sin overlay → comportamiento según contexto
+    // Pantalla principal — sin overlay
     if (!canExit) {
-      // Web/PWA: no podemos salir — haptic de aviso
-      Utils?.triggerHaptic?.('light');
+      // PWA/web: no podemos salir con JS
+      if (!_backPressedOnce) {
+        _backPressedOnce = true;
+        try { Utils?.showToast?.('Pulsa atrás de nuevo para salir'); } catch(e) {}
+        clearTimeout(_backPressTimer);
+        _backPressTimer = setTimeout(function() { _backPressedOnce = false; }, 2000);
+      }
       return;
     }
 
-    // APK nativa con Capacitor: podría salir
-    // Guard anti-salida accidental: doble back en 2s para salir
+    // APK nativa: doble back en 2s para salir
     if (!_backPressedOnce) {
       _backPressedOnce = true;
-      Utils?.triggerHaptic?.('light');
-      try { Utils?.showToast?.('Pulsa atrás de nuevo para salir'); } catch(_) {}
+      try { Utils?.triggerHaptic?.('light'); } catch(e) {}
+      try { Utils?.showToast?.('Pulsa atrás de nuevo para salir'); } catch(e) {}
       clearTimeout(_backPressTimer);
-      _backPressTimer = setTimeout(() => { _backPressedOnce = false; }, 2000);
+      _backPressTimer = setTimeout(function() { _backPressedOnce = false; }, 2000);
     } else {
-      // Segundo back en 2s → salir
       clearTimeout(_backPressTimer);
       try {
-        const { App: CapApp } = window.Capacitor?.Plugins || {};
-        if (CapApp?.exitApp) CapApp.exitApp();
+        var CapApp = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
+        if (CapApp && CapApp.exitApp) CapApp.exitApp();
       } catch(e) {}
     }
   }
 
-  // ── A) Capacitor App plugin (APK nativa) ────────────────────────
-  // Se inicializa cuando Capacitor está disponible
+  // ── A) Capacitor (APK nativa) ────────────────────────────────────
   function _initCapacitorBack() {
     try {
-      const { App: CapApp } = window.Capacitor?.Plugins || {};
-      if (!CapApp?.addListener) return false;
-      CapApp.addListener('backButton', ({ canGoBack }) => {
-        _handleBack(true); // En APK siempre puede potencialmente salir
-      });
+      var CapApp = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
+      if (!CapApp || !CapApp.addListener) return false;
+      CapApp.addListener('backButton', function() { _handleBack(true); });
       return true;
     } catch(e) { return false; }
   }
 
-  // ── B) Web history fallback (PWA / browser) ─────────────────────
-  // Añade un estado al historial para que el back del navegador
-  // dispare popstate en lugar de navegar fuera de la SPA
+  // ── B) Web history fallback (PWA / browser) ──────────────────────
   function _initWebBack() {
-    // Añadir estado inicial si no existe
-    if (!history.state?.dashwey) {
+    if (!history.state || !history.state.dashwey) {
       history.pushState({ dashwey: true }, '');
     }
-    window.addEventListener('popstate', function(e) {
-      // Siempre reponer el estado para interceptar el próximo back
-      const layer = _getTopLayer();
-      if (layer) {
-        history.pushState({ dashwey: true }, '');
-        _handleBack(false);
-      } else {
-        // Sin overlay: reponer estado (no dejar que el browser navegue atrás)
-        history.pushState({ dashwey: true }, '');
-        _handleBack(false);
-      }
+    window.addEventListener('popstate', function() {
+      history.pushState({ dashwey: true }, '');
+      _handleBack(false);
     });
   }
 
-  // Inicializar: intentar Capacitor primero, fallback a web
+  // Inicializar tras DOMContentLoaded
   document.addEventListener('DOMContentLoaded', function() {
-    const usedCapacitor = _initCapacitorBack();
+    var usedCapacitor = _initCapacitorBack();
     if (!usedCapacitor) _initWebBack();
   }, { once: true });
+})();
 })();
 </script>
 
