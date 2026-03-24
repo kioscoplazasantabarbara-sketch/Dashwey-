@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-21-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-22-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.21-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.21-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.22-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.22-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.21-dev</title>
+<title>Dashwey v1.2.22-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7506,15 +7506,21 @@ const ui = (() => {
   function doReset() {
     State.set.resetStorage();
     closeFs();
-    App.dash.render();
-    App.tpv.render();
-    App.alm.renderOrden();
-    App.alm.updateBadge();
+    // v1.2.22: diferir renders hasta después de la animación de cierre del sheet (300ms).
+    // Evita que dash+tpv rendericen mientras el overlay está cerrando → cero flicker.
+    // Usar _renderAll (fuente única) en lugar de llamadas individuales desordenadas.
+    setTimeout(() => {
+      try { App.alm.renderOrden?.(); }     catch(_) {}
+      try { App.alm.renderCatInline?.(); } catch(_) {}
+      try { App.alm.updateBadge?.(); }     catch(_) {}
+      try { App.tpv.render?.(); }          catch(_) {}
+      try { App.dash.render?.(); }         catch(_) {}
+    }, 320);
     showToast('✅ Datos restaurados');
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.21-dev';
+  const _APP_VERSION = 'v1.2.22-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -9106,9 +9112,19 @@ const nav = (() => {
 // 6. DASHBOARD
 // ══════════════════════════════════════════
 const dash = (() => {
-  let _ventasMode = 'ingresos'; // 'ingresos' | 'unidades'
+  let _ventasMode  = 'ingresos'; // 'ingresos' | 'unidades'
+  let _isRendering = false;      // v1.2.22: guard de re-entrada — evita renders apilados
 
   function render() {
+    // v1.2.22: si ya hay un render en curso, descartar silenciosamente.
+    // Evita que eventos rápidos (venta, sync, etc.) apilen renders concurrentes.
+    if (_isRendering) return;
+    _isRendering = true;
+    // v1.2.22: try/finally garantiza que _isRendering siempre se libera,
+    // incluso si algún sub-render lanza una excepción.
+    // Sin esto, un error en renderFinanciero() dejaría el flag bloqueado
+    // permanentemente → todos los renders futuros descartados silenciosamente.
+    try {
     // v9.5.73: shimmer en todas las tarjetas durante render
     _shimmerAllCards(320);
     // v9.5.25: sincronizar label del selector de periodo en el título
@@ -9188,6 +9204,9 @@ const dash = (() => {
 
     // Aplicar modo dashboard al final del render (cache guard interno evita trabajo redundante)
     _applyDashMode();
+    } finally {
+      _isRendering = false; // v1.2.22: liberar guard — siempre, incluso si algo lanzó
+    }
   }
 
 
@@ -9656,7 +9675,12 @@ const dash = (() => {
     _updateSnavLabel(L[t]);
     document.querySelectorAll('.period-opt').forEach(el => el.classList.toggle('sel', el.id===`po-${t}`));
     if(t === 'custom') document.getElementById('cf').classList.add('show');
-    else { ui.closeFs(); render(); }
+    else {
+      ui.closeFs();
+      // v1.2.22: diferir render 320ms — esperar a que closeFs termine su animación (300ms).
+      // Evita repaint del dashboard mientras el sheet todavía está cerrando.
+      setTimeout(() => render(), 320);
+    }
   }
 
   function applyCustom() {
@@ -9665,7 +9689,10 @@ const dash = (() => {
     const label = `${f.slice(0,10)} → ${t2.slice(0,10)}`;
     State.set.period({ type:'custom', label, offset:0, customStart: f, customEnd: t2 });
     _updateSnavLabel(label);
-    ui.closeFs(); render();
+    ui.closeFs();
+    // v1.2.22: diferir render 320ms — sheet close animation es 300ms
+    setTimeout(() => render(), 320);
+
   }
 
   // Informe Financiero del mes
@@ -12484,6 +12511,7 @@ const tpv = (() => {
   let _searchQ      = '';
   let _ticketActivo = null;
   let _dockExpanded = false;
+  let _isRendering  = false;  // v1.2.22: guard de re-entrada
 
   // ── Helpers ──────────────────────────────────────────────────
   function cartTotal() {
@@ -12498,11 +12526,18 @@ const tpv = (() => {
 
   // ── Render principal ─────────────────────────────────────────
   function render() {
-    _renderHotGrid();
-    _renderCats();
-    _renderProds();
-    _updateDock();
-    _updateTabletTicket();
+    // v1.2.22: descartar si ya hay render en curso
+    if (_isRendering) return;
+    _isRendering = true;
+    try {
+      _renderHotGrid();
+      _renderCats();
+      _renderProds();
+      _updateDock();
+      _updateTabletTicket();
+    } finally {
+      _isRendering = false; // siempre liberar, incluso si algo lanza
+    }
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
