@@ -1,53 +1,70 @@
-Dashwey v1.2.29-dev
-Build: v1.2.29-dev
+Dashwey v1.2.31-dev
+Build: v1.2.31-dev
 Date: 2026-03-25
 
-CHANGELOG v1.2.29-dev — Sistema Global de Manejo de Errores
-=============================================================
+CHANGELOG v1.2.31-dev — Modal central de comprobación de pedido
+================================================================
 
-[FEAT-1] window.onerror implementado (reemplaza listener básico)
-  - Captura: mensaje, fuente, línea, columna, objeto Error
-  - Filtra errores de recursos externos (img, script) — no spam al usuario
-  - Llama a _tryRecoverUI() automáticamente antes de notificar
-  - Solo muestra toast si el error es de código propio de la app
+[FEAT] Check-Modal — sistema aislado de recepción de pedidos
 
-[FEAT-2] Try/catch en funciones críticas de navegación y render
-  - goTab()          — navegación entre tabs nunca puede congelar la app
-  - openFs()         — apertura de full-screen sheet protegida
-  - closeFs()        — cierre de sheet protegido (overflow body siempre restaurado)
-  - openModal()      — apertura de modal protegida
-  - closeModal()     — cierre de modal protegido
-  - openSettings()   — drawer de ajustes protegido
-  - closeSettings()  — cierre de drawer protegido
-  - renderOrden()    — render ALM protegido (ya existía en dash/tpv)
+ARQUITECTURA
+  - window.checkModalState  → estado privado (items snapshot + Set checked)
+  - window._checkModal      → API pública: open() / close() / toggle() / confirm()
+  - Estado temporal: NO modifica State hasta confirmación final
+  - Snapshot inmutable heredado de _pedidoPendiente (ya existente en ALM)
 
-[FEAT-3] Fallback UI — recuperación automática (_tryRecoverUI)
-  - Restaura document.body.overflow si quedó bloqueado por sheet a medias
-  - Cierra overlays huérfanos (fs-overlay, modal-overlay sin contenido)
-  - Garantiza visibilidad de bottom-tabs
-  - Se invoca desde onerror Y desde unhandledrejection
+CSS — #check-modal-overlay / #check-modal-box
+  - Modal central (no sheet) con backdrop blur(10px) + rgba(0,0,0,0.72)
+  - Animación entrada: scale(0.92→1) + opacity(0→1) en var(--sheet-duration)
+  - Solo transform + opacity — GPU friendly, cero layout
+  - Dark mode completo via tokens del sistema
+  - .cm-item: transition opacity sin re-render del nodo
+  - .cm-chk: checkbox grande con tick SVG, transición color
+  - .cm-price-badge.cm-price-alert: badge rojo con % subida si precio > histórico
+  - .cm-confirm-btn: disabled hasta todos marcados, activo con color var(--red)
+  - .cm-progress-bar-fill: barra animada con will-change:width
 
-[FEAT-4] Logger centralizado window._DashweyLog
-  - _DashweyLog.error(tag, msg, extra) — errores
-  - _DashweyLog.warn(tag, msg, extra)  — advertencias
-  - _DashweyLog.info(tag, msg, extra)  — info
-  - _DashweyLog.dump()                 — devuelve historial de últimos 50 errores
-  - Accesible desde consola Android para depuración: window._DashweyLog.dump()
+FLUJO DE APERTURA
+  Popup análisis → botón "📦 Comprobar recepción"
+    → App.alm._abrirCheckModal()
+    → cierra aceptar-popup-overlay
+    → construye items desde _pedidoPendiente (snapshot ya inmutable)
+    → window._checkModal.open(items, {sel, prov})
+    → anima entrada (doble rAF)
 
-[FEAT-5] Toast throttle — máx. 1 aviso de error cada 4 segundos
-  - Evita spam de toasts si hay un error recurrente
-  - Solo errores de código propio generan toast (no recursos)
+MARCAR ITEMS (sin re-render global)
+  toggle(prodId):
+    1. añade/quita class .cm-checked inmediatamente (visual instantáneo)
+    2. setTimeout 120ms → appendChild al final del contenedor (reordenamiento)
+    3. _updateFooter() actualiza counter + barra + estado del botón
 
-[FIX] unhandledrejection mejorado
-  - Extrae mensaje del Error object o string correctamente
-  - Incluye stack trace en el log cuando está disponible
-  - Llama a _tryRecoverUI() en rejections también
+ALERTA DE PRECIO
+  - Compara item.precio vs item.precioHistorico (penúltimo registro historialPrecios)
+  - Si precio actual > histórico: badge rojo + ⚠️ + % subida
+  - Solo visual — no bloquea el flujo
+
+CONFIRMACIÓN (sincronización real)
+  confirm():
+    1. State.set.updateProd(prodId, {stockActual}) para cada item
+    2. State.set.addPedido(pedido) con snapshot completo
+    3. App.alm._cancelarPedidoCarrito() — limpia carrito ALM
+    4. DashweyBus.emit('pedido_stock') — dash.render() + alm.updateBadge()
+    5. document.dispatchEvent('order:checked') + 'data:updated'
+    6. Utils.triggerHaptic('medium') + showToast
+    7. _checkModal.close()
+
+NAVEGACIÓN ANDROID BACK
+  - 'check-modal-overlay' añadido a _LAYERS con clase 'cm-open'
+  - Prioridad máxima (primer elemento del array)
+  - Back cierra el modal, no la app
 
 VALIDACIÓN
-- 6 funciones críticas envueltas en try/catch con log identificado
-- window.onerror activo (antes solo window.addEventListener)
-- _DashweyLog accesible globalmente para debugging en Android
-- 0 regresiones — todos los catch son no-op si no hay error
-- Líneas index.html: 19362 (original: 19226 +136 líneas de sistema de errores)
-- CACHE_NAME sw.js == CURRENT_CACHE index.html: dashwey-v1-2-29-dev ✅
-- _APP_VERSION == postMessage.version == version.json: 1.2.29-dev ✅
+  - ✅ CSS: 19 selectores del sistema de check-modal
+  - ✅ HTML: modal pre-colocado en body (no creado dinámicamente)
+  - ✅ JS engine: window._checkModal con open/close/toggle/confirm
+  - ✅ _abrirCheckModal() expuesta en return{} de alm
+  - ✅ Back button: check-modal-overlay en _LAYERS[0]
+  - ✅ Sincronización: DashweyBus.emit('pedido_stock') + eventos custom
+  - ✅ Sin flickering: classList en nodos existentes, sin innerHTML en lista
+  - ✅ Reordenamiento: appendChild (no re-render) con 120ms delay
+  - ✅ CACHE_NAME == CURRENT_CACHE: dashwey-v1-2-31-dev
