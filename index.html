@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-19-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-20-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.19-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.19-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.20-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.20-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.19-dev</title>
+<title>Dashwey v1.2.20-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7514,7 +7514,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.19-dev';
+  const _APP_VERSION = 'v1.2.20-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13523,7 +13523,136 @@ const alm = (() => {
 
   let _cataloSel = new Set();
   let _prodPhotoData = null;
+  let _editPhoto     = null;  // v1.2.20: foto temporal del formulario de edición (módulo-level)
   let _cddActive = null;
+
+  // ── v1.2.20: Funciones permanentes del formulario de edición ─────
+  // Antes se asignaban como closures dentro de openEditArt() causando
+  // ReferenceError si el HTML las invocaba antes de que el formulario abriera.
+  // Ahora son funciones estables del módulo. _editPhoto es módulo-level.
+
+  function _eaIvaChange() {
+    const sel  = document.getElementById('ea-iva')?.value;
+    const wrap = document.getElementById('ea-iva-custom-wrap');
+    if (wrap) wrap.style.display = sel === 'otro' ? 'block' : 'none';
+    _eaRecalc();
+  }
+
+  function _eaLoadPhoto(inp) {
+    const file = inp.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      _editPhoto = ev.target.result;
+      const prev = document.getElementById('ea-photo-prev');
+      if (prev) prev.innerHTML =
+        '<img src="' + _editPhoto + '" class="alm-photo-wrap-img">' +
+        '<div class="alm-photo-badge">' +
+        '<svg width="10" height="10" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24">' +
+        '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
+        '<circle cx="12" cy="13" r="4"/></svg></div>';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function _eaRecalc() {
+    const pc  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
+    const pvp = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
+    const ivaSelect = document.getElementById('ea-iva')?.value;
+    const ivaPct = ivaSelect === 'otro'
+      ? parseFloat(document.getElementById('ea-iva-custom')?.value) || 0
+      : parseFloat(ivaSelect) || 10;
+    const costeIva = +(pc * (1 + ivaPct / 100)).toFixed(2);
+    const uc       = parseInt(document.getElementById('ea-uc')?.value) || 12;
+    const ganCaja  = pvp > 0 ? +((pvp - costeIva / uc) * uc).toFixed(2) : 0;
+    const mg       = pvp > 0 && costeIva > 0
+      ? Math.round((pvp - costeIva / uc) / pvp * 100) : null;
+    const rentEl  = document.getElementById('ea-rent');
+    const costeEl = document.getElementById('ea-r-coste');
+    const mgEl    = document.getElementById('ea-r-mg');
+    const ganEl   = document.getElementById('ea-r-gan');
+    if (rentEl)  rentEl.classList.toggle('visible', pc > 0 || pvp > 0);
+    if (costeEl) costeEl.textContent = pc > 0 ? feur(costeIva) + '/bulto' : '\u2014';
+    if (mgEl) {
+      mgEl.textContent = mg !== null ? mg + '%' : '\u2014';
+      mgEl.style.color = mg === null ? 'var(--ink)'
+        : mg >= 30 ? '#16A34A' : mg >= 15 ? '#F97316' : '#E53935';
+    }
+    if (ganEl) ganEl.textContent = ganCaja > 0 ? '+' + feur(ganCaja) + '/bulto' : '\u2014';
+  }
+
+  function _eaSave(id) {
+    const nombre = document.getElementById('ea-nombre')?.value.trim();
+    if (!nombre) { showToast('\u26a0\ufe0f Nombre vac\u00edo'); return; }
+    const prNuevo  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
+    const pvpNuevo = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
+    const ivaSelect = document.getElementById('ea-iva')?.value;
+    const ivaNuevo  = ivaSelect === 'otro'
+      ? (document.getElementById('ea-iva-custom')?.value.trim() || '10') + '%'
+      : ivaSelect;
+    const prod     = State.get.prod(id);
+    const histPrev = prod?.historialPrecios || [];
+    const lastH    = histPrev[histPrev.length - 1];
+    const ahoraH   = new Date().toISOString();
+    const histNew  = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
+      ? [...histPrev, { fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }]
+      : histPrev;
+    // Resolver proveedor desde campo texto
+    const eaProvTxt = document.getElementById('ea-prov-txt')?.value?.trim();
+    let eaProvId = State.get.proveedores().find(pv => pv.nombre === eaProvTxt)?.id || prod.prov;
+    if (eaProvTxt && !State.get.prov(eaProvId)) {
+      eaProvId = 'prov_' + Date.now();
+      State.set.addProv({ id: eaProvId, nombre: eaProvTxt, icon: '\uD83C\uDFEA',
+        direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
+        agente: '', repartidor: '', telReparto: '' });
+    }
+    const fotoOrig = State.get.prod(id)?.foto || null;
+    const updates = {
+      nombre,
+      precioCompra:     prNuevo,
+      pvp:              pvpNuevo,
+      iva:              ivaNuevo,
+      descuento:        document.getElementById('ea-desc')?.value.trim() || '',
+      cat:              document.getElementById('ea-cat')?.value.trim()  || '',
+      prov:             eaProvId,
+      stockMinimo:      parseInt(document.getElementById('ea-nc')?.value)  || prod.stockMinimo || 1,
+      udscaja:          parseInt(document.getElementById('ea-uc')?.value)  || prod.udscaja     || 12,
+      caducidad:        document.getElementById('ea-cad')?.value || null,
+      historialPrecios: histNew,
+    };
+    if (_editPhoto !== fotoOrig) updates.foto = _editPhoto;
+    State.set.updateProd(id, updates);
+    _editPhoto = null;
+    ui.closeFs();
+    requestAnimationFrame(() => {
+      renderOrden(); renderCatInline(); updateBadge();
+      try { tpv.render();  } catch(_) {}
+      try { dash.render(); } catch(_) {}
+    });
+    showToast('\u2705 Art\u00edculo actualizado');
+  }
+
+  function _eaConfirmDelete(id) {
+    const prod = State.get.prod(id); if (!prod) return;
+    ui.openModal(
+      '<div class="alm-confirm-body">' +
+      '<div class="alm-confirm-title">Borrar art\u00edculo</div>' +
+      '<div class="alm-confirm-text">\u00bfSeguro que quieres borrar <strong>' +
+        esc(prod.nombre) + '</strong>?</div>' +
+      '<div class="alm-confirm-btns">' +
+      '<button class="btn-sec" onclick="App.ui.closeModal()">Cancelar</button>' +
+      '<button class="btn-ok alm-btn-delete" onclick="App.alm._eaDelete(\'' + id + '\')">Borrar</button>' +
+      '</div></div>'
+    );
+  }
+
+  function _eaDelete(id) {
+    State.set.productos(State.get.productos().filter(p => p.id !== id));
+    State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
+    _editPhoto = null;
+    ui.closeModal(); ui.closeFs();
+    requestAnimationFrame(() => { renderOrden(); updateBadge(); try { tpv.render(); } catch(_) {} renderCatInline(); });
+    showToast('Art\u00edculo eliminado');
+  }
 
   // ── Dropdown engine ──
   function cddOpen(triggerId, menuId) {
@@ -15105,45 +15234,120 @@ const alm = (() => {
       ${tip ? `<div class="ia-tip">${tip}</div>` : ''}`;
   }
 
-  function saveArt() {
-    // v1.2.15: todos los campos son inputs directos — sin SAC ni dropdown
-    const n = document.getElementById('fn')?.value?.trim();
-    if(!n) { Utils.triggerHaptic('error'); showToast('⚠️ Escribe el nombre del artículo'); return; }
-    // Resolver proveedor: buscar por nombre en texto, fallback a seleccionado
+  // ── v1.2.20: _collectArticleFormData ─────────────────────────────
+  // Única fuente de recogida de datos del formulario de nuevo artículo.
+  // Devuelve null si el nombre está vacío (validación mínima).
+  // saveArt y saveArtAndAddCart llaman a esta función — sin duplicación.
+  function _collectArticleFormData() {
+    const nombre = document.getElementById('fn')?.value?.trim();
+    if (!nombre) return null;
+
+    // Resolver proveedor: texto → id existente → fallback seleccionado
     const provTxt = document.getElementById('fpv-txt')?.value?.trim();
-    let provId = State.get.proveedores().find(p => p.nombre === provTxt)?.id || State.get.selectedProv();
-    // Si proveedor no existe, crear nuevo
+    let provId = State.get.proveedores().find(p => p.nombre === provTxt)?.id
+               || State.get.selectedProv();
     if (provTxt && !State.get.prov(provId)) {
       provId = 'prov_' + Date.now();
-      State.set.addProv({ id: provId, nombre: provTxt, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'' });
+      State.set.addProv({ id: provId, nombre: provTxt, icon:'🏪', direccion:'',
+        telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'' });
     }
-    const cat     = document.getElementById('fca-val')?.value?.trim() || KPI.ALL_CATS[0];
-    // IVA: leer del select + campo custom
+
+    // IVA
     const ivaSelect = document.getElementById('fiv')?.value || '10%';
-    const ivaFinal  = ivaSelect === 'otro'
+    const iva = ivaSelect === 'otro'
       ? (parseFloat(document.getElementById('fiv-custom')?.value) || 10) + '%'
       : ivaSelect;
-    const pr      = parseFloat(document.getElementById('fpr')?.value)  || 0;
-    const pvp     = parseFloat(document.getElementById('fpvp')?.value) || 0;
-    const nc      = parseInt(document.getElementById('fnc')?.value)    || 1;
-    const uc      = parseInt(document.getElementById('fuc')?.value)    || 12;
-    const cad     = document.getElementById('fcad')?.value || null;
+
+    // Campos numéricos
+    const pr  = parseFloat(document.getElementById('fpr')?.value)  || 0;
+    const pvp = parseFloat(document.getElementById('fpvp')?.value) || 0;
+    const nc  = parseInt(document.getElementById('fnc')?.value)    || 1;
+    const uc  = parseInt(document.getElementById('fuc')?.value)    || 12;
+    const cat = document.getElementById('fca-val')?.value?.trim() || KPI.ALL_CATS[0];
+    const cad = document.getElementById('fcad')?.value            || null;
+
+    // Descuento
     const descRaw = document.getElementById('fdesc')?.value?.trim() || '';
     let descuento = 0;
-    if (descRaw.endsWith('%')) descuento = parseFloat(descRaw) || 0;
-    else if (descRaw) descuento = parseFloat(descRaw) || 0;
-    State.set.lastVal('nuevoArt', {nombre:'', ncajas:nc, udscaja:uc, precio:pr, pvp, cat});
+    if (descRaw) descuento = parseFloat(descRaw) || 0;
+
     const ahora = new Date().toISOString();
-    // FIX v1.2.11: incluir udscaja en addProd (faltaba — no se persistía)
-    State.set.addProd({id:'p'+Date.now(), nombre:n, precioCompra:pr, pvp, stockActual:0, stockMinimo:nc, udscaja:uc, cat, prov:provId, e:'📦', ventas:0, foto:_prodPhotoData||null, caducidad:cad, descuento,
-      historialPrecios: pr > 0 ? [{fecha:ahora, precio:pr, pvp}] : []
+    return {
+      id: 'p' + Date.now(), nombre, provId, cat, iva, pr, pvp, nc, uc,
+      cad, descuento, descRaw,
+      foto: _prodPhotoData || null,
+      historialPrecios: pr > 0 ? [{ fecha: ahora, precio: pr, pvp }] : []
+    };
+  }
+
+  // ── v1.2.20: _createArticle ───────────────────────────────────────
+  // Única función que persiste un artículo en State y emite el evento.
+  // Ningún otro punto del código debe llamar a State.set.addProd
+  // para artículos nuevos desde el formulario — todo pasa por aquí.
+  function _createArticle(data) {
+    State.set.addProd({
+      id:             data.id,
+      nombre:         data.nombre,
+      precioCompra:   data.pr,
+      pvp:            data.pvp,
+      stockActual:    0,
+      stockMinimo:    data.nc,
+      udscaja:        data.uc,
+      cat:            data.cat,
+      prov:           data.provId,
+      iva:            data.iva,
+      e:              '📦',
+      ventas:         0,
+      foto:           data.foto,
+      caducidad:      data.cad,
+      descuento:      data.descuento,
+      historialPrecios: data.historialPrecios
     });
+
+    // Limpiar foto temporal
     _prodPhotoData = null;
+
+    // Persistir lastVal para que reapertura del form recuerde bultos/uds
+    State.set.lastVal('nuevoArt', {
+      nombre: '', ncajas: data.nc, udscaja: data.uc,
+      precio: data.pr, pvp: data.pvp, cat: data.cat
+    });
+
+    // Emitir evento para que TPV y Dashboard reaccionen sin acoplamiento directo
+    try {
+      document.dispatchEvent(new CustomEvent('item:created', {
+        detail: { id: data.id, nombre: data.nombre }
+      }));
+    } catch(_) {}
+
+    // Refresh UI inmediato — solo lo estrictamente necesario
+    requestAnimationFrame(() => {
+      renderOrden();
+      renderCatInline();
+      updateBadge();
+      try { tpv.render(); }  catch(_) {}
+      try { dash.render(); } catch(_) {}
+    });
+  }
+
+  // ── saveArt ───────────────────────────────────────────────────────
+  // Guardar artículo sin añadir al carrito.
+  // Único punto de entrada desde el botón "Guardar artículo".
+  function saveArt() {
+    const data = _collectArticleFormData();
+    if (!data) {
+      Utils.triggerHaptic('error');
+      showToast('⚠️ Escribe el nombre del artículo');
+      return;
+    }
+    _createArticle(data);
     _sacCloseAll();
     ui.closeFs();
     Utils.triggerHaptic('medium');
-    requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); tpv.render(); });
-    showToast('✅ ' + n + (cad?' · cad. '+cad:'') + (descuento?' · ' + descRaw + ' dto':''));
+    const msg = '✅ ' + data.nombre
+      + (data.cad    ? ' · cad. ' + data.cad                 : '')
+      + (data.descuento ? ' · ' + data.descRaw + ' dto'      : '');
+    showToast(msg);
   }
 
   function _applyRecomPvpVal(val) {
@@ -15160,48 +15364,24 @@ const alm = (() => {
     showToast('✦ PVP recomendado aplicado: ' + feur(parseFloat(pvpRec)));
   }
 
+  // ── saveArtAndAddCart ─────────────────────────────────────────────
+  // Guardar artículo Y añadirlo al carrito de pedido activo.
   function saveArtAndAddCart() {
-    // v1.2.15: todos los campos son inputs directos
-    const n = document.getElementById('fn')?.value?.trim();
-    if (!n) { showToast('⚠️ Escribe el nombre del artículo'); return; }
-    const provTxt2 = document.getElementById('fpv-txt')?.value?.trim();
-    let provId = State.get.proveedores().find(p => p.nombre === provTxt2)?.id || State.get.selectedProv();
-    if (provTxt2 && !State.get.prov(provId)) {
-      provId = 'prov_' + Date.now();
-      State.set.addProv({ id: provId, nombre: provTxt2, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'' });
+    const data = _collectArticleFormData();
+    if (!data) {
+      Utils.triggerHaptic('error');
+      showToast('⚠️ Escribe el nombre del artículo');
+      return;
     }
-    const cat     = document.getElementById('fca-val')?.value?.trim() || KPI.ALL_CATS[0];
-    const pr      = parseFloat(document.getElementById('fpr')?.value)  || 0;
-    const pvp     = parseFloat(document.getElementById('fpvp')?.value) || 0;
-    const nc      = parseInt(document.getElementById('fnc')?.value)    || 1;
-    const uc      = parseInt(document.getElementById('fuc')?.value)    || 12;
-    const cad     = document.getElementById('fcad')?.value || null;
-    const descRaw = document.getElementById('fdesc')?.value?.trim() || '';
-    const ahora   = new Date().toISOString();
-    const prodId  = 'p' + Date.now();
-    // Calcular descuento
-    let descuento = 0;
-    if (descRaw.endsWith('%')) descuento = parseFloat(descRaw) || 0;
-    else if (descRaw) descuento = parseFloat(descRaw) || 0;
-
-
-    // FIX v1.2.11: incluir udscaja en addProd (faltaba — no se persistía)
-    State.set.addProd({
-      id: prodId, nombre: n, precioCompra: pr, pvp, stockActual: 0, stockMinimo: nc, udscaja: uc,
-      cat, prov: provId, e: '📦', ventas: 0, foto: _prodPhotoData||null, caducidad: cad,
-      descuento, historialPrecios: pr > 0 ? [{fecha:ahora, precio:pr, pvp}] : []
-    });
-    _prodPhotoData = null;
+    _createArticle(data);
     _sacCloseAll();
     ui.closeFs();
     Utils.triggerHaptic('medium');
 
-    // Añadir al carrito con las bultos del formulario
-    _ordenCarrito[prodId] = nc;
+    // Añadir al carrito con los bultos del formulario
+    _ordenCarrito[data.id] = data.nc;
     _updateMainBtn();
-    // Refrescar catálogo inline tras guardar nuevo artículo
-    renderCatInline(); updateBadge();
-    showToast('✅ ' + n + ' añadido al pedido (' + nc + ' bultos)');
+    showToast('✅ ' + data.nombre + ' añadido al pedido (' + data.nc + ' bultos)');
   }
 
   // ── NS Overlay: legacy eliminado (ns-overlay removido del DOM) ──
@@ -15217,7 +15397,7 @@ const alm = (() => {
   // ── Editar artículo existente ──────────────────────────────────
   function openEditArt(prodId) {
     const p = State.get.prod(prodId); if (!p) return;
-    let _editPhoto = p.foto || null;
+    _editPhoto = p.foto || null;  // v1.2.20: módulo-level, no local
 
     const ivaVal    = p.iva || '10%';
     const ivaCustom = !['4%','10%','21%'].includes(ivaVal);
@@ -15320,119 +15500,8 @@ const alm = (() => {
     ui.openFs('full');
     Utils.triggerHaptic('light');
 
-    alm._eaIvaChange = () => {
-      const sel = document.getElementById('ea-iva')?.value;
-      const wrap = document.getElementById('ea-iva-custom-wrap');
-      if (wrap) wrap.style.display = sel === 'otro' ? 'block' : 'none';
-      alm._eaRecalc();
-    };
-
-    alm._eaLoadPhoto = (inp) => {
-      const file = inp.files?.[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        _editPhoto = e.target.result;
-        const prev = document.getElementById('ea-photo-prev');
-        if (prev) prev.innerHTML =
-          '<img src="' + _editPhoto + '" class="alm-photo-wrap-img">' +
-          '<div class="alm-photo-badge">' +
-          '<svg width="10" height="10" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div>';
-      };
-      reader.readAsDataURL(file);
-    };
-
-    alm._eaRecalc = () => {
-      const pc  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
-      const pvp = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
-      const ivaSelect = document.getElementById('ea-iva')?.value;
-      const ivaPct = ivaSelect === 'otro'
-        ? parseFloat(document.getElementById('ea-iva-custom')?.value) || 0
-        : parseFloat(ivaSelect) || 10;
-      const costeIva = +(pc * (1 + ivaPct/100)).toFixed(2);
-      const uc  = parseInt(document.getElementById('ea-uc')?.value) || 12;
-      const ganCaja = pvp > 0 ? +((pvp - costeIva / uc) * uc).toFixed(2) : 0;
-      const mg  = pvp > 0 && costeIva > 0 ? Math.round((pvp - costeIva/uc) / pvp * 100) : null;
-      const rentEl  = document.getElementById('ea-rent');
-      const costeEl = document.getElementById('ea-r-coste');
-      const mgEl    = document.getElementById('ea-r-mg');
-      const ganEl   = document.getElementById('ea-r-gan');
-      if (rentEl)  rentEl.classList.toggle('visible', pc > 0 || pvp > 0);
-      if (costeEl) costeEl.textContent   = pc > 0 ? feur(costeIva) + '/bulto' : '\u2014';
-      if (mgEl) {
-        mgEl.textContent = mg !== null ? mg + '%' : '\u2014';
-        mgEl.style.color = mg === null ? 'var(--ink)' : mg >= 30 ? '#16A34A' : mg >= 15 ? '#F97316' : '#E53935';
-      }
-      if (ganEl) ganEl.textContent = ganCaja > 0 ? '+' + feur(ganCaja) + '/bulto' : '\u2014';
-    };
-
-    alm._eaSave = (id) => {
-      const nombre = document.getElementById('ea-nombre')?.value.trim();
-      if (!nombre) { showToast('\u26a0\ufe0f Nombre vac\u00edo'); return; }
-      const prNuevo  = parseFloat(document.getElementById('ea-pc')?.value)  || 0;
-      const pvpNuevo = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
-      const ivaSelect = document.getElementById('ea-iva')?.value;
-      const ivaNuevo  = ivaSelect === 'otro'
-        ? (document.getElementById('ea-iva-custom')?.value.trim() || '10') + '%'
-        : ivaSelect;
-      const prod    = State.get.prod(id);
-      const histPrev= prod?.historialPrecios || [];
-      const lastH   = histPrev[histPrev.length - 1];
-      const ahoraH  = new Date().toISOString();
-      const histNew = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
-        ? [...histPrev, { fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }]
-        : histPrev;
-      // Resolver proveedor desde campo texto
-      const eaProvTxt = document.getElementById('ea-prov-txt')?.value?.trim();
-      let eaProvId = State.get.proveedores().find(pv => pv.nombre === eaProvTxt)?.id || prod.prov;
-      if (eaProvTxt && !State.get.prov(eaProvId)) {
-        eaProvId = 'prov_' + Date.now();
-        State.set.addProv({ id: eaProvId, nombre: eaProvTxt, icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'' });
-      }
-      const updates = {
-        nombre,
-        precioCompra:     prNuevo,
-        pvp:              pvpNuevo,
-        iva:              ivaNuevo,
-        descuento:        document.getElementById('ea-desc')?.value.trim() || '',
-        cat:              document.getElementById('ea-cat')?.value.trim()  || '',
-        prov:             eaProvId,
-        stockMinimo:      parseInt(document.getElementById('ea-nc')?.value) || prod.stockMinimo || 1,
-        udscaja:          parseInt(document.getElementById('ea-uc')?.value) || prod.udscaja    || 12,
-        caducidad:        document.getElementById('ea-cad')?.value || null,
-        historialPrecios: histNew,
-      };
-      if (_editPhoto !== p.foto) updates.foto = _editPhoto;
-      State.set.updateProd(id, updates);
-      ui.closeFs();
-      requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); tpv.render(); });
-      showToast('\u2705 Art\u00edculo actualizado');
-    };
-
-    alm._eaConfirmDelete = (id) => {
-      const prod = State.get.prod(id); if (!prod) return;
-      ui.openModal(
-        '<div class="alm-confirm-body">' +
-        '<div class="alm-confirm-title">Borrar art\u00edculo</div>' +
-        '<div class="alm-confirm-text">\u00bfSeguro que quieres borrar <strong>' + esc(prod.nombre) + '</strong>?</div>' +
-        '<div class="alm-confirm-btns">' +
-        '<button class="btn-sec" onclick="App.ui.closeModal()">Cancelar</button>' +
-        '<button class="btn-ok alm-btn-delete" onclick="App.alm._eaDelete(\'' + id + '\')">Borrar</button>' +
-        '</div></div>'
-      )
-    };
-
-    alm._eaDelete = (id) => {
-      const prod = State.get.prod(id);
-      State.set.productos(State.get.productos().filter(p => p.id !== id));
-      State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
-
-      ui.closeModal(); ui.closeFs();
-      // v1.2.1: batching final — agrupar 4 DOM writes en un rAF
-      requestAnimationFrame(() => { renderOrden(); updateBadge(); tpv.render(); renderCatInline(); });
-      showToast('Artículo eliminado');
-    };
-
-    requestAnimationFrame(() => alm._eaRecalc?.());
+    // Inicializar análisis financiero al abrir
+    requestAnimationFrame(() => _eaRecalc());
   }
 
   // Declarar _almKbActive ANTES del return para evitar TDZ con el getter
@@ -15507,6 +15576,9 @@ const alm = (() => {
     openMerma, saveMerma,
     // Nuevo / Editar Art
     openNuevoArtFs, openEditArt, setFmt, loadProdPhoto, calcIAAnalysis, saveArt, saveArtAndAddCart, _applyRecomPvp, _applyRecomPvpVal, _naIvaChange,
+    // v1.2.20: funciones permanentes — ya no closures dentro de open*
+    _collectArticleFormData, _createArticle,
+    _eaIvaChange, _eaLoadPhoto, _eaRecalc, _eaSave, _eaConfirmDelete, _eaDelete,
     // Smart Autocomplete
     _sacOpen, _sacCloseAll, _sacFilter, _sacClear, _sacPickArt, _sacAddArt, _sacPickProv, _sacAddProv, _sacPickCat, _sacAddCat,
     // v9.5.82: longpress move handler — cancela timer si hay movimiento durante toque
@@ -17504,6 +17576,14 @@ const alm = (() => {
   DashweyBus.on('proveedor', () => {
     try { dash.renderAgenda && dash.renderAgenda(); }   catch(e) {}
     try { alm.updateProvBar && alm.updateProvBar(); }   catch(e) {}
+  });
+
+  // v1.2.20: item:created — suscripción desacoplada
+  // _createArticle emite este evento. TPV y Dashboard reaccionan aquí
+  // sin que el módulo alm conozca detalles de dash o tpv directamente.
+  document.addEventListener('item:created', () => {
+    try { dash.render(); }   catch(e) {}
+    try { tpv.render();  }   catch(e) {}
   });
 
   // v9.5.75: eliminado listener vacío dashwey:venta-registrada
