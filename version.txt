@@ -1,84 +1,61 @@
-Dashwey v1.2.33-dev
-Build: v1.2.33-dev
+Dashwey v1.2.34-dev
+Build: v1.2.34-dev
 Date: 2026-03-25
 
-CHANGELOG v1.2.33-dev — Sistema de pedidos múltiples pendientes (Opción B)
-===========================================================================
+CHANGELOG v1.2.34-dev — Fix flujo pedidos: separación currentOrder vs pendientes
+==================================================================================
 
-ARQUITECTURA
-  Estado nuevo: State.pendingOrders[]
-    {id, date(ISO), provId, items:[{prodId,ncajas,udscaja,precio,pvp}], status:'pending'|'checked'}
-  Diferencia clave vs historialPedidos: pendingOrders NO han actualizado el stock.
-  El stock se actualiza SOLO cuando el usuario completa la comprobación física.
+PROBLEMA CORREGIDO
+  v1.2.33 mezclaba los roles del botón "Aceptar pedido":
+  lo usaba para GUARDAR el pedido (en lugar de MOSTRARLO) y abría el selector
+  automáticamente. Los tres puntos de entrada del dock no tenían responsabilidades claras.
 
-[FEAT-1] State.pendingOrders — fuente de verdad de pedidos enviados
-  - State.get.pendingOrders()         → PendingOrder[]
-  - State.set.addPendingOrder(p)      → añade sin sobrescribir
-  - State.set.updatePendingOrder(id, updates) → actualiza status u otros campos
-  - State.set.removePendingOrder(id)  → elimina tras archivar (no usado aún)
-  - Persiste en localStorage igual que historialPedidos
+FLUJO CORRECTO v1.2.34
+  ┌──────────────────────┬──────────────────────────────────────────────┐
+  │ Botón/Área           │ Acción                                       │
+  ├──────────────────────┼──────────────────────────────────────────────┤
+  │ Botón "Pedido" (rojo)│ Abre modal carrito activo (openCurrentOrder) │
+  │ Ícono guardar (💾)   │ Guarda carrito → pendingOrder (sin stock)    │
+  │ PRÓXIMA ENTREGA      │ 0→toast/informe · 1→check-modal · N→selector │
+  │ PEDIDO (col dock)    │ Abre carrito activo (=Botón "Pedido")        │
+  │ TOTAL A PAGAR        │ Informe de totales (sin cambio)              │
+  └──────────────────────┴──────────────────────────────────────────────┘
 
-[FEAT-2] _guardarComoOrdenPendiente() — nuevo flujo del botón Aceptar
-  - Carrito activo → construye PendingOrder con status:'pending'
-  - State.set.addPendingOrder() → stock NO modificado
-  - Limpia _ordenCarrito + localStorage carrito
-  - Toast informativo + abre order-selector tras 400ms
-  - Carrito vacío + pedidos pendientes existentes → abre selector directamente
-  - _guardarCarritoYPopup() ahora es alias → _guardarComoOrdenPendiente()
+[FIX-1] _onAcceptBtnTap — botón "Pedido" → openCurrentOrder()
+  - Antes: guardaba el carrito como pendingOrder y abría el selector
+  - Ahora: abre el modal del carrito activo (análisis + botón guardar)
+  - haptic: 'light' (era 'medium' — apropiado para abrir, no confirmar)
 
-[FEAT-3] window._orderSelector — selector de pedidos pendientes
-  - open(): carga pendingOrders del proveedor activo, ordena (pending primero, fecha desc)
-    · Si 1 pendiente → check-modal directo (sin selector)
-    · Si N pendientes → muestra sheet con lista
-  - selectOrder(id): guarda currentOrderId, cierra selector, abre check-modal
-  - close(): animación de salida 240ms, restaura body.overflow
+[FEAT-1] openCurrentOrder() — nueva función exportada
+  - Carrito vacío → showToast('🛒 No hay artículos en el pedido actual')
+  - Carrito con items → openCarritoReport() (modal de análisis existente)
 
-[FEAT-4] UI — #order-selector-overlay (sheet bottom)
-  - Pre-colocado en body (no dinámico)
-  - Animación: translateY(100%→0) + opacity con var(--sheet-spring)
-  - .os-item: fila con icono proveedor, fecha legible, nº artículos, total, badge estado
-  - .os-badge-pending: fondo rojo suave + texto "Pendiente"
-  - .os-badge-checked: fondo verde suave + texto "Comprobado"
-  - Items ya comprobados (status:'checked') visibles pero no seleccionables (opacity 0.55)
-  - Dark mode completo con tokens del sistema
+[FEAT-2] openPendingOrders() — nueva función exportada
+  - 0 pendientes del proveedor activo → openOrdenReport() (informe clásico)
+  - ≥1 pendientes → window._orderSelector.open() (1→directo · N→selector)
+  - Lógica 1-vs-N delegada en _orderSelector.open() (ya existente)
 
-[FEAT-5] check-modal confirm() actualizado
-  - Lee meta.orderId si viene de order-selector
-  - Con orderId: State.updatePendingOrder(id, {status:'checked'}) + State.addPedido()
-  - Sin orderId (flujo legacy): comportamiento anterior (limpia carrito ALM)
-  - pedidoId derivado del orderId para trazabilidad: pord_xxx → ped_xxx
+[FIX-2] _guardarComoOrdenPendiente — ya NO abre selector automáticamente
+  - Antes: abría _orderSelector tras 400ms (flujo confuso)
+  - Ahora: guarda silenciosamente y muestra toast + animaciones de feedback
+  - El usuario decide cuándo ir a "Próxima Entrega" para recibir el pedido
 
-[FEAT-6] updateBadge() — dot de pedidos pendientes en dock ALM
-  - Muestra .alm-pending-dot con contador en columna "Próxima Entrega"
-  - Filtrado por proveedor activo y status:'pending'
-  - Creado dinámicamente si no existe, oculto si count=0
+[FEAT-3] Feedback visual al guardar pedido
+  - Flash .alm-dock-save-flash en col PEDIDO (0.55s dockSavePulse)
+  - Highlight .alm-dia-highlight en col PRÓXIMA ENTREGA con offset 160ms
+    → secuencia: "de aquí (PEDIDO) viene → a aquí (PRÓXIMA ENTREGA) fue"
+  - Ambas animaciones solo transform+opacity: GPU friendly, sin layout
 
-[FEAT-7] Back button Android — order-selector registrado en _LAYERS
-  - ['order-selector-overlay', 'os-open', close()]
-  - Prioridad: check-modal > order-selector > modal > fs > ...
-
-FLUJO COMPLETO
-  1. Usuario añade artículos al catálogo ALM
-  2. Pulsa "Aceptar pedido" → _guardarComoOrdenPendiente()
-     → PendingOrder guardado (status: 'pending', stock sin tocar)
-     → Carrito limpiado
-     → order-selector se abre
-  3. Usuario puede cerrar y volver días después
-  4. Al abrir ALM: dot rojo en "Próxima Entrega" indica pedidos pendientes
-  5. Pulsa "Aceptar pedido" (carrito vacío) → order-selector directo
-  6. Selecciona el pedido → check-modal con lista de artículos
-  7. Marca artículos recibidos → "Confirmar e ingresar stock"
-     → Stock actualizado en State
-     → PendingOrder marcado como 'checked'
-     → Pedido añadido a historialPedidos
-     → DashweyBus.emit('pedido_stock') → dash + alm sincronizan
+[FIX-3] HTML dock — onclick rewired correctamente
+  - PRÓXIMA ENTREGA: App.alm.openPendingOrders() (era _onProximaEntregaTap)
+  - PEDIDO: App.alm.openCurrentOrder() (era openCarritoReport directamente)
+  - TOTAL: App.alm.openTotalReport() (sin cambio)
 
 VALIDACIÓN
-  - ✅ Múltiples pedidos no se sobrescriben (addPendingOrder usa push)
-  - ✅ Stock solo se actualiza al completar comprobación
-  - ✅ 1 pedido pendiente → check-modal directo (sin selector intermedio)
-  - ✅ N pedidos → selector con orden: pending primero, fecha desc
-  - ✅ Back Android cierra order-selector (_LAYERS[1])
-  - ✅ Dot badge en dock ALM refleja pendientes por proveedor
-  - ✅ flujo legacy (_guardarCarritoYPopup) sigue funcionando como alias
-  - ✅ CACHE_NAME == CURRENT_CACHE: dashwey-v1-2-33-dev
+  - ✅ Botón "Pedido" → abre carrito activo, no guarda
+  - ✅ Ícono guardar → guarda sin abrir nada automáticamente
+  - ✅ Próxima Entrega: 0→informe, 1→check-modal, N→selector
+  - ✅ No hay estados mezclados entre currentOrder y pendientes
+  - ✅ Feedback visual: flash + highlight con secuencia animada
+  - ✅ Toast guía al usuario: "toca Próxima Entrega para recibirlo"
+  - ✅ CACHE_NAME == CURRENT_CACHE: dashwey-v1-2-34-dev
