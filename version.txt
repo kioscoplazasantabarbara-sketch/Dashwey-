@@ -1,51 +1,84 @@
-Dashwey v1.2.32-dev
-Build: v1.2.32-dev
+Dashwey v1.2.33-dev
+Build: v1.2.33-dev
 Date: 2026-03-25
 
-CHANGELOG v1.2.32-dev — Selector global de periodo: bugs corregidos y sincronización completa
-==============================================================================================
+CHANGELOG v1.2.33-dev — Sistema de pedidos múltiples pendientes (Opción B)
+===========================================================================
 
-[BUG-C1 CRÍTICO] Presets nunca se marcaban como seleccionados (checkmark visual ausente)
-  - _onPeriodSheetSel: usaba el.getAttribute('onclick') para marcar .sel
-  - Los opts del sheet usan data-t (no onclick attr) desde v9.5.104b
-  - FIX: el.classList.toggle('sel', el.dataset.t === t) en ambas funciones
-  - Afectaba: _onPeriodSheetSel (Utils) y selGlobalPeriod (dash)
+ARQUITECTURA
+  Estado nuevo: State.pendingOrders[]
+    {id, date(ISO), provId, items:[{prodId,ncajas,udscaja,precio,pvp}], status:'pending'|'checked'}
+  Diferencia clave vs historialPedidos: pendingOrders NO han actualizado el stock.
+  El stock se actualiza SOLO cuando el usuario completa la comprobación física.
 
-[BUG-C2 CRÍTICO] Custom 'Personalizado' tampoco se marcaba como .sel
-  - Mismo bug en selGlobalPeriod rama t==='custom'
-  - FIX: misma corrección dataset.t
+[FEAT-1] State.pendingOrders — fuente de verdad de pedidos enviados
+  - State.get.pendingOrders()         → PendingOrder[]
+  - State.set.addPendingOrder(p)      → añade sin sobrescribir
+  - State.set.updatePendingOrder(id, updates) → actualiza status u otros campos
+  - State.set.removePendingOrder(id)  → elimina tras archivar (no usado aún)
+  - Persiste en localStorage igual que historialPedidos
 
-[FEAT-1] KPI.getPresetRange(type) — función exportada con normalización de horas
-  - type: 'today'|'yesterday'|'week'|'month'|'last30'|'year'|'hours'
-  - Normaliza: 00:00:00.000 inicio del día, 23:59:59.999 fin del día
-  - 'last30': últimos 30 días desde hoy (00:00 → 23:59 hoy)
-  - Devuelve { start: Date, end: Date }
-  - Diferencia de periodRange(): no necesita un period object, solo el tipo
+[FEAT-2] _guardarComoOrdenPendiente() — nuevo flujo del botón Aceptar
+  - Carrito activo → construye PendingOrder con status:'pending'
+  - State.set.addPendingOrder() → stock NO modificado
+  - Limpia _ordenCarrito + localStorage carrito
+  - Toast informativo + abre order-selector tras 400ms
+  - Carrito vacío + pedidos pendientes existentes → abre selector directamente
+  - _guardarCarritoYPopup() ahora es alias → _guardarComoOrdenPendiente()
 
-[FEAT-2] Evento global document.dispatchEvent(new Event('date:changed'))
-  - Emitido en: selGlobalPeriod, applyGlobalCustom, shiftPeriod, onCustom callback
-  - Cubre todos los caminos de cambio de periodo en la app
-  - Listener registrado una sola vez (_dateChangedBound guard)
+[FEAT-3] window._orderSelector — selector de pedidos pendientes
+  - open(): carga pendingOrders del proveedor activo, ordena (pending primero, fecha desc)
+    · Si 1 pendiente → check-modal directo (sin selector)
+    · Si N pendientes → muestra sheet con lista
+  - selectOrder(id): guarda currentOrderId, cierra selector, abre check-modal
+  - close(): animación de salida 240ms, restaura body.overflow
 
-[FEAT-3] appState.dateRange sincronizado en todos los cambios de periodo
-  - { from: Date, to: Date } actualizado en selGlobalPeriod, applyGlobalCustom,
-    shiftPeriod y openGlobalPeriodPicker.onCustom
-  - Inicializado al arranque desde el periodo persistido en State (localStorage)
+[FEAT-4] UI — #order-selector-overlay (sheet bottom)
+  - Pre-colocado en body (no dinámico)
+  - Animación: translateY(100%→0) + opacity con var(--sheet-spring)
+  - .os-item: fila con icono proveedor, fecha legible, nº artículos, total, badge estado
+  - .os-badge-pending: fondo rojo suave + texto "Pendiente"
+  - .os-badge-checked: fondo verde suave + texto "Comprobado"
+  - Items ya comprobados (status:'checked') visibles pero no seleccionables (opacity 0.55)
+  - Dark mode completo con tokens del sistema
 
-[FEAT-4] Guard de "rango sin cambios" — evita doble render
-  - selGlobalPeriod: si current.type === t && !current.offset → no re-render
-  - applyGlobalCustom: si customStart y customEnd idénticos → no re-render
+[FEAT-5] check-modal confirm() actualizado
+  - Lee meta.orderId si viene de order-selector
+  - Con orderId: State.updatePendingOrder(id, {status:'checked'}) + State.addPedido()
+  - Sin orderId (flujo legacy): comportamiento anterior (limpia carrito ALM)
+  - pedidoId derivado del orderId para trazabilidad: pord_xxx → ped_xxx
 
-[FEAT-5] shiftPeriod emite date:changed y actualiza appState.dateRange
-  - Consistencia: cualquier cambio de periodo (incluyendo flechas izq/der)
-    dispara el evento y actualiza el mirror
+[FEAT-6] updateBadge() — dot de pedidos pendientes en dock ALM
+  - Muestra .alm-pending-dot con contador en columna "Próxima Entrega"
+  - Filtrado por proveedor activo y status:'pending'
+  - Creado dinámicamente si no existe, oculto si count=0
+
+[FEAT-7] Back button Android — order-selector registrado en _LAYERS
+  - ['order-selector-overlay', 'os-open', close()]
+  - Prioridad: check-modal > order-selector > modal > fs > ...
+
+FLUJO COMPLETO
+  1. Usuario añade artículos al catálogo ALM
+  2. Pulsa "Aceptar pedido" → _guardarComoOrdenPendiente()
+     → PendingOrder guardado (status: 'pending', stock sin tocar)
+     → Carrito limpiado
+     → order-selector se abre
+  3. Usuario puede cerrar y volver días después
+  4. Al abrir ALM: dot rojo en "Próxima Entrega" indica pedidos pendientes
+  5. Pulsa "Aceptar pedido" (carrito vacío) → order-selector directo
+  6. Selecciona el pedido → check-modal con lista de artículos
+  7. Marca artículos recibidos → "Confirmar e ingresar stock"
+     → Stock actualizado en State
+     → PendingOrder marcado como 'checked'
+     → Pedido añadido a historialPedidos
+     → DashweyBus.emit('pedido_stock') → dash + alm sincronizan
 
 VALIDACIÓN
-  - ✅ Presets se marcan visualmente al seleccionarlos (BUG-C1 corregido)
-  - ✅ 'Personalizado' se marca al abrir el form custom (BUG-C2 corregido)
-  - ✅ date:changed emitido en 4 puntos + listener registrado sin duplicados
-  - ✅ appState.dateRange inicializado al arranque y actualizado en cada cambio
-  - ✅ Guards evitan render doble si el periodo es idéntico
-  - ✅ KPI.getPresetRange() disponible globalmente via App.KPI.getPresetRange()
-  - ✅ CACHE_NAME sw.js == CURRENT_CACHE index.html: dashwey-v1-2-32-dev
-  - ✅ 0 cambios en comportamiento existente — solo correcciones y adiciones
+  - ✅ Múltiples pedidos no se sobrescriben (addPendingOrder usa push)
+  - ✅ Stock solo se actualiza al completar comprobación
+  - ✅ 1 pedido pendiente → check-modal directo (sin selector intermedio)
+  - ✅ N pedidos → selector con orden: pending primero, fecha desc
+  - ✅ Back Android cierra order-selector (_LAYERS[1])
+  - ✅ Dot badge en dock ALM refleja pendientes por proveedor
+  - ✅ flujo legacy (_guardarCarritoYPopup) sigue funcionando como alias
+  - ✅ CACHE_NAME == CURRENT_CACHE: dashwey-v1-2-33-dev
