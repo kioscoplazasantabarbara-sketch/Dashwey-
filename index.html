@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-20-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-21-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.20-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.20-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.21-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.21-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.20-dev</title>
+<title>Dashwey v1.2.21-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7514,7 +7514,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.20-dev';
+  const _APP_VERSION = 'v1.2.21-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15313,20 +15313,20 @@ const alm = (() => {
       precio: data.pr, pvp: data.pvp, cat: data.cat
     });
 
-    // Emitir evento para que TPV y Dashboard reaccionen sin acoplamiento directo
+    // Emitir evento para que TPV y Dashboard reaccionen sin acoplamiento directo.
+    // v1.2.21: item:created dispara dash.render + tpv.render via listener global.
+    // NO repetir esos renders aquí — evita double-render en cada creación.
     try {
       document.dispatchEvent(new CustomEvent('item:created', {
         detail: { id: data.id, nombre: data.nombre }
       }));
     } catch(_) {}
 
-    // Refresh UI inmediato — solo lo estrictamente necesario
+    // Refresh local del módulo alm — solo lo que item:created NO cubre
     requestAnimationFrame(() => {
       renderOrden();
       renderCatInline();
       updateBadge();
-      try { tpv.render(); }  catch(_) {}
-      try { dash.render(); } catch(_) {}
     });
   }
 
@@ -15935,6 +15935,8 @@ const alm = (() => {
   }
 
   // _quickAddArt — guarda el artículo desde el mini-sheet de quick-add
+  // v1.2.21: enrutado por _createArticle — única fuente de creación.
+  // Emite item:created → TPV + Dashboard se actualizan automáticamente.
   function _quickAddArt() {
     const nombre = document.getElementById('qa-nombre')?.value?.trim();
     const pvpRaw = document.getElementById('qa-pvp')?.value;
@@ -15948,33 +15950,31 @@ const alm = (() => {
       return;
     }
 
-    // Guardar artículo con datos mínimos
     const provId = State.get.selectedProv();
-    const cat    = State.get.productos().find(p => p.prov === provId)?.cat || (typeof KPI !== 'undefined' ? KPI.ALL_CATS[0] : 'General');
+    const cat    = State.get.productos().find(p => p.prov === provId)?.cat
+                   || (typeof KPI !== 'undefined' ? KPI.ALL_CATS[0] : 'General');
     const ahora  = new Date().toISOString();
 
-    State.set.addProd({
-      id:           'p' + Date.now(),
+    // Pasar por _createArticle: normalización + persistencia + evento item:created
+    _createArticle({
+      id:               'p' + Date.now(),
       nombre,
-      precioCompra: 0,
+      pr:               0,          // precioCompra
       pvp,
-      stockActual:  0,
-      stockMinimo:  5,
+      nc:               5,          // stockMinimo
+      uc:               1,          // udscaja
       cat,
-      prov:         provId,
-      e:            '📦',
-      ventas:       0,
-      foto:         null,
-      caducidad:    null,
-      descuento:    0,
+      provId,
+      iva:              0,
+      foto:             null,
+      cad:              null,
+      descuento:        0,
+      descRaw:          '',
       historialPrecios: pvp > 0 ? [{ fecha: ahora, precio: 0, pvp }] : []
     });
 
     Utils.triggerHaptic('confirm');
     ui.closeFs();
-    renderCatInline();
-    updateBadge();
-    tpv.render?.();
     showToast('✅ ' + nombre + ' añadido al catálogo');
   }
   function clearMainSearch() { _permSearchClear(); }
@@ -16126,10 +16126,17 @@ const alm = (() => {
       ventas: 0,
       historialPrecios: []
     };
+    // v1.2.21: persistir vía State (idéntico a antes) + emitir item:created
+    // para que TPV y Dashboard se actualicen vía el listener global.
+    // Elimina el tpv.render() manual redundante.
     State.set.addProd(copy);
-    // v1.1.8: refresh completo — catálogo inline + TPV + catálogo sheet
+    try {
+      document.dispatchEvent(new CustomEvent('item:created', {
+        detail: { id: copy.id, nombre: copy.nombre }
+      }));
+    } catch(_) {}
+    // Refresh local: catálogo inline + badge + sheet de catálogo
     renderCatInline();
-    try { tpv.render?.(); } catch(_) {}
     updateBadge();
     const sel  = State.get.selectedProv();
     const prov = State.get.prov(sel);
@@ -17578,12 +17585,42 @@ const alm = (() => {
     try { alm.updateProvBar && alm.updateProvBar(); }   catch(e) {}
   });
 
+  // ── v1.2.21: window.appState — mirror reactivo del catálogo ──────────
+  // Fuente de verdad externa para diagnóstico, integraciones y DevTools.
+  // Se actualiza en arranque y en cada item:created / item:updated.
+  // NUNCA escribir en window.appState directamente — es solo lectura.
+  // Para mutar artículos usar State.set.addProd / State.set.updateProd.
+  function _syncAppState() {
+    try {
+      window.appState = {
+        articles: (State.get.productos() || []).map(function(p) {
+          return {
+            id:           p.id,
+            nombre:       p.nombre,
+            pvp:          p.pvp,
+            precioCompra: p.precioCompra,
+            stockActual:  p.stockActual,
+            stockMinimo:  p.stockMinimo,
+            cat:          p.cat,
+            prov:         p.prov,
+            caducidad:    p.caducidad || null,
+            foto:         p.foto      || null
+          };
+        })
+      };
+    } catch(e) {}
+  }
+  // Sincronizar al arranque
+  _syncAppState();
+
   // v1.2.20: item:created — suscripción desacoplada
-  // _createArticle emite este evento. TPV y Dashboard reaccionan aquí
-  // sin que el módulo alm conozca detalles de dash o tpv directamente.
+  // _createArticle y _catCopyArt emiten este evento.
+  // TPV y Dashboard reaccionan aquí sin acoplamiento directo.
+  // v1.2.21: también actualiza window.appState mirror.
   document.addEventListener('item:created', () => {
     try { dash.render(); }   catch(e) {}
     try { tpv.render();  }   catch(e) {}
+    _syncAppState();
   });
 
   // v9.5.75: eliminado listener vacío dashwey:venta-registrada
