@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-24-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-25-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.24-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.24-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.25-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.25-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.24-dev</title>
+<title>Dashwey v1.2.25-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -895,7 +895,7 @@ html, body {
 
 /* ── § 5. SWIPE / TABS ── */
 #swipe-wrap { flex: 1; overflow: hidden; position: relative; min-height: 0; }
-#swipe-track { display: flex; width: 300%; height: 100%; transition: transform 0.30s cubic-bezier(0.25, 0.46, 0.45, 0.94); will-change: transform; }
+#swipe-track { display: flex; width: 300%; height: 100%; transition: transform 0.30s cubic-bezier(0.25, 0.46, 0.45, 0.94); /* v1.2.25: will-change aplicado solo durante drag vía JS — sin GPU layer permanente */ }
 .tab-page {
   width: calc(100%/3); height: 100%;
   overflow-y: auto; background: var(--bg);
@@ -2010,7 +2010,7 @@ input:focus, select:focus, textarea:focus {
   z-index: 5;
 }
 .tpv-prod-scroll::-webkit-scrollbar { display: none; }
-.tpv-prod-list { display: flex; flex-direction: column; gap: 7px; }
+.tpv-prod-list { display: flex; flex-direction: column; gap: 7px; content-visibility: auto; contain-intrinsic-size: 0 500px; /* v1.2.25: skip paint for off-screen items */ }
 .tpv-prod-item {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-lg); box-shadow: var(--shadow-md);
@@ -7839,7 +7839,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.24-dev';
+  const _APP_VERSION = 'v1.2.25-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -9271,7 +9271,9 @@ const nav = (() => {
     _vetoed = false;
     _touchStartTime = Date.now(); // v9.5.73: velocity tracking
     track.style.transition = 'none';
-  }, { passive: true }); // passive — touchstart no necesita preventDefault
+    // v1.2.25: activar GPU layer solo al iniciar gesto (no permanente)
+    track.style.willChange = 'transform';
+  }, { passive: true });
 
   // v9.5.73: two listeners — passive for reading, non-passive for preventing vertical scroll
   // during confirmed horizontal swipe (required by iOS/Android gesture system)
@@ -9310,6 +9312,8 @@ const nav = (() => {
 
   track.addEventListener('touchend', e => {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    // v1.2.25: liberar GPU layer — will-change solo durante el gesto
+    track.style.willChange = 'auto';
     if (!_drag) {
       /* No hubo swipe — restaurar posición sin animación si hace falta */
       if (!_vetoed) {
@@ -9335,6 +9339,8 @@ const nav = (() => {
 
   track.addEventListener('touchcancel', () => {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    // v1.2.25: liberar GPU layer en cancel
+    track.style.willChange = 'auto';
     _drag   = false;
     _vetoed = false;
     track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
@@ -9425,15 +9431,17 @@ const nav = (() => {
       const sl = document.getElementById('snav-label');
       if (sl) sl.textContent = State.get.period().label;
     } else if(i === 2) {
-      App.alm.renderOrden();
-      App.alm.updateBadge();
-      App.alm.updateProvBar();
-      App.alm.renderCatInline();
-      // Posicionar botón añadir + botón aceptar sobre navbar
+      // v1.2.25: defer ALM renders a rAF — la transición CSS (.38s) corre libre
+      // sin ser bloqueada por el trabajo síncrono del render del almacén
       requestAnimationFrame(() => {
-        const tabH = document.getElementById('bottom-tabs')?.offsetHeight || 68;
-        // Sincronizar botón Aceptar rojo
-        if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn();
+        App.alm.renderOrden();
+        App.alm.updateBadge();
+        App.alm.updateProvBar();
+        App.alm.renderCatInline();
+        // Posicionar botón Aceptar sobre navbar
+        requestAnimationFrame(() => {
+          if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn();
+        });
       });
     }
   }
@@ -9469,8 +9477,8 @@ const dash = (() => {
     // Sin esto, un error en renderFinanciero() dejaría el flag bloqueado
     // permanentemente → todos los renders futuros descartados silenciosamente.
     try {
-    // v9.5.73: shimmer en todas las tarjetas durante render
-    _shimmerAllCards(320);
+    // v1.2.25: shimmer eliminado de render() automático — solo en refresh() (user-triggered)
+    // _shimmerAllCards(320) movido a refresh() para evitar reflow en cada evento de datos
     // v9.5.25: sincronizar label del selector de periodo en el título
     try {
       const _p = State.get.period();
@@ -9913,6 +9921,7 @@ const dash = (() => {
 
 
   // ══ renderTopArticulos v9.5.73 ═══════════════════════════════════
+  let _topArticulosHash = ''; // v1.2.25: dirty-check
   function renderTopArticulos(period) {
     const el = document.getElementById('dash-top-articulos');
     if (!el) return;
@@ -9946,6 +9955,11 @@ const dash = (() => {
       .filter(x => x.prod)
       .sort((a, b) => b.total - a.total)
       .slice(0, 5);
+
+    // v1.2.25: skip DOM rebuild if data unchanged
+    const newHash = top.map(x => `${x.prod.id}:${x.total.toFixed(2)}:${x.uds}`).join('|') + `|${period.type}:${period.offset}`;
+    if (newHash === _topArticulosHash) return;
+    _topArticulosHash = newHash;
 
     if (!top.length) {
       el.innerHTML = '<div class="ta-empty">Sin ventas registradas hoy</div>';
@@ -10838,9 +10852,19 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // Lista cronológica unificada: pedidos (camión) + visitas (persona)
   // Sin tabs — todo en una sola vista ordenada por fecha.
   // ─────────────────────────────────────────────────────────────────
+  let _agendaHash = ''; // v1.2.25: dirty-check
   function renderAgenda() {
     const el = document.getElementById('dash-agenda-list');
     if (!el) return;
+
+    // v1.2.25: hash guard — skip si los datos fuente no cambiaron
+    const _agendaRawHash = JSON.stringify([
+      (State.get.historialPedidos()||[]).map(p=>p.id+p.fecha).join(','),
+      (State.get.visitasComerciales()||[]).map(v=>v.id+v.fecha+v.estado).join(','),
+      (State.get.proveedores()||[]).map(p=>p.id+p.nombre).join(','),
+    ]);
+    if (_agendaRawHash === _agendaHash) return;
+    _agendaHash = _agendaRawHash;
 
     const hoy    = new Date(); hoy.setHours(0,0,0,0);
     const provs  = State.get.proveedores() || [];
@@ -12157,7 +12181,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           'style="flex-shrink:0;width:44px;height:26px;border-radius:13px;border:none;cursor:pointer;' +
           'background:'+(on?'var(--red)':'var(--border)')+';transition:background .2s;position:relative" ' +
           'id="npc-btn-'+it.key+'">' +
-          '<span style="position:absolute;top:3px;'+(on?'right:3px':'left:3px')+';width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s,right .2s;box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
+          '<span style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s;transform:translateX('+(on?'18px':'0px')+');box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
         '</button>' +
       '</div>';
     }).join('');
@@ -12173,7 +12197,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           '<button onclick="App.dash._notifGlobalToggle(this)" ' +
             'style="flex-shrink:0;width:48px;height:28px;border-radius:14px;border:none;cursor:pointer;' +
             'background:'+(s.notifOn?'var(--red)':'var(--border)')+';position:relative" id="npc-global">' +
-            '<span style="position:absolute;top:4px;'+(s.notifOn?'right:4px':'left:4px')+';width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s,right .2s;box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
+            '<span style="position:absolute;top:4px;left:4px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s;transform:translateX('+(s.notifOn?'20px':'0px')+');box-shadow:0 1px 4px rgba(0,0,0,.2)"></span>' +
           '</button>' +
         '</div>' +
         '<div style="padding:12px 16px"><div style="height:1px;background:var(--border)"></div></div>' +
@@ -12856,6 +12880,8 @@ const tpv = (() => {
   let _ticketActivo = null;
   let _dockExpanded = false;
   let _isRendering  = false;  // v1.2.22: guard de re-entrada
+  let _prodsHash    = '';     // v1.2.25: dirty-check para _renderProds
+  let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
 
   // ── Helpers ──────────────────────────────────────────────────
   function cartTotal() {
@@ -12893,6 +12919,10 @@ const tpv = (() => {
       .filter(p => p.stockActual > 0 && p.pvp > 0)
       .sort((a,b) => (b.ventas||0) - (a.ventas||0))
       .slice(0, 9);
+    // v1.2.25: dirty-check — skip si los productos y cantidades en carrito no cambiaron
+    const newHash = prods.map(p => `${p.id}:${p.nombre}:${p.pvp}:${p.e}:${_cart[p.id]?.q||0}`).join('|');
+    if (newHash === _hotGridHash) return;
+    _hotGridHash = newHash;
     if (!prods.length) {
       grid.parentElement.style.display = 'none';
       return;
@@ -12910,11 +12940,16 @@ const tpv = (() => {
   }
 
   // ── CATEGORÍAS ───────────────────────────────────────────────
+  let _catsHash = ''; // v1.2.25: dirty-check
   function _renderCats() {
     const row = document.getElementById('tpv-cats-row');
     if (!row) return;
     const prods = State.get.productos().filter(p=>p.stockActual>0);
     const cats  = ['Todos', ...new Set(prods.map(p=>p.cat).filter(Boolean))];
+    // v1.2.25: skip rebuild if category list + active selection unchanged
+    const newHash = cats.join('|') + '|' + _catActiva;
+    if (newHash === _catsHash) return;
+    _catsHash = newHash;
     row.innerHTML = cats.map(c=>`
       <button class="tpv-cat-chip${_catActiva===c?' active':''}" onclick="App.tpv.setcat('${c}')">
         ${esc(c)}
@@ -12930,6 +12965,10 @@ const tpv = (() => {
     if (_catActiva !== 'Todos') prods = prods.filter(p=>p.cat===_catActiva);
     if (q) prods = prods.filter(p=>p.nombre.toLowerCase().includes(q)||(p.cat||'').toLowerCase().includes(q));
     prods.sort((a,b)=>(b.ventas||0)-(a.ventas||0));
+    // v1.2.25: dirty-check — skip DOM rebuild si lista + carrito no cambiaron
+    const newHash = prods.map(p=>`${p.id}:${p.nombre}:${p.pvp}:${p.stockActual}:${p.cat}:${p.e}:${_cart[p.id]?.q||0}`).join('|')+'|q:'+q+'|cat:'+_catActiva;
+    if (newHash === _prodsHash) return;
+    _prodsHash = newHash;
     const maxV = prods[0]?.ventas||0;
     const minV = prods[prods.length-1]?.ventas||0;
 
@@ -12982,6 +13021,8 @@ const tpv = (() => {
     _cart[id] = _cart[id] || { p, q: 0 };
     _cart[id].q++;
     State.set.updateProd(id, { ventas: (p.ventas||0)+1 });
+    // v1.2.25: invalidar dirty-checks — carrito mutado
+    _prodsHash = ''; _hotGridHash = '';
 
     // Haptic feedback — pulso ligero al añadir producto
     Utils.triggerHaptic('light');
@@ -13154,6 +13195,7 @@ const tpv = (() => {
 
   function setcat(c) {
     _catActiva = c;
+    _catsHash = ''; _prodsHash = ''; // v1.2.25: invalidar — categoría cambió
     // Scroll selected tab into view
     requestAnimationFrame(() => {
       const row = document.getElementById('tpv-cats-row');
@@ -13188,6 +13230,8 @@ const tpv = (() => {
     if (!_cart[id]) return;
     _cart[id].q = Math.max(0, _cart[id].q + d);
     if (!_cart[id].q) delete _cart[id];
+    // v1.2.25: invalidar dirty-checks
+    _prodsHash = ''; _hotGridHash = '';
     _updateQtyIndicator(id);
     _updateDock();
     _updateTabletTicket();
@@ -13228,6 +13272,7 @@ const tpv = (() => {
   }
   function _loadTicketToCart(t) {
     _cart = {};
+    _prodsHash = ''; _hotGridHash = ''; // v1.2.25: invalidar dirty-checks
     (t.items||[]).forEach(i=>{
       const p = State.get.prod(i.prodId);
       if (p) _cart[i.prodId] = { p, q:i.q };
@@ -13325,7 +13370,7 @@ const tpv = (() => {
     const t = { id:_genTicketId(), nombre:'Mesa '+num, items:[], creadoEn:new Date().toISOString() };
     State.set.saveTicket(t);
     _ticketActivo = t.id;
-    _cart = {};
+    _cart = {}; _prodsHash = ''; _hotGridHash = ''; // v1.2.25
     closeTickets();
     render();
     showToast('🎫 '+t.nombre+' creado');
@@ -13349,7 +13394,7 @@ const tpv = (() => {
     State.set.deleteTicket(id);
     if (_ticketActivo === id) {
       _ticketActivo = null;
-      _cart = {};
+      _cart = {}; _prodsHash = ''; _hotGridHash = ''; // v1.2.25
       _updateDock();
       _updateTabletTicket();
       _renderProds();
@@ -13426,7 +13471,7 @@ const tpv = (() => {
 
       // 6. Cerrar ticket y limpiar
       if (_ticketActivo) { State.set.deleteTicket(_ticketActivo); _ticketActivo = null; }
-      _cart = {};
+      _cart = {}; _prodsHash = ''; _hotGridHash = ''; // v1.2.25
       if (_dockExpanded) toggleDock();
       Utils.triggerHaptic('medium');
       closeCobro();
@@ -13508,6 +13553,7 @@ const alm = (() => {
   // Timer de debounce para busqueda inline — declarado aqui para evitar TDZ
   let _almSearchTimer     = null;
   let _catRenderTimer     = null; // v9.5.96: debounce del innerHTML de renderCatInline
+  let _catInlineHash      = '';   // v1.2.25: hash de contenido para skip de render sin cambios
   // Carrito persistente: se restaura al iniciar el módulo
   (function _restoreCarrito() {
     try {
@@ -13553,6 +13599,13 @@ const alm = (() => {
     if (q) prods = prods.filter(p =>
       p.nombre.toLowerCase().includes(q) || (p.cat||'').toLowerCase().includes(q)
     );
+
+    // v1.2.25: hash guard — skip full DOM rebuild if content hasn't changed
+    // Hash: selectedProv + query + prodIds + carritoKeys + nc values
+    const carritoStr = prods.map(p => `${p.id}:${_ordenCarrito[p.id]||0}`).join(',');
+    const newHash = `${sel}|${q}|${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto?'f':'')).join(',')}|${carritoStr}`;
+    if (newHash === _catInlineHash) return; // nada cambió → skip
+    _catInlineHash = newHash;
 
     if (!prods.length) {
       wrap.innerHTML = q
@@ -13700,6 +13753,7 @@ const alm = (() => {
     const nc = _ordenCarrito[prodId] || 0;
     const p  = State.get.prod(prodId);
     if (!p) return;
+    _catInlineHash = ''; // v1.2.25: invalidar hash → próximo renderCatInline reconstruye
     // Reconstruir solo la parte derecha del item
     const rightEl = el.querySelector('.alm-cat-right');
     if (!rightEl) return;
@@ -14650,18 +14704,22 @@ const alm = (() => {
 
     wrap.innerHTML = html;
 
-    // Long-press → selección múltiple
-    wrap.querySelectorAll('[data-longpress]').forEach(el => {
-      let t;
-      el.addEventListener('touchstart', ev => {
-        t = setTimeout(() => {
-          const id = el.dataset.longpress;
-          if(!_selMode) { _selMode = true; _ordenSel.add(id); renderOrden(); }
+    // v1.2.25: Long-press delegado en el wrapper (no por elemento)
+    // Evita acumular N listeners en cada renderOrden()
+    if (!wrap._lpBound) {
+      wrap._lpBound = true;
+      let _lpTimer = null;
+      wrap.addEventListener('touchstart', ev => {
+        const row = ev.target.closest('[data-longpress]');
+        if (!row) return;
+        _lpTimer = setTimeout(() => {
+          const id = row.dataset.longpress;
+          if (!_selMode) { _selMode = true; _ordenSel.add(id); renderOrden(); }
         }, 500);
-      }, {passive:true});
-      el.addEventListener('touchend',  () => clearTimeout(t), { passive: true });
-      el.addEventListener('touchmove', () => clearTimeout(t), { passive: true });
-    });
+      }, { passive: true });
+      wrap.addEventListener('touchend',  () => { clearTimeout(_lpTimer); _lpTimer = null; }, { passive: true });
+      wrap.addEventListener('touchmove', () => { clearTimeout(_lpTimer); _lpTimer = null; }, { passive: true });
+    }
   }
 
   function toggleChk(e, prodId) {
@@ -17906,11 +17964,22 @@ const alm = (() => {
   // Each event triggers ONLY the renders needed for that data change.
   // No full dash.render() on routine mutations — prevents flicker.
 
+  // v1.2.25: rAF render scheduler — agrupa ventas rápidas en un único frame
+  // Evita que tap rápido (3-4 productos en <100ms) dispare N renders consecutivos
+  let _ventaRafId = null;
+  function _scheduleVentaRender() {
+    if (_ventaRafId) return; // ya hay un frame pendiente
+    _ventaRafId = requestAnimationFrame(() => {
+      _ventaRafId = null;
+      try { dash.render(); } catch(e) {}
+      try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
+    });
+  }
+
   // venta: update KPIs, ventas card, beneficio, alm stock badge
-  // v9.5.76: eliminado renderVentas() redundante — dash.render() ya lo incluye internamente
+  // v1.2.25: rAF-scheduled para agrupar ventas rápidas en un único render
   DashweyBus.on('venta', () => {
-    try { dash.render(); } catch(e) {}
-    try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
+    _scheduleVentaRender();
   });
 
   // pedido: update agenda, kpis (inv changed), alm badge
