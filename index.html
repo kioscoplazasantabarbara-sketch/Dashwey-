@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-22-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-23-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=1.2.22-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.22-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=1.2.23-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=1.2.23-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.22-dev</title>
+<title>Dashwey v1.2.23-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7520,7 +7520,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.22-dev';
+  const _APP_VERSION = 'v1.2.23-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -9039,6 +9039,21 @@ const nav = (() => {
     );
   }
 
+  // ── v1.2.23: window.navState — mirror reactivo de navegación ────────
+  // Solo lectura externa. Tab 0=TPV, 1=Dashboard, 2=Almacén.
+  // Actualizado en cada goTab — fuente de verdad para diagnóstico.
+  const _TAB_NAMES = ['tpv', 'dashboard', 'almacen'];
+  function _syncNavState(i) {
+    try {
+      window.navState = {
+        current:  _TAB_NAMES[i] || 'dashboard',
+        tabIndex: i,
+        // history: no aplica — Dashwey usa swipe-tabs, no stack de pantallas.
+        // Back siempre cierra overlays o confirma salida, nunca navega entre tabs.
+      };
+    } catch(_) {}
+  }
+
   function goTab(i) {
     // Guard: no re-render completo si ya estamos en esta tab
     if (_cTab === i) {
@@ -9082,6 +9097,7 @@ const nav = (() => {
     track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
     track.style.transform = `translateX(${-i * window.innerWidth}px)`;
     _syncNavActive(i); // FIX v9.5.23: centralizado en _syncNavActive
+    _syncNavState(i);  // v1.2.23: actualizar mirror window.navState
     (document.getElementById('header-title')||{}).textContent = TITLES[i];
     window.dispatchEvent(new CustomEvent('dashwey:tab-changed', { detail: { tab: i } }));
     const sn = document.getElementById('sub-nav');
@@ -9106,6 +9122,15 @@ const nav = (() => {
   function goTabFS(i) { App.ui.closeFs(); setTimeout(() => goTab(i), Utils.ANIM_DELAY); }
 
   return { goTab, goTabFS, goTo: goTab, get _cTab() { return _cTab; } };
+})();
+
+// v1.2.23: inicializar navState con la tab de arranque (Dashboard = 1)
+// _syncNavState vive dentro del IIFE de nav — llamar goTab no es posible aquí.
+// Inicialización directa segura porque _cTab arranca en 1.
+(function() {
+  try {
+    window.navState = { current: 'dashboard', tabIndex: 1 };
+  } catch(_) {}
 })();
 
 // ══════════════════════════════════════════
@@ -18589,9 +18614,11 @@ if (!window.Utils) {
 </script>
 
 <script>
-/* ═══ BACK GESTURE — Edge swipe universal v8.9.1 ═══════════════
-   Swipe desde borde izquierdo (<30px) → cierra modal activo
-   Prioridad: fs-overlay > settings-drawer > nada
+/* ═══ BACK GESTURE — Edge swipe universal v1.2.23 ══════════════
+   Swipe desde borde izquierdo (<30px) → cierra overlay activo
+   Prioridad: modal-overlay > fs-overlay > tickets-sheet >
+              settings-drawer > whats-new-overlay > cobro > periodpicker
+   v1.2.23: añadidos modal-overlay y tickets-sheet (paridad con back button)
    No conflicta con tab-swipe (que inicia desde el centro)
    ═══════════════════════════════════════════════════════════ */
 (function() {
@@ -18602,9 +18629,15 @@ if (!window.Utils) {
 
   let _x0 = 0, _y0 = 0, _t0 = 0, _active = false;
 
+  // v1.2.23: tabla de capas en paridad con _LAYERS del back button.
+  // Orden = prioridad (mayor a menor). Mismas capas, mismo comportamiento.
   function _getTopLayer() {
+    if (document.getElementById('modal-overlay')?.classList.contains('open'))
+      return 'modal';       // v1.2.23: añadido — faltaba en swipe
     if (document.getElementById('fs-overlay')?.classList.contains('open'))
       return 'fs';
+    if (document.getElementById('tickets-sheet')?.classList.contains('open'))
+      return 'tickets';     // v1.2.23: añadido — faltaba en swipe
     if (document.getElementById('settings-drawer')?.classList.contains('open'))
       return 'settings';
     if (document.getElementById('whats-new-overlay')?.classList.contains('open'))
@@ -18612,17 +18645,19 @@ if (!window.Utils) {
     if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open'))
       return 'cobro';
     if (document.getElementById('dash-period-sheet')?.classList.contains('open'))
-      return 'periodpicker'; // v9.5.25
+      return 'periodpicker';
     return null;
   }
 
   function _close(layer) {
     try {
+      if (layer === 'modal')        App?.ui?.closeModal?.();          // v1.2.23
       if (layer === 'fs')           App?.ui?.closeFs?.();
+      if (layer === 'tickets')      App?.tpv?.closeTickets?.();       // v1.2.23
       if (layer === 'settings')     App?.ui?.closeSettings?.();
       if (layer === 'whatsnew')     App?.ui?.closeWhatsNew?.();
       if (layer === 'cobro')        App?.tpv?.closeCobro?.();
-      if (layer === 'periodpicker') App?.dash?.closeGlobalPeriodPicker?.(); // v9.5.25
+      if (layer === 'periodpicker') App?.dash?.closeGlobalPeriodPicker?.();
     } catch(e) {}
   }
 
