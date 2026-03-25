@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-46-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-47-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.46-dev</title>
+<title>Dashwey v1.2.47-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8484,7 +8484,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.46-dev';
+  const _APP_VERSION = 'v1.2.47-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17043,6 +17043,7 @@ const alm = (() => {
     _openProvPeriodSheet, _refreshProvPeriodBtn,
     openOrdenReport, openArticulosReport, openTotalReport,
     openCarritoReport, openCurrentOrder, openPendingOrders, _vaciarCesta,
+    _abrirPedidoProgramadoById, _eliminarPedidoProgramado,
     /* v9.5.48: _onBannerUpload, _clearBanner removed */
     _editProvFromPicker, _toggleDayOrder, _toggleDayDeliv,
     // Catálogo
@@ -18024,7 +18025,100 @@ const alm = (() => {
     } catch(e) { console.error('[ALM] _abrirCheckModalById error:', e); }
   }
 
-  // v9.5.87: _cancelarPedidoCarrito — liberar processing además de limpiar estado
+  // v1.2.47: _abrirPedidoProgramadoById — abre detalle del pedido en el fs-sheet
+  function _abrirPedidoProgramadoById(id) {
+    try {
+      var allOrders = State.get.pendingOrders() || [];
+      var order = allOrders.find(function(o){ return o.id === id; });
+      if (!order) { showToast('Pedido no encontrado'); return; }
+
+      var prov = State.get.prov(order.provId);
+      var provNombre = (prov && prov.nombre) || order.provId || 'Proveedor';
+      var provIcon   = (prov && prov.icon)   || '📦';
+
+      var items = (order.items || []).map(function(o) {
+        var p = State.get.prod(o.prodId);
+        var ncajas  = o.ncajas || 1;
+        var precio  = o.precio || (p && p.precioCompra) || 0;
+        var pvp     = o.pvp    || (p && p.pvp) || 0;
+        var precIva = precio * 1.10;
+        var mg      = pvp > 0 ? Math.round(((pvp - precIva) / pvp) * 100) : null;
+        var mgCol   = mg===null?'var(--ink-soft)':mg>=30?'#16A34A':mg>=15?'#F97316':'#E53935';
+        return {
+          e: (p && p.e) || '📦',
+          nombre: (p && p.nombre) || o.prodId,
+          ncajas, precio, pvp, precIva,
+          total: ncajas * precIva, mg, mgCol
+        };
+      });
+
+      var totalInv = items.reduce(function(s,i){ return s + i.total; }, 0);
+      var totalVta = items.reduce(function(s,i){ return s + i.ncajas * (o.udscaja||12) * i.pvp; }, 0);
+      var margen   = totalVta > 0 ? Math.round((totalVta-totalInv)/totalVta*100) : 0;
+      var mgColor  = margen >= 30 ? '#16A34A' : margen >= 15 ? '#F97316' : '#E53935';
+
+      var fmtDate = function(iso) {
+        try {
+          var d = new Date(iso);
+          var pad = function(n){ return String(n).padStart(2,'0'); };
+          var M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+          return pad(d.getDate())+' '+M[d.getMonth()]+' '+d.getFullYear();
+        } catch(_){ return iso||'—'; }
+      };
+
+      var itemsHtml = items.map(function(i) {
+        return '<div class="carrito-item">' +
+          '<div class="carrito-item-e">' + i.e + '</div>' +
+          '<div class="carrito-item-info">' +
+            '<div class="carrito-item-name">' + esc(i.nombre) + '</div>' +
+            '<div class="carrito-item-detail">' + i.ncajas + ' bulto' + (i.ncajas!==1?'s':'') +
+              ' · ' + feur(i.precIva) + '/u+IVA' + (i.pvp>0?' · PVP '+feur(i.pvp):'') + '</div>' +
+          '</div>' +
+          '<div class="carrito-item-right">' +
+            '<div class="carrito-item-total">' + feur(i.total) + '</div>' +
+            (i.mg!==null?'<div class="carrito-item-mg" style="color:'+i.mgCol+'">'+i.mg+'% mg</div>':'') +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      var html =
+        '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+          '<div class="mhd-title">' + esc(provNombre) + '</div>' +
+          '<div class="mhd-sub">' + fmtDate(order.date) + ' · ' + items.length + ' artículo' + (items.length!==1?'s':'') + '</div>' +
+        '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+        '<div style="padding:12px 14px;font-family:var(--font)">' +
+          '<div class="ib-modal-section">' +
+            '<div class="ib-modal-section-hdr">Artículos del pedido</div>' +
+            '<div style="padding:0">' + itemsHtml + '</div>' +
+          '</div>' +
+          '<div class="ib-modal-section" style="background:' + (margen>=30?'#DCFCE7':margen>=15?'#FFF7ED':'#FEE2E2') + '">' +
+            '<div class="ib-modal-section-body">' +
+              '<div class="ib-kpi-grid">' +
+                '<div class="ib-kpi"><div class="ib-kpi-lbl">Inversión</div><div class="ib-kpi-val">' + feur(totalInv) + '</div></div>' +
+                '<div class="ib-kpi"><div class="ib-kpi-lbl">Margen</div><div class="ib-kpi-val" style="color:' + mgColor + '">' + margen + '%</div></div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<button class="btn-ok" style="width:100%;margin-top:4px" ' +
+            'onclick="App.ui.closeFs();setTimeout(function(){App.alm._abrirCheckModalById(\'' + id + '\');},220)">' +
+            '✅ Comprobar recepción' +
+          '</button>' +
+        '</div>';
+
+      ui.setFs(html);
+      ui.openFs();
+    } catch(e) { console.error('[ALM] _abrirPedidoProgramadoById error:', e); }
+  }
+
+  // v1.2.47: _eliminarPedidoProgramado — elimina con confirmación y recarga lista
+  function _eliminarPedidoProgramado(id) {
+    if (!confirm('¿Eliminar este pedido programado?')) return;
+    try { State.set.removePendingOrder(id); } catch(e) { console.error(e); return; }
+    updateBadge();
+    // Reabrir la lista (puede haber quedado vacía)
+    App.ui.closeFs();
+    setTimeout(function() { openPendingOrders(); }, 220);
+  }
   function _cancelarPedidoCarrito() {
     document.getElementById('aceptar-popup-overlay')?.remove();
     _pedidoPendiente = null;
@@ -18208,34 +18302,71 @@ const alm = (() => {
     openCarritoReport();
   }
 
-  // v1.2.42: openPendingOrders — siempre abre el sheet (nunca sale silencioso)
+  // v1.2.47: openPendingOrders — siempre abre sheet propio con lista
   function openPendingOrders() {
     const sel    = State.get.selectedProv();
+    const prov   = State.get.prov(sel);
+    const provNombre = (prov && prov.nombre) || sel;
     const orders = (State.get.pendingOrders() || [])
-      .filter(o => o.provId === sel && o.status === 'pending');
+      .filter(o => o.provId === sel && o.status === 'pending')
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
 
+    // ── Estado vacío ────────────────────────────────────────────
     if (orders.length === 0) {
-      // Estado vacío — abrir sheet con mensaje en lugar de toast silencioso
-      const prov = State.get.prov(sel);
-      const provNombre = (prov && prov.nombre) || 'este proveedor';
       ui.setFs(
         '<div class="modal-header-dark"><div class="mhd-row"><div>' +
           '<div class="mhd-title">Pedidos programados</div>' +
           '<div class="mhd-sub">' + esc(provNombre) + '</div>' +
         '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
         '<div style="padding:48px 20px;text-align:center;font-family:var(--font)">' +
-          '<div style="font-size:36px;margin-bottom:16px">📋</div>' +
+          '<div style="font-size:40px;margin-bottom:16px">📋</div>' +
           '<div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin pedidos programados</div>' +
-          '<div style="font-size:13px;color:var(--ink-soft);line-height:1.5">Añade artículos al carrito y pulsa<br>"Guardar pedido" para programar una entrega.</div>' +
+          '<div style="font-size:13px;color:var(--ink-soft);line-height:1.6">Añade artículos al carrito y pulsa<br>"Guardar pedido" para programar una entrega.</div>' +
         '</div>'
       );
       ui.openFs();
       return;
     }
 
-    if (window._orderSelector) {
-      window._orderSelector.open();
-    }
+    // ── Lista de pedidos — siempre en sheet propio ───────────────
+    const fmtDate = iso => {
+      try {
+        const d = new Date(iso);
+        const pad = n => String(n).padStart(2,'0');
+        const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        return pad(d.getDate()) + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
+      } catch(_) { return iso || '—'; }
+    };
+
+    const rows = orders.map(order => {
+      const nArt  = (order.items || []).length;
+      const total = (order.items || []).reduce((s, o) => s + (o.ncajas||1)*(o.precio||0)*1.10, 0);
+      return '<div class="os-item os-pending" style="cursor:pointer" ' +
+             'onclick="App.alm._abrirPedidoProgramadoById(\'' + order.id + '\')">' +
+        '<div class="os-item-icon">📦</div>' +
+        '<div class="os-item-info">' +
+          '<div class="os-item-prov">' + fmtDate(order.date) + '</div>' +
+          '<div class="os-item-meta">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
+        '</div>' +
+        '<div class="os-item-right">' +
+          '<div class="os-status-badge os-badge-pending">Pendiente</div>' +
+          '<button onclick="event.stopPropagation();App.alm._eliminarPedidoProgramado(\'' + order.id + '\')" ' +
+            'style="font-size:10px;font-weight:700;color:var(--red);background:none;border:none;' +
+            'cursor:pointer;padding:4px 0 0;font-family:var(--font);touch-action:manipulation">Eliminar</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+        '<div class="mhd-title">Pedidos programados</div>' +
+        '<div class="mhd-sub">' + esc(provNombre) + ' · ' + orders.length + ' pedido' + (orders.length!==1?'s':'') + '</div>' +
+      '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+      '<div style="padding:12px 14px 24px;font-family:var(--font)">' +
+        rows +
+      '</div>'
+    );
+    ui.openFs();
   }
 
   // ══ MODAL 1: PRÓXIMA ENTREGA — operativo del pedido programado ══
