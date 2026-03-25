@@ -63,7 +63,7 @@ self.addEventListener('activate', e => {
           clients.forEach(client => {
             client.postMessage({
               action: 'SW_UPDATED',
-              version: '1.2.29-dev'
+              version: '1.2.47-dev'
             });
           });
         } else {
@@ -79,7 +79,7 @@ self.addEventListener('activate', e => {
               tag:      'dashwey-update',
               renotify: true,
               vibrate:  [100, 50, 100],
-              data:     { action: 'update', version: '1.2.29-dev', url: '/' },
+              data:     { action: 'update', version: '1.2.47-dev', url: '/' },
             }).catch(() => {});
           }
         }
