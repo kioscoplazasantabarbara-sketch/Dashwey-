@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-62-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-63-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.62-dev</title>
+<title>Dashwey v1.2.63-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8631,7 +8631,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.62-dev';
+  const _APP_VERSION = 'v1.2.63-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -10242,6 +10242,10 @@ const nav = (() => {
     // Cerrar SAC dropdown global si está visible
     const sacDd = document.getElementById('sac-global-dd');
     if (sacDd) sacDd.style.display = 'none';
+    // v1.2.63: cerrar overlays centrados al cambiar de tab (evita overflow leak)
+    try { if (document.getElementById('alm-center-overlay'))  window._closeAlmOverlay();  } catch(_) {}
+    try { if (document.getElementById('bell-center-overlay')) window._closeBellCenter();  } catch(_) {}
+    try { if (document.getElementById('chat-center-overlay')) window._closeChatCenter();  } catch(_) {}
 
     _cTab = i;
     track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
@@ -18004,9 +18008,10 @@ const alm = (() => {
       const ox = evt?.changedTouches?.[0]?.clientX ?? evt?.clientX ?? (window.innerWidth / 2);
       const oy = evt?.changedTouches?.[0]?.clientY ?? evt?.clientY ?? (window.innerHeight / 2);
 
-      // v1.2.55: destino = icono carrito en el header (nueva UI)
-      const destEl   = document.getElementById('alm-hdr-cart-badge')?.closest('.alm-hdr-icon-btn')
-                    || document.getElementById('alm-carrito-dot')
+      // v1.2.63: destino = icono carrito en el header — cadena de fallbacks robusta
+      const _cartBadge = document.getElementById('alm-hdr-cart-badge');
+      const destEl   = (_cartBadge && _cartBadge.closest('.alm-hdr-icon-btn'))
+                    || document.querySelector('#alm-header-icons .alm-hdr-icon-btn:last-child')
                     || document.getElementById('alm-pedido-col');
       const destRect = destEl?.getBoundingClientRect();
       const tx = destRect ? (destRect.left + destRect.width  / 2) : window.innerWidth  - 40;
@@ -18078,27 +18083,30 @@ const alm = (() => {
   }
 
   function _updateAcceptBtn() {
-    // Guard: solo mostrar el botón si estamos en tab 2 (Almacén)
-    if (typeof nav !== 'undefined' && nav._cTab !== 2) {
-      const btn = document.getElementById('alm-accept-fixed');
-      if (btn) btn.style.display = 'none';
-      return;
-    }
-    const cnt  = Object.values(_ordenCarrito).reduce((s, n) => s + n, 0);
-    const nArts = Object.keys(_ordenCarrito).length;
-    const btn  = document.getElementById('alm-accept-fixed');
-    const lbl  = document.getElementById('alm-accept-label');
+    const btn = document.getElementById('alm-accept-fixed');
     if (!btn) return;
+
+    // Guard 1: solo en tab 2 (Almacén)
+    if (typeof nav !== 'undefined' && nav._cTab !== 2) {
+      btn.style.display = 'none'; return;
+    }
+    // Guard 2: v1.2.63 — no restaurar si hay overlay o check-modal activo
+    if (document.getElementById('alm-center-overlay') ||
+        document.getElementById('bell-center-overlay') ||
+        document.getElementById('chat-center-overlay') ||
+        document.getElementById('check-modal-overlay')?.classList.contains('cm-open')) {
+      btn.style.display = 'none'; return;
+    }
+
+    const nArts = Object.keys(_ordenCarrito).length;
+    const lbl   = document.getElementById('alm-accept-label');
     if (nArts > 0) {
       if (lbl) lbl.textContent = 'Guardar pedido';
-      if (btn.style.display === 'none' || btn.style.display === '') {
-        btn.style.display = 'block';
-        // v9.5.84: position:fixed definido en CSS — solo actualizar bottom
-        requestAnimationFrame(() => {
-          const tabH = document.getElementById('bottom-tabs')?.offsetHeight || 68;
-          btn.style.bottom = tabH + 'px';
-        });
-      }
+      btn.style.display = 'block';
+      requestAnimationFrame(() => {
+        const tabH = document.getElementById('bottom-tabs')?.offsetHeight || 68;
+        btn.style.bottom = tabH + 'px';
+      });
     } else {
       btn.style.display = 'none';
     }
@@ -18827,6 +18835,13 @@ const alm = (() => {
   // v1.2.52: _abrirCheckModalById — cierra fs-sheet si está abierto, luego abre check-modal
   function _abrirCheckModalById(id) {
     try {
+      // v1.2.63: cerrar alm-center-overlay si está abierto
+      var almOv = document.getElementById('alm-center-overlay');
+      if (almOv) {
+        window._closeAlmOverlay();
+        setTimeout(function() { _abrirCheckModalById(id); }, 220);
+        return;
+      }
       // Cerrar fs-sheet si sigue abierto (caso: llamada directa sin closeFs previo)
       var fsOverlay = document.getElementById('fs-overlay');
       if (fsOverlay && fsOverlay.classList.contains('open')) {
@@ -18976,9 +18991,9 @@ const alm = (() => {
     if (!confirm('¿Eliminar este pedido programado?')) return;
     try { State.set.removePendingOrder(id); } catch(e) { console.error(e); return; }
     updateBadge();
-    // Reabrir la lista (puede haber quedado vacía) — sin timeout, RAF garantiza post-paint
-    App.ui.closeFs();
-    requestAnimationFrame(function() { openPendingOrders(); });
+    // v1.2.63: usa _almOverlay, no fs-sheet
+    window._closeAlmOverlay();
+    setTimeout(function() { openPendingOrders(); }, 220);
   }
 
   // v1.2.53: openHistorialPedidos — historial de pedidos confirmados + reabrir en check-modal
