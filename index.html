@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-52-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-53-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.52-dev</title>
+<title>Dashwey v1.2.53-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8365,6 +8365,7 @@ const ui = (() => {
           <div class="sub-item" onclick="App.ui.closeFs();setTimeout(App.alm.openCatalogoPicker,220)">📋 Catálogo</div>
           <div class="sub-item" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditProv(),220)">✏️ Editar proveedor</div>
           <div class="sub-item" onclick="App.alm.setupCaducidadNotif()">Caducidades</div>
+          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(function(){App.alm.openHistorialPedidos();},220)">📋 Historial de pedidos</div>
         </div>
       </div>
 
@@ -8487,7 +8488,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.52-dev';
+  const _APP_VERSION = 'v1.2.53-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17048,6 +17049,7 @@ const alm = (() => {
     _openProvPeriodSheet, _refreshProvPeriodBtn,
     openOrdenReport, openArticulosReport, openTotalReport,
     openCarritoReport, openCurrentOrder, openPendingOrders, _vaciarCesta,
+    openHistorialPedidos, _reabrirPedidoHistorial,
     _abrirPedidoProgramadoById, _eliminarPedidoProgramado,
     /* v9.5.48: _onBannerUpload, _clearBanner removed */
     _editProvFromPicker, _toggleDayOrder, _toggleDayDeliv,
@@ -18151,6 +18153,100 @@ const alm = (() => {
     App.ui.closeFs();
     requestAnimationFrame(function() { openPendingOrders(); });
   }
+
+  // v1.2.53: openHistorialPedidos — historial de pedidos confirmados + reabrir en check-modal
+  function openHistorialPedidos() {
+    const historial = (State.get.historialPedidos() || []).slice().reverse();
+
+    const fmtDate = iso => {
+      try {
+        const d = new Date(iso);
+        const pad = n => String(n).padStart(2,'0');
+        const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        return pad(d.getDate()) + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
+      } catch(_) { return iso || '—'; }
+    };
+
+    if (historial.length === 0) {
+      ui.setFs(
+        '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+          '<div class="mhd-title">Historial de pedidos</div>' +
+          '<div class="mhd-sub">Pedidos recibidos</div>' +
+        '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+        '<div style="padding:48px 20px;text-align:center;font-family:var(--font)">' +
+          '<div style="font-size:40px;margin-bottom:16px">📋</div>' +
+          '<div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin historial</div>' +
+          '<div style="font-size:13px;color:var(--ink-soft)">Los pedidos confirmados aparecerán aquí.</div>' +
+        '</div>'
+      );
+      ui.openFs();
+      return;
+    }
+
+    const rows = historial.map(pedido => {
+      const prov  = State.get.prov(pedido.provId);
+      const nArt  = (pedido.items || []).length;
+      const total = (pedido.items || []).reduce((s, o) =>
+        s + (o.ncajas||1) * (o.precio||0) * 1.10, 0);
+      return '<div class="os-item" style="cursor:pointer" ' +
+             'onclick="App.alm._reabrirPedidoHistorial(\'' + pedido.id + '\')">' +
+        '<div class="os-item-icon">📦</div>' +
+        '<div class="os-item-info">' +
+          '<div class="os-item-prov">' + fmtDate(pedido.fecha) + '</div>' +
+          '<div class="os-item-meta">' + (prov ? esc(prov.nombre) + ' · ' : '') +
+            nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
+        '</div>' +
+        '<div class="os-item-right">' +
+          '<div class="os-status-badge os-badge-checked">Recibido</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+        '<div class="mhd-title">Historial de pedidos</div>' +
+        '<div class="mhd-sub">' + historial.length + ' pedido' + (historial.length!==1?'s':'') + ' recibidos</div>' +
+      '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+      '<div style="padding:12px 14px 24px;font-family:var(--font)">' + rows + '</div>'
+    );
+    ui.openFs();
+  }
+
+  // v1.2.53: _reabrirPedidoHistorial — abre el check-modal desde el historial
+  function _reabrirPedidoHistorial(pedidoId) {
+    try {
+      const allHist = State.get.historialPedidos() || [];
+      const pedido  = allHist.find(p => p.id === pedidoId);
+      if (!pedido) { showToast('Pedido no encontrado'); return; }
+
+      const prov  = State.get.prov(pedido.provId);
+      const items = (pedido.items || []).map(o => {
+        const p    = State.get.prod(o.prodId);
+        const hist = (p && p.historialPrecios) || [];
+        const ultH = hist.length >= 2 ? hist[hist.length - 2] : null;
+        return {
+          prodId:          o.prodId,
+          nombre:          (p && p.nombre) || o.prodId,
+          e:               (p && p.e) || '📦',
+          ncajas:          o.ncajas || 1,
+          udscaja:         o.udscaja || (p && p.udscaja) || 12,
+          precio:          o.precio  || (p && p.precioCompra) || 0,
+          pvpActual:       o.pvp     || (p && p.pvp) || 0,
+          precioHistorico: ultH ? (ultH.precio || 0) : 0,
+        };
+      });
+
+      App.ui.closeFs();
+      setTimeout(function() {
+        if (window._checkModal) {
+          window._checkModal.open(items, { sel: pedido.provId, prov, orderId: null });
+        }
+      }, 260);
+
+      console.log('[Dashwey] Reabierto desde historial — pedidoId:', pedidoId);
+    } catch(e) { console.error('[ALM] _reabrirPedidoHistorial error:', e); }
+  }
+
   function _cancelarPedidoCarrito() {
     document.getElementById('aceptar-popup-overlay')?.remove();
     _pedidoPendiente = null;
@@ -20872,10 +20968,6 @@ if (!window.Utils) {
       <div class="cm-progress-bar-track">
         <div class="cm-progress-bar-fill" id="cm-bar" style="width:0%"></div>
       </div>
-      <button class="cm-confirm-btn cm-btn-disabled" id="cm-confirm-btn"
-        onclick="window._checkModal.confirm()">
-        Confirmar e ingresar stock
-      </button>
     </div>
   </div>
 </div>
@@ -21007,10 +21099,13 @@ if (!window.Utils) {
     _countEl.textContent = checked + ' / ' + total;
     _barEl.style.width   = pct + '%';
 
+    // v1.2.53: al marcar el último checkbox → popup automático sin botón
     if (allDone) {
-      _confirmBtn.className = 'cm-confirm-btn cm-btn-ready';
-    } else {
-      _confirmBtn.className = 'cm-confirm-btn cm-btn-disabled';
+      setTimeout(function() {
+        if (S.checked.size === S.items.length && S.items.length > 0) {
+          _showConfirmPopup();
+        }
+      }, 180); // pequeño delay para que la animación del checkbox termine
     }
   }
 
@@ -21079,16 +21174,22 @@ if (!window.Utils) {
   }
 
   /* ── Resumen post-confirmación — v1.2.37 ──────────────────────── */
+  // v1.2.53: _showSummary — overlay centrado oscuro, sin fs-sheet
+  function _removeSummaryOverlay() {
+    var el = document.getElementById('cm-summary-overlay');
+    if (el) el.remove();
+  }
+
   function _showSummary(items, meta) {
     try {
+      _removeSummaryOverlay();
       var prov = (meta && meta.prov) || null;
       var provNombre = (prov && prov.nombre) || 'Proveedor';
       var provIcon   = (prov && prov.icon)   || '📦';
+      var orderId    = (meta && meta.orderId) || null;
 
       var fmt = function(n) {
-        try { return Utils.feur(n); } catch(_) {
-          return (+(n||0)).toFixed(2).replace('.',',') + ' €';
-        }
+        try { return Utils.feur(n); } catch(_) { return (+(n||0)).toFixed(2).replace('.',',')+'€'; }
       };
       var esc3 = function(s) {
         try { return Utils.esc(s); } catch(_) {
@@ -21096,62 +21197,127 @@ if (!window.Utils) {
         }
       };
 
-      var totalInv = items.reduce(function(s,i){ return s + (i.ncajas||1)*(i.precio||0)*1.10; }, 0);
-      var totalVta = items.reduce(function(s,i){ return s + (i.ncajas||1)*(i.udscaja||1)*(i.pvpActual||0); }, 0);
+      var totalInv = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.precio||0)*1.10;},0);
+      var totalVta = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.udscaja||1)*(i.pvpActual||0);},0);
       var ganancia = totalVta - totalInv;
-      var margen   = totalVta > 0 ? Math.round(ganancia / totalVta * 100) : 0;
-      var roi      = totalInv > 0 ? Math.round(ganancia / totalInv * 100) : 0;
-      var mgColor  = margen >= 30 ? '#16A34A' : margen >= 15 ? '#F97316' : '#E53935';
+      var margen   = totalVta>0?Math.round(ganancia/totalVta*100):0;
+      var roi      = totalInv>0?Math.round(ganancia/totalInv*100):0;
+      var mgColor  = margen>=30?'#16A34A':margen>=15?'#F97316':'#E53935';
+      var mgBg     = margen>=30?'#DCFCE7':margen>=15?'#FFF7ED':'#FEE2E2';
 
-      var itemsHtml = items.map(function(i) {
-        var precIva = (i.precio||0) * 1.10;
-        var total   = (i.ncajas||1) * precIva;
-        return '<div class="carrito-item">' +
-          '<div class="carrito-item-e">' + (i.e||'📦') + '</div>' +
-          '<div class="carrito-item-info">' +
-            '<div class="carrito-item-name">' + esc3(i.nombre) + '</div>' +
-            '<div class="carrito-item-detail">' + (i.ncajas||1) + ' bulto' + ((i.ncajas||1)!==1?'s':'') +
-              ' · ' + fmt(precIva) + '/u+IVA</div>' +
-          '</div>' +
-          '<div class="carrito-item-right">' +
-            '<div class="carrito-item-total">' + fmt(total) + '</div>' +
-          '</div>' +
-        '</div>';
-      }).join('');
+      // Informe texto para WhatsApp
+      var whatsappText = encodeURIComponent(
+        '✅ Pedido recibido — ' + provNombre + '\n' +
+        '📦 ' + items.length + ' artículo' + (items.length!==1?'s':'') + '\n' +
+        '💰 Inversión: ' + fmt(totalInv) + ' · Margen: ' + margen + '%\n' +
+        items.map(function(i){ return '  • '+i.nombre+' ×'+i.ncajas; }).join('\n')
+      );
 
-      var html =
-        '<div class="modal-header-dark"><div class="mhd-row"><div>' +
-          '<div class="mhd-title">✅ Recepción confirmada</div>' +
-          '<div class="mhd-sub">' + provIcon + ' ' + esc3(provNombre) + ' · ' + items.length + ' artículos</div>' +
-        '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
-        '<div style="padding:16px;font-family:var(--font)">' +
+      var ov = document.createElement('div');
+      ov.id = 'cm-summary-overlay';
+      ov.style.cssText = [
+        'position:fixed;inset:0;z-index:10001',
+        'display:flex;align-items:center;justify-content:center',
+        'background:rgba(0,0,0,0.78);padding:16px',
+        'font-family:var(--font)',
+      ].join(';');
 
-        '<div class="ib-modal-section">' +
-          '<div class="ib-modal-section-hdr">📋 Artículos recibidos</div>' +
-          '<div style="padding:0 16px">' + itemsHtml + '</div>' +
-        '</div>' +
+      ov.innerHTML =
+        '<div style="background:var(--surface);border-radius:22px;width:100%;max-width:420px;' +
+            'max-height:calc(100dvh - 48px);display:flex;flex-direction:column;overflow:hidden;' +
+            'box-shadow:0 32px 80px rgba(0,0,0,0.35)">' +
 
-        '<div class="ib-modal-section" style="background:' +
-          (margen>=30?'#DCFCE7':margen>=15?'#FFF7ED':'#FEE2E2') + '">' +
-          '<div class="ib-modal-section-hdr" style="color:' + mgColor + '">💰 Análisis financiero</div>' +
-          '<div class="ib-modal-section-body">' +
-            '<div class="ib-kpi-grid">' +
-              '<div class="ib-kpi"><div class="ib-kpi-lbl">Inversión</div>' +
-                '<div class="ib-kpi-val">' + fmt(totalInv) + '</div></div>' +
-              '<div class="ib-kpi"><div class="ib-kpi-lbl">Venta est.</div>' +
-                '<div class="ib-kpi-val">' + fmt(totalVta) + '</div></div>' +
-              '<div class="ib-kpi"><div class="ib-kpi-lbl">Margen</div>' +
-                '<div class="ib-kpi-val" style="color:' + mgColor + '">' + margen + '%</div></div>' +
-              '<div class="ib-kpi"><div class="ib-kpi-lbl">ROI</div>' +
-                '<div class="ib-kpi-val" style="color:' + (roi>25?'#16A34A':roi>10?'#F97316':'#E53935') + '">' + roi + '%</div></div>' +
+          // Header
+          '<div style="padding:20px 20px 16px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between">' +
+              '<div>' +
+                '<div style="font-size:18px;font-weight:800;color:var(--ink);letter-spacing:-0.4px">✅ Recepción confirmada</div>' +
+                '<div style="font-size:12px;color:var(--ink-soft);margin-top:3px">' + provIcon + ' ' + esc3(provNombre) + ' · ' + items.length + ' artículo' + (items.length!==1?'s':'') + '</div>' +
+              '</div>' +
+              '<button onclick="document.getElementById('cm-summary-overlay').remove();document.body.style.overflow=''" ' +
+                'style="width:32px;height:32px;border-radius:50%;border:none;background:var(--bg);' +
+                'cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;' +
+                'touch-action:manipulation;flex-shrink:0">×</button>' +
             '</div>' +
           '</div>' +
-        '</div>' +
+
+          // KPIs financieros
+          '<div style="padding:14px 16px;background:'+mgBg+';flex-shrink:0">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">' +
+              '<div style="text-align:center"><div style="font-size:14px;font-weight:800;color:var(--ink)">'+fmt(totalInv)+'</div><div style="font-size:9px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;margin-top:2px">Inversión</div></div>' +
+              '<div style="text-align:center"><div style="font-size:14px;font-weight:800;color:var(--ink)">'+fmt(totalVta)+'</div><div style="font-size:9px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;margin-top:2px">Venta est.</div></div>' +
+              '<div style="text-align:center"><div style="font-size:14px;font-weight:800;color:'+mgColor+'">'+margen+'%</div><div style="font-size:9px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;margin-top:2px">Margen</div></div>' +
+              '<div style="text-align:center"><div style="font-size:14px;font-weight:800;color:'+(roi>25?'#16A34A':roi>10?'#F97316':'#E53935')+'">'+roi+'%</div><div style="font-size:9px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;margin-top:2px">ROI</div></div>' +
+            '</div>' +
+          '</div>' +
+
+          // Lista artículos (scrollable)
+          '<div style="flex:1;overflow-y:auto;padding:10px 14px;-webkit-overflow-scrolling:touch">' +
+            items.map(function(i) {
+              var precIva = (i.precio||0)*1.10;
+              return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+                '<div style="font-size:20px;width:28px;text-align:center;flex-shrink:0">'+(i.e||'📦')+'</div>' +
+                '<div style="flex:1;min-width:0">' +
+                  '<div style="font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc3(i.nombre)+'</div>' +
+                  '<div style="font-size:11px;color:var(--ink-soft);margin-top:1px">'+(i.ncajas||1)+' bulto'+((i.ncajas||1)!==1?'s':'')+' · '+fmt(precIva)+'/u+IVA</div>' +
+                '</div>' +
+                '<div style="font-size:13px;font-weight:700;color:var(--ink);flex-shrink:0">'+fmt((i.ncajas||1)*precIva)+'</div>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+
+          // Acciones
+          '<div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:9px;flex-shrink:0">' +
+
+            // Guardar imagen factura
+            '<button onclick="try{window._checkModal._logAction('factura');}catch(_){}window.showToast('📸 Lector de facturas próximamente')" ' +
+              'style="width:100%;height:46px;border-radius:14px;border:1.5px solid var(--border);background:var(--surface);' +
+              'color:var(--ink);font-size:14px;font-weight:600;font-family:var(--font);cursor:pointer;' +
+              'display:flex;align-items:center;justify-content:center;gap:8px;touch-action:manipulation">' +
+              '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>' +
+              'Guardar imagen de la factura' +
+            '</button>' +
+
+            // Compartir por WhatsApp
+            '<button onclick="try{window._checkModal._logAction('whatsapp');}catch(_){}window.open('https://wa.me/?text='+whatsappText+'','_blank')" ' +
+              'style="width:100%;height:46px;border-radius:14px;border:none;background:#25D366;' +
+              'color:#fff;font-size:14px;font-weight:700;font-family:var(--font);cursor:pointer;' +
+              'display:flex;align-items:center;justify-content:center;gap:8px;touch-action:manipulation;' +
+              'box-shadow:0 4px 16px rgba(37,211,102,0.28)">' +
+              '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.113.549 4.099 1.508 5.827L.057 23.215a.749.749 0 0 0 .915.934l5.545-1.467A11.947 11.947 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.817 9.817 0 0 1-5.044-1.397l-.361-.214-3.741.98.999-3.648-.235-.374A9.818 9.818 0 0 1 2.182 12c0-5.415 4.403-9.818 9.818-9.818 5.415 0 9.818 4.403 9.818 9.818 0 5.415-4.403 9.818-9.818 9.818z"/></svg>' +
+              'Compartir por WhatsApp' +
+            '</button>' +
+
+            // Guardar en historial
+            '<button id="cm-summary-save-hist" ' +
+              'onclick="window._checkModal._guardarEnHistorial(this)" ' +
+              'style="width:100%;height:46px;border-radius:14px;border:none;background:var(--red);' +
+              'color:#fff;font-size:14px;font-weight:700;font-family:var(--font);cursor:pointer;' +
+              'display:flex;align-items:center;justify-content:center;gap:8px;touch-action:manipulation;' +
+              'box-shadow:0 4px 16px rgba(139,26,47,0.28)">' +
+              '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' +
+              'Guardar en historial' +
+            '</button>' +
+
+          '</div>' +
         '</div>';
 
-      try { ui.setFs(html); ui.openFs(); } catch(_) {
-        try { App.ui.setFs(html); App.ui.openFs(); } catch(_) {}
-      }
+      // Guardar referencia a items+meta para acciones
+      ov._summaryItems = items;
+      ov._summaryMeta  = meta;
+
+      document.body.appendChild(ov);
+      ov.style.opacity = '0';
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          ov.style.transition = 'opacity 0.2s ease';
+          ov.style.opacity = '1';
+        });
+      });
+
+      // Log
+      try { console.log('[Dashwey] Resumen mostrado — orderId:', orderId, '| artículos:', items.length, '| margen:', margen+'%'); } catch(_) {}
+
     } catch(e) { console.error('[CheckModal] _showSummary error:', e); }
   }
 
@@ -21293,17 +21459,21 @@ if (!window.Utils) {
           console.error('[CheckModal] addPedido error:', e);
         }
 
-        // ── 3. v1.2.33: actualizar o eliminar el pending order ────
+        // ── 3. v1.2.53: eliminar pending order confirmado + actualizar badge
         if (orderId) {
           try {
-            // Marcar como checked en pendingOrders (conservar para historial UI)
-            State.set.updatePendingOrder(orderId, { status: 'checked' });
+            // Eliminar de pendingOrders (ya está guardado en historialPedidos)
+            State.set.removePendingOrder(orderId);
           } catch(e) {
-            console.error('[CheckModal] updatePendingOrder error:', e);
+            console.error('[CheckModal] removePendingOrder error:', e);
           }
           // Limpiar currentOrderId del selector
           try {
             if (window._orderSelectorState) window._orderSelectorState.currentOrderId = null;
+          } catch(_) {}
+          // Actualizar badge de pedidos pendientes en tiempo real
+          try {
+            if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge();
           } catch(_) {}
         } else {
           // Flujo legacy (sin orderId): limpiar carrito ALM
@@ -21344,6 +21514,43 @@ if (!window.Utils) {
       } catch(e) {
         console.error('[CheckModal] _doConfirm error:', e);
       }
+    },
+
+    /* _logAction(tipo) — log interno de acciones del usuario */
+    _logAction: function(tipo) {
+      try {
+        var ts = new Date().toISOString();
+        var meta = S._meta || {};
+        console.log('[Dashwey] Acción:', tipo, '| orderId:', meta.orderId||'—', '| ts:', ts);
+      } catch(_) {}
+    },
+
+    /* _guardarEnHistorial(btn) — confirma guardado y actualiza botón */
+    _guardarEnHistorial: function(btn) {
+      try {
+        var ov = document.getElementById('cm-summary-overlay');
+        var items = (ov && ov._summaryItems) || S.items || [];
+        var meta  = (ov && ov._summaryMeta)  || S._meta || {};
+        var orderId = meta.orderId || null;
+        var sel     = meta.sel || '';
+        var prov    = meta.prov || null;
+
+        // Ya está en historialPedidos (addPedido se llamó en _doConfirm)
+        // Solo confirmar visualmente y loguear
+        this._logAction('guardar_historial');
+
+        if (btn) {
+          btn.disabled = true;
+          btn.style.background = '#16A34A';
+          btn.innerHTML =
+            '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' +
+            ' Guardado en historial';
+        }
+
+        try { if (window.Utils) Utils.showToast('✅ Pedido guardado en historial'); } catch(_) {}
+        try { if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge(); } catch(_) {}
+
+      } catch(e) { console.error('[CheckModal] _guardarEnHistorial error:', e); }
     },
 
     /* close() — animación de salida + limpiar estado */
