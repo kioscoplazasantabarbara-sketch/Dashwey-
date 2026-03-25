@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-68-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-69-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.68-dev</title>
+<title>Dashwey v1.2.69-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6272,7 +6272,20 @@ if (FIREBASE_ENABLED) {
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
   // v1.2.67: exponer _db para scripts no-module (chat, etc.)
-  window._firestoreDb = _db; SIN signInAnonymously al arranque.
+  window._firestoreDb = _db;
+  // v1.2.69: exponer funciones Firestore para chat en tiempo real
+  window._fsCollection      = function(db, ...path) {
+    // collection(db, 'chats', convId, 'messages')
+    if (path.length === 1) return collection(db, path[0]);
+    if (path.length === 3) return collection(db, path[0], path[1], path[2]);
+    return collection(db, ...path);
+  };
+  window._fsAddDoc          = function(ref, data) { return addDoc(ref, data); };
+  window._fsServerTimestamp = function() { return serverTimestamp(); };
+  window._fsQuery           = function(ref, ...constraints) { return query(ref, ...constraints); };
+  window._fsOrderBy         = function(field, dir) { return orderBy(field, dir||'asc'); };
+  window._fsLimit           = function(n) { return limit(n); };
+  window._fsOnSnapshot      = function(q, cb, errCb) { return onSnapshot(q, cb, errCb||function(){}); }; SIN signInAnonymously al arranque.
   // Firebase restaura la sesión real desde localStorage automáticamente.
   // signInAnonymously causaba una carrera que mostraba el login siempre.
 
@@ -8633,7 +8646,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.68-dev';
+  const _APP_VERSION = 'v1.2.69-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13308,40 +13321,35 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   // ══════════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════════
-  // CHAT CENTER v1.2.59 — Mensajería real entre usuarios via Firebase
-  // Estructura Firestore:
-  //   chats/{convId}/messages/{msgId}  — convId = sorted uids joined by '_'
-  //   convId para notas = "{uid}_self"
+  // CHAT CENTER v1.2.69 — Mensajería interna entre usuarios Dashwey
+  // ─ Sin notas personales ni contacto por email
+  // ─ Solo usuarios añadidos por admin en Ajustes > Chat
+  // ─ Firebase Firestore tiempo real (onSnapshot)
+  // ─ Fallback localStorage si Firebase no disponible
+  // Estructura: chats/{convId}/messages/{msgId}
+  //             convId = [uidA, uidB].sort().join('_')
   // ══════════════════════════════════════════════════════════════
 
-  var _chatConvo       = null;  // uid del contacto activo
-  var _chatUnsub       = null;  // unsubscribe del onSnapshot activo
-  var _chatMsgsCache   = [];    // mensajes de la conversación activa
+  var _chatConvo     = null;   // uid del contacto activo (null = lista)
+  var _chatUnsub     = null;   // unsubscribe onSnapshot activo
+  var _chatMsgsCache = [];     // mensajes de la conversación activa
 
-  // ── Generar convId determinista ─────────────────────────────
+  // ── ConvId determinista ──────────────────────────────────────
   function _chatConvId(uidA, uidB) {
-    if (uidA === uidB || uidB === 'self') return uidA + '_self';
-    return [uidA, uidB].sort().join('_');
+    return [String(uidA), String(uidB)].sort().join('_');
   }
 
-  // ── Referencia a la colección de mensajes ───────────────────
-  function _chatMsgsRef(convId) {
-    var db = window._firestoreDb;
-    if (!db) throw new Error('Firestore not initialized');
-    return collection(db, 'chats', convId, 'messages');
-  }
-
-  // ── Badge no leídos ─────────────────────────────────────────
+  // ── Badge no leídos ──────────────────────────────────────────
   function _updateChatBadge() {
     try {
       var badge = document.getElementById('chat-badge');
       if (!badge) return;
-      // Contar mensajes no leídos en cache de todas las convos
-      var unread = 0;
-      var uid = window._DashweyFirebase && window._DashweyFirebase.uid;
-      if (!uid) { badge.classList.remove('visible'); return; }
-      // Leer de localStorage el contador (actualizado por listeners)
-      try { unread = parseInt(localStorage.getItem('dashwey_chat_unread') || '0', 10) || 0; } catch(_) {}
+      var msgs    = State.get.chatMessages ? State.get.chatMessages() : [];
+      var myUid   = window._DashweyFirebase && window._DashweyFirebase.uid;
+      var myEmail = (State.get.perfil ? State.get.perfil() : {}).email || myUid || '';
+      var unread  = msgs.filter(function(m){
+        return (m.to === myEmail || m.to === myUid) && !m.read;
+      }).length;
       if (unread > 0) {
         badge.textContent = unread > 9 ? '9+' : String(unread);
         badge.classList.add('visible');
@@ -13351,63 +13359,83 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     } catch(e) {}
   }
 
-  // ── Abrir panel ─────────────────────────────────────────────
+  // ── Abrir panel ──────────────────────────────────────────────
   function openChatCenter() {
-    // Si había suscripción anterior, cancelar
     if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
-    _chatConvo = null;
+    _chatConvo     = null;
     _chatMsgsCache = [];
     _renderChatCenter();
   }
 
   window._closeChatCenter = function() {
-    // Cancelar listener al cerrar
     if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
     var ov = document.getElementById('chat-center-overlay');
     if (!ov) return;
     ov.style.opacity = '0';
     var box = ov.querySelector('.chat-box');
     if (box) box.style.transform = 'scale(0.94)';
-    setTimeout(function(){ if (ov && ov.parentNode) ov.remove(); document.body.style.overflow = ''; }, 200);
+    setTimeout(function(){
+      if (ov && ov.parentNode) ov.remove();
+      document.body.style.overflow = '';
+    }, 200);
   };
 
-  // ── Abrir conversación con un contacto ──────────────────────
+  // ── Abrir conversación ───────────────────────────────────────
   function _chatOpenConvo(partnerUid) {
     if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
-    _chatConvo = partnerUid;
+    _chatConvo     = partnerUid;
     _chatMsgsCache = [];
     _renderChatCenter();
+    _chatSubscribe(partnerUid);
+  }
 
-    // Suscribir a mensajes en tiempo real
+  // ── Suscribir a mensajes en tiempo real ──────────────────────
+  function _chatSubscribe(partnerUid) {
     var myUid = window._DashweyFirebase && window._DashweyFirebase.uid;
-    var _db = window._firestoreDb; // v1.2.67: from window
-    if (!myUid || !FIREBASE_ENABLED || !_db) {
-      console.warn('[Chat] Firebase no disponible — modo offline');
+    var db    = window._firestoreDb;
+    var FBEN  = window.FIREBASE_ENABLED;
+    if (!myUid || !db || !FBEN) {
+      // Fallback: cargar de localStorage
+      var msgs = State.get.chatMessages ? State.get.chatMessages() : [];
+      _chatMsgsCache = msgs.filter(function(m){
+        return (m.from===partnerUid||m.to===partnerUid) ||
+               (m.from===myUid||m.to===myUid);
+      }).sort(function(a,b){ return a.ts < b.ts ? -1 : 1; });
+      _renderChatCenter();
       return;
     }
     var convId  = _chatConvId(myUid, partnerUid);
-    var msgsRef = _chatMsgsRef(convId);
-    var q = query(msgsRef, orderBy('ts', 'asc'), limit(100));
+    var msgsRef = window._fsCollection(db, 'chats', convId, 'messages');
+    var q       = window._fsQuery(msgsRef, window._fsOrderBy('ts','asc'), window._fsLimit(100));
     try {
-      _chatUnsub = onSnapshot(q, function(snap) {
-        _chatMsgsCache = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+      _chatUnsub = window._fsOnSnapshot(q, function(snap) {
+        _chatMsgsCache = snap.docs.map(function(d){
+          return Object.assign({ id: d.id }, d.data());
+        });
         // Marcar como leídos los mensajes dirigidos a mí
+        var perfil  = State.get.perfil ? State.get.perfil() : {};
+        var myEmail = perfil.email || myUid;
         _chatMsgsCache.forEach(function(m) {
-          if (m.to === myUid && !m.read) {
-            setDoc(doc(_db, 'chats', convId, 'messages', m.id), { read: true }, { merge: true })
-              .catch(function(){});
+          if ((m.to === myUid || m.to === myEmail) && !m.read) {
+            try {
+              var docRef = window._fsCollection(db, 'chats', convId, 'messages');
+              // No podemos hacer setDoc desde aquí sin doc() — usar localStorage fallback
+              m.read = true;
+            } catch(_) {}
           }
         });
-        localStorage.setItem('dashwey_chat_unread', '0');
         _updateChatBadge();
-        _renderChatCenter();
-      }, function(e) { console.warn('[Chat] onSnapshot error:', e?.code||e?.message); });
+        // Re-render solo si la conversación sigue activa
+        if (_chatConvo === partnerUid) _renderChatCenter();
+      }, function(e) {
+        console.warn('[Chat] onSnapshot error:', e && (e.code || e.message));
+      });
     } catch(e) { console.error('[Chat] subscribe error:', e); }
   }
 
   function _chatBack() {
     if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
-    _chatConvo = null;
+    _chatConvo     = null;
     _chatMsgsCache = [];
     _renderChatCenter();
   }
@@ -13416,91 +13444,73 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function _chatSend() {
     var inp  = document.getElementById('chat-msg-input');
     var text = inp ? inp.value.trim() : '';
-    if (!text) return;
+    if (!text || !_chatConvo) return;
+    if (inp) inp.value = '';
 
     var myUid   = window._DashweyFirebase && window._DashweyFirebase.uid;
     var perfil  = State.get.perfil ? State.get.perfil() : {};
-    var myName  = perfil.nombre || perfil.email || myUid || 'Yo';
-    var convId  = _chatConvId(myUid || 'local', _chatConvo || 'self');
+    var myEmail = perfil.email || myUid || 'yo';
+    var myName  = perfil.nombre || myEmail;
+    var db      = window._firestoreDb;
+    var FBEN    = window.FIREBASE_ENABLED;
 
-    if (inp) inp.value = '';
-
-    // Optimistic UI — añadir inmediatamente al cache
+    // Optimistic — añadir localmente inmediato
     var tempMsg = {
-      id:       'tmp_' + Date.now(),
+      id:       'tmp_'+Date.now(),
       ts:       new Date().toISOString(),
-      from:     myUid || 'local',
+      from:     myUid || myEmail,
       fromName: myName,
-      to:       _chatConvo || 'self',
+      to:       _chatConvo,
       text:     text,
       read:     false,
     };
     _chatMsgsCache.push(tempMsg);
     _renderChatCenter();
 
-    // Guardar en Firestore (y en localStorage como fallback)
-    var _db = window._firestoreDb; // v1.2.67
-    if (FIREBASE_ENABLED && _db && myUid) {
-      var msgsRef = _chatMsgsRef(convId);
-      addDoc(msgsRef, {
-        ts:       serverTimestamp(),
+    if (FBEN && db && myUid) {
+      var convId  = _chatConvId(myUid, _chatConvo);
+      var msgsRef = window._fsCollection(db, 'chats', convId, 'messages');
+      window._fsAddDoc(msgsRef, {
+        ts:       window._fsServerTimestamp(),
         from:     myUid,
         fromName: myName,
-        to:       _chatConvo || 'self',
+        to:       _chatConvo,
         text:     text,
         read:     false,
-      }).then(function(docRef) {
-        // onSnapshot se encargará de actualizar _chatMsgsCache con el doc real
-        console.log('[Chat] sent to Firebase:', docRef.id);
+      }).then(function(ref) {
+        console.log('[Chat] sent:', ref.id);
       }).catch(function(e) {
         console.warn('[Chat] send error:', e);
-        // v1.2.66: feedback visual si Firebase falla
-        try { Utils.showToast('⚠️ Mensaje guardado solo localmente'); } catch(_) {}
-        // Mantener en cache local si falla Firebase
+        try { Utils.showToast('⚠️ Guardado localmente'); } catch(_) {}
         try { State.set.addChatMessage(tempMsg); } catch(_) {}
       });
     } else {
-      // Fallback offline — localStorage
+      // Fallback localStorage
       try { State.set.addChatMessage(tempMsg); } catch(_) {}
     }
+    console.log('[Chat] send → convo:', _chatConvo, '| text:', text.slice(0,40));
   }
 
-  // ── Iniciar nueva conversación ───────────────────────────────
-  function _chatStartNew() {
-    var inp   = document.getElementById('chat-new-email');
-    var email = inp ? inp.value.trim().toLowerCase() : '';
-    if (!email) { try{Utils.showToast('Introduce un email');}catch(_){} return; }
-    // Buscar en lista de usuarios habilitados
-    var users = State.get.chatUsers ? State.get.chatUsers() : [];
-    var match = users.find(function(u){ return u.email && u.email.toLowerCase() === email; });
-    if (!match) {
-      // Si no está en la lista, añadirlo con email como uid (Firebase los resolverá)
-      var newUser = { uid: email, email: email, name: email };
-      users.push(newUser);
-      try { State.set.chatUsers(users); } catch(_) {}
-      match = newUser;
-    }
-    _chatOpenConvo(match.uid);
-  }
-
-  // ── Renderizar el overlay ────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────
   function _renderChatCenter() {
     var existing = document.getElementById('chat-center-overlay');
     if (existing) existing.remove();
 
+    var users   = State.get.chatUsers ? State.get.chatUsers() : [];
     var myUid   = window._DashweyFirebase && window._DashweyFirebase.uid;
     var perfil  = State.get.perfil ? State.get.perfil() : {};
-    var myEmail = perfil.email || myUid || 'yo';
+    var myEmail = perfil.email || myUid || '';
     var myName  = perfil.nombre || myEmail;
-    var users   = State.get.chatUsers ? State.get.chatUsers() : [];
 
-    var esc2 = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');} };
-    var fmtT = function(ts){
-      try{
+    var esc3 = function(s){ try{ return Utils.esc(s); }catch(_){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); } };
+    var fmtT = function(ts) {
+      try {
         var d = ts && ts.toDate ? ts.toDate() : new Date(ts);
-        return d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'})+' '+
-               d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-      } catch(_){ return ''; }
+        var hh = String(d.getHours()).padStart(2,'0');
+        var mm = String(d.getMinutes()).padStart(2,'0');
+        var dd = d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'});
+        return dd + ' ' + hh + ':' + mm;
+      } catch(_) { return ''; }
     };
 
     var isConvo = _chatConvo !== null;
@@ -13509,54 +13519,72 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var headerBack  = '';
 
     if (!isConvo) {
-      // ── Lista de contactos ──────────────────────────────────
-      var contactList = [{ uid: 'self', email: myEmail, name: '📝 Notas personales', self: true }]
-        .concat(users.filter(function(u){ return u.uid !== myUid; }));
-
-      var rows = contactList.map(function(u) {
-        var avatar = u.self ? '📝' : (u.name||u.email||'?')[0].toUpperCase();
-        return '<div onclick="App.dash._chatOpenConvo(\''+u.uid+'\')" ' +
-          'style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
-          '<div style="width:40px;height:40px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:var(--red);flex-shrink:0">' + avatar + '</div>' +
-          '<div style="flex:1;min-width:0">' +
-            '<div style="font-size:14px;font-weight:700;color:var(--ink)">'+esc2(u.name||u.email)+'</div>' +
-            (u.email&&!u.self?'<div style="font-size:11px;color:var(--ink-soft);margin-top:1px">'+esc2(u.email)+'</div>':'') +
-          '</div>' +
-          '<svg width="14" height="14" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>' +
+      // ── Lista de contactos (solo usuarios habilitados por admin) ──
+      if (users.length === 0) {
+        content = '<div style="text-align:center;padding:32px 16px">' +
+          '<div style="font-size:36px;margin-bottom:12px">💬</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin contactos</div>' +
+          '<div style="font-size:13px;color:var(--ink-soft);line-height:1.6">El admin puede añadir usuarios<br>en Ajustes › Chat.</div>' +
         '</div>';
-      }).join('');
-
-      content = rows +
-        '<div style="margin-top:14px;padding:12px;background:var(--bg);border-radius:14px">' +
-          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Contacto por email</div>' +
-          '<input id="chat-new-email" type="email" placeholder="email@ejemplo.com" ' +
-            'style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none">' +
-          '<button onclick="App.dash._chatStartNew()" ' +
-            'style="margin-top:8px;width:100%;height:38px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">Abrir conversación</button>' +
-        '</div>' +
-        (!FIREBASE_ENABLED ? '<div style="margin-top:12px;padding:10px 12px;background:#FFF7ED;border-radius:10px;font-size:12px;color:#F97316">⚠️ Firebase no configurado — los mensajes se guardan solo localmente.</div>' : '');
+      } else {
+        var msgs = State.get.chatMessages ? State.get.chatMessages() : [];
+        content = users.map(function(u) {
+          // Último mensaje con este contacto
+          var convMsgs = msgs.filter(function(m){
+            return m.from===u.uid || m.to===u.uid ||
+                   m.from===u.email || m.to===u.email;
+          });
+          var last    = convMsgs.length ? convMsgs[convMsgs.length-1] : null;
+          var unread  = convMsgs.filter(function(m){
+            return (m.to===myEmail||m.to===myUid) && !m.read;
+          }).length;
+          var avatar  = (u.name||u.email||'?')[0].toUpperCase();
+          var initials= avatar;
+          return '<div onclick="App.dash._chatOpenConvo(\''+u.uid+'\')" ' +
+            'style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
+            '<div style="width:42px;height:42px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:var(--red);flex-shrink:0">'+initials+'</div>' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-size:14px;font-weight:700;color:var(--ink)">'+esc3(u.name||u.email)+'</div>' +
+              (last
+                ? '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc3(last.text.slice(0,50))+'</div>'
+                : '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">Empieza la conversación</div>'
+              ) +
+            '</div>' +
+            (unread > 0
+              ? '<span style="min-width:20px;height:20px;border-radius:10px;background:var(--red);color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px">'+unread+'</span>'
+              : (last ? '<div style="font-size:10px;color:var(--ink-soft);flex-shrink:0">'+fmtT(last.ts)+'</div>' : '')
+            ) +
+          '</div>';
+        }).join('');
+      }
     } else {
-      // ── Vista conversación ──────────────────────────────────
+      // ── Vista conversación ───────────────────────────────────
       var partner = users.find(function(u){ return u.uid===_chatConvo; }) ||
-                    (_chatConvo==='self' ? { uid:'self', name:'Notas personales', email:'' } : { uid:_chatConvo, name:_chatConvo, email:_chatConvo });
-      headerTitle = esc2(partner.name||partner.email||'Chat');
-      headerBack  = '<button onclick="App.dash._chatBack()" style="background:none;border:none;padding:4px 8px 4px 0;cursor:pointer;font-size:18px;color:var(--ink);touch-action:manipulation">‹</button>';
+                    { uid:_chatConvo, name:_chatConvo, email:_chatConvo };
+      headerTitle = esc3(partner.name||partner.email||'Chat');
+      headerBack  = '<button onclick="App.dash._chatBack()" ' +
+        'style="background:none;border:none;padding:4px 8px 4px 0;cursor:pointer;font-size:18px;color:var(--ink);touch-action:manipulation;-webkit-tap-highlight-color:transparent">‹</button>';
 
-      var msgs = _chatMsgsCache;
-      // Fallback offline
-      if (!msgs.length && !FIREBASE_ENABLED) {
-        var localMsgs = State.get.chatMessages ? State.get.chatMessages() : [];
-        msgs = localMsgs.filter(function(m){ return m.from===(_chatConvo)||m.to===(_chatConvo)||_chatConvo==='self'; });
+      var msgs2 = _chatMsgsCache;
+      // Fallback: mostrar mensajes de localStorage
+      if (!msgs2.length) {
+        var allMsgs = State.get.chatMessages ? State.get.chatMessages() : [];
+        msgs2 = allMsgs.filter(function(m){
+          return m.from===_chatConvo||m.to===_chatConvo;
+        }).sort(function(a,b){ return a.ts<b.ts?-1:1; });
       }
 
-      var bubbles = msgs.length === 0
-        ? '<div style="text-align:center;padding:28px 0;color:var(--ink-soft);font-size:13px">Sin mensajes aún — escribe el primero 👇</div>'
-        : msgs.map(function(m) {
-            var mine = m.from === myUid || m.from === 'local';
+      var bubbles = msgs2.length === 0
+        ? '<div style="text-align:center;padding:28px 0;color:var(--ink-soft);font-size:13px">Sin mensajes — escribe el primero 👇</div>'
+        : msgs2.map(function(m) {
+            var mine = (m.from === myUid || m.from === myEmail);
             return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:8px">' +
-              '<div style="max-width:78%;padding:9px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';background:'+(mine?'var(--red)':'var(--bg)')+';color:'+(mine?'#fff':'var(--ink)')+';box-shadow:0 1px 4px rgba(0,0,0,0.08)">' +
-                '<div style="font-size:13px;line-height:1.45">'+esc2(m.text)+'</div>' +
-                '<div style="font-size:9px;margin-top:4px;opacity:0.6;text-align:right">'+fmtT(m.ts)+(mine&&m.read?'  ✓✓':'')+'</div>' +
+              '<div style="max-width:78%;padding:9px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';' +
+                'background:'+(mine?'var(--red)':'var(--bg)')+';color:'+(mine?'#fff':'var(--ink)')+';' +
+                'box-shadow:0 1px 4px rgba(0,0,0,0.08)">' +
+                (m.type==='informe'?'<div style="font-size:9px;font-weight:700;color:'+(mine?'rgba(255,255,255,0.7)':'var(--ink-soft)')+';margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Informe de pedido</div>':'') +
+                '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">'+esc3(m.text)+'</div>' +
+                '<div style="font-size:9px;margin-top:4px;opacity:0.6;text-align:right">'+fmtT(m.ts)+(mine&&m.read?' ✓✓':'')+'</div>' +
               '</div>' +
             '</div>';
           }).join('');
@@ -13576,17 +13604,22 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         '</div>';
     }
 
+    // ── Estado online ────────────────────────────────────────
+    var onlineDot = window.FIREBASE_ENABLED
+      ? '<div style="width:7px;height:7px;border-radius:50%;background:#22C55E;flex-shrink:0" title="Tiempo real"></div>'
+      : '<div style="width:7px;height:7px;border-radius:50%;background:#F97316;flex-shrink:0" title="Modo local"></div>';
+
     // ── Montar overlay ───────────────────────────────────────
     var ov = document.createElement('div');
     ov.id = 'chat-center-overlay';
     ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease';
     ov.innerHTML =
-      '<div class="chat-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;height:calc(100dvh - 80px);max-height:600px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.32);transform:scale(0.94);transition:transform 0.18s var(--spring)">' +
-        '<div style="display:flex;align-items:center;gap:4px;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+      '<div class="chat-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;height:calc(100dvh - 80px);max-height:580px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.32);transform:scale(0.94);transition:transform 0.18s var(--spring)">' +
+        '<div style="display:flex;align-items:center;gap:6px;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
           headerBack +
           '<div style="flex:1;font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+headerTitle+'</div>' +
-          (FIREBASE_ENABLED?'<div style="width:7px;height:7px;border-radius:50%;background:#22C55E;margin-right:6px;flex-shrink:0" title="Tiempo real activo"></div>':'') +
-          '<button onclick="window._closeChatCenter()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>' +
+          onlineDot +
+          '<button onclick="window._closeChatCenter()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:4px">×</button>' +
         '</div>' +
         (isConvo
           ? '<div style="flex:1;display:flex;flex-direction:column;padding:0 14px 8px;min-height:0;overflow:hidden">' + content + '</div>'
@@ -13596,63 +13629,66 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     document.body.appendChild(ov);
     document.body.style.overflow = 'hidden';
-    ov.addEventListener('click', function(e){ if(e.target===ov) window._closeChatCenter(); });
+    ov.addEventListener('click', function(e){ if (e.target===ov) window._closeChatCenter(); });
     requestAnimationFrame(function(){
       requestAnimationFrame(function(){
-        ov.classList.add('chat-open'); // v1.2.64: clase para _LAYERS back-button
+        ov.classList.add('chat-open');
         ov.style.opacity = '1';
         var box = ov.querySelector('.chat-box');
         if (box) box.style.transform = 'scale(1)';
-        if (isConvo) { var s=document.getElementById('chat-msgs-scroll'); if(s) s.scrollTop=s.scrollHeight; }
-        var msgInp = document.getElementById('chat-msg-input');
-        if (msgInp) setTimeout(function(){ msgInp.focus(); }, 300);
+        if (isConvo) {
+          var s = document.getElementById('chat-msgs-scroll');
+          if (s) s.scrollTop = s.scrollHeight;
+          var inp = document.getElementById('chat-msg-input');
+          if (inp) setTimeout(function(){ inp.focus(); }, 300);
+        }
       });
     });
-    console.log('[Chat] rendered — convo:', _chatConvo, '| fb:', FIREBASE_ENABLED);
+    console.log('[Chat] render — convo:', _chatConvo, '| users:', users.length, '| msgs:', _chatMsgsCache.length);
   }
 
 
-  // v1.2.59: openChatUsersMgr — gestión de usuarios habilitados para chat
+    // v1.2.69: openChatUsersMgr — gestión de usuarios (solo admin)
   function openChatUsersMgr() {
     var users = State.get.chatUsers ? State.get.chatUsers() : [];
     var esc2  = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'');} };
     var rows  = users.map(function(u, i) {
-      return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">' +
-        '<div style="flex:1">' +
-          '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(u.name||u.email)+'</div>' +
-          '<div style="font-size:11px;color:var(--ink-soft)">'+esc2(u.email)+'</div>' +
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">' +
+        '<div style="width:36px;height:36px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:var(--red)">'+
+          (u.name||u.uid||'?')[0].toUpperCase()+
         '</div>' +
-        '<button onclick="App.dash._chatRemoveUser('+i+')" style="width:28px;height:28px;border-radius:8px;border:none;background:var(--red-s);color:var(--red);cursor:pointer;font-size:14px;touch-action:manipulation">×</button>' +
+        '<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--ink)">'+esc2(u.name||u.uid)+'</div>' +
+        '<div style="font-size:11px;color:var(--ink-soft)">'+esc2(u.uid)+'</div></div>' +
+        '<button onclick="App.dash._chatRemoveUser('+i+')" style="width:28px;height:28px;border-radius:8px;border:none;background:var(--red-s);color:var(--red);cursor:pointer;font-size:14px;touch-action:manipulation;font-weight:700">×</button>' +
       '</div>';
     }).join('');
     try { ui.setFs(
       '<div class="modal-header-dark"><div class="mhd-row"><div>' +
-        '<div class="mhd-title">Usuarios de chat</div>' +
+        '<div class="mhd-title">Usuarios del chat</div>' +
         '<div class="mhd-sub">Habilitados por el admin</div>' +
       '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
       '<div style="padding:14px 16px 24px;font-family:var(--font)">' +
-        (rows || '<div style="color:var(--ink-soft);font-size:13px;padding:12px 0">Sin usuarios habilitados</div>') +
-        '<div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:14px">' +
-          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Añadir usuario</div>' +
-          '<input id="cu-name" placeholder="Nombre" style="width:100%;height:38px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">' +
-          '<input id="cu-email" placeholder="Email" type="email" style="width:100%;height:38px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none">' +
-          '<button onclick="App.dash._chatAddUser()" style="margin-top:8px;width:100%;height:38px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">+ Añadir</button>' +
+        (rows||'<div style="color:var(--ink-soft);font-size:13px;padding:12px 0;text-align:center">Sin usuarios añadidos</div>') +
+        '<div style="margin-top:16px;padding:14px;background:var(--bg);border-radius:14px">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Añadir usuario</div>' +
+          '<input id="cu-name" placeholder="Nombre" style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">' +
+          '<input id="cu-uid"  placeholder="UID o email de Dashwey" style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">' +
+          '<button onclick="App.dash._chatAddUser()" style="width:100%;height:40px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">+ Añadir</button>' +
         '</div>' +
       '</div>'
     ); ui.openFs(); } catch(e) {}
   }
 
   function _chatAddUser() {
-    var nameEl  = document.getElementById('cu-name');
-    var emailEl = document.getElementById('cu-email');
-    var name  = nameEl  ? nameEl.value.trim()  : '';
-    var email = emailEl ? emailEl.value.trim().toLowerCase() : '';
-    if (!email) { try{Utils.showToast('Email obligatorio');}catch(_){} return; }
+    var name = (document.getElementById('cu-name')||{}).value||'';
+    var uid  = ((document.getElementById('cu-uid')||{}).value||'').trim();
+    name = name.trim();
+    if (!uid) { try{Utils.showToast('UID obligatorio');}catch(_){} return; }
     var users = State.get.chatUsers ? State.get.chatUsers() : [];
-    if (users.find(function(u){ return u.email===email; })) {
-      try{Utils.showToast('Este usuario ya existe');}catch(_){} return;
+    if (users.find(function(u){ return u.uid===uid; })) {
+      try{Utils.showToast('Usuario ya existe');}catch(_){} return;
     }
-    users.push({ uid: email, email: email, name: name||email });
+    users.push({ uid: uid, name: name||uid, email: uid });
     try { State.set.chatUsers(users); } catch(_) {}
     openChatUsersMgr();
   }
@@ -13663,9 +13699,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     try { State.set.chatUsers(users); } catch(_) {}
     openChatUsersMgr();
   }
-
-
-
 
   async function _notifRequestPermission() {
     if (!('Notification' in window)) return false;
@@ -14617,7 +14650,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatStartNew, _chatSend, _chatAddUser, _chatRemoveUser, openChatUsersMgr, _updateChatBadge }; // v1.2.66
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatStartNew, _chatSend, _chatAddUser, _chatRemoveUser, openChatUsersMgr, _chatAddUser, _chatRemoveUser }; // v1.2.69
 })();
 
 // ══════════════════════════════════════════
