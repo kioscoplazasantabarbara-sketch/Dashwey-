@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-42-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-43-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -102,10 +102,10 @@
     }
   }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.2.42-dev"><!-- v1.1.8-dev: cache-bust manifest -->
-<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.42-dev"><!-- v1.1.8-dev: cache-bust icon -->
+<link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.42-dev</title>
+<title>Dashwey v1.2.43-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -118,7 +118,7 @@
 :root {
   /* ═══════════════════════════════════════════════
      DASHWEY · CRIMSON PRECISION · Design Tokens
-     Versión: v9.5 · Sistema unificado UI/UX v1.2.42
+     Versión: v9.5 · Sistema unificado UI/UX v1.2.43
      ═══════════════════════════════════════════════ */
 
   /* Acento principal — Crimson Borgoña */
@@ -8478,7 +8478,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.42-dev';
+  const _APP_VERSION = 'v1.2.43-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12658,68 +12658,157 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => openFinModal('gastos'), Utils.ANIM_DELAY);
   }
 
+  // v1.2.43: _openIngresosModal — modal de CREACIÓN de ingreso (manual o programado)
+  // Campos: importe, fecha, cuenta, descripción, tipo, periodicidad LOCAL
+  var _ingresoPeriodo = 'unico'; // estado local — NO afecta selector global
+  var _ingresoTipo    = 'manual'; // 'manual' | 'programado'
+
   function _openIngresosModal() {
-    const ventas = State.get.ventas();
-    const prods  = State.get.productos();
-    const now    = new Date();
-    const s30    = new Date(now.getTime()-30*24*3600*1000);
-    const v30    = ventas.filter(v=>new Date(v.fecha)>=s30);
-    const ing30  = v30.reduce((s,v)=>s+(v.qty||1)*(v.pvp||0),0);
+    const cuentas = State.get.cuentas() || [];
+    const hoy     = new Date().toISOString().slice(0, 10);
 
-    // Por producto
-    const byProd = {};
-    v30.forEach(v => { byProd[v.prodId]=(byProd[v.prodId]||0)+(v.qty||1)*(v.pvp||0); });
-    const topProds = Object.entries(byProd).sort((a,b)=>b[1]-a[1]).slice(0,5);
+    const cuentaOpts = cuentas.length
+      ? cuentas.map(c =>
+          '<option value="' + c.id + '">' + esc(c.nombre) + ' · ' + _feur(c.saldo) + '</option>'
+        ).join('')
+      : '<option value="">Sin cuentas</option>';
 
-    // Por hora (si hay datos)
-    const byHour = {};
-    v30.forEach(v => {
-      const h = new Date(v.fecha).getHours();
-      byHour[h] = (byHour[h]||0) + (v.qty||1)*(v.pvp||0);
-    });
-    const topHour = Object.entries(byHour).sort((a,b)=>b[1]-a[1])[0];
+    _ingresoPeriodo = 'unico';
+    _ingresoTipo    = 'manual';
+    _calcReset();
 
-    const html = `
-      <div class="modal-header-dark">
-        <div class="mhd-row">
-          <div><div class="mhd-title">📈 Análisis de Ingresos</div><div class="mhd-sub">Últimos 30 días</div></div>
-          <button class="mhd-close" onclick="App.ui.closeFs()">✕</button>
-        </div>
-      </div>
-      <div style="padding-bottom:40px">
-        <div class="fin-modal-section">
-          <div class="fin-modal-section-title">Rendimiento</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            ${[
-              ['Ingresos 30d', _feur(ing30), '#16A34A'],
-              ['Ticket medio', _feur(v30.length>0?ing30/v30.length:0), '#2563EB'],
-              ['Nº ventas', v30.length, '#F97316'],
-              ['Hora punta', topHour?topHour[0]+'h':'—', '#8B5CF6'],
-            ].map(([l,v,c])=>`<div style="background:var(--bg);border-radius:12px;padding:12px">
-              <div style="font-size:20px;font-weight:800;color:${c}">${v}</div>
-              <div style="font-size:10px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;margin-top:3px">${l}</div>
-            </div>`).join('')}
-          </div>
-        </div>
-        <div class="fin-modal-section">
-          <div class="fin-modal-section-title">Top productos (ingresos)</div>
-          ${topProds.length ? topProds.map(([pid,amt])=>{
-            const p = State.get.prod(pid);
-            const pct = ing30>0?Math.round(amt/ing30*100):0;
-            return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0">
-              <span style="font-size:20px">${p?.e||'📦'}</span>
-              <div style="flex:1">
-                <div style="font-size:13px;font-weight:600;color:var(--ink)">${p?.nombre||pid}</div>
-                <div class="fin-bar-wrap"><div class="fin-bar-fill" style="transform:scaleX(${(pct/100).toFixed(3)});background:var(--green)"></div></div>
-                <div style="font-size:10px;color:var(--ink-soft);margin-top:2px">${pct}% de ingresos totales</div>
-              </div>
-              <div style="font-size:13px;font-weight:700;color:var(--green)">${_feur(amt)}</div>
-            </div>`;
-          }).join('') : '<div style="padding:12px 0;font-size:13px;color:var(--ink-soft)">Sin ventas en los últimos 30 días</div>'}
-        </div>
-      </div>`;
+    const html =
+      '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+        '<div class="mhd-title">+ Nuevo ingreso</div>' +
+        '<div class="mhd-sub">Registrar entrada de dinero</div>' +
+      '</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>' +
+      '<div style="padding-bottom:40px">' +
+
+        // Tipo: manual / programado
+        '<div class="fin-modal-section">' +
+          '<div class="fin-modal-section-title">Tipo de ingreso</div>' +
+          '<div style="display:flex;gap:8px;padding:0 16px 4px">' +
+            '<button id="ingr-tipo-manual" class="gasto-periodo-btn active" data-tipo="manual" style="flex:1">Manual</button>' +
+            '<button id="ingr-tipo-prog"   class="gasto-periodo-btn"        data-tipo="programado" style="flex:1">Programado</button>' +
+          '</div>' +
+        '</div>' +
+
+        // Importe — calculadora
+        '<div class="fin-modal-section">' +
+          '<div class="fin-modal-section-title">Importe</div>' +
+          '<div style="padding:0 16px">' +
+            '<div class="calc-display">' +
+              '<div class="calc-display-lbl">Importe</div>' +
+              '<div class="calc-display-val" id="calc-val-disp">0</div>' +
+            '</div>' +
+            _buildCalcPad() +
+          '</div>' +
+        '</div>' +
+
+        // Campos
+        '<div class="fin-modal-section">' +
+          '<div class="fin-modal-section-title">Datos</div>' +
+          '<div style="display:flex;flex-direction:column;gap:10px;padding:0 16px 4px">' +
+            '<input id="ingr-concepto" class="fi" placeholder="Descripción (ej: Venta online)">' +
+            '<div>' +
+              '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Fecha</div>' +
+              '<input id="ingr-fecha" type="date" value="' + hoy + '" class="fi">' +
+            '</div>' +
+            '<div>' +
+              '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Cuenta destino</div>' +
+              '<select id="ingr-cuenta" class="gasto-cuenta-sel">' +
+                '<option value="">Sin asignar</option>' +
+                cuentaOpts +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+
+        // Periodicidad — solo para ingresos programados
+        '<div class="fin-modal-section" id="ingr-periodo-section" style="display:none">' +
+          '<div class="fin-modal-section-title">Periodicidad</div>' +
+          '<div class="gasto-periodo-grid" style="padding:0 16px 4px">' +
+            '<button type="button" class="gasto-periodo-btn active" data-ingr-periodo="mensual">Mensual</button>' +
+            '<button type="button" class="gasto-periodo-btn"        data-ingr-periodo="trimestral">Trimestral</button>' +
+            '<button type="button" class="gasto-periodo-btn"        data-ingr-periodo="anual">Anual</button>' +
+            '<button type="button" class="gasto-periodo-btn active" data-ingr-periodo="unico">Único</button>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="padding:0 16px 16px">' +
+          '<button id="btn-confirmar-nuevo-ingreso" class="btn-ok">+ Registrar ingreso</button>' +
+        '</div>' +
+      '</div>';
+
     App.ui.setFs(html);
     App.ui.openFs();
+
+    // Listeners post-render
+    requestAnimationFrame(function() {
+      // Toggle tipo manual / programado
+      document.querySelectorAll('[data-tipo]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          _ingresoTipo = this.dataset.tipo;
+          document.querySelectorAll('[data-tipo]').forEach(function(b) {
+            b.classList.toggle('active', b.dataset.tipo === _ingresoTipo);
+          });
+          var sec = document.getElementById('ingr-periodo-section');
+          if (sec) sec.style.display = _ingresoTipo === 'programado' ? '' : 'none';
+        });
+      });
+
+      // Toggle periodicidad LOCAL
+      document.querySelectorAll('[data-ingr-periodo]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          _ingresoPeriodo = this.dataset.ingrPeriodo;
+          document.querySelectorAll('[data-ingr-periodo]').forEach(function(b) {
+            b.classList.toggle('active', b.dataset.ingrPeriodo === _ingresoPeriodo);
+          });
+        });
+      });
+
+      // Confirmar
+      var confirmBtn = document.getElementById('btn-confirmar-nuevo-ingreso');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', function() {
+          _confirmarNuevoIngreso();
+        }, { once: true });
+      }
+    });
+  }
+
+  function _confirmarNuevoIngreso() {
+    var importe   = _calcGet();
+    var concepto  = document.getElementById('ingr-concepto')?.value?.trim() || 'Ingreso manual';
+    var fecha     = document.getElementById('ingr-fecha')?.value || new Date().toISOString().slice(0,10);
+    var cuentaId  = document.getElementById('ingr-cuenta')?.value || '';
+    var recurrente = _ingresoTipo === 'programado' && _ingresoPeriodo !== 'unico';
+    var mensualEq  = _mensualEq(importe, _ingresoPeriodo);
+
+    if (importe <= 0) { showToast('Introduce un importe'); return; }
+
+    // Sumar a la cuenta si está asignada
+    if (cuentaId) {
+      var c = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
+      if (c) State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
+    }
+
+    State.set.addIngreso({
+      id:         'ing' + Date.now(),
+      fecha:      new Date(fecha).toISOString(),
+      concepto,
+      importe,
+      cuentaId,
+      recurrente,
+      frecuencia: _ingresoPeriodo,
+      mensualEq,
+    });
+
+    DashweyBus.emit('ingreso');
+    renderFinanciero();
+    _calcReset();
+    App.ui.closeFs();
+    showToast('✅ ' + _feur(importe) + ' registrados');
   }
 
 
@@ -13679,7 +13768,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin }; // v1.2.41
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin }; // v1.2.43
 })();
 
 // ══════════════════════════════════════════
