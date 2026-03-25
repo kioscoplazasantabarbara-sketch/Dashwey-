@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-47-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-49-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.47-dev</title>
+<title>Dashwey v1.2.49-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8064,6 +8064,8 @@ const Utils = (() => {
 
     document.getElementById('dash-title-period-chevron')
       ?.style.setProperty?.('transform', 'rotate(180deg)');
+    // v1.2.48: bloquear scroll mientras el sheet está abierto — restaurar en close
+    document.body.style.overflow = 'hidden';
     sheet.classList.add('open');
   }
 
@@ -8484,7 +8486,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.48-dev';
+  const _APP_VERSION = 'v1.2.49-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13437,9 +13439,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const sheet = document.getElementById('dash-period-sheet');
     if (!sheet) return;
     sheet.classList.remove('open');
-    sheet._periodConfig = null; // v9.5.104: limpiar siempre para evitar config stale
+    sheet._periodConfig = null;
     document.getElementById('dash-title-period-chevron')
       ?.style.setProperty?.('transform', '');
+    // v1.2.48: restaurar scroll del body
+    document.body.style.overflow = '';
   }
 
   // Seleccionar periodo desde el picker
@@ -17166,8 +17170,9 @@ const alm = (() => {
       const ox = evt?.changedTouches?.[0]?.clientX ?? evt?.clientX ?? (window.innerWidth / 2);
       const oy = evt?.changedTouches?.[0]?.clientY ?? evt?.clientY ?? (window.innerHeight / 2);
 
-      // ── Destino: icono de la cesta ──────────────────────────────
-      const destEl   = document.getElementById('alm-dock-art');
+      // ── Destino: badge del carrito ──────────────────────────────
+      const destEl   = document.getElementById('alm-carrito-dot') ||
+                       document.getElementById('alm-pedido-col');
       const destRect = destEl?.getBoundingClientRect();
       const tx = destRect ? (destRect.left + destRect.width  / 2) : window.innerWidth  - 40;
       const ty = destRect ? (destRect.top  + destRect.height / 2) : window.innerHeight - 80;
@@ -17546,7 +17551,9 @@ const alm = (() => {
     _ordenEstado  = 0;
     try { localStorage.removeItem('dashwey_carrito_v1'); } catch(_) {}
 
+    // v1.2.48: capturar rect del botón ANTES de ocultarlo (display:none → rect = {0,0,0,0})
     const acceptBtn = document.getElementById('alm-accept-fixed');
+    const _btnRect  = acceptBtn ? acceptBtn.getBoundingClientRect() : null;
     if (acceptBtn) acceptBtn.style.display = 'none';
     updateBadge();
     renderCatInline();
@@ -17554,14 +17561,12 @@ const alm = (() => {
     Utils.triggerHaptic('medium');
 
     // ── Animación: caja volando del botón → "Pedidos programados" ──
-    // Calcula coordenadas reales en el momento del tap para seguir el dedo.
     requestAnimationFrame(() => {
       try {
-        const btnEl  = document.getElementById('alm-accept-fixed');
         const diaCol = document.getElementById('alm-dia-col');
-        if (!btnEl || !diaCol) return;
+        if (!_btnRect || !diaCol) return;
 
-        const btnR = btnEl.getBoundingClientRect();
+        const btnR = _btnRect; // rect capturado antes del hide
         const diaR = diaCol.getBoundingClientRect();
 
         // Punto de origen: centro del botón
@@ -18105,8 +18110,19 @@ const alm = (() => {
           '</button>' +
         '</div>';
 
-      ui.setFs(html);
-      ui.openFs();
+      // v1.2.48: el fs-sheet ya está abierto (desde openPendingOrders).
+      // ui.setFs() reemplaza el contenido en el mismo sheet ya visible.
+      // ui.openFs() tiene guard "ya abierto → return" — omitir para evitar no-op.
+      var fsOverlay = document.getElementById('fs-overlay');
+      if (fsOverlay && fsOverlay.classList.contains('open')) {
+        // Sheet ya abierto: solo actualizar contenido
+        try { ui.setFs(html); } catch(_) { try { App.ui.setFs(html); } catch(_) {} }
+      } else {
+        // Sheet cerrado: abrir normalmente
+        try { ui.setFs(html); ui.openFs(); } catch(_) {
+          try { App.ui.setFs(html); App.ui.openFs(); } catch(_) {}
+        }
+      }
     } catch(e) { console.error('[ALM] _abrirPedidoProgramadoById error:', e); }
   }
 
