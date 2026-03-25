@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-67-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-68-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.67-dev</title>
+<title>Dashwey v1.2.68-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -4286,9 +4286,9 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
   border: 1px solid var(--border);
   border-radius: 22px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.28);
-  width: 100%; max-width: 480px;
-  height: calc(100dvh - 64px);
-  max-height: calc(100dvh - 64px);
+  width: 100%; max-width: 440px; /* v1.2.68: 440 uniforme con otros overlays */
+  height: min(calc(100dvh - 48px), 680px); /* v1.2.68: max 680px, padding reducido */
+  max-height: calc(100dvh - 48px);
   display: flex; flex-direction: column;
   overflow: hidden;
   transform: scale(0.92);
@@ -8633,7 +8633,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.67-dev';
+  const _APP_VERSION = 'v1.2.68-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13098,6 +13098,25 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         });
       });
 
+    // v1.2.68: Pedidos recibidos hoy — aparecen en campana tras confirmación
+    var historial = State.get.historialPedidos ? State.get.historialPedidos() : [];
+    var hoyStr = new Date().toISOString().slice(0,10);
+    historial.filter(function(p){
+      return p.fecha && p.fecha.slice(0,10) === hoyStr;
+    }).forEach(function(p) {
+      var prov = State.get.prov(p.provId);
+      var n    = (p.items||[]).length;
+      notifs.push({
+        id:     'recibido_'+p.id,
+        cat:    'Recibidos hoy',
+        icon:   '✅',
+        title:  'Pedido recibido — '+(prov?prov.nombre:p.provId),
+        sub:    n+' artículo'+(n!==1?'s':'')+' · '+fmtD(p.fecha),
+        color:  '#16A34A',
+        action: 'historial:'+p.id,
+      });
+    });
+
     return notifs;
   }
 
@@ -13135,12 +13154,57 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     try { State.set.markNotifRead(id); } catch(e) {}
     _updateBellBadge();
     _renderBellCenter();
-    // Si es un pedido, abrir el check-modal
+
+    // v1.2.68: acciones por categoría de notificación
     if (id.indexOf('pedido_') === 0) {
+      // Pedido pendiente → abrir check-modal
       var orderId = id.replace('pedido_', '');
       window._closeBellCenter();
       setTimeout(function(){ try { App.alm._abrirCheckModalById(orderId); } catch(_) {} }, 250);
+    } else if (id.indexOf('recibido_') === 0) {
+      // Pedido recibido hoy → abrir historial de pedidos
+      window._closeBellCenter();
+      setTimeout(function(){
+        try { App.ui.closeFs && App.ui.closeFs(); } catch(_) {}
+        setTimeout(function(){ try { App.alm.openHistorialPedidos(); } catch(_) {} }, 200);
+      }, 250);
+    } else if (id.indexOf('stock_') === 0) {
+      // Stock bajo → navegar a Almacén y abrir el artículo
+      window._closeBellCenter();
+      var prodId = id.replace('stock_', '');
+      setTimeout(function(){
+        try {
+          if (window.nav && nav.goTo) nav.goTo(2);
+          setTimeout(function(){
+            try { App.alm.openProdDetail(prodId); } catch(_) {}
+          }, 400);
+        } catch(_) {}
+      }, 250);
+    } else if (id.indexOf('cad_') === 0) {
+      // Caducidad → navegar a Almacén
+      window._closeBellCenter();
+      var prodIdCad = id.replace('cad_', '');
+      setTimeout(function(){
+        try {
+          if (window.nav && nav.goTo) nav.goTo(2);
+          setTimeout(function(){
+            try { App.alm.openProdDetail(prodIdCad); } catch(_) {}
+          }, 400);
+        } catch(_) {}
+      }, 250);
+    } else if (id.indexOf('visita_') === 0) {
+      // Visita → ir a Dashboard, pestaña Agenda
+      window._closeBellCenter();
+      setTimeout(function(){
+        try {
+          if (window.nav && nav.goTo) nav.goTo(1);
+          setTimeout(function(){
+            try { App.dash._switchAgendaTab && App.dash._switchAgendaTab('visitas'); } catch(_) {}
+          }, 400);
+        } catch(_) {}
+      }, 250);
     }
+    console.log('[Bell] notif read:', id);
   }
   window._bellReadNotif = _bellReadNotif;
 
@@ -16256,6 +16320,15 @@ const alm = (() => {
           <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
         </div>
       </div>
+      ${p.banner ? `
+      <div style="position:relative;height:80px;border-radius:0;overflow:hidden;flex-shrink:0">
+        <img src="${p.banner}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(2px) brightness(0.5);transform:scale(1.06)">
+        <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 40%,var(--surface) 100%)"></div>
+        <div style="position:relative;z-index:1;display:flex;align-items:center;gap:10px;padding:18px 20px 0">
+          <span style="font-size:26px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4))">${esc(p.icon||'🏪')}</span>
+          <span style="font-size:16px;font-weight:800;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,0.6)">${esc(p.nombre)}</span>
+        </div>
+      </div>` : ''}
       <div class="prov-edit-section">
 
         <!-- Datos del proveedor -->
@@ -19425,21 +19498,26 @@ const alm = (() => {
           const p = State.get.prod(o.prodId);
           return s + (o.ncajas||1) * (o.precio||0) * 1.10;
         }, 0);
-        return '<div class="os-item os-pending" style="cursor:pointer" ' +
+        return '<div style="display:flex;align-items:center;padding:11px 14px;border-top:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent" ' +
                'onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(\'' + order.id + '\');},260)">' +
-          '<div class="os-item-info" style="flex:1">' +
-            '<div class="os-item-prov">' + fmtDate(order.date) + '</div>' +
-            '<div class="os-item-meta">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:13px;font-weight:700;color:var(--ink)">' + fmtDate(order.date) + '</div>' +
+            '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
           '</div>' +
-          '<div class="os-item-right">' +
-            '<div class="os-status-badge os-badge-pending">Pendiente</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
+            '<span style="font-size:10px;font-weight:800;color:var(--red);background:var(--red-s);padding:2px 8px;border-radius:8px">Pendiente</span>' +
             '<button onclick="event.stopPropagation();App.alm._eliminarPedidoProgramado(\'' + order.id + '\')" ' +
-              'style="font-size:10px;font-weight:700;color:var(--red);background:none;border:none;cursor:pointer;padding:4px 0 0;font-family:var(--font);touch-action:manipulation">Eliminar</button>' +
+              'style="font-size:10px;font-weight:600;color:var(--ink-soft);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font);touch-action:manipulation">Eliminar</button>' +
           '</div>' +
         '</div>';
       }).join('');
 
-      return '<div style="margin-bottom:8px">' + bannerHtml + rows + '</div>';
+      // v1.2.68: cajón unificado — banner + filas en el mismo contenedor
+      var cajon = '<div style="background:var(--surface);border-radius:16px;overflow:hidden;' +
+                  'margin-bottom:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07)">' +
+                    bannerHtml + rows +
+                  '</div>';
+      return cajon;
     }).join('');
 
     _almOverlay(
@@ -22227,6 +22305,16 @@ if (!window.Utils) {
               'Guardar imagen de la factura' +
             '</button>' +
 
+            // Compartir por Dashwey (chat interno)
+            '<button onclick="window._checkModal._shareDashwey()" ' +
+              'style="width:100%;height:46px;border-radius:14px;border:none;background:var(--red);' +
+              'color:#fff;font-size:14px;font-weight:700;font-family:var(--font);cursor:pointer;' +
+              'display:flex;align-items:center;justify-content:center;gap:8px;touch-action:manipulation;' +
+              'box-shadow:0 4px 16px var(--red-g)">' +
+              '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' +
+              'Compartir por Dashwey' +
+            '</button>' +
+
             // Compartir por WhatsApp
             '<button onclick="window._checkModal._logAction(\'whatsapp\');window.open(\'https://wa.me/?text=\'+encodeURIComponent(whatsappText),\'_blank\')" ' +
               'style="width:100%;height:46px;border-radius:14px;border:none;background:#25D366;' +
@@ -22458,6 +22546,19 @@ if (!window.Utils) {
           }
         } catch(_) {}
 
+        // ── v1.2.68: Emitir notificación a campana ────────────────
+        try {
+          // Limpiar notifsRead del pedido confirmado para que aparezca como nueva notif
+          if (orderId && window.State && State.set.markNotifRead) {
+            // Añadir notif especial "pedido recibido" al historial de notifs
+            var notifId = 'recibido_' + pedidoId;
+            // No marcarla como leída — aparecerá en campana como no leída
+            if (window.App && App.dash && App.dash._updateBellBadge) {
+              App.dash._updateBellBadge();
+            }
+          }
+        } catch(_) {}
+
         // ── 6. Cerrar check-modal y mostrar resumen ───────────────
         var summaryItems = items;
         var summaryMeta  = meta;
@@ -22478,6 +22579,46 @@ if (!window.Utils) {
         var meta = S._meta || {};
         console.log('[Dashwey] Acción:', tipo, '| orderId:', meta.orderId||'—', '| ts:', ts);
       } catch(_) {}
+    },
+
+    // v1.2.68: _shareDashwey — envía informe del pedido al chat de Dashwey
+    _shareDashwey: function() {
+      try {
+        var meta       = S._meta || {};
+        var prov       = meta.prov || null;
+        var provNombre = (prov && prov.nombre) || 'Proveedor';
+        var items      = S.items || [];
+        var n          = items.length;
+        var totalInv   = items.reduce(function(s,o){ return s+(o.ncajas||1)*(o.precio||0)*1.10; }, 0);
+        var fmt2 = function(v){ return (+(v||0)).toFixed(2).replace('.',',')+' €'; };
+        var msgText = '✅ Pedido recibido: '+provNombre+'\n'+
+                      '📦 '+n+' artículo'+(n!==1?'s':'')+'\n'+
+                      '💰 Inversión: '+fmt2(totalInv)+'\n'+
+                      items.slice(0,5).map(function(i){ return '  • '+i.nombre+' ×'+(i.ncajas||1); }).join('\n')+
+                      (n>5?'\n  ...y '+(n-5)+' más':'');
+        var perfil  = (typeof State!=='undefined'&&State.get.perfil)?State.get.perfil():{};
+        var myEmail = perfil.email||'yo';
+        var myName  = perfil.nombre||myEmail;
+        var users   = (typeof State!=='undefined'&&State.get.chatUsers)?State.get.chatUsers():[];
+        var sent = 0;
+        users.forEach(function(u) {
+          if (!u.uid || u.uid===myEmail) return;
+          var msg = {
+            id: 'dash_'+Date.now()+'_'+u.uid, ts: new Date().toISOString(),
+            from: myEmail, fromName: myName, to: u.uid, toName: u.name||u.email,
+            text: msgText, read: false, type: 'informe',
+          };
+          try { if(typeof State!=='undefined') State.set.addChatMessage(msg); } catch(_) {}
+          sent++;
+        });
+        if (typeof Utils!=='undefined') {
+          Utils.showToast(sent>0
+            ? '📤 Compartido con '+sent+' contacto'+(sent!==1?'s':'')
+            : '⚠️ Sin contactos de chat — añade en Ajustes');
+        }
+        this._logAction('dashwey');
+        try { if(window.App&&App.dash&&App.dash._updateBellBadge) App.dash._updateBellBadge(); } catch(_) {}
+      } catch(e) { console.error('[CheckModal] _shareDashwey:', e); }
     },
 
     /* _guardarEnHistorial(btn) — confirma guardado y actualiza botón */
