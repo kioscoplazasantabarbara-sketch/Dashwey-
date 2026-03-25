@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-71-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-72-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.71-dev</title>
+<title>Dashwey v1.2.72-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8657,7 +8657,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.71-dev';
+  const _APP_VERSION = 'v1.2.72-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19480,19 +19480,50 @@ function _parseIva(iva) {
   }
 
   // v1.2.60: openPendingOrders — muestra pedidos de TODOS los proveedores
+  // v1.2.72: openPendingOrders — sin banner, info completa por pedido
   function openPendingOrders() {
     const allOrders = (State.get.pendingOrders() || [])
       .filter(o => o.status === 'pending')
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
+      .sort((a, b) => new Date(a.date) - new Date(b.date)); // más antiguos primero
+
+    // ── Helpers de fecha ────────────────────────────────────────
+    const DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
+    const M      = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 
     const fmtDate = iso => {
       try {
         const d = new Date(iso);
-        const pad = n => String(n).padStart(2,'0');
-        const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-        return pad(d.getDate()) + ' ' + M[d.getMonth()] + ' ' + d.getFullYear();
+        return DNAMES[d.getDay()===0?6:d.getDay()-1] + ' ' +
+               String(d.getDate()).padStart(2,'0') + ' ' + M[d.getMonth()];
       } catch(_) { return iso || '—'; }
     };
+
+    // Calcular fecha de entrega desde diasEntrega del proveedor
+    const calcEntrega = (fechaPedidoISO, provId) => {
+      const prov = State.get.prov(provId);
+      const de   = (prov && prov.diasEntrega) || [];
+      if (!de.length) {
+        // Sin días configurados: +2 días laborales
+        const d = new Date(fechaPedidoISO);
+        d.setDate(d.getDate() + 2);
+        return d;
+      }
+      const base = new Date(fechaPedidoISO);
+      for (let i = 1; i <= 14; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i);
+        const dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Lu…6=Do
+        if (de.includes(dow)) return d;
+      }
+      // Fallback +3
+      const fb = new Date(fechaPedidoISO);
+      fb.setDate(fb.getDate() + 3);
+      return fb;
+    };
+
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const esHoy = d => { const x = new Date(d); x.setHours(0,0,0,0); return x.getTime()===hoy.getTime(); };
+    const esPasado = d => { const x = new Date(d); x.setHours(0,0,0,0); return x < hoy; };
 
     // ── Estado vacío ────────────────────────────────────────────
     if (allOrders.length === 0) {
@@ -19513,62 +19544,82 @@ function _parseIva(iva) {
     // ── Agrupar por proveedor ───────────────────────────────────
     const byProv = {};
     allOrders.forEach(order => {
-      const provId = order.provId;
-      if (!byProv[provId]) byProv[provId] = [];
-      byProv[provId].push(order);
+      if (!byProv[order.provId]) byProv[order.provId] = [];
+      byProv[order.provId].push(order);
     });
 
     const sections = Object.entries(byProv).map(([provId, orders]) => {
-      const prov = State.get.prov(provId);
+      const prov      = State.get.prov(provId);
       const provNombre = prov ? prov.nombre : provId;
       const provIcon   = prov ? (prov.icon || '📦') : '📦';
-      const provBanner = prov && prov.banner ? prov.banner : null;
 
-      // v1.2.67: banner integrado en el header de sección con fondo difuminado
-      var bannerHtml = '<div style="position:relative;border-radius:14px;overflow:hidden;margin-bottom:6px;' +
-          'background:'+(provBanner?'transparent':'var(--bg)')+';">' +
-          (provBanner
-            ? '<img src="'+provBanner+'" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(1px) brightness(0.55);transform:scale(1.04)">' +
-              '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:10px;padding:10px 14px;">' +
-                '<span style="font-size:22px;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5))">'+provIcon+'</span>' +
-                '<div style="flex:1">' +
-                  '<div style="font-size:14px;font-weight:800;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.7)">'+esc(provNombre)+'</div>' +
-                  '<div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:1px">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</div>' +
-                '</div>' +
-              '</div>'
-            : '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;">' +
-                '<span style="font-size:18px">'+provIcon+'</span>' +
-                '<div style="font-size:13px;font-weight:800;color:var(--ink)">'+esc(provNombre)+'</div>' +
-                '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);margin-left:auto">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</span>' +
-              '</div>'
-          ) + '</div>';
+      // ── Cabecera de proveedor (sin banner) ──────────────────
+      const provHeader =
+        '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px 10px;' +
+            'border-bottom:2px solid var(--red-s)">' +
+          '<div style="width:32px;height:32px;border-radius:9px;background:var(--red-s);' +
+              'display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">' +
+            provIcon +
+          '</div>' +
+          '<div style="flex:1">' +
+            '<div style="font-size:14px;font-weight:800;color:var(--ink)">' + esc(provNombre) + '</div>' +
+            '<div style="font-size:11px;color:var(--ink-soft)">' +
+              orders.length + ' pedido' + (orders.length!==1?'s pendientes':'pendiente') +
+            '</div>' +
+          '</div>' +
+        '</div>';
 
+      // ── Filas de pedidos ────────────────────────────────────
       const rows = orders.map(order => {
-        const nArt  = (order.items || []).length;
-        const total = (order.items || []).reduce((s, o) => {
+        const nArt       = (order.items || []).length;
+        const total      = (order.items || []).reduce((s, o) => {
           const p = State.get.prod(o.prodId);
-          return s + (o.ncajas||1) * (o.precio||0) * 1.10;
+          return s + (o.ncajas||1) * (o.precio||0) * (1 + (_parseIva(p && p.iva)/100));
         }, 0);
-        return '<div style="display:flex;align-items:center;padding:11px 14px;border-top:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent" ' +
+        const dEntrega   = calcEntrega(order.date, provId);
+        const entregaStr = fmtDate(dEntrega);
+        const esHoyE     = esHoy(dEntrega);
+        const atrasado   = esPasado(dEntrega);
+        const entregaColor = atrasado ? 'var(--red)' : esHoyE ? '#F97316' : '#16A34A';
+        const entregaLabel = atrasado ? '⚠️ ' + entregaStr : esHoyE ? '🕐 Hoy' : entregaStr;
+
+        return '<div style="padding:11px 14px;border-top:1px solid var(--border);cursor:pointer;' +
+                   '-webkit-tap-highlight-color:transparent" ' +
                'onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(\'' + order.id + '\');},260)">' +
-          '<div style="flex:1;min-width:0">' +
-            '<div style="font-size:13px;font-weight:700;color:var(--ink)">' + fmtDate(order.date) + '</div>' +
-            '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
+
+          // Fila 1: Proveedor fecha pedido + fecha entrega
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">' +
+            '<div style="font-size:12px;color:var(--ink-soft)">' +
+              '📅 Pedido ' + fmtDate(order.date) +
+            '</div>' +
+            '<div style="font-size:12px;font-weight:700;color:' + entregaColor + '">' +
+              '🚚 Entrega ' + entregaLabel +
+            '</div>' +
           '</div>' +
-          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
-            '<span style="font-size:10px;font-weight:800;color:var(--red);background:var(--red-s);padding:2px 8px;border-radius:8px">Pendiente</span>' +
+
+          // Fila 2: Nº artículos + total + estado + eliminar
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<div style="font-size:13px;color:var(--ink);font-weight:600">' +
+              nArt + ' artículo' + (nArt!==1?'s':'') +
+            '</div>' +
+            '<div style="font-size:13px;color:var(--ink-soft)">·</div>' +
+            '<div style="font-size:13px;font-weight:700;color:var(--ink)">' + feur(total) + '</div>' +
+            '<div style="flex:1"></div>' +
+            '<span style="font-size:10px;font-weight:800;color:var(--red);background:var(--red-s);' +
+                'padding:2px 8px;border-radius:8px">Pendiente</span>' +
             '<button onclick="event.stopPropagation();App.alm._eliminarPedidoProgramado(\'' + order.id + '\')" ' +
-              'style="font-size:10px;font-weight:600;color:var(--ink-soft);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font);touch-action:manipulation">Eliminar</button>' +
+              'style="font-size:11px;font-weight:600;color:var(--ink-soft);background:none;border:none;' +
+              'cursor:pointer;padding:0 0 0 6px;font-family:var(--font);touch-action:manipulation;' +
+              'text-decoration:underline">Eliminar</button>' +
           '</div>' +
+
         '</div>';
       }).join('');
 
-      // v1.2.68: cajón unificado — banner + filas en el mismo contenedor
-      var cajon = '<div style="background:var(--surface);border-radius:16px;overflow:hidden;' +
-                  'margin-bottom:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07)">' +
-                    bannerHtml + rows +
-                  '</div>';
-      return cajon;
+      return '<div style="background:var(--surface);border-radius:16px;overflow:hidden;' +
+             'margin-bottom:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07)">' +
+               provHeader + rows +
+             '</div>';
     }).join('');
 
     _almOverlay(
