@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-74-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-75-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.74-dev</title>
+<title>Dashwey v1.2.75-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6180,6 +6180,12 @@ function _authTabSafe(tab) {
         <div class="sd-info"><div class="sd-title">Perfil del negocio</div><div class="sd-sub">Email y datos fiscales</div></div>
         <div class="sd-chev">›</div>
       </div>
+      <!-- v1.2.75: Gestión de equipo -->
+      <div class="sd-row" onclick="App.ui.openTeamMgr()">
+        <div class="sd-icon" style="background:#EFF6FF">👥</div>
+        <div class="sd-info"><div class="sd-title">Equipo</div><div class="sd-sub" id="sd-team-sub">Gestión de permisos</div></div>
+        <div class="sd-chev">›</div>
+      </div>
       <div class="sd-row" onclick="App.ui.sdSubOpenSeguridad()">
         <div class="sd-icon" style="background:#F0FDF4">🔒</div>
         <div class="sd-info"><div class="sd-title">Seguridad</div><div class="sd-sub">Cambiar contraseña</div></div>
@@ -6851,6 +6857,8 @@ const State = (() => {
     chatMessages: [],
     // v1.2.59: usuarios habilitados para chat — gestionados por admin en Ajustes
     chatUsers: [],
+    // v1.2.75: miembros del equipo con permisos
+    teamMembers: [],
     // v1.2.61: ids de notificaciones ya leídas
     notifsRead: [],
     // v9.5.24: visitas comerciales programadas
@@ -7042,6 +7050,7 @@ const State = (() => {
     gastosCustomPeriod:    () => _state.gastosCustomPeriod || null,
     chatMessages:          () => _state.chatMessages || [],
     chatUsers:             () => _state.chatUsers || [],
+    teamMembers:           () => _state.teamMembers || [],
     notifsRead:            () => _state.notifsRead || [],
     visitasComerciales:    () => _state.visitasComerciales || [],
     ingresosFin:           () => _state.ingresosFin || [], // v9.5.73: ingresos manuales
@@ -7097,6 +7106,7 @@ const State = (() => {
     gastosCustomPeriod:    (v) => { _state.gastosCustomPeriod = v; },
     addChatMessage:        (m) => { if (!_state.chatMessages) _state.chatMessages = []; _state.chatMessages.push(m); save(); },
     chatUsers:             (v) => { _state.chatUsers = v; save(); },
+    teamMembers:           (v) => { _state.teamMembers = v; save(); },
     markNotifRead:         (id) => { if (!_state.notifsRead) _state.notifsRead = []; if (!_state.notifsRead.includes(id)) { _state.notifsRead.push(id); save(); } },
     clearNotifsRead:       ()  => { _state.notifsRead = []; save(); },
     visitasComerciales:    (v) => { _state.visitasComerciales = v; save(); },
@@ -8658,7 +8668,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.74-dev';
+  const _APP_VERSION = 'v1.2.75-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -9211,6 +9221,13 @@ const ui = (() => {
     if (el('sd-notif-toggle')) el('sd-notif-toggle').classList.toggle('on', !!s.notifOn);
     if (el('sd-ia-toggle'))    el('sd-ia-toggle').classList.toggle('on', !!s.iaOn);
     if (el('sd-cierre-sub'))   el('sd-cierre-sub').textContent = s.cierreHora || '21:00';
+    // v1.2.75: equipo — actualizar sub-label
+    try {
+      const teamCount = (State.get.teamMembers ? State.get.teamMembers() : []).length;
+      if (el('sd-team-sub')) el('sd-team-sub').textContent = teamCount > 0
+        ? teamCount + ' miembro' + (teamCount!==1?'s':'')
+        : 'Gestión de permisos';
+    } catch(_) {}
     // ctx selector
     _refreshCtxSelector();
     // v9.5.104: mostrar versión de producto desde version.json si disponible
@@ -9346,6 +9363,143 @@ const ui = (() => {
       }).catch(() => showToast('⚠️ Notificaciones no disponibles'));
     } else { sdSubClose(); showToast(`✅ Guardado — ${hora}`); }
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // GESTIÓN DE EQUIPO v1.2.75
+  // Permite al OWNER añadir miembros con permisos por módulo
+  // ══════════════════════════════════════════════════════════════
+
+  function openTeamMgr() {
+    _renderTeamMgr();
+    openFs();
+    Utils.triggerHaptic('light');
+  }
+
+  function _renderTeamMgr() {
+    const members = State.get.teamMembers ? State.get.teamMembers() : [];
+    const currentRole = (State.get.user && State.get.user().role) || 'OWNER';
+    const isOwner = currentRole === 'OWNER';
+
+    const PERM_LABELS = [
+      { id: 'tpv',       label: 'Solo TPV',         icon: '🛒' },
+      { id: 'dashboard', label: 'Solo Dashboard',    icon: '📊' },
+      { id: 'almacen',   label: 'Solo Almacén',      icon: '📦' },
+      { id: 'chat',      label: 'Acceso al Chat',    icon: '💬' },
+    ];
+
+    const memberRows = members.map((m, idx) => {
+      const permChips = PERM_LABELS.map(p => {
+        const active = (m.perms || []).includes(p.id);
+        return `<span onclick="App.ui._teamTogglePerm(${idx},'${p.id}')" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;touch-action:manipulation;border:1.5px solid ${active?'var(--red)':'var(--border)'};background:${active?'var(--red-s)':'transparent'};color:${active?'var(--red)':'var(--ink-soft)'}">${p.icon} ${p.label}</span>`;
+      }).join('');
+      return `<div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <div style="width:36px;height:36px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:var(--red);flex-shrink:0">${(m.name||m.email||'?')[0].toUpperCase()}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:var(--ink)">${esc(m.name||m.email)}</div>
+            <div style="font-size:11px;color:var(--ink-soft)">${esc(m.email)}</div>
+          </div>
+          ${isOwner ? `<button onclick="App.ui._teamRemove(${idx})" style="width:28px;height:28px;border-radius:8px;border:none;background:var(--red-s);color:var(--red);cursor:pointer;font-size:14px;font-weight:700;touch-action:manipulation">×</button>` : ''}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${permChips}</div>
+      </div>`;
+    }).join('');
+
+    const addForm = isOwner ? `
+      <div style="margin-top:16px;padding:14px;background:var(--bg);border-radius:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Añadir miembro</div>
+        <input id="tm-name"  placeholder="Nombre" style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">
+        <input id="tm-email" placeholder="Email" type="email" style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;color:var(--ink-soft);margin-bottom:6px">Permisos iniciales:</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px" id="tm-perms-sel">
+            ${PERM_LABELS.map(p => `<span data-perm="${p.id}" onclick="this.dataset.active=this.dataset.active==='1'?'0':'1';this.style.background=this.dataset.active==='1'?'var(--red-s)':'transparent';this.style.color=this.dataset.active==='1'?'var(--red)':'var(--ink-soft)';this.style.borderColor=this.dataset.active==='1'?'var(--red)':'var(--border)'" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;touch-action:manipulation;border:1.5px solid var(--border);background:transparent;color:var(--ink-soft)">${p.icon} ${p.label}</span>`).join('')}
+          </div>
+        </div>
+        <button onclick="App.ui._teamAdd()" style="width:100%;height:40px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">+ Añadir al equipo</button>
+      </div>` : '';
+
+    setFs(`
+      <div class="modal-header-dark">
+        <div class="mhd-row">
+          <div>
+            <div class="mhd-title">Equipo</div>
+            <div class="mhd-sub">${members.length} miembro${members.length!==1?'s':''}</div>
+          </div>
+          <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
+        </div>
+      </div>
+      <div style="padding:0 16px 24px;font-family:var(--font)">
+        ${members.length === 0
+          ? `<div style="text-align:center;padding:28px 0;color:var(--ink-soft)">
+              <div style="font-size:36px;margin-bottom:10px">👥</div>
+              <div style="font-size:14px;font-weight:700;color:var(--ink);margin-bottom:6px">Sin miembros del equipo</div>
+              <div style="font-size:12px;line-height:1.6">Añade colaboradores y asigna<br>permisos de acceso por módulo.</div>
+            </div>`
+          : memberRows
+        }
+        ${addForm}
+        <div style="margin-top:12px;padding:10px 12px;background:var(--bg);border-radius:10px">
+          <div style="font-size:11px;color:var(--ink-soft);line-height:1.5">ℹ️ Los permisos se aplican en el próximo inicio de sesión del miembro. Solo el propietario puede gestionar el equipo.</div>
+        </div>
+      </div>`);
+  }
+
+  function _teamAdd() {
+    if (!canAccess('manage_users')) { showToast('🔒 Solo el propietario'); return; }
+    const nameEl  = document.getElementById('tm-name');
+    const emailEl = document.getElementById('tm-email');
+    const name    = nameEl  ? nameEl.value.trim()  : '';
+    const email   = emailEl ? emailEl.value.trim().toLowerCase() : '';
+    if (!email) { Utils.showToast('Email obligatorio'); return; }
+
+    const members = State.get.teamMembers ? State.get.teamMembers() : [];
+    if (members.find(m => m.email === email)) { Utils.showToast('Este miembro ya existe'); return; }
+
+    // Leer permisos seleccionados
+    const permEls = document.querySelectorAll('#tm-perms-sel [data-perm]');
+    const perms   = Array.from(permEls)
+      .filter(el => el.dataset.active === '1')
+      .map(el => el.dataset.perm);
+
+    members.push({ uid: email, name: name||email, email, perms });
+    try { State.set.teamMembers(members); } catch(e) {}
+
+    // Actualizar sub-label en ajustes
+    const subEl = document.getElementById('sd-team-sub');
+    if (subEl) subEl.textContent = members.length + ' miembro' + (members.length!==1?'s':'');
+
+    _renderTeamMgr();
+    Utils.showToast('✅ Miembro añadido');
+    console.log('[Team] member added:', email, '| perms:', perms);
+  }
+
+  function _teamRemove(idx) {
+    if (!canAccess('manage_users')) { showToast('🔒 Solo el propietario'); return; }
+    const members = State.get.teamMembers ? State.get.teamMembers() : [];
+    const removed = members.splice(idx, 1)[0];
+    try { State.set.teamMembers(members); } catch(e) {}
+    const subEl = document.getElementById('sd-team-sub');
+    if (subEl) subEl.textContent = members.length + ' miembro' + (members.length!==1?'s':'');
+    _renderTeamMgr();
+    Utils.showToast('Miembro eliminado');
+    console.log('[Team] member removed:', removed && removed.email);
+  }
+
+  function _teamTogglePerm(memberIdx, permId) {
+    if (!canAccess('manage_users')) { showToast('🔒 Solo el propietario'); return; }
+    const members = State.get.teamMembers ? State.get.teamMembers() : [];
+    const m = members[memberIdx];
+    if (!m) return;
+    if (!m.perms) m.perms = [];
+    const pos = m.perms.indexOf(permId);
+    if (pos >= 0) m.perms.splice(pos, 1);
+    else          m.perms.push(permId);
+    try { State.set.teamMembers(members); } catch(e) {}
+    _renderTeamMgr();
+    console.log('[Team] perm toggled:', permId, '| member:', m.email, '| perms:', m.perms);
+  }
+
   function sdSubOpenSeguridad() {
     sdSubOpen('Seguridad', `
       <div style="font-size:13px;color:var(--ink-mid);line-height:1.6;margin-bottom:4px">
@@ -10066,7 +10220,7 @@ const ui = (() => {
     overlay.classList.remove('open');
   }
 
-  return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openMainMenu, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSubOpenPerfil, sdSavePerfil, sdSubOpenCierre, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar };
+  return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openMainMenu, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSubOpenPerfil, sdSavePerfil, sdSubOpenCierre, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm };
 })();
 
 // ══════════════════════════════════════════
