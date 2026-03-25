@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.2.49-dev
-   Cache: dashwey-v1-2-49-dev
+   Dashwey Service Worker v1.2.50-dev
+   Cache: dashwey-v1-2-50-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-2-49-dev';
+const CACHE_NAME  = 'dashwey-v1-2-50-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -31,7 +31,7 @@ self.addEventListener('install', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v1.2.49-dev] Install: eliminando cache antigua:', k);
+          console.log('[SW v1.2.50-dev] Install: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -51,7 +51,7 @@ self.addEventListener('activate', e => {
       .then(keys => {
         const toDelete = keys.filter(k => k !== CACHE_NAME);
         return Promise.all(toDelete.map(k => {
-          console.log('[SW v1.2.49-dev] Activate: eliminando cache antigua:', k);
+          console.log('[SW v1.2.50-dev] Activate: eliminando cache antigua:', k);
           return caches.delete(k);
         }));
       })
@@ -72,7 +72,7 @@ self.addEventListener('activate', e => {
           const permission = (typeof Notification !== 'undefined')
             ? Notification.permission : 'denied';
           if (permission === 'granted') {
-            self.registration.showNotification('🆕 Dashwey v1.2.49-dev disponible', {
+            self.registration.showNotification('🆕 Dashwey v1.2.50-dev disponible', {
               body:     'Abre la app para aplicar la actualización.',
               icon:     'icon-192.png',
               badge:    'icon-192.png',
