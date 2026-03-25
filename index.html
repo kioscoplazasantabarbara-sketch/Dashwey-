@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-76-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-78-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.76-dev</title>
+<title>Dashwey v1.2.78-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1137,6 +1137,11 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
   vertical-align: middle; flex-shrink: 0;
   position: relative; top: -0.5px; /* optical center with uppercase text */
   animation: agendaPulse 2.5s ease-in-out infinite;
+}
+/* v1.2.78: animación bocadillo chat */
+@keyframes chatBubbleIn {
+  from { opacity: 0; transform: scale(0.85) translateY(4px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
 }
 @keyframes agendaPulse {
   0%,100% { opacity: 0.85; transform: scale(1); }
@@ -4287,9 +4292,11 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
   border: 1px solid var(--border);
   border-radius: 22px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.28);
-  width: 100%; max-width: 440px; /* v1.2.68: 440 uniforme con otros overlays */
-  height: min(calc(100dvh - 48px), 680px); /* v1.2.68: max 680px, padding reducido */
-  max-height: calc(100dvh - 48px);
+  width: 100%; max-width: 440px;
+  /* v1.2.77: altura adaptativa — crece con el contenido, nunca sale de pantalla */
+  height: auto;
+  max-height: min(calc(100dvh - 48px), 720px);
+  min-height: 200px;
   display: flex; flex-direction: column;
   overflow: hidden;
   transform: scale(0.92);
@@ -8668,7 +8675,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.76-dev';
+  const _APP_VERSION = 'v1.2.78-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13716,135 +13723,203 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var perfil  = State.get.perfil ? State.get.perfil() : {};
     var myEmail = perfil.email || myUid || '';
     var myName  = perfil.nombre || myEmail;
+    var isConvo = _chatConvo !== null;
 
-    var esc3 = function(s){ try{ return Utils.esc(s); }catch(_){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); } };
+    var esc3 = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');} };
     var fmtT = function(ts) {
       try {
         var d = ts && ts.toDate ? ts.toDate() : new Date(ts);
-        var hh = String(d.getHours()).padStart(2,'0');
-        var mm = String(d.getMinutes()).padStart(2,'0');
-        var dd = d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'});
-        return dd + ' ' + hh + ':' + mm;
+        return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
       } catch(_) { return ''; }
     };
 
-    var isConvo = _chatConvo !== null;
+    var headerBack = isConvo
+      ? '<button onclick="App.dash._chatBack()" style="background:none;border:none;padding:4px 10px 4px 0;cursor:pointer;font-size:22px;color:var(--ink);touch-action:manipulation;line-height:1">‹</button>'
+      : '';
+
+    var partner = isConvo
+      ? (users.find(function(u){ return u.uid===_chatConvo; }) || {uid:_chatConvo,name:_chatConvo})
+      : null;
+    var headerTitle = isConvo ? esc3(partner.name||partner.uid) : 'Mensajes';
+
+    // ── Contenido según vista ─────────────────────────────────────
     var content = '';
-    var headerTitle = 'Mensajes';
-    var headerBack  = '';
 
     if (!isConvo) {
-      // ── Lista de contactos (solo usuarios habilitados por admin) ──
+      // ══ VISTA LISTA: stories bar + lista compacta ════════════════
       if (users.length === 0) {
-        content = '<div style="text-align:center;padding:32px 16px">' +
-          '<div style="font-size:36px;margin-bottom:12px">💬</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin contactos</div>' +
-          '<div style="font-size:13px;color:var(--ink-soft);line-height:1.6">El admin puede añadir usuarios<br>en Ajustes › Chat.</div>' +
-        '</div>';
+        content =
+          '<div style="text-align:center;padding:32px 16px">' +
+            '<div style="font-size:36px;margin-bottom:12px">💬</div>' +
+            '<div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin contactos</div>' +
+            '<div style="font-size:13px;color:var(--ink-soft);line-height:1.6">El admin puede añadir usuarios<br>en Ajustes › Chat.</div>' +
+          '</div>';
       } else {
-        var msgs = State.get.chatMessages ? State.get.chatMessages() : [];
-        content = users.map(function(u) {
-          // Último mensaje con este contacto
-          var convMsgs = msgs.filter(function(m){
-            return m.from===u.uid || m.to===u.uid ||
-                   m.from===u.email || m.to===u.email;
+        // Stories bar (scroll horizontal)
+        var storiesHtml = '<div style="display:flex;gap:14px;padding:14px 14px 10px;overflow-x:auto;' +
+          'scrollbar-width:none;-webkit-overflow-scrolling:touch;flex-shrink:0">';
+        users.forEach(function(u) {
+          var allMsgs = State.get.chatMessages ? State.get.chatMessages() : [];
+          var hasUnread = allMsgs.some(function(m){
+            return (m.from===u.uid||m.from===u.email) && !m.read;
           });
-          var last    = convMsgs.length ? convMsgs[convMsgs.length-1] : null;
-          var unread  = convMsgs.filter(function(m){
+          var initial = (u.name||u.uid||'?')[0].toUpperCase();
+          storiesHtml +=
+            '<div style="display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;cursor:pointer;' +
+              '-webkit-tap-highlight-color:transparent" onclick="App.dash._chatOpenConvoAnimated(\'' + u.uid + '\',this)">' +
+              '<div style="width:52px;height:52px;border-radius:50%;' +
+                'border:2px solid '+(hasUnread?'var(--red)':'var(--border)')+';' +
+                'padding:2px;box-sizing:border-box">' +
+                '<div style="width:100%;height:100%;border-radius:50%;background:var(--red-s);' +
+                  'display:flex;align-items:center;justify-content:center;' +
+                  'font-size:20px;font-weight:800;color:var(--red)">'+initial+'</div>' +
+              '</div>' +
+              '<div style="font-size:10px;font-weight:600;color:var(--ink-soft);' +
+                'max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center">'+
+                esc3((u.name||u.uid).split(' ')[0])+'</div>' +
+            '</div>';
+        });
+        storiesHtml += '</div><div style="height:1px;background:var(--border);margin:0 14px"></div>';
+
+        // Lista compacta de conversaciones
+        var allMsgsAll = State.get.chatMessages ? State.get.chatMessages() : [];
+        var listHtml = users.map(function(u) {
+          var convMsgs = allMsgsAll.filter(function(m){
+            return m.from===u.uid||m.to===u.uid||m.from===u.email||m.to===u.email;
+          });
+          var last   = convMsgs.length ? convMsgs[convMsgs.length-1] : null;
+          var unread = convMsgs.filter(function(m){
             return (m.to===myEmail||m.to===myUid) && !m.read;
           }).length;
-          var avatar  = (u.name||u.email||'?')[0].toUpperCase();
-          var initials= avatar;
-          return '<div onclick="App.dash._chatOpenConvo(\''+u.uid+'\')" ' +
-            'style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
-            '<div style="width:42px;height:42px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:var(--red);flex-shrink:0">'+initials+'</div>' +
+          var initial = (u.name||u.uid||'?')[0].toUpperCase();
+          return '<div onclick="App.dash._chatOpenConvoAnimated(\'' + u.uid + '\',null)" ' +
+            'style="display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;' +
+              '-webkit-tap-highlight-color:transparent;border-bottom:1px solid var(--border)">' +
+            '<div style="width:40px;height:40px;border-radius:50%;background:var(--red-s);' +
+              'display:flex;align-items:center;justify-content:center;font-size:16px;' +
+              'font-weight:800;color:var(--red);flex-shrink:0">'+initial+'</div>' +
             '<div style="flex:1;min-width:0">' +
-              '<div style="font-size:14px;font-weight:700;color:var(--ink)">'+esc3(u.name||u.email)+'</div>' +
+              '<div style="font-size:13px;font-weight:700;color:var(--ink)">'+esc3(u.name||u.uid)+'</div>' +
               (last
-                ? '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc3(last.text.slice(0,50))+'</div>'
-                : '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">Empieza la conversación</div>'
+                ? '<div style="font-size:11px;color:var(--ink-soft);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc3(last.text.slice(0,50))+'</div>'
+                : '<div style="font-size:11px;color:var(--ink-soft)">Empieza la conversación</div>'
               ) +
             '</div>' +
-            (unread > 0
+            (unread>0
               ? '<span style="min-width:20px;height:20px;border-radius:10px;background:var(--red);color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px">'+unread+'</span>'
-              : (last ? '<div style="font-size:10px;color:var(--ink-soft);flex-shrink:0">'+fmtT(last.ts)+'</div>' : '')
-            ) +
+              : '') +
           '</div>';
         }).join('');
-      }
-    } else {
-      // ── Vista conversación ───────────────────────────────────
-      var partner = users.find(function(u){ return u.uid===_chatConvo; }) ||
-                    { uid:_chatConvo, name:_chatConvo, email:_chatConvo };
-      headerTitle = esc3(partner.name||partner.email||'Chat');
-      headerBack  = '<button onclick="App.dash._chatBack()" ' +
-        'style="background:none;border:none;padding:4px 8px 4px 0;cursor:pointer;font-size:18px;color:var(--ink);touch-action:manipulation;-webkit-tap-highlight-color:transparent">‹</button>';
 
+        content = storiesHtml + '<div style="flex:1;overflow-y:auto;scrollbar-width:none">' + listHtml + '</div>';
+      }
+
+    } else {
+      // ══ VISTA CONVERSACIÓN ════════════════════════════════════════
       var msgs2 = _chatMsgsCache;
-      // Fallback: mostrar mensajes de localStorage
       if (!msgs2.length) {
-        var allMsgs = State.get.chatMessages ? State.get.chatMessages() : [];
-        msgs2 = allMsgs.filter(function(m){
+        var allMsgsFb = State.get.chatMessages ? State.get.chatMessages() : [];
+        msgs2 = allMsgsFb.filter(function(m){
           return m.from===_chatConvo||m.to===_chatConvo;
         }).sort(function(a,b){ return a.ts<b.ts?-1:1; });
       }
 
       var bubbles = msgs2.length === 0
-        ? '<div style="text-align:center;padding:28px 0;color:var(--ink-soft);font-size:13px">Sin mensajes — escribe el primero 👇</div>'
+        ? '<div style="text-align:center;padding:20px 0;color:var(--ink-soft);font-size:13px">Sin mensajes — escribe el primero 👇</div>'
         : msgs2.map(function(m) {
-            var mine = (m.from === myUid || m.from === myEmail);
-            return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:8px">' +
-              '<div style="max-width:78%;padding:9px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';' +
+            var mine = (m.from===myUid||m.from===myEmail);
+            return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:6px">' +
+              '<div style="max-width:78%;padding:8px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';' +
                 'background:'+(mine?'var(--red)':'var(--bg)')+';color:'+(mine?'#fff':'var(--ink)')+';' +
-                'box-shadow:0 1px 4px rgba(0,0,0,0.08)">' +
-                (m.type==='informe'?'<div style="font-size:9px;font-weight:700;color:'+(mine?'rgba(255,255,255,0.7)':'var(--ink-soft)')+';margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Informe de pedido</div>':'') +
-                '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">'+esc3(m.text)+'</div>' +
-                '<div style="font-size:9px;margin-top:4px;opacity:0.6;text-align:right">'+fmtT(m.ts)+(mine&&m.read?' ✓✓':'')+'</div>' +
-              '</div>' +
-            '</div>';
+                'box-shadow:0 1px 3px rgba(0,0,0,0.07);' +
+                // v1.2.78: animación de entrada del bocadillo
+                'animation:chatBubbleIn 0.2s ease">' +
+              '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">'+esc3(m.text)+'</div>' +
+              '<div style="font-size:9px;margin-top:3px;opacity:0.6;text-align:right">'+fmtT(m.ts)+'</div>' +
+              '</div></div>';
           }).join('');
 
       content =
-        '<div id="chat-msgs-scroll" style="flex:1;overflow-y:auto;padding:8px 0 4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">' +
+        '<div id="chat-msgs-scroll" style="flex:1;overflow-y:auto;padding:10px 12px 4px;' +
+          '-webkit-overflow-scrolling:touch;scrollbar-width:none">' +
           bubbles +
         '</div>' +
-        '<div style="border-top:1px solid var(--border);padding:10px 0 4px;display:flex;gap:8px;align-items:center;flex-shrink:0">' +
+        '<div style="border-top:1px solid var(--border);padding:8px 12px;display:flex;gap:8px;' +
+          'align-items:center;flex-shrink:0">' +
           '<input id="chat-msg-input" type="text" placeholder="Escribe un mensaje…" ' +
-            'style="flex:1;height:40px;border-radius:12px;border:1.5px solid var(--border);padding:0 12px;font-size:14px;font-family:var(--font);background:var(--bg);color:var(--ink);outline:none" ' +
-            'onkeydown="if(event.key===\'Enter\')App.dash._chatSend()">' +
+            'style="flex:1;height:40px;border-radius:12px;border:1.5px solid var(--border);' +
+              'padding:0 12px;font-size:14px;font-family:var(--font);background:var(--bg);' +
+              'color:var(--ink);outline:none;-webkit-appearance:none" ' +
+            'onkeydown="if(event.keyCode===13)App.dash._chatSend()">' +
           '<button onclick="App.dash._chatSend()" ' +
-            'style="width:40px;height:40px;border-radius:12px;border:none;background:var(--red);color:#fff;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;touch-action:manipulation">' +
+            'style="width:40px;height:40px;border-radius:12px;border:none;background:var(--red);' +
+              'color:#fff;cursor:pointer;flex-shrink:0;display:flex;align-items:center;' +
+              'justify-content:center;touch-action:manipulation">' +
             '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>' +
           '</button>' +
         '</div>';
     }
 
-    // ── Estado online ────────────────────────────────────────
-    var onlineDot = window.FIREBASE_ENABLED
-      ? '<div style="width:7px;height:7px;border-radius:50%;background:#22C55E;flex-shrink:0" title="Tiempo real"></div>'
-      : '<div style="width:7px;height:7px;border-radius:50%;background:#F97316;flex-shrink:0" title="Modo local"></div>';
-
-    // ── Montar overlay ───────────────────────────────────────
+    // ── Montar overlay ─────────────────────────────────────────────
     var ov = document.createElement('div');
     ov.id = 'chat-center-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;' +
+      'justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);' +
+      'opacity:0;transition:opacity 0.18s ease';
+
+    // v1.2.78: altura adaptativa — sin convo: auto; con convo: usa Visual Viewport
+    var boxStyle = isConvo
+      ? 'background:var(--surface);border-radius:22px;width:100%;max-width:440px;' +
+        'display:flex;flex-direction:column;overflow:hidden;' +
+        'box-shadow:0 24px 64px rgba(0,0,0,0.32);' +
+        'transform:scale(0.94);transition:transform 0.18s var(--spring);' +
+        'max-height:min(calc(100dvh - 80px), 600px);height:auto'
+      : 'background:var(--surface);border-radius:22px;width:100%;max-width:440px;' +
+        'display:flex;flex-direction:column;overflow:hidden;' +
+        'box-shadow:0 24px 64px rgba(0,0,0,0.32);' +
+        'transform:scale(0.94);transition:transform 0.18s var(--spring);' +
+        'height:auto;max-height:min(calc(100dvh - 80px), 520px)';
+
     ov.innerHTML =
-      '<div class="chat-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;height:calc(100dvh - 80px);max-height:580px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.32);transform:scale(0.94);transition:transform 0.18s var(--spring)">' +
-        '<div style="display:flex;align-items:center;gap:6px;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+      '<div class="chat-box" style="'+boxStyle+'">' +
+        '<div style="display:flex;align-items:center;gap:6px;padding:14px 14px 10px;' +
+          'border-bottom:1px solid var(--border);flex-shrink:0">' +
           headerBack +
-          '<div style="flex:1;font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+headerTitle+'</div>' +
-          onlineDot +
-          '<button onclick="window._closeChatCenter()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:4px">×</button>' +
+          '<div style="flex:1;font-size:16px;font-weight:800;color:var(--ink);' +
+            'letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+headerTitle+'</div>' +
+          (window.FIREBASE_ENABLED
+            ? '<div style="width:7px;height:7px;border-radius:50%;background:#22C55E;flex-shrink:0" title="Tiempo real"></div>'
+            : '<div style="width:7px;height:7px;border-radius:50%;background:#F97316;flex-shrink:0" title="Local"></div>'
+          ) +
+          '<button onclick="window._closeChatCenter()" style="width:30px;height:30px;border-radius:50%;' +
+            'border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;' +
+            'display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:6px">×</button>' +
         '</div>' +
         (isConvo
-          ? '<div style="flex:1;display:flex;flex-direction:column;padding:0 14px 8px;min-height:0;overflow:hidden">' + content + '</div>'
-          : '<div style="flex:1;overflow-y:auto;padding:4px 14px 12px;-webkit-overflow-scrolling:touch;scrollbar-width:none">' + content + '</div>'
+          ? '<div style="flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden">' + content + '</div>'
+          : '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden">' + content + '</div>'
         ) +
       '</div>';
 
     document.body.appendChild(ov);
     document.body.style.overflow = 'hidden';
-    ov.addEventListener('click', function(e){ if (e.target===ov) window._closeChatCenter(); });
+    ov.addEventListener('click', function(e){ if(e.target===ov) window._closeChatCenter(); });
+
+    // v1.2.78: Visual Viewport API para no quedar detrás del teclado
+    if (isConvo && window.visualViewport) {
+      var _vvHandler = function() {
+        var vv  = window.visualViewport;
+        var box = ov.querySelector('.chat-box');
+        if (!box) return;
+        var avail = vv.height - 16;
+        box.style.maxHeight = Math.min(avail, 600) + 'px';
+        ov.style.alignItems = vv.height < window.innerHeight * 0.7 ? 'flex-start' : 'center';
+        ov.style.paddingTop = vv.height < window.innerHeight * 0.7 ? '8px' : '16px';
+      };
+      window.visualViewport.addEventListener('resize', _vvHandler);
+      ov._vvHandler = _vvHandler;
+    }
+
     requestAnimationFrame(function(){
       requestAnimationFrame(function(){
         ov.classList.add('chat-open');
@@ -13855,15 +13930,41 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           var s = document.getElementById('chat-msgs-scroll');
           if (s) s.scrollTop = s.scrollHeight;
           var inp = document.getElementById('chat-msg-input');
-          if (inp) setTimeout(function(){ inp.focus(); }, 300);
+          if (inp) setTimeout(function(){ inp.focus(); }, 350);
         }
       });
     });
-    console.log('[Chat] render — convo:', _chatConvo, '| users:', users.length, '| msgs:', _chatMsgsCache.length);
+    console.log('[Chat] render — convo:', _chatConvo, '| users:', users.length);
+  }
+
+  // v1.2.78: abrir conversación con animación desde avatar de stories
+  function _chatOpenConvoAnimated(uid, fromEl) {
+    if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
+    _chatConvo     = uid;
+    _chatMsgsCache = [];
+
+    // Animación: si viene de un elemento, hacer flash en el avatar
+    if (fromEl) {
+      var avatar = fromEl.querySelector('div > div');
+      if (avatar) {
+        avatar.style.transform = 'scale(1.15)';
+        avatar.style.transition = 'transform 0.15s ease';
+        setTimeout(function(){
+          avatar.style.transform = '';
+          _renderChatCenter();
+          _chatSubscribe(uid);
+        }, 150);
+      } else {
+        _renderChatCenter();
+        _chatSubscribe(uid);
+      }
+    } else {
+      _renderChatCenter();
+      _chatSubscribe(uid);
+    }
   }
 
 
-    // v1.2.69: openChatUsersMgr — gestión de usuarios (solo admin)
   function openChatUsersMgr() {
     var users = State.get.chatUsers ? State.get.chatUsers() : [];
     var esc2  = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'');} };
@@ -14865,7 +14966,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatSend, _updateChatBadge, openChatUsersMgr, _chatAddUser, _chatRemoveUser }; // v1.2.70
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatSend, _updateChatBadge, openChatUsersMgr, _chatAddUser, _chatRemoveUser, _chatOpenConvoAnimated }; // v1.2.78
 })();
 
 // ══════════════════════════════════════════
@@ -22910,26 +23011,56 @@ if (!window.Utils) {
         try { document.dispatchEvent(new Event('order:checked'));  } catch(_) {}
         try { document.dispatchEvent(new Event('data:updated'));   } catch(_) {}
 
-        // ── 5. Haptic + toast ─────────────────────────────────────
+        // ── 5. Haptic + toast + notificación campana ─────────────
         try { if (window.Utils) Utils.triggerHaptic('medium'); } catch(_) {}
         var n = items.length;
+
+        // v1.2.77: calcular total e información para notificación
+        var totalConf = 0;
+        try {
+          totalConf = items.reduce(function(s, o) {
+            return s + (o.ncajas||1) * (o.precio||0) * (1 + (_parseIva(o.iva||'10%')/100));
+          }, 0);
+        } catch(_) {}
+
+        // v1.2.77: calcular fecha de entrega inline (calcEntrega es local a openPendingOrders)
+        var entregaStr = '';
+        try {
+          var provConf = (meta && meta.prov) ||
+                         (window.State && State.get.prov && State.get.prov(meta && meta.sel));
+          var de = (provConf && provConf.diasEntrega) || [];
+          var base = new Date(pedido.fecha);
+          var dEnt = new Date(base);
+          dEnt.setDate(base.getDate() + 2); // fallback +2
+          for (var di = 1; di <= 14; di++) {
+            var d2 = new Date(base);
+            d2.setDate(base.getDate() + di);
+            var dow2 = d2.getDay() === 0 ? 6 : d2.getDay() - 1;
+            if (de.indexOf(dow2) >= 0) { dEnt = d2; break; }
+          }
+          var M2 = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+          var DN2 = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
+          var dow3 = dEnt.getDay() === 0 ? 6 : dEnt.getDay() - 1;
+          entregaStr = DN2[dow3] + ' ' + dEnt.getDate() + ' ' + M2[dEnt.getMonth()];
+        } catch(_) {}
+
+        // Toast mejorado
         try {
           if (window.Utils) {
-            Utils.showToast('✅ Stock actualizado — ' + n +
-              ' producto' + (n !== 1 ? 's' : '') + ' recibido' + (n !== 1 ? 's' : ''));
+            var fmtTotal = (+(totalConf||0)).toFixed(2).replace('.',',') + ' €';
+            var provNConf = (meta && meta.prov && meta.prov.nombre) || 'Proveedor';
+            Utils.showToast(
+              '✅ Pedido realizado — ' + provNConf + '\n' +
+              n + ' artículo' + (n!==1?'s':'') + ' · ' + fmtTotal +
+              (entregaStr ? ' · Entrega ' + entregaStr : '')
+            );
           }
         } catch(_) {}
 
-        // ── v1.2.68: Emitir notificación a campana ────────────────
+        // Enviar notificación a campana
         try {
-          // Limpiar notifsRead del pedido confirmado para que aparezca como nueva notif
-          if (orderId && window.State && State.set.markNotifRead) {
-            // Añadir notif especial "pedido recibido" al historial de notifs
-            var notifId = 'recibido_' + pedidoId;
-            // No marcarla como leída — aparecerá en campana como no leída
-            if (window.App && App.dash && App.dash._updateBellBadge) {
-              App.dash._updateBellBadge();
-            }
+          if (window.App && App.dash && App.dash._updateBellBadge) {
+            App.dash._updateBellBadge();
           }
         } catch(_) {}
 
