@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-58-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-59-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.58-dev</title>
+<title>Dashwey v1.2.59-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6234,7 +6234,8 @@ import { getAuth, signInAnonymously, onAuthStateChanged,
          signOut, updatePassword, EmailAuthProvider, linkWithCredential }
                                                   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc,
-         collection, onSnapshot, serverTimestamp }
+         collection, onSnapshot, serverTimestamp,
+         addDoc, query, getDocs, orderBy, limit, where }
                                                   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ── firebaseConfig ─────────────────────────────────────────────
@@ -6811,6 +6812,8 @@ const State = (() => {
     gastosCustomPeriod: null,
     // v1.2.58: mensajes internos — notas y mensajes entre cuentas
     chatMessages: [],
+    // v1.2.59: usuarios habilitados para chat — gestionados por admin en Ajustes
+    chatUsers: [],
     // v9.5.24: visitas comerciales programadas
     visitasComerciales: [
       // { id, provId, fecha: ISO, agente, notas, estado: 'pendiente'|'cumplida'|'cancelada' }
@@ -6999,6 +7002,7 @@ const State = (() => {
     gastosOp:         () => _state.gastosOp || [],
     gastosCustomPeriod:    () => _state.gastosCustomPeriod || null,
     chatMessages:          () => _state.chatMessages || [],
+    chatUsers:             () => _state.chatUsers || [],
     visitasComerciales:    () => _state.visitasComerciales || [],
     ingresosFin:           () => _state.ingresosFin || [], // v9.5.73: ingresos manuales
     notifPrefs:            () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
@@ -7052,6 +7056,7 @@ const State = (() => {
     addCuenta:  (c)        => { _state.cuentas.push(c); save(); },
     gastosCustomPeriod:    (v) => { _state.gastosCustomPeriod = v; },
     addChatMessage:        (m) => { if (!_state.chatMessages) _state.chatMessages = []; _state.chatMessages.push(m); save(); },
+    chatUsers:             (v) => { _state.chatUsers = v; save(); },
     visitasComerciales:    (v) => { _state.visitasComerciales = v; save(); },
     addVisita:             (v) => { if (!_state.visitasComerciales) _state.visitasComerciales = []; _state.visitasComerciales.push(v); save(); },
     updateVisita:          (id, data) => { const v = (_state.visitasComerciales||[]).find(x=>x.id===id); if(v) { Object.assign(v,data); save(); } },
@@ -8488,6 +8493,7 @@ const ui = (() => {
           <div class="sub-item" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openEditProv(),220)">✏️ Editar proveedor</div>
           <div class="sub-item" onclick="App.alm.setupCaducidadNotif()">Caducidades</div>
           <div class="sub-item" onclick="App.ui.closeFs();setTimeout(function(){App.alm.openHistorialPedidos();},220)">📋 Historial de pedidos</div>
+          <div class="sub-item" onclick="App.ui.closeFs();setTimeout(function(){App.dash.openChatUsersMgr();},220)">💬 Usuarios de chat</div>
         </div>
       </div>
 
@@ -8610,7 +8616,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.58-dev';
+  const _APP_VERSION = 'v1.2.59-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13249,19 +13255,39 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
   // ══════════════════════════════════════════════════════════════
-  // CHAT CENTER v1.2.58 — Mensajería interna y notas personales
+  // ══════════════════════════════════════════════════════════════
+  // CHAT CENTER v1.2.59 — Mensajería real entre usuarios via Firebase
+  // Estructura Firestore:
+  //   chats/{convId}/messages/{msgId}  — convId = sorted uids joined by '_'
+  //   convId para notas = "{uid}_self"
   // ══════════════════════════════════════════════════════════════
 
-  var _chatConvo = null;
+  var _chatConvo       = null;  // uid del contacto activo
+  var _chatUnsub       = null;  // unsubscribe del onSnapshot activo
+  var _chatMsgsCache   = [];    // mensajes de la conversación activa
 
+  // ── Generar convId determinista ─────────────────────────────
+  function _chatConvId(uidA, uidB) {
+    if (uidA === uidB || uidB === 'self') return uidA + '_self';
+    return [uidA, uidB].sort().join('_');
+  }
+
+  // ── Referencia a la colección de mensajes ───────────────────
+  function _chatMsgsRef(convId) {
+    return collection(_db, 'chats', convId, 'messages');
+  }
+
+  // ── Badge no leídos ─────────────────────────────────────────
   function _updateChatBadge() {
     try {
       var badge = document.getElementById('chat-badge');
       if (!badge) return;
-      var msgs    = State.get.chatMessages();
-      var perfil  = State.get.perfil ? State.get.perfil() : {};
-      var myEmail = perfil.email || 'yo';
-      var unread  = msgs.filter(function(m){ return m.to === myEmail && !m.read; }).length;
+      // Contar mensajes no leídos en cache de todas las convos
+      var unread = 0;
+      var uid = window._DashweyFirebase && window._DashweyFirebase.uid;
+      if (!uid) { badge.classList.remove('visible'); return; }
+      // Leer de localStorage el contador (actualizado por listeners)
+      try { unread = parseInt(localStorage.getItem('dashwey_chat_unread') || '0', 10) || 0; } catch(_) {}
       if (unread > 0) {
         badge.textContent = unread > 9 ? '9+' : String(unread);
         badge.classList.add('visible');
@@ -13271,12 +13297,18 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     } catch(e) {}
   }
 
+  // ── Abrir panel ─────────────────────────────────────────────
   function openChatCenter() {
+    // Si había suscripción anterior, cancelar
+    if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
     _chatConvo = null;
+    _chatMsgsCache = [];
     _renderChatCenter();
   }
 
   window._closeChatCenter = function() {
+    // Cancelar listener al cerrar
+    if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
     var ov = document.getElementById('chat-center-overlay');
     if (!ov) return;
     ov.style.opacity = '0';
@@ -13285,83 +13317,188 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(function(){ if (ov && ov.parentNode) ov.remove(); document.body.style.overflow = ''; }, 200);
   };
 
+  // ── Abrir conversación con un contacto ──────────────────────
+  function _chatOpenConvo(partnerUid) {
+    if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
+    _chatConvo = partnerUid;
+    _chatMsgsCache = [];
+    _renderChatCenter();
+
+    // Suscribir a mensajes en tiempo real
+    var myUid = window._DashweyFirebase && window._DashweyFirebase.uid;
+    if (!myUid || !FIREBASE_ENABLED || !_db) {
+      console.warn('[Chat] Firebase no disponible — modo offline');
+      return;
+    }
+    var convId  = _chatConvId(myUid, partnerUid);
+    var msgsRef = _chatMsgsRef(convId);
+    var q = query(msgsRef, orderBy('ts', 'asc'), limit(100));
+    try {
+      _chatUnsub = onSnapshot(q, function(snap) {
+        _chatMsgsCache = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        // Marcar como leídos los mensajes dirigidos a mí
+        _chatMsgsCache.forEach(function(m) {
+          if (m.to === myUid && !m.read) {
+            setDoc(doc(_db, 'chats', convId, 'messages', m.id), { read: true }, { merge: true })
+              .catch(function(){});
+          }
+        });
+        localStorage.setItem('dashwey_chat_unread', '0');
+        _updateChatBadge();
+        _renderChatCenter();
+      }, function(e) { console.warn('[Chat] onSnapshot error:', e?.code||e?.message); });
+    } catch(e) { console.error('[Chat] subscribe error:', e); }
+  }
+
+  function _chatBack() {
+    if (_chatUnsub) { try { _chatUnsub(); } catch(_) {} _chatUnsub = null; }
+    _chatConvo = null;
+    _chatMsgsCache = [];
+    _renderChatCenter();
+  }
+
+  // ── Enviar mensaje ───────────────────────────────────────────
+  function _chatSend() {
+    var inp  = document.getElementById('chat-msg-input');
+    var text = inp ? inp.value.trim() : '';
+    if (!text) return;
+
+    var myUid   = window._DashweyFirebase && window._DashweyFirebase.uid;
+    var perfil  = State.get.perfil ? State.get.perfil() : {};
+    var myName  = perfil.nombre || perfil.email || myUid || 'Yo';
+    var convId  = _chatConvId(myUid || 'local', _chatConvo || 'self');
+
+    if (inp) inp.value = '';
+
+    // Optimistic UI — añadir inmediatamente al cache
+    var tempMsg = {
+      id:       'tmp_' + Date.now(),
+      ts:       new Date().toISOString(),
+      from:     myUid || 'local',
+      fromName: myName,
+      to:       _chatConvo || 'self',
+      text:     text,
+      read:     false,
+    };
+    _chatMsgsCache.push(tempMsg);
+    _renderChatCenter();
+
+    // Guardar en Firestore (y en localStorage como fallback)
+    if (FIREBASE_ENABLED && _db && myUid) {
+      var msgsRef = _chatMsgsRef(convId);
+      addDoc(msgsRef, {
+        ts:       serverTimestamp(),
+        from:     myUid,
+        fromName: myName,
+        to:       _chatConvo || 'self',
+        text:     text,
+        read:     false,
+      }).then(function(docRef) {
+        // onSnapshot se encargará de actualizar _chatMsgsCache con el doc real
+        console.log('[Chat] sent to Firebase:', docRef.id);
+      }).catch(function(e) {
+        console.warn('[Chat] send error:', e);
+        // Mantener en cache local si falla Firebase
+        try { State.set.addChatMessage(tempMsg); } catch(_) {}
+      });
+    } else {
+      // Fallback offline — localStorage
+      try { State.set.addChatMessage(tempMsg); } catch(_) {}
+    }
+  }
+
+  // ── Iniciar nueva conversación ───────────────────────────────
+  function _chatStartNew() {
+    var inp   = document.getElementById('chat-new-email');
+    var email = inp ? inp.value.trim().toLowerCase() : '';
+    if (!email) { try{Utils.showToast('Introduce un email');}catch(_){} return; }
+    // Buscar en lista de usuarios habilitados
+    var users = State.get.chatUsers ? State.get.chatUsers() : [];
+    var match = users.find(function(u){ return u.email && u.email.toLowerCase() === email; });
+    if (!match) {
+      // Si no está en la lista, añadirlo con email como uid (Firebase los resolverá)
+      var newUser = { uid: email, email: email, name: email };
+      users.push(newUser);
+      try { State.set.chatUsers(users); } catch(_) {}
+      match = newUser;
+    }
+    _chatOpenConvo(match.uid);
+  }
+
+  // ── Renderizar el overlay ────────────────────────────────────
   function _renderChatCenter() {
     var existing = document.getElementById('chat-center-overlay');
     if (existing) existing.remove();
 
-    var msgs    = State.get.chatMessages();
+    var myUid   = window._DashweyFirebase && window._DashweyFirebase.uid;
     var perfil  = State.get.perfil ? State.get.perfil() : {};
-    var myEmail = perfil.email || 'yo';
+    var myEmail = perfil.email || myUid || 'yo';
     var myName  = perfil.nombre || myEmail;
-
-    var contactSet = {};
-    contactSet[myEmail] = { email: myEmail, name: myName + ' · Notas personales', self: true };
-    msgs.forEach(function(m) {
-      if (m.from && m.from !== myEmail) contactSet[m.from] = { email: m.from, name: m.fromName || m.from };
-      if (m.to   && m.to   !== myEmail) contactSet[m.to]   = { email: m.to,   name: m.toName   || m.to   };
-    });
-    var contacts = Object.values(contactSet);
+    var users   = State.get.chatUsers ? State.get.chatUsers() : [];
 
     var esc2 = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');} };
-    var fmtT = function(iso){
-      try{ var d=new Date(iso);
+    var fmtT = function(ts){
+      try{
+        var d = ts && ts.toDate ? ts.toDate() : new Date(ts);
         return d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'})+' '+
                d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
       } catch(_){ return ''; }
     };
 
+    var isConvo = _chatConvo !== null;
     var content = '';
     var headerTitle = 'Mensajes';
     var headerBack  = '';
-    var isConvo = _chatConvo !== null;
 
     if (!isConvo) {
-      headerTitle = 'Mensajes';
-      var rows = contacts.map(function(c) {
-        var convMsgs = msgs.filter(function(m){ return m.from===c.email||m.to===c.email; });
-        var last     = convMsgs.length ? convMsgs[convMsgs.length-1] : null;
-        var unread   = msgs.filter(function(m){ return m.from===c.email && m.to===myEmail && !m.read; }).length;
-        return '<div onclick="App.dash._chatOpenConvo(\''+c.email+'\')"\''+
-          ' style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
-          '<div style="width:40px;height:40px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:var(--red);flex-shrink:0">' +
-            (c.self ? '📝' : (c.name[0]||'?').toUpperCase()) +
-          '</div>' +
+      // ── Lista de contactos ──────────────────────────────────
+      var contactList = [{ uid: 'self', email: myEmail, name: '📝 Notas personales', self: true }]
+        .concat(users.filter(function(u){ return u.uid !== myUid; }));
+
+      var rows = contactList.map(function(u) {
+        var avatar = u.self ? '📝' : (u.name||u.email||'?')[0].toUpperCase();
+        return '<div onclick="App.dash._chatOpenConvo(\''+u.uid+'\')" ' +
+          'style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
+          '<div style="width:40px;height:40px;border-radius:50%;background:var(--red-s);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:var(--red);flex-shrink:0">' + avatar + '</div>' +
           '<div style="flex:1;min-width:0">' +
-            '<div style="font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc2(c.name)+'</div>' +
-            (last ? '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc2(last.text.slice(0,50))+'</div>'
-                  : '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">Sin mensajes</div>') +
+            '<div style="font-size:14px;font-weight:700;color:var(--ink)">'+esc2(u.name||u.email)+'</div>' +
+            (u.email&&!u.self?'<div style="font-size:11px;color:var(--ink-soft);margin-top:1px">'+esc2(u.email)+'</div>':'') +
           '</div>' +
-          (unread > 0 ? '<span style="min-width:20px;height:20px;border-radius:10px;background:var(--red);color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px">'+unread+'</span>' :
-            (last ? '<div style="font-size:10px;color:var(--ink-soft);flex-shrink:0">'+fmtT(last.ts)+'</div>' : '')) +
+          '<svg width="14" height="14" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>' +
         '</div>';
       }).join('');
 
       content = rows +
         '<div style="margin-top:14px;padding:12px;background:var(--bg);border-radius:14px">' +
-          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Nuevo mensaje</div>' +
-          '<input id="chat-new-email" type="email" placeholder="Email del destinatario" ' +
+          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Contacto por email</div>' +
+          '<input id="chat-new-email" type="email" placeholder="email@ejemplo.com" ' +
             'style="width:100%;height:40px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none">' +
           '<button onclick="App.dash._chatStartNew()" ' +
             'style="margin-top:8px;width:100%;height:38px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">Abrir conversación</button>' +
-        '</div>';
+        '</div>' +
+        (!FIREBASE_ENABLED ? '<div style="margin-top:12px;padding:10px 12px;background:#FFF7ED;border-radius:10px;font-size:12px;color:#F97316">⚠️ Firebase no configurado — los mensajes se guardan solo localmente.</div>' : '');
     } else {
-      var partner  = contacts.find(function(c){ return c.email===_chatConvo; }) || { email:_chatConvo, name:_chatConvo };
-      headerTitle  = esc2(partner.name);
-      headerBack   = '<button onclick="App.dash._chatBack()" style="background:none;border:none;padding:4px 8px 4px 0;cursor:pointer;font-size:18px;color:var(--ink);-webkit-tap-highlight-color:transparent;touch-action:manipulation">‹</button>';
+      // ── Vista conversación ──────────────────────────────────
+      var partner = users.find(function(u){ return u.uid===_chatConvo; }) ||
+                    (_chatConvo==='self' ? { uid:'self', name:'Notas personales', email:'' } : { uid:_chatConvo, name:_chatConvo, email:_chatConvo });
+      headerTitle = esc2(partner.name||partner.email||'Chat');
+      headerBack  = '<button onclick="App.dash._chatBack()" style="background:none;border:none;padding:4px 8px 4px 0;cursor:pointer;font-size:18px;color:var(--ink);touch-action:manipulation">‹</button>';
 
-      var convMsgs = msgs.filter(function(m){ return m.from===_chatConvo||m.to===_chatConvo; });
-      convMsgs.forEach(function(m){ if (m.to===myEmail && !m.read) m.read=true; });
+      var msgs = _chatMsgsCache;
+      // Fallback offline
+      if (!msgs.length && !FIREBASE_ENABLED) {
+        var localMsgs = State.get.chatMessages ? State.get.chatMessages() : [];
+        msgs = localMsgs.filter(function(m){ return m.from===(_chatConvo)||m.to===(_chatConvo)||_chatConvo==='self'; });
+      }
 
-      var bubbles = convMsgs.length === 0
-        ? '<div style="text-align:center;padding:24px 0;color:var(--ink-soft);font-size:13px">Sin mensajes aún — escribe el primero 👇</div>'
-        : convMsgs.map(function(m) {
-            var mine = m.from === myEmail;
+      var bubbles = msgs.length === 0
+        ? '<div style="text-align:center;padding:28px 0;color:var(--ink-soft);font-size:13px">Sin mensajes aún — escribe el primero 👇</div>'
+        : msgs.map(function(m) {
+            var mine = m.from === myUid || m.from === 'local';
             return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:8px">' +
-              '<div style="max-width:78%;padding:9px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';\''+
-                'background:'+(mine?'var(--red)':'var(--bg)')+';\''+
-                'color:'+(mine?'#fff':'var(--ink)')+';\'box-shadow:0 1px 3px rgba(0,0,0,0.08)">' +
+              '<div style="max-width:78%;padding:9px 12px;border-radius:'+(mine?'14px 14px 4px 14px':'14px 14px 14px 4px')+';background:'+(mine?'var(--red)':'var(--bg)')+';color:'+(mine?'#fff':'var(--ink)')+';box-shadow:0 1px 4px rgba(0,0,0,0.08)">' +
                 '<div style="font-size:13px;line-height:1.45">'+esc2(m.text)+'</div>' +
-                '<div style="font-size:9px;margin-top:4px;opacity:0.65;text-align:right">'+fmtT(m.ts)+'</div>' +
+                '<div style="font-size:9px;margin-top:4px;opacity:0.6;text-align:right">'+fmtT(m.ts)+(mine&&m.read?'  ✓✓':'')+'</div>' +
               '</div>' +
             '</div>';
           }).join('');
@@ -13381,6 +13518,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         '</div>';
     }
 
+    // ── Montar overlay ───────────────────────────────────────
     var ov = document.createElement('div');
     ov.id = 'chat-center-overlay';
     ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease';
@@ -13389,6 +13527,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         '<div style="display:flex;align-items:center;gap:4px;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
           headerBack +
           '<div style="flex:1;font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+headerTitle+'</div>' +
+          (FIREBASE_ENABLED?'<div style="width:7px;height:7px;border-radius:50%;background:#22C55E;margin-right:6px;flex-shrink:0" title="Tiempo real activo"></div>':'') +
           '<button onclick="window._closeChatCenter()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>' +
         '</div>' +
         (isConvo
@@ -13406,41 +13545,67 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         var box = ov.querySelector('.chat-box');
         if (box) box.style.transform = 'scale(1)';
         if (isConvo) { var s=document.getElementById('chat-msgs-scroll'); if(s) s.scrollTop=s.scrollHeight; }
-        var inp = document.getElementById('chat-msg-input');
-        if (inp) setTimeout(function(){ inp.focus(); }, 300);
+        var msgInp = document.getElementById('chat-msg-input');
+        if (msgInp) setTimeout(function(){ msgInp.focus(); }, 300);
       });
     });
-    console.log('[Chat] rendered — convo:', _chatConvo, '| msgs:', msgs.length);
+    console.log('[Chat] rendered — convo:', _chatConvo, '| fb:', FIREBASE_ENABLED);
   }
 
-  function _chatOpenConvo(email) { _chatConvo = email; _renderChatCenter(); }
-  function _chatBack()            { _chatConvo = null;  _renderChatCenter(); }
 
-  function _chatStartNew() {
-    var inp = document.getElementById('chat-new-email');
-    var email = inp ? inp.value.trim() : '';
-    if (!email) { try{Utils.showToast('Introduce un email');}catch(_){} return; }
-    _chatConvo = email;
-    _renderChatCenter();
+  // v1.2.59: openChatUsersMgr — gestión de usuarios habilitados para chat
+  function openChatUsersMgr() {
+    var users = State.get.chatUsers ? State.get.chatUsers() : [];
+    var esc2  = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'');} };
+    var rows  = users.map(function(u, i) {
+      return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(u.name||u.email)+'</div>' +
+          '<div style="font-size:11px;color:var(--ink-soft)">'+esc2(u.email)+'</div>' +
+        '</div>' +
+        '<button onclick="App.dash._chatRemoveUser('+i+')" style="width:28px;height:28px;border-radius:8px;border:none;background:var(--red-s);color:var(--red);cursor:pointer;font-size:14px;touch-action:manipulation">×</button>' +
+      '</div>';
+    }).join('');
+    try { ui.setFs(
+      '<div class="modal-header-dark"><div class="mhd-row"><div>' +
+        '<div class="mhd-title">Usuarios de chat</div>' +
+        '<div class="mhd-sub">Habilitados por el admin</div>' +
+      '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+      '<div style="padding:14px 16px 24px;font-family:var(--font)">' +
+        (rows || '<div style="color:var(--ink-soft);font-size:13px;padding:12px 0">Sin usuarios habilitados</div>') +
+        '<div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:14px">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Añadir usuario</div>' +
+          '<input id="cu-name" placeholder="Nombre" style="width:100%;height:38px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none;margin-bottom:8px">' +
+          '<input id="cu-email" placeholder="Email" type="email" style="width:100%;height:38px;border-radius:10px;border:1.5px solid var(--border);padding:0 12px;font-size:13px;font-family:var(--font);background:var(--surface);color:var(--ink);box-sizing:border-box;outline:none">' +
+          '<button onclick="App.dash._chatAddUser()" style="margin-top:8px;width:100%;height:38px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;touch-action:manipulation">+ Añadir</button>' +
+        '</div>' +
+      '</div>'
+    ); ui.openFs(); } catch(e) {}
   }
 
-  function _chatSend() {
-    var inp  = document.getElementById('chat-msg-input');
-    var text = inp ? inp.value.trim() : '';
-    if (!text) return;
-    var perfil  = State.get.perfil ? State.get.perfil() : {};
-    var myEmail = perfil.email || 'yo';
-    var msg = {
-      id: 'msg_'+Date.now(), ts: new Date().toISOString(),
-      from: myEmail, fromName: perfil.nombre||myEmail,
-      to: _chatConvo,   toName: _chatConvo,
-      text: text, read: (_chatConvo === myEmail),
-    };
-    try { State.set.addChatMessage(msg); } catch(e) { console.error('[Chat] save:', e); }
-    if (inp) inp.value = '';
-    _updateChatBadge();
-    _renderChatCenter();
+  function _chatAddUser() {
+    var nameEl  = document.getElementById('cu-name');
+    var emailEl = document.getElementById('cu-email');
+    var name  = nameEl  ? nameEl.value.trim()  : '';
+    var email = emailEl ? emailEl.value.trim().toLowerCase() : '';
+    if (!email) { try{Utils.showToast('Email obligatorio');}catch(_){} return; }
+    var users = State.get.chatUsers ? State.get.chatUsers() : [];
+    if (users.find(function(u){ return u.email===email; })) {
+      try{Utils.showToast('Este usuario ya existe');}catch(_){} return;
+    }
+    users.push({ uid: email, email: email, name: name||email });
+    try { State.set.chatUsers(users); } catch(_) {}
+    openChatUsersMgr();
   }
+
+  function _chatRemoveUser(idx) {
+    var users = State.get.chatUsers ? State.get.chatUsers() : [];
+    users.splice(idx, 1);
+    try { State.set.chatUsers(users); } catch(_) {}
+    openChatUsersMgr();
+  }
+
+
 
 
   async function _notifRequestPermission() {
@@ -14393,7 +14558,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellSwitchTab, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatStartNew, _chatSend, _updateChatBadge }; // v1.2.58
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellSwitchTab, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatStartNew, _chatSend, _chatAddUser, _chatRemoveUser, openChatUsersMgr, _updateChatBadge }; // v1.2.59
 })();
 
 // ══════════════════════════════════════════
