@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-56-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-57-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.56-dev</title>
+<title>Dashwey v1.2.57-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5605,8 +5605,24 @@ function _authTabSafe(tab) {
     </div>
     <!-- CENTRO: título módulo (absolute, para compatibilidad JS) -->
     <h1 id="header-title" style="display:none;">DASHBOARD</h1>
-    <!-- DERECHA: avatar / ajustes -->
-    <!-- v9.5.84: hamburger 3 barras en lugar de avatar circular -->
+    <!-- DERECHA: campana + ajustes -->
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <!-- Campana — centro de informes -->
+      <button id="dash-bell-btn" onclick="App.dash.openBellCenter()"
+        aria-label="Informes y alertas"
+        style="position:relative;width:36px;height:36px;border-radius:10px;background:none;border:none;
+               cursor:pointer;display:flex;align-items:center;justify-content:center;
+               -webkit-tap-highlight-color:transparent;touch-action:manipulation">
+        <svg width="20" height="20" fill="none" stroke="var(--ink)" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" style="pointer-events:none">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <span id="bell-badge" style="display:none;position:absolute;top:4px;right:4px;
+          width:8px;height:8px;border-radius:50%;background:var(--red);
+          border:2px solid var(--bg)"></span>
+      </button>
+      <!-- v9.5.84: hamburger 3 barras en lugar de avatar circular -->
     <button id="header-avatar-btn" class="header-menu-btn" onclick="App.ui.openSettings()" aria-label="Menú"
       style="width:36px;height:36px;border-radius:10px;background:none;border:none;cursor:pointer;
              display:flex;align-items:center;justify-content:center;flex-shrink:0;
@@ -5617,6 +5633,7 @@ function _authTabSafe(tab) {
         <rect x="2" y="15" width="18" height="2.2" rx="1.1" fill="var(--ink)"/>
       </svg>
     </button>
+    </div><!-- /header-right -->
     <!-- hidden compat -->
     <span id="settings-label" style="display:none">Settings</span>
     <div id="sync-badge" style="display:none"><div id="sync-dot" class="local"></div><span id="sync-label"></span></div>
@@ -8578,7 +8595,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.56-dev';
+  const _APP_VERSION = 'v1.2.57-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -10354,6 +10371,10 @@ const dash = (() => {
 
     // Aplicar modo dashboard al final del render (cache guard interno evita trabajo redundante)
     _applyDashMode();
+    // Sincronizar botón Aceptar rojo
+    if (typeof _updateAcceptBtn === 'function') _updateAcceptBtn();
+    // v1.2.57: actualizar badge campana
+    try { _updateBellBadge(); } catch(_) {}
     } finally {
       _isRendering = false; // v1.2.22: liberar guard — siempre, incluso si algo lanzó
     }
@@ -12919,7 +12940,296 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // FCM token se registra en Firestore para push server-side.
   // ══════════════════════════════════════════════════════════
 
-  // ── Solicitar permiso de notificaciones ─────────────────
+  // ══════════════════════════════════════════════════════════════
+  // BELL CENTER v1.2.57 — Centro de informes y alertas
+  // Overlay centrado con fondo oscuro, pestañas por tipo de informe
+  // ══════════════════════════════════════════════════════════════
+
+  var _bellTab = 'hoy'; // pestaña activa por defecto
+
+  function _updateBellBadge() {
+    try {
+      var badge = document.getElementById('bell-badge');
+      if (!badge) return;
+      var prods = State.get.productos() || [];
+      var cad = KPI.getCaducidadesAlerta ? KPI.getCaducidadesAlerta() : [];
+      var stockBajos = prods.filter(function(p){ return p.stockActual <= (p.stockMinimo || p.stockMin || 3); });
+      var pvpBajos   = prods.filter(function(p){ var mg = p.pvp>0?Math.round(((p.pvp-(p.precioCompra||0)*1.1)/p.pvp)*100):100; return mg < 30; });
+      var pending    = (State.get.pendingOrders ? State.get.pendingOrders() : []).filter(function(o){ return o.status === 'pending'; });
+      var total = cad.length + stockBajos.length + pvpBajos.length + pending.length;
+      badge.style.display = total > 0 ? 'block' : 'none';
+    } catch(e) {}
+  }
+
+  function openBellCenter() {
+    try {
+      _bellTab = _bellTab || 'hoy';
+      _renderBellCenter();
+    } catch(e) { console.error('[Bell] openBellCenter error:', e); }
+  }
+
+  function _closeBellCenter() {
+    var ov = document.getElementById('bell-center-overlay');
+    if (!ov) return;
+    ov.style.opacity = '0';
+    var box = ov.querySelector('.bell-box');
+    if (box) box.style.transform = 'scale(0.94)';
+    setTimeout(function(){ if (ov.parentNode) ov.remove(); document.body.style.overflow = ''; }, 200);
+  }
+  window._closeBellCenter = _closeBellCenter;
+
+  function _renderBellCenter() {
+    var existing = document.getElementById('bell-center-overlay');
+    if (existing) existing.remove();
+
+    // ── Datos ──────────────────────────────────────────────────
+    var period   = State.get.period();
+    var prods    = State.get.productos() || [];
+    var ventas   = State.get.ventas() || [];
+    var cuentas  = State.get.cuentas() || [];
+    var visitas  = State.get.visitasComerciales ? State.get.visitasComerciales() : [];
+    var pending  = State.get.pendingOrders ? (State.get.pendingOrders() || []).filter(function(o){ return o.status==='pending'; }) : [];
+    var historial = State.get.historialPedidos ? State.get.historialPedidos() : [];
+    var cad      = KPI.getCaducidadesAlerta ? KPI.getCaducidadesAlerta() : [];
+
+    var hoy     = new Date(); hoy.setHours(0,0,0,0);
+    var manana  = new Date(hoy); manana.setDate(hoy.getDate()+1);
+    var en7     = new Date(hoy); en7.setDate(hoy.getDate()+7);
+
+    var fmt = function(n){ try{return Utils.feur(n);}catch(_){return (+(n||0)).toFixed(2).replace('.',',')+' €';} };
+    var esc2 = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'').replace(/&/g,'&amp;');} };
+    var fmtD = function(iso){
+      try{ var d=new Date(iso); var pad=function(n){return String(n).padStart(2,'0');};
+        var M=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        return pad(d.getDate())+' '+M[d.getMonth()]; } catch(_){ return iso||'—'; }
+    };
+
+    // ── KPIs del día ───────────────────────────────────────────
+    var ventasHoy = ventas.filter(function(v){ var d=new Date(v.fecha); return d>=hoy && d<manana; });
+    var totalHoy  = ventasHoy.reduce(function(s,v){ return s+(v.total||((v.qty||1)*(v.pvp||0))); }, 0);
+
+    // ── KPIs del mes ──────────────────────────────────────────
+    var mesStart = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    var ventasMes = ventas.filter(function(v){ var d=new Date(v.fecha); return d>=mesStart; });
+    var totalMes  = ventasMes.reduce(function(s,v){ return s+(v.total||((v.qty||1)*(v.pvp||0))); }, 0);
+
+    // ── KPIs del año ──────────────────────────────────────────
+    var anioStart = new Date(hoy.getFullYear(), 0, 1);
+    var ventasAnio = ventas.filter(function(v){ var d=new Date(v.fecha); return d>=anioStart; });
+    var totalAnio  = ventasAnio.reduce(function(s,v){ return s+(v.total||((v.qty||1)*(v.pvp||0))); }, 0);
+
+    // ── Saldo bancario ─────────────────────────────────────────
+    var saldoTotal = cuentas.reduce(function(s,c){ return s+(c.saldo||0); }, 0);
+
+    // ── Alertas ────────────────────────────────────────────────
+    var stockBajos = prods.filter(function(p){ return (p.stockActual||0) <= (p.stockMinimo||p.stockMin||3); });
+    var pvpBajos   = prods.filter(function(p){ var mg=p.pvp>0?Math.round(((p.pvp-(p.precioCompra||0)*1.1)/p.pvp)*100):100; return mg<30; });
+    var nAlertas   = cad.length + stockBajos.length + pvpBajos.length + pending.length;
+
+    // ── Próximas visitas ───────────────────────────────────────
+    var visitasFut = visitas.filter(function(v){ return new Date(v.fecha) >= hoy; })
+      .sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); }).slice(0,5);
+
+    // ── Tabs ──────────────────────────────────────────────────
+    var tabs = [
+      {id:'hoy',      label:'Hoy'},
+      {id:'ventas',   label:'Ventas'},
+      {id:'bancario', label:'Banco'},
+      {id:'entregas', label:'Entregas'},
+      {id:'agenda',   label:'Agenda'},
+      {id:'alertas',  label:'Alertas' + (nAlertas>0?' ('+nAlertas+')':'')},
+    ];
+    var t = _bellTab;
+
+    var tabBar = '<div style="display:flex;gap:0;border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0;-webkit-overflow-scrolling:touch;scrollbar-width:none">' +
+      tabs.map(function(tab){
+        var active = tab.id === t;
+        return '<button onclick="App.dash._bellSwitchTab(\''+tab.id+'\')" '+
+          'style="flex-shrink:0;padding:10px 14px;border:none;background:none;font-size:12px;font-weight:'+(active?'800':'600')+';'+
+          'color:'+(active?'var(--red)':'var(--ink-soft)')+';cursor:pointer;border-bottom:2px solid '+(active?'var(--red)':'transparent')+';'+
+          'font-family:var(--font);white-space:nowrap;touch-action:manipulation">'+tab.label+'</button>';
+      }).join('') +
+    '</div>';
+
+    // ── Contenido por tab ─────────────────────────────────────
+    var content = '';
+
+    // Fila KPI reutilizable
+    var kpiRow = function(label, val, color) {
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">'+
+        '<div style="font-size:13px;color:var(--ink-soft)">'+label+'</div>'+
+        '<div style="font-size:14px;font-weight:700;color:'+(color||'var(--ink)')+'">'+val+'</div>'+
+      '</div>';
+    };
+
+    if (t === 'hoy') {
+      content =
+        '<div style="padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Resumen de hoy</div>' +
+        kpiRow('Ventas', fmt(totalHoy), totalHoy>0?'var(--green)':'var(--ink)') +
+        kpiRow('Recibos', ventasHoy.length + ' tickets') +
+        kpiRow('Pedidos pendientes', pending.length, pending.length>0?'var(--red)':'var(--ink)') +
+        kpiRow('Saldo bancario', fmt(saldoTotal)) +
+        (cad.length>0?'<div style="margin-top:12px;padding:10px 12px;background:var(--red-s);border-radius:12px;font-size:12px;font-weight:700;color:var(--red)">⚠️ '+cad.length+' artículo'+(cad.length!==1?'s':'')+' próximos a caducar</div>':'') +
+        (stockBajos.length>0?'<div style="margin-top:8px;padding:10px 12px;background:#FFF7ED;border-radius:12px;font-size:12px;font-weight:700;color:#F97316">📦 '+stockBajos.length+' artículo'+(stockBajos.length!==1?'s':'')+' con stock bajo</div>':'');
+    }
+    else if (t === 'ventas') {
+      content =
+        '<div style="padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Evolución de ventas</div>' +
+        kpiRow('Hoy', fmt(totalHoy) + ' · ' + ventasHoy.length + ' tickets') +
+        kpiRow('Este mes', fmt(totalMes) + ' · ' + ventasMes.length + ' tickets') +
+        kpiRow('Este año', fmt(totalAnio) + ' · ' + ventasAnio.length + ' tickets') +
+        kpiRow('Ticket medio (mes)', ventasMes.length>0?fmt(totalMes/ventasMes.length):'—');
+    }
+    else if (t === 'bancario') {
+      content =
+        '<div style="padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Estado bancario</div>' +
+        kpiRow('Saldo total', fmt(saldoTotal), saldoTotal>=0?'var(--green)':'var(--red)') +
+        cuentas.map(function(c){ return kpiRow(esc2(c.nombre), fmt(c.saldo||0), (c.saldo||0)>=0?'var(--ink)':'var(--red)'); }).join('') +
+        (cuentas.length===0?'<div style="text-align:center;padding:24px;color:var(--ink-soft);font-size:13px">Sin cuentas registradas</div>':'');
+    }
+    else if (t === 'entregas') {
+      var entPend = pending;
+      var entHist = historial.slice().reverse().slice(0,8);
+      content =
+        '<div style="padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Pedidos pendientes ('+entPend.length+')</div>' +
+        (entPend.length===0?'<div style="color:var(--ink-soft);font-size:13px;padding:10px 0">Sin pedidos pendientes ✓</div>':
+          entPend.map(function(o){
+            var prov = State.get.prov(o.provId);
+            var n = (o.items||[]).length;
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)">'+
+              '<div><div style="font-size:13px;font-weight:600;color:var(--ink)">'+(prov?esc2(prov.nombre):o.provId)+'</div>'+
+              '<div style="font-size:11px;color:var(--ink-soft)">'+fmtD(o.date)+' · '+n+' artículo'+(n!==1?'s':'')+'</div></div>'+
+              '<span style="font-size:10px;font-weight:800;color:var(--red);background:var(--red-s);padding:3px 8px;border-radius:8px">PENDIENTE</span>'+
+            '</div>';
+          }).join('')
+        ) +
+        '<div style="padding:12px 0 4px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase;margin-top:8px">Últimas recepciones</div>' +
+        (entHist.length===0?'<div style="color:var(--ink-soft);font-size:13px">Sin historial</div>':
+          entHist.map(function(p){
+            var prov = State.get.prov(p.provId);
+            var n = (p.items||[]).length;
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">'+
+              '<div><div style="font-size:13px;font-weight:600;color:var(--ink)">'+(prov?esc2(prov.nombre):p.provId)+'</div>'+
+              '<div style="font-size:11px;color:var(--ink-soft)">'+fmtD(p.fecha)+' · '+n+' artículo'+(n!==1?'s':'')+'</div></div>'+
+              '<span style="font-size:10px;font-weight:800;color:var(--green);background:#DCFCE7;padding:3px 8px;border-radius:8px">RECIBIDO</span>'+
+            '</div>';
+          }).join('')
+        );
+    }
+    else if (t === 'agenda') {
+      var hoy7 = en7;
+      var vizFut = visitasFut;
+      content =
+        '<div style="padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Próximas visitas comerciales</div>' +
+        (vizFut.length===0?'<div style="color:var(--ink-soft);font-size:13px;padding:10px 0">Sin visitas programadas</div>':
+          vizFut.map(function(v){
+            var d = new Date(v.fecha);
+            var esHoy = d>=hoy && d<manana;
+            var diff  = Math.ceil((d-hoy)/(1000*60*60*24));
+            var cuandoLbl = esHoy?'<span style="color:var(--red);font-weight:800">Hoy</span>':
+              diff===1?'<span style="color:#F97316;font-weight:700">Mañana</span>':
+              '<span style="color:var(--ink-soft)">en '+diff+' días</span>';
+            return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">'+
+              '<div style="font-size:20px;width:28px;text-align:center">👤</div>'+
+              '<div style="flex:1">'+
+                '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(v.nombre||v.agente||'Visita')+'</div>'+
+                '<div style="font-size:11px;color:var(--ink-soft);margin-top:1px">'+fmtD(v.fecha)+'</div>'+
+              '</div>'+
+              cuandoLbl+
+            '</div>';
+          }).join('')
+        ) +
+        '<div style="margin-top:12px;padding:4px 0 8px;font-size:11px;font-weight:700;color:var(--ink-soft);letter-spacing:.6px;text-transform:uppercase">Pedidos programados ('+pending.length+')</div>' +
+        (pending.length===0?'<div style="color:var(--ink-soft);font-size:13px">Sin pedidos pendientes</div>':
+          pending.slice(0,5).map(function(o){
+            var prov = State.get.prov(o.provId);
+            return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
+              '<div style="font-size:18px">🚚</div>'+
+              '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--ink)">'+(prov?esc2(prov.nombre):o.provId)+'</div>'+
+              '<div style="font-size:11px;color:var(--ink-soft)">'+fmtD(o.date)+'</div></div>'+
+            '</div>';
+          }).join('')
+        );
+    }
+    else if (t === 'alertas') {
+      content =
+        (cad.length===0 && stockBajos.length===0 && pvpBajos.length===0 && pending.length===0
+          ? '<div style="text-align:center;padding:32px 16px"><div style="font-size:40px;margin-bottom:12px">✅</div><div style="font-size:15px;font-weight:700;color:var(--ink)">Sin alertas activas</div><div style="font-size:13px;color:var(--ink-soft);margin-top:6px">Todo en orden</div></div>'
+          :
+          (cad.length>0?
+            '<div style="padding:4px 0 6px;font-size:11px;font-weight:700;color:var(--red);letter-spacing:.6px;text-transform:uppercase">Caducidades próximas ('+cad.length+')</div>' +
+            cad.map(function(x){
+              var p=x.prod, dias=x.diasRestantes;
+              return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">'+
+                '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(p.nombre)+'</div>'+
+                '<span style="font-size:11px;font-weight:800;color:var(--red)">'+
+                  (dias<=0?'CADUCADO':dias===1?'Mañana':dias+' días')+'</span>'+
+              '</div>';
+            }).join('') : '') +
+          (stockBajos.length>0?
+            '<div style="padding:12px 0 6px;font-size:11px;font-weight:700;color:#F97316;letter-spacing:.6px;text-transform:uppercase">Stock bajo ('+stockBajos.length+')</div>' +
+            stockBajos.map(function(p){
+              return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">'+
+                '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(p.nombre)+'</div>'+
+                '<span style="font-size:11px;font-weight:800;color:#F97316">'+((p.stockActual||0)+' uds')+'</span>'+
+              '</div>';
+            }).join('') : '') +
+          (pvpBajos.length>0?
+            '<div style="padding:12px 0 6px;font-size:11px;font-weight:700;color:#2563EB;letter-spacing:.6px;text-transform:uppercase">PVP &lt;30% margen ('+pvpBajos.length+')</div>' +
+            pvpBajos.map(function(p){
+              var mg=p.pvp>0?Math.round(((p.pvp-(p.precioCompra||0)*1.1)/p.pvp)*100):0;
+              return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">'+
+                '<div style="font-size:13px;font-weight:600;color:var(--ink)">'+esc2(p.nombre)+'</div>'+
+                '<span style="font-size:11px;font-weight:800;color:#2563EB">'+mg+'% mg</span>'+
+              '</div>';
+            }).join('') : '')
+        );
+    }
+
+    // ── Montar overlay ────────────────────────────────────────
+    var ov = document.createElement('div');
+    ov.id = 'bell-center-overlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:9998',
+      'display:flex;align-items:center;justify-content:center',
+      'background:rgba(0,0,0,0.72);padding:16px',
+      'font-family:var(--font);opacity:0;transition:opacity 0.18s ease',
+    ].join(';');
+    ov.innerHTML =
+      '<div class="bell-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;'+
+           'max-height:calc(100dvh - 48px);display:flex;flex-direction:column;overflow:hidden;'+
+           'box-shadow:0 24px 64px rgba(0,0,0,0.32);transform:scale(0.94);'+
+           'transition:transform 0.18s var(--spring)">' +
+        // Header
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 18px 14px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+          '<div style="font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-0.3px">Informes y Alertas</div>' +
+          '<button onclick="window._closeBellCenter()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center">×</button>' +
+        '</div>' +
+        // Tab bar
+        tabBar +
+        // Content
+        '<div style="flex:1;overflow-y:auto;padding:14px 16px 20px;-webkit-overflow-scrolling:touch;scrollbar-width:none">' +
+          content +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(ov);
+    document.body.style.overflow = 'hidden';
+    ov.addEventListener('click', function(e){ if (e.target === ov) _closeBellCenter(); });
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        ov.style.opacity = '1';
+        var box = ov.querySelector('.bell-box');
+        if (box) box.style.transform = 'scale(1)';
+      });
+    });
+    console.log('[Bell] openBellCenter tab:', t, '| alertas:', nAlertas);
+  }
+
+  function _bellSwitchTab(tabId) {
+    _bellTab = tabId;
+    _renderBellCenter();
+  }
   async function _notifRequestPermission() {
     if (!('Notification' in window)) return false;
     if (Notification.permission === 'granted') return true;
@@ -13870,7 +14180,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     setTimeout(() => menu.remove(), 200);
   }
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin }; // v1.2.43
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellSwitchTab, _updateBellBadge }; // v1.2.57
 })();
 
 // ══════════════════════════════════════════
