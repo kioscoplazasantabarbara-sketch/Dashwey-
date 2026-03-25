@@ -91,7 +91,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-66-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-67-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -105,7 +105,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.66-dev</title>
+<title>Dashwey v1.2.67-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6244,6 +6244,8 @@ import { getFirestore, doc, getDoc, setDoc,
 // Cuando estén pegados, cambia FIREBASE_ENABLED a true.
 // ────────────────────────────────────────────────────────────────
 const FIREBASE_ENABLED = true;
+// v1.2.67: exponer como global para scripts no-module (App principal)
+window.FIREBASE_ENABLED = FIREBASE_ENABLED;
 
 const firebaseConfig = {
   apiKey:            'AIzaSyBWfiUMB2q8dHojUTW731suaPx_98Kp2Bk',
@@ -6269,8 +6271,8 @@ if (FIREBASE_ENABLED) {
   _fbApp = initializeApp(firebaseConfig);
   _db    = getFirestore(_fbApp);
   _auth  = getAuth(_fbApp);
-
-  // v8.8.4: SIN signInAnonymously al arranque.
+  // v1.2.67: exponer _db para scripts no-module (chat, etc.)
+  window._firestoreDb = _db; SIN signInAnonymously al arranque.
   // Firebase restaura la sesión real desde localStorage automáticamente.
   // signInAnonymously causaba una carrera que mostraba el login siempre.
 
@@ -8631,7 +8633,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.66-dev';
+  const _APP_VERSION = 'v1.2.67-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12983,6 +12985,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // ══════════════════════════════════════════════════════════
 
   // ══════════════════════════════════════════════════════════════
+  // v1.2.67: alias local para FIREBASE_ENABLED (definida en script type=module)
+  var FIREBASE_ENABLED = window.FIREBASE_ENABLED !== undefined ? window.FIREBASE_ENABLED : false;
+
   // ══════════════════════════════════════════════════════════════
   // BELL CENTER v1.2.61 — Notificaciones estilo Facebook
   // Genera notificaciones dinámicamente desde el estado de la app.
@@ -13257,7 +13262,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   // ── Referencia a la colección de mensajes ───────────────────
   function _chatMsgsRef(convId) {
-    return collection(_db, 'chats', convId, 'messages');
+    var db = window._firestoreDb;
+    if (!db) throw new Error('Firestore not initialized');
+    return collection(db, 'chats', convId, 'messages');
   }
 
   // ── Badge no leídos ─────────────────────────────────────────
@@ -13309,6 +13316,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     // Suscribir a mensajes en tiempo real
     var myUid = window._DashweyFirebase && window._DashweyFirebase.uid;
+    var _db = window._firestoreDb; // v1.2.67: from window
     if (!myUid || !FIREBASE_ENABLED || !_db) {
       console.warn('[Chat] Firebase no disponible — modo offline');
       return;
@@ -13367,6 +13375,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     _renderChatCenter();
 
     // Guardar en Firestore (y en localStorage como fallback)
+    var _db = window._firestoreDb; // v1.2.67
     if (FIREBASE_ENABLED && _db && myUid) {
       var msgsRef = _chatMsgsRef(convId);
       addDoc(msgsRef, {
@@ -16154,6 +16163,13 @@ const alm = (() => {
       <div class="prov-list">
         ${State.get.proveedores().map(p => `
           <div class="prov-row${sel === p.id ? ' sel' : ''}" id="prow-${p.id}">
+            ${p.banner ? `<div style="position:relative;height:44px;border-radius:10px 10px 0 0;overflow:hidden;margin:-1px -1px 0">
+              <img src="${p.banner}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(1px) brightness(0.55);transform:scale(1.04)">
+              <div style="position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:0 12px;height:100%">
+                <span style="font-size:18px">${esc(p.icon||'🏪')}</span>
+                <span style="font-size:13px;font-weight:800;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.6)">${esc(p.nombre)}</span>
+              </div>
+            </div>` : ''}
             <div class="prov-row-body">
               <button class="prov-row-select" onclick="App.alm.selProv('${p.id}')">
                 <div class="prov-row-name">${esc(p.nombre)}</div>
@@ -19384,20 +19400,24 @@ const alm = (() => {
       const provIcon   = prov ? (prov.icon || '📦') : '📦';
       const provBanner = prov && prov.banner ? prov.banner : null;
 
-      const bannerHtml = provBanner
-        ? '<div style="height:48px;border-radius:10px;overflow:hidden;margin-bottom:8px;position:relative">' +
-            '<img src="'+provBanner+'" style="width:100%;height:100%;object-fit:cover;filter:brightness(0.8)">' +
-            '<div style="position:absolute;inset:0;background:linear-gradient(to right,rgba(0,0,0,0.5),transparent);display:flex;align-items:center;padding:0 12px">' +
-              '<span style="font-size:18px;margin-right:8px">'+provIcon+'</span>' +
-              '<span style="font-size:13px;font-weight:800;color:#fff">'+esc(provNombre)+'</span>' +
-              '<span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.8);margin-left:auto">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</span>' +
-            '</div>' +
-          '</div>'
-        : '<div style="display:flex;align-items:center;gap:8px;padding:10px 0 6px;border-bottom:2px solid var(--border)">' +
-            '<span style="font-size:18px">'+provIcon+'</span>' +
-            '<div style="font-size:13px;font-weight:800;color:var(--ink)">'+esc(provNombre)+'</div>' +
-            '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);margin-left:auto">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</span>' +
-          '</div>';
+      // v1.2.67: banner integrado en el header de sección con fondo difuminado
+      var bannerHtml = '<div style="position:relative;border-radius:14px;overflow:hidden;margin-bottom:6px;' +
+          'background:'+(provBanner?'transparent':'var(--bg)')+';">' +
+          (provBanner
+            ? '<img src="'+provBanner+'" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(1px) brightness(0.55);transform:scale(1.04)">' +
+              '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:10px;padding:10px 14px;">' +
+                '<span style="font-size:22px;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5))">'+provIcon+'</span>' +
+                '<div style="flex:1">' +
+                  '<div style="font-size:14px;font-weight:800;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.7)">'+esc(provNombre)+'</div>' +
+                  '<div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:1px">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</div>' +
+                '</div>' +
+              '</div>'
+            : '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;">' +
+                '<span style="font-size:18px">'+provIcon+'</span>' +
+                '<div style="font-size:13px;font-weight:800;color:var(--ink)">'+esc(provNombre)+'</div>' +
+                '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);margin-left:auto">'+orders.length+' pedido'+(orders.length!==1?'s':'')+'</span>' +
+              '</div>'
+          ) + '</div>';
 
       const rows = orders.map(order => {
         const nArt  = (order.items || []).length;
