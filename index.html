@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-89-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-90-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -130,7 +130,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.89-dev</title>
+<title>Dashwey v1.2.90-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8756,7 +8756,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.89-dev';
+  const _APP_VERSION = 'v1.2.90-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18502,7 +18502,7 @@ function _parseIva(iva) {
     _almOverlay, _closeAlmOverlay,
     openHistorialPedidos, _reabrirPedidoHistorial,
     _loadProvBanner, _clearProvBanner,
-    _abrirPedidoProgramadoById, _eliminarPedidoProgramado,
+    _abrirPedidoProgramadoById, _eliminarPedidoProgramado, _eliminarPedidosProveedor,
     /* v9.5.48: _onBannerUpload, _clearBanner removed */
     _editProvFromPicker, _toggleDayOrder, _toggleDayDeliv,
     // Catálogo
@@ -19614,6 +19614,24 @@ function _parseIva(iva) {
     setTimeout(function() { openPendingOrders(); }, 220);
   }
 
+  // v1.2.89: eliminar todos los pedidos pendientes de un proveedor de una vez
+  function _eliminarPedidosProveedor(provId) {
+    var orders = (State.get.pendingOrders()||[]).filter(function(o){
+      return o.provId === provId && o.status === 'pending';
+    });
+    if (!orders.length) return;
+    var msg = orders.length === 1
+      ? '¿Eliminar este pedido programado?'
+      : '¿Eliminar los ' + orders.length + ' pedidos de este proveedor?';
+    if (!confirm(msg)) return;
+    orders.forEach(function(o){
+      try { State.set.removePendingOrder(o.id); } catch(_) {}
+    });
+    updateBadge();
+    window._closeAlmOverlay();
+    setTimeout(function() { openPendingOrders(); }, 220);
+  }
+
   // v1.2.53: openHistorialPedidos — historial de pedidos confirmados + reabrir en check-modal
   function openHistorialPedidos() {
     const historial = (State.get.historialPedidos() || []).slice().reverse();
@@ -20070,17 +20088,15 @@ function _parseIva(iva) {
       // ── Card principal del proveedor ─────────────────────
       var cardId = 'truck-prov-'+provId.replace(/[^a-z0-9]/gi,'_');
       var cardHtml =
-        '<div data-order-id="'+mainId+'" data-prov-id="'+provId+'" ' +
+        '<div data-order-id="'+mainId+'" data-prov-id="'+provId+'" data-order-ids="'+orderIds.join(',')+'" ' +
              'style="display:flex;align-items:center;gap:12px;padding:14px 2px;' +
                     'border-bottom:1px solid var(--border);cursor:pointer;position:relative;' +
                     'transition:transform 0.18s ease,opacity 0.18s ease;touch-action:pan-y"' +
-             ' onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(''+mainId+'');},260)">' +
-          // Icono proveedor
+             ' onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(\''+mainId+'\');},260)">' +
           '<div style="width:44px;height:44px;border-radius:12px;background:var(--red-s);' +
                'display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">' +
             provIcon +
           '</div>' +
-          // Cuerpo: nombre > artículos > timeline
           '<div style="flex:1;min-width:0">' +
             '<div style="font-size:14px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
               esc2(provNombre) +
@@ -20091,21 +20107,16 @@ function _parseIva(iva) {
             '</div>' +
             timelineHtml +
           '</div>' +
-          // Precio + eliminar
           '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">' +
             '<div style="font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.4px">'+totFmt+'</div>' +
-            '<button onclick="event.stopPropagation();(function(){' +
-              'var ids='+JSON.stringify(orderIds)+';' +
-              'ids.forEach(function(id){try{App.alm._eliminarPedidoProgramado(id);}catch(_){}});' +
-            '})()" ' +
-            'style="display:inline-flex;align-items:center;gap:4px;color:var(--red);font-size:11px;' +
-                   'font-weight:700;background:none;border:none;cursor:pointer;font-family:var(--font);' +
-                   'padding:2px 0;touch-action:manipulation">' +
+            '<button data-del-prov="'+provId+'" onclick="event.stopPropagation();App.alm._eliminarPedidosProveedor(this.dataset.delProv)" ' +
+                    'style="display:inline-flex;align-items:center;gap:4px;color:var(--red);font-size:11px;' +
+                           'font-weight:700;background:none;border:none;cursor:pointer;font-family:var(--font);' +
+                           'padding:2px 0;touch-action:manipulation">' +
               trashSvg+'&nbsp;Eliminar' +
             '</button>' +
           '</div>' +
         '</div>';
-
       allRows.push({ id: mainId, html: cardHtml, provId: provId });
       return cardHtml;
     }).join('');
