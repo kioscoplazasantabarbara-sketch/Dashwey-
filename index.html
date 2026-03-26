@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-98-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-99-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.2.98-dev</title>
+<title>Dashwey v1.2.99-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1089,6 +1089,45 @@ body[data-dash-snap="1"] .snap-narrative-zone {
   font-size: 18px; font-weight: 800;
   color: var(--ink); letter-spacing: -0.5px;
 }
+
+/* ── Snap chart — gráfica de barras en zona central ───────────────────── */
+.snap-chart-wrap {
+  display: none;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  position: relative;
+  margin-top: 16px;
+}
+body[data-dash-snap="1"] .snap-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.snap-chart-svg {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: visible;
+}
+.snap-chart-tooltip {
+  position: absolute;
+  background: var(--ink);
+  color: #fff;
+  font-family: 'Inter', var(--font), sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  white-space: nowrap;
+  z-index: 10;
+  transform: translateX(-50%);
+}
+.snap-chart-tooltip.visible { opacity: 1; }
 
 /* ── Narrative typography ──────────────────────────────────────────────── */
 .snap-narrative-badge {
@@ -6110,6 +6149,13 @@ function _authTabSafe(tab) {
                   <div class="snap-kpi-mini-val" id="snap-hora-rendimiento">—</div>
                 </div>
               </div>
+              <!-- SNAP CHART — zona central entre KPIs y narrativa -->
+              <div class="snap-chart-wrap" id="snap-chart-rendimiento">
+                <svg class="snap-chart-svg" id="snap-chart-svg-rendimiento"
+                     preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                </svg>
+                <div class="snap-chart-tooltip" id="snap-chart-tip-rendimiento"></div>
+              </div>
             </div>
             <!-- SNAP NARRATIVE ZONE -->
             <div class="snap-narrative-zone" id="snap-narrative-rendimiento">
@@ -9061,7 +9107,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.98-dev';
+  const _APP_VERSION = 'v1.2.99-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15562,6 +15608,131 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     return '';
   }
 
+  // ── Gráfica de barras por hora — v1.2.99 ────────────────────────────────
+  function _snapRenderChart(cardId, period) {
+    var wrap = document.getElementById('snap-chart-' + cardId);
+    var svg  = document.getElementById('snap-chart-svg-' + cardId);
+    var tip  = document.getElementById('snap-chart-tip-' + cardId);
+    if (!wrap || !svg) return;
+
+    // Calcular datos: ventas agrupadas por hora (0-23)
+    var vals = new Array(24).fill(0);
+    try {
+      var ventas = KPI.ventasEnPeriodo(period) || [];
+      ventas.forEach(function(v) {
+        var h = new Date(v.fecha).getHours();
+        var ing = (v.items || []).reduce(function(s, it) {
+          return s + (it.pvp || 0) * (it.qty || 1);
+        }, 0) || (v.total || 0);
+        vals[h] += ing;
+      });
+    } catch(e) {
+      console.warn('[Dashwey snap chart] data error:', e);
+    }
+
+    var maxVal = Math.max.apply(null, vals) || 1;
+    // Round up to nearest 10€
+    var yMax = Math.ceil(maxVal / 10) * 10 || 10;
+
+    // Measure container
+    var W = wrap.clientWidth  || 300;
+    var H = wrap.clientHeight || 140;
+    if (H < 60) H = 120;
+
+    var padL = 36; // eje Y labels
+    var padR = 8;
+    var padT = 8;
+    var padB = 22; // eje X labels
+
+    var chartW = W - padL - padR;
+    var chartH = H - padT - padB;
+    var barW   = Math.max(2, (chartW / 24) - 2);
+    var gap    = (chartW / 24) - barW;
+
+    // Y gridlines: 0, 25%, 50%, 75%, 100%
+    var yLines = [0, 0.25, 0.5, 0.75, 1];
+    var svgParts = [];
+
+    svgParts.push('<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif">');
+
+    // Gridlines
+    yLines.forEach(function(pct) {
+      var y = padT + chartH * (1 - pct);
+      var yVal = yMax * pct;
+      var label = yVal >= 1000
+        ? (yVal/1000).toFixed(1)+'k'
+        : Math.round(yVal)+'€';
+      svgParts.push(
+        '<line x1="'+padL+'" y1="'+y+'" x2="'+(padL+chartW)+'" y2="'+y+'" '+
+        'stroke="rgba(0,0,0,0.06)" stroke-width="1"/>'+
+        '<text x="'+(padL-4)+'" y="'+(y+4)+'" text-anchor="end" '+
+        'fill="rgba(0,0,0,0.35)" font-size="9">'+label+'</text>'
+      );
+    });
+
+    // Bars
+    var RED = '#E53935';
+    var RED_LIGHT = 'rgba(229,57,53,0.15)';
+    vals.forEach(function(v, h) {
+      var barH  = v > 0 ? Math.max(3, (v / yMax) * chartH) : 0;
+      var x     = padL + h * (barW + gap) + gap/2;
+      var y     = padT + chartH - barH;
+      var fill  = v > 0 ? RED : RED_LIGHT;
+      var rx    = Math.min(3, barW/2);
+
+      svgParts.push(
+        '<rect class="snap-bar" data-h="'+h+'" data-v="'+v.toFixed(2)+'" '+
+        'x="'+x+'" y="'+y+'" width="'+barW+'" height="'+(barH||2)+'" '+
+        'rx="'+rx+'" fill="'+fill+'" cursor="pointer" '+
+        'style="-webkit-tap-highlight-color:transparent"/>'
+      );
+
+      // X axis label cada 4h
+      if (h % 4 === 0) {
+        svgParts.push(
+          '<text x="'+(x+barW/2)+'" y="'+(H-6)+'" text-anchor="middle" '+
+          'fill="rgba(0,0,0,0.35)" font-size="9">'+h+'h</text>'
+        );
+      }
+    });
+
+    svgParts.push('</svg>');
+    svg.outerHTML; // flush
+    wrap.querySelector('svg').outerHTML;
+    svg.innerHTML = '';
+    svg.setAttribute('width',  W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', '0 0 '+W+' '+H);
+
+    // Build DOM elements (avoid innerHTML parsing issues with SVG)
+    svg.innerHTML = svgParts.join('');
+
+    // Tooltip interaction
+    if (tip) {
+      svg.querySelectorAll('.snap-bar').forEach(function(bar) {
+        bar.addEventListener('touchstart', function(e) {
+          e.stopPropagation();
+          var h   = bar.dataset.h;
+          var v   = parseFloat(bar.dataset.v);
+          var x   = parseFloat(bar.getAttribute('x')) + parseFloat(bar.getAttribute('width'))/2;
+          var y   = parseFloat(bar.getAttribute('y'));
+          tip.textContent = h + ':00 — ' + v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+          tip.style.left = x + 'px';
+          tip.style.top  = Math.max(4, y - 36) + 'px';
+          tip.classList.add('visible');
+          bar.setAttribute('fill', '#B71C1C');
+          console.info('[Dashwey snap chart] tap hora:', h, 'importe:', v);
+          setTimeout(function() {
+            tip.classList.remove('visible');
+            bar.setAttribute('fill', v > 0 ? '#E53935' : 'rgba(229,57,53,0.15)');
+          }, 2000);
+        }, {passive: true});
+      });
+    }
+
+    console.info('[Dashwey snap chart] rendered cardId:', cardId, 'bars:', vals.filter(function(v){return v>0;}).length, 'max:', yMax);
+  }
+
   // ── Render completo de una tarjeta en modo snap ───────────────────────────
   function _snapRenderCard(cardId) {
     var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
@@ -15683,7 +15854,14 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (textEl && narrative) {
       setTimeout(function() {
         _snapTypewriter(textEl, narrative);
-      }, 500); // pequeño delay para que termine el counter-up primero
+      }, 500);
+    }
+
+    // Gráfica de barras — solo rendimiento (de momento)
+    if (cardId === 'rendimiento') {
+      setTimeout(function() {
+        _snapRenderChart(cardId, period);
+      }, 120);
     }
   }
 
