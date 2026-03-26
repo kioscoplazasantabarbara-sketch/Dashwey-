@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.2.88-dev
+   Dashwey Service Worker v1.2.89-dev
    Cache: dashwey-v1-2-84-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-2-88-dev';
+const CACHE_NAME  = 'dashwey-v1-2-89-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -61,7 +61,7 @@ self.addEventListener('activate', e => {
           clients.forEach(client => {
             client.postMessage({
               action: 'SW_UPDATED',
-              version: '1.2.88-dev'
+              version: '1.2.89-dev'
             });
           });
         } else {
@@ -70,14 +70,14 @@ self.addEventListener('activate', e => {
           const permission = (typeof Notification !== 'undefined')
             ? Notification.permission : 'denied';
           if (permission === 'granted') {
-            self.registration.showNotification('🆕 Dashwey v1.2.88-dev disponible', {
+            self.registration.showNotification('🆕 Dashwey v1.2.89-dev disponible', {
               body:     'Abre la app para aplicar la actualización.',
               icon:     'icon-192.png',
               badge:    'icon-192.png',
               tag:      'dashwey-update',
               renotify: true,
               vibrate:  [100, 50, 100],
-              data:     { action: 'update', version: '1.2.88-dev', url: '/' },
+              data:     { action: 'update', version: '1.2.89-dev', url: '/' },
             }).catch(() => {});
           }
         }
