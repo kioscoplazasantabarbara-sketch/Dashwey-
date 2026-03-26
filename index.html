@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-86-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-87-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -130,7 +130,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.86-dev</title>
+<title>Dashwey v1.2.87-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6357,6 +6357,9 @@ if (FIREBASE_ENABLED) {
   window._fsOrderBy         = function(field, dir) { return orderBy(field, dir||'asc'); };
   window._fsLimit           = function(n) { return limit(n); };
   window._fsOnSnapshot      = function(q, cb, errCb) { return onSnapshot(q, cb, errCb||function(){}); };
+  // v1.2.87: doc + setDoc expuestos para marcar mensajes como leídos en chat
+  window._fsDoc             = function(db, ...path) { return doc(db, ...path); };
+  window._fsSetDoc          = function(ref, data, opts) { return opts ? setDoc(ref, data, opts) : setDoc(ref, data); };
   // SIN signInAnonymously al arranque.
   // Firebase restaura la sesión real desde localStorage automáticamente.
   // signInAnonymously causaba una carrera que mostraba el login siempre.
@@ -8752,7 +8755,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.86-dev';
+  const _APP_VERSION = 'v1.2.87-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13588,7 +13591,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Crear overlay
     var ov = document.createElement('div');
     ov.id = 'bell-center-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease'; /* v1.2.87: raised above settings-drawer (9999) — was 9998 */
     ov.innerHTML =
       '<div class="bell-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;' +
         'height:auto;max-height:'+Math.max(boxMaxH,180)+'px;min-height:160px;display:flex;flex-direction:column;overflow:hidden;' +
@@ -13649,6 +13652,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     });
   }
 
+  // ── Variables de estado del chat ─────────────────────────────
+  // v1.2.87: declaradas explícitamente para evitar ReferenceError en strict mode
+  var _chatConvo     = null;  // UID del interlocutor activo, null = vista lista
+  var _chatUnsub     = null;  // Función de unsuscribe del onSnapshot activo
+  var _chatMsgsCache = [];    // Mensajes en memoria de la conversación activa
 
   function _chatConvId(uidA, uidB) {
     return [String(uidA), String(uidB)].sort().join('_');
@@ -13732,10 +13740,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         var myEmail = perfil.email || myUid;
         _chatMsgsCache.forEach(function(m) {
           if ((m.to === myUid || m.to === myEmail) && !m.read) {
+            m.read = true; // optimistic local
+            // v1.2.87: marcar como leído en Firestore usando _fsDoc + _fsSetDoc
             try {
-              var docRef = window._fsCollection(db, 'chats', convId, 'messages');
-              // No podemos hacer setDoc desde aquí sin doc() — usar localStorage fallback
-              m.read = true;
+              if (window._fsDoc && window._fsSetDoc && m.id && m.id.indexOf('tmp_') === -1) {
+                var msgDocRef = window._fsDoc(db, 'chats', convId, 'messages', m.id);
+                window._fsSetDoc(msgDocRef, { read: true }, { merge: true }).catch(function(){});
+              }
             } catch(_) {}
           }
         });
@@ -13956,9 +13967,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // ── Montar overlay ─────────────────────────────────────────────
     var ov = document.createElement('div');
     ov.id = 'chat-center-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;' +
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10050;display:flex;align-items:center;' +
       'justify-content:center;background:rgba(0,0,0,0.72);padding:16px;font-family:var(--font);' +
-      'opacity:0;transition:opacity 0.18s ease';
+      'opacity:0;transition:opacity 0.18s ease'; /* v1.2.87: raised above settings-drawer (9999) — was 9998 */
 
     // v1.2.78: altura adaptativa — sin convo: auto; con convo: usa Visual Viewport
     var boxStyle = isConvo
@@ -19895,7 +19906,7 @@ function _parseIva(iva) {
     var ov = document.createElement('div');
     ov.id = 'alm-center-overlay';
     ov.style.cssText = [
-      'position:fixed;inset:0;z-index:9998',
+      'position:fixed;inset:0;z-index:10050', /* v1.2.87: raised above settings-drawer (9999) — was 9998 */
       'display:flex;align-items:center;justify-content:center',
       'background:rgba(0,0,0,0.72);padding:16px',
       'font-family:var(--font)',
