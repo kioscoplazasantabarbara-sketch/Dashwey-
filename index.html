@@ -29,6 +29,18 @@
       config:  {}
     };
   }
+  /* ── Dashwey.utils.safeCall v1.2.86 ─────────────────────────────────
+     Wrapper defensivo para llamadas a funciones opcionales o futuras.
+     Uso: Dashwey.utils.safeCall(fn, 'nombre')(...args)
+     Solo para: nuevos módulos, plugins opcionales, callbacks en runtime.
+     NO usar para envolver código existente estable. */
+  Dashwey.utils.safeCall = function(fn, name) {
+    if (typeof fn !== 'function') {
+      console.warn('[Dashwey] Missing function:', name);
+      return function() {};
+    }
+    return fn;
+  };
   /* ── HEAD BOOTSTRAP v9.5.107 ────────────────────────────────────────
      Sin splash activo en HEAD. La función real _hideSplash() se define
      más adelante en el body y SOBRESCRIBE este stub automáticamente.
@@ -104,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-2-86-dev";
+      var CURRENT_CACHE = "dashwey-v1-2-87-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -118,7 +130,7 @@
 <link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
-<title>Dashwey v1.2.86-dev</title>
+<title>Dashwey v1.2.87-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6725,6 +6737,26 @@ window.t = (key) => window._DashweyI18n.t(key);
 // DASHWEY v8.0 — Arquitectura: State · KPI · Utils · ui · nav · dash · tpv · alm
 // ══════════════════════════════════════════
 
+/* ── safeCall v1.2.86 ────────────────────────────────────────────────────────
+   Wrapper defensivo para llamadas a funciones que pueden no estar definidas.
+   Uso: safeCall(fn, 'nombre')(...args)
+   Si fn no es función → console.warn + no-op (no crash, UI sigue usable).
+
+   CUÁNDO USAR:
+   - Funciones cargadas condicionalmente (plugins, Firebase, Capacitor)
+   - Callbacks pasados entre módulos en runtime
+   - Funciones expuestas a onclicks generados dinámicamente
+
+   NO USAR para envolver todo ciegamente — oculta bugs reales.
+   ──────────────────────────────────────────────────────────────────────────── */
+function safeCall(fn, name) {
+  if (typeof fn !== 'function') {
+    console.warn('[Dashwey] Missing function:', name || '(anonymous)');
+    return function() { return undefined; };
+  }
+  return fn;
+}
+
 // v1.2.62: _closeBellCenter global — safe wrapper before App init
 window._closeBellCenter = function() {
   var ov = document.getElementById('bell-center-overlay');
@@ -6751,9 +6783,13 @@ window._closeAlmOverlay = function() {
   var ov = document.getElementById('alm-center-overlay');
   if (!ov) return;
   ov.style.opacity = '0';
-  var box = ov.querySelector('div');
+  var box = ov.querySelector('.truck-box') || ov.querySelector('div');
   if (box) box.style.transform = 'scale(0.94)';
-  setTimeout(function(){ if (ov && ov.parentNode) ov.remove(); document.body.style.overflow = ''; }, 200);
+  setTimeout(function(){
+    if (ov && ov.parentNode) ov.remove();
+    document.body.style.overflow = '';
+    console.info('[Dashwey] truck overlay cerrado');
+  }, 200);
 };
 window._closeCmSummary = function() {
   var ov = document.getElementById('cm-summary-overlay');
@@ -8720,7 +8756,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.2.86-dev';
+  const _APP_VERSION = 'v1.2.87-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19919,147 +19955,247 @@ function _parseIva(iva) {
   // v1.2.60: openPendingOrders — muestra pedidos de TODOS los proveedores
   // v1.2.72: openPendingOrders — sin banner, info completa por pedido
   function openPendingOrders() {
-    const allOrders = (State.get.pendingOrders() || [])
-      .filter(o => o.status === 'pending')
-      .sort((a, b) => new Date(a.date) - new Date(b.date)); // más antiguos primero
+    console.info('[Dashwey] openPendingOrders — abriendo');
 
-    // ── Helpers de fecha ────────────────────────────────────────
-    const DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
-    const M      = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    var allOrders = (State.get.pendingOrders() || [])
+      .filter(function(o){ return o.status === 'pending'; })
+      .sort(function(a, b){ return new Date(a.date) - new Date(b.date); });
 
-    const fmtDate = iso => {
+    // ── Helpers ──────────────────────────────────────────────
+    var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
+    var MON    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    var esc2   = function(s){ try{return Utils.esc(s);}catch(_){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');} };
+
+    var fmtDate = function(iso) {
       try {
-        const d = new Date(iso);
+        var d = new Date(iso);
         return DNAMES[d.getDay()===0?6:d.getDay()-1] + ' ' +
-               String(d.getDate()).padStart(2,'0') + ' ' + M[d.getMonth()];
+               String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
       } catch(_) { return iso || '—'; }
     };
 
-    // Calcular fecha de entrega desde diasEntrega del proveedor
-    const calcEntrega = (fechaPedidoISO, provId) => {
-      const prov = State.get.prov(provId);
-      const de   = (prov && prov.diasEntrega) || [];
+    var calcEntrega = function(fechaPedidoISO, provId) {
+      var prov = State.get.prov(provId);
+      var de   = (prov && prov.diasEntrega) || [];
       if (!de.length) {
-        // Sin días configurados: +2 días laborales
-        const d = new Date(fechaPedidoISO);
-        d.setDate(d.getDate() + 2);
-        return d;
+        var d = new Date(fechaPedidoISO); d.setDate(d.getDate()+2); return d;
       }
-      const base = new Date(fechaPedidoISO);
-      for (let i = 1; i <= 14; i++) {
-        const d = new Date(base);
-        d.setDate(base.getDate() + i);
-        const dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Lu…6=Do
-        if (de.includes(dow)) return d;
+      var base = new Date(fechaPedidoISO);
+      for (var i = 1; i <= 14; i++) {
+        var d2 = new Date(base); d2.setDate(base.getDate()+i);
+        var dow = d2.getDay()===0 ? 6 : d2.getDay()-1;
+        if (de.indexOf(dow) >= 0) return d2;
       }
-      // Fallback +3
-      const fb = new Date(fechaPedidoISO);
-      fb.setDate(fb.getDate() + 3);
-      return fb;
+      var fb = new Date(fechaPedidoISO); fb.setDate(fb.getDate()+3); return fb;
     };
 
-    const hoy = new Date(); hoy.setHours(0,0,0,0);
-    const esHoy = d => { const x = new Date(d); x.setHours(0,0,0,0); return x.getTime()===hoy.getTime(); };
-    const esPasado = d => { const x = new Date(d); x.setHours(0,0,0,0); return x < hoy; };
+    var hoy     = new Date(); hoy.setHours(0,0,0,0);
+    var esPasado = function(d){ var x=new Date(d); x.setHours(0,0,0,0); return x < hoy; };
 
-    // ── Estado vacío ────────────────────────────────────────────
+    var truckSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+    var boxSvg   = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>';
+    var trashSvg = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+
+    // ── Estado vacío ─────────────────────────────────────────
+    var innerHtml;
     if (allOrders.length === 0) {
-      _almOverlay(
-        '<div class="modal-header-dark"><div class="mhd-row"><div>' +
-          '<div class="mhd-title">Pedidos programados</div>' +
-          '<div class="mhd-sub">Todos los proveedores</div>' +
-        '</div><button class="mhd-close" onclick="window._closeAlmOverlay()">×</button></div></div>' +
-        '<div style="padding:40px 20px;text-align:center;font-family:var(--font)">' +
+      innerHtml =
+        '<div style="display:flex;align-items:center;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+          '<div style="flex:1;font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.3px">Pedidos programados</div>' +
+          '<button onclick="window._closeAlmOverlay()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg-mid);color:var(--ink-mid);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>' +
+        '</div>' +
+        '<div style="text-align:center;padding:40px 20px;font-family:var(--font)">' +
           '<div style="font-size:40px;margin-bottom:16px">📋</div>' +
-          '<div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin pedidos programados</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin pedidos programados</div>' +
           '<div style="font-size:13px;color:var(--ink-soft);line-height:1.6">Añade artículos al carrito y pulsa<br>"Guardar pedido" para programar una entrega.</div>' +
-        '</div>'
-      );
+        '</div>';
+      _openTruckOverlay(innerHtml, []);
       return;
     }
 
-    // ── Agrupar por proveedor ───────────────────────────────────
-    const byProv = {};
-    allOrders.forEach(order => {
+    // ── Agrupar por proveedor ────────────────────────────────
+    var byProv = {};
+    allOrders.forEach(function(order){
       if (!byProv[order.provId]) byProv[order.provId] = [];
       byProv[order.provId].push(order);
     });
 
-    const sections = Object.entries(byProv).map(([provId, orders]) => {
-      const prov      = State.get.prov(provId);
-      const provNombre = prov ? prov.nombre : provId;
-      const provIcon   = prov ? (prov.icon || '📦') : '📦';
+    // ── Construir filas ──────────────────────────────────────
+    var allRows  = [];  // {id, html} para swipe
+    var sections = Object.keys(byProv).map(function(provId) {
+      var orders     = byProv[provId];
+      var prov       = State.get.prov(provId);
+      var provNombre = prov ? prov.nombre : provId;
+      var provIcon   = prov ? (prov.icon || '📦') : '📦';
 
-      // ── Cabecera de proveedor (sin banner) ──────────────────
-      const provHeader =
-        '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px 10px;' +
-            'border-bottom:2px solid var(--red-s)">' +
-          '<div style="width:32px;height:32px;border-radius:9px;background:var(--red-s);' +
-              'display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">' +
+      // Cabecera de sección (proveedor)
+      var sectionHeader =
+        '<div style="display:flex;align-items:center;gap:10px;padding:10px 4px 8px;flex-shrink:0">' +
+          '<div style="width:28px;height:28px;border-radius:8px;background:var(--red-s);' +
+               'display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0">' +
             provIcon +
           '</div>' +
-          '<div style="flex:1">' +
-            '<div style="font-size:14px;font-weight:800;color:var(--ink)">' + esc(provNombre) + '</div>' +
-            '<div style="font-size:11px;color:var(--ink-soft)">' +
-              orders.length + ' pedido' + (orders.length!==1?'s pendientes':'pendiente') +
-            '</div>' +
+          '<div style="font-size:12px;font-weight:800;color:var(--ink-soft);' +
+               'text-transform:uppercase;letter-spacing:.6px">' +
+            esc2(provNombre) +
           '</div>' +
+          '<div style="flex:1;height:1px;background:var(--border)"></div>' +
         '</div>';
 
-      // ── Filas de pedidos ────────────────────────────────────
-      const truckSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
-      const boxSvg   = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>';
-      const trashSvg = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
-
-      const rows = orders.map(order => {
-        const delId    = order.id;
-        const nArt2    = (order.items || []).length;
-        const total2   = (order.items || []).reduce((s, o) => {
-          const p = State.get.prod(o.prodId);
+      var rows = orders.map(function(order) {
+        var delId    = order.id;
+        var nArt     = (order.items || []).length;
+        var total    = (order.items || []).reduce(function(s, o) {
+          var p = State.get.prod(o.prodId);
           return s + (o.ncajas||1) * (o.precio||0) * (1 + (_parseIva(p && p.iva)/100));
         }, 0);
-        const dEnt2    = calcEntrega(order.date, provId);
-        const entStr   = fmtDate(dEnt2);
-        const atras    = esPasado(dEnt2);
-        const entColor = atras ? 'var(--red)' : '#16A34A';
-        const fechaUp  = fmtDate(order.date).toUpperCase();
-        const totFmt   = (+(total2||0)).toFixed(2).replace('.',',') + ' €';
+        var dEnt     = calcEntrega(order.date, provId);
+        var entStr   = fmtDate(dEnt);
+        var atras    = esPasado(dEnt);
+        var entColor = atras ? 'var(--red)' : '#16A34A';
+        var fechaLbl = fmtDate(order.date);
+        var totFmt   = (+(total||0)).toFixed(2).replace('.',',') + ' €';
 
-        return '<div class="po-card" onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(\'' + delId + '\');},260)">' +
-          '<div class="po-card-top">' +
-            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px">' +
-              '<div><div class="po-card-status">Pendiente</div><div class="po-card-prov">' + esc(provNombre) + '</div></div>' +
-              '<div class="po-card-pill">' + fechaUp + '</div>' +
+        var rowHtml =
+          '<div data-order-id="'+delId+'" style="display:flex;align-items:flex-start;gap:12px;' +
+               'padding:11px 2px;border-radius:14px;cursor:pointer;position:relative;' +
+               'transition:transform 0.18s ease,opacity 0.18s ease;touch-action:pan-y;' +
+               'border-bottom:1px solid var(--border)"' +
+               ' onclick="window._closeAlmOverlay();setTimeout(function(){App.alm._abrirCheckModalById(''+delId+'');},260)">' +
+            // Icono
+            '<div style="width:38px;height:38px;border-radius:10px;background:var(--red-s);' +
+                 'display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">' +
+              '<span style="font-size:18px">'+provIcon+'</span>' +
             '</div>' +
-            '<div class="po-card-meta">' +
-              '<div class="po-card-arts">' + boxSvg + '&nbsp;' + nArt2 + ' artículo' + (nArt2!==1?'s':'') + '</div>' +
-              '<div class="po-card-truck" style="color:' + entColor + '">' + truckSvg + '&nbsp;Entrega ' + entStr + '</div>' +
+            // Cuerpo
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-size:13px;font-weight:700;color:var(--ink);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+                esc2(provNombre) +
+              '</div>' +
+              '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+                '<span style="display:inline-flex;align-items:center;gap:4px">'+boxSvg+'&nbsp;'+nArt+' artículo'+(nArt!==1?'s':'')+'</span>' +
+                '<span style="display:inline-flex;align-items:center;gap:4px;color:'+entColor+'">'+truckSvg+'&nbsp;'+entStr+'</span>' +
+              '</div>' +
+              '<div style="font-size:10px;color:var(--ink-soft);margin-top:3px">Pedido: '+fechaLbl+'</div>' +
             '</div>' +
-          '</div>' +
-          '<div class="po-card-bottom">' +
-            '<div><div class="po-card-est">Estimado</div><div class="po-card-total">' + totFmt + '</div></div>' +
-            '<button class="po-card-del" onclick="event.stopPropagation();App.alm._eliminarPedidoProgramado(\'' + delId + '\')">' +
-              trashSvg + '&nbsp;Eliminar' +
-            '</button>' +
-          '</div>' +
-        '</div>';
+            // Total + eliminar
+            '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">' +
+              '<div style="font-size:15px;font-weight:800;color:var(--ink);letter-spacing:-0.3px">'+totFmt+'</div>' +
+              '<button onclick="event.stopPropagation();App.alm._eliminarPedidoProgramado(''+delId+'')" ' +
+                      'style="display:inline-flex;align-items:center;gap:4px;color:var(--red);' +
+                             'font-size:11px;font-weight:700;background:none;border:none;cursor:pointer;' +
+                             'font-family:var(--font);padding:2px 0;touch-action:manipulation">'+
+                trashSvg+'&nbsp;Eliminar' +
+              '</button>' +
+            '</div>' +
+          '</div>';
+
+        allRows.push({ id: delId, html: rowHtml });
+        return rowHtml;
       }).join('');
 
-      return '<div style="background:var(--surface);border-radius:16px;overflow:hidden;' +
-             'margin-bottom:10px;box-shadow:0 2px 12px rgba(0,0,0,0.07)">' +
-               provHeader + rows +
-             '</div>';
+      return sectionHeader + rows;
     }).join('');
 
-    _almOverlay(
-      '<div class="modal-header-dark"><div class="mhd-row"><div>' +
-        '<div class="mhd-title">Pedidos programados</div>' +
-        '<div class="mhd-sub">Todos los proveedores · ' + allOrders.length + ' pedido' + (allOrders.length!==1?'s':'') + '</div>' +
-      '</div><button class="mhd-close" onclick="window._closeAlmOverlay()">×</button></div></div>' +
-      '<div style="flex:1;overflow-y:auto;padding:8px 14px 20px;-webkit-overflow-scrolling:touch">' +
+    innerHtml =
+      '<div style="display:flex;align-items:center;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-0.3px">Pedidos programados</div>' +
+          '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">' +
+            allOrders.length + ' pedido' + (allOrders.length!==1?'s':'') + ' pendiente' + (allOrders.length!==1?'s':'') +
+          '</div>' +
+        '</div>' +
+        '<button onclick="window._closeAlmOverlay()" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--bg-mid);color:var(--ink-mid);cursor:pointer;font-size:16px;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:8px">×</button>' +
+      '</div>' +
+      '<div style="flex:1;overflow-y:auto;padding:4px 14px 20px;-webkit-overflow-scrolling:touch;scrollbar-width:none">' +
         sections +
-      '</div>'
-    );
+      '</div>';
+
+    _openTruckOverlay(innerHtml, allRows);
+  }
+
+  // ── Overlay del camión — mismo estilo que bell/chat ──────────
+  function _openTruckOverlay(innerHtml, rows) {
+    var existing = document.getElementById('alm-center-overlay');
+    if (existing) existing.remove();
+
+    var ab = document.getElementById('alm-accept-fixed');
+    if (ab) ab.style.display = 'none';
+
+    var ov = document.createElement('div');
+    ov.id = 'alm-center-overlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:10050',
+      'display:flex;align-items:center;justify-content:center',
+      'background:rgba(0,0,0,0.72);padding:16px',
+      'font-family:var(--font)',
+      'opacity:0;transition:opacity 0.18s ease'
+    ].join(';');
+    ov.innerHTML =
+      '<div class="truck-box" style="background:var(--surface);border-radius:22px;width:100%;max-width:440px;' +
+           'max-height:min(calc(100dvh - 80px),580px);min-height:160px;display:flex;flex-direction:column;' +
+           'overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.32);' +
+           'transform:scale(0.94);transition:transform 0.18s var(--spring)">' +
+        innerHtml +
+      '</div>';
+
+    document.body.appendChild(ov);
+    document.body.style.overflow = 'hidden';
+
+    // Swipe lateral para descartar filas
+    _truckAttachSwipe(ov);
+
+    ov.addEventListener('click', function(e) {
+      if (e.target === ov) _closeAlmOverlay();
+    });
+
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        ov.classList.add('alm-open');
+        ov.style.opacity = '1';
+        var box = ov.querySelector('.truck-box');
+        if (box) box.style.transform = 'scale(1)';
+        console.info('[Dashwey] truck overlay abierto — pedidos:', rows.length);
+      });
+    });
+  }
+
+  // ── Swipe lateral — igual que _bellAttachSwipe ───────────────
+  function _truckAttachSwipe(container) {
+    if (!container) return;
+    container.querySelectorAll('[data-order-id]').forEach(function(row) {
+      var x0 = 0, dx = 0;
+      row.addEventListener('touchstart', function(e){
+        x0 = e.touches[0].clientX;
+        dx = 0;
+        row.style.transition = 'none'; // desactiva transición durante el gesto
+      }, {passive:true});
+      row.addEventListener('touchmove', function(e){
+        dx = e.touches[0].clientX - x0;
+        if (Math.abs(dx) > 8) {
+          row.style.transform = 'translateX('+dx+'px)';
+          row.style.opacity   = String(Math.max(0.3, 1 - Math.abs(dx)/140));
+        }
+      }, {passive:true});
+      row.addEventListener('touchend', function(){
+        row.style.transition = ''; // reactiva transición
+        if (Math.abs(dx) > 80) {
+          row.style.transform = 'translateX('+(dx>0?'130%':'-130%')+')';
+          row.style.opacity   = '0';
+          var oid = row.dataset.orderId;
+          setTimeout(function(){
+            try {
+              App.alm._eliminarPedidoProgramado(oid);
+            } catch(_) {}
+            if (row.parentNode) row.style.display = 'none';
+          }, 200);
+        } else {
+          row.style.transform = '';
+          row.style.opacity   = '';
+        }
+        dx = 0;
+      });
+    });
   }
 
   // ══ MODAL 1: PRÓXIMA ENTREGA — operativo del pedido programado ══
