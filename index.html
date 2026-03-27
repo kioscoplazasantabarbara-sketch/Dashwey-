@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-3-06-dev";
+      var CURRENT_CACHE = "dashwey-v1-3-07-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.06-dev</title>
+<title>Dashwey v1.3.07-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9331,7 +9331,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.06-dev';
+  const _APP_VERSION = 'v1.3.07-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15916,6 +15916,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // ── Timeline de entregas — v1.3.05 ──────────────────────────────────────
   // Puntos sobre línea horizontal: cada pedido pendiente = 1 punto
   // Posición X = fecha de entrega relativa al rango hoy → hoy+30 días
+  // ── Timeline de entregas — v1.3.07 — layout VERTICAL sin solapamientos ──
+  // Una fila por proveedor, ordenadas por fecha ascendente
+  // Línea vertical izquierda con punto + info a la derecha
   function _snapRenderTimeline() {
     var wrap = document.getElementById('snap-agenda-timeline');
     var svg  = document.getElementById('snap-timeline-svg');
@@ -15924,172 +15927,156 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
     var MON    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-
     var fmtDate = function(d) {
       return DNAMES[d.getDay()===0?6:d.getDay()-1]+' '+
              String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()];
     };
+    var esc2 = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
 
-    // Calcular fecha de entrega desde diasEntrega del proveedor
     var calcEntrega = function(fechaISO, provId) {
       var prov = State.get.prov ? State.get.prov(provId) : null;
       var de   = (prov && prov.diasEntrega) || [];
-      if (!de.length) {
-        var d = new Date(fechaISO); d.setDate(d.getDate()+2); return d;
-      }
+      if (!de.length) { var d=new Date(fechaISO); d.setDate(d.getDate()+2); return d; }
       var base = new Date(fechaISO);
-      for (var i = 1; i <= 14; i++) {
-        var d2  = new Date(base); d2.setDate(base.getDate()+i);
-        var dow = d2.getDay()===0 ? 6 : d2.getDay()-1;
-        if (de.indexOf(dow) >= 0) return d2;
+      for (var i=1; i<=14; i++) {
+        var d2=new Date(base); d2.setDate(base.getDate()+i);
+        var dow=d2.getDay()===0?6:d2.getDay()-1;
+        if (de.indexOf(dow)>=0) return d2;
       }
-      var fb = new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
+      var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
     };
 
-    // Pedidos pendientes enriquecidos con fecha de entrega
+    // Pedidos → agrupar por proveedor → un punto por proveedor
     var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
       .filter(function(o){ return o.status === 'pending'; });
 
-    // Agrupar por proveedor — un punto por proveedor (con # pedidos)
     var byProv = {};
     pedidos.forEach(function(o) {
       if (!byProv[o.provId]) byProv[o.provId] = [];
       byProv[o.provId].push(o);
     });
 
+    var hoy = new Date(); hoy.setHours(0,0,0,0);
+
     var points = Object.keys(byProv).map(function(provId) {
       var orders = byProv[provId];
-      // Entrega más próxima del proveedor
-      var earliestDate = orders.reduce(function(min, o) {
+      var earliest = orders.reduce(function(min, o) {
         var d = calcEntrega(o.date, provId);
         return d < min ? d : min;
       }, calcEntrega(orders[0].date, provId));
-      var prov = State.get.prov ? State.get.prov(provId) : null;
+      var prov  = State.get.prov ? State.get.prov(provId) : null;
       var nArts = orders.reduce(function(s,o){ return s+(o.items||[]).length; }, 0);
       return {
         provId:   provId,
         nombre:   prov ? prov.nombre : provId,
         icon:     prov ? (prov.icon || '📦') : '📦',
-        fecha:    earliestDate,
+        fecha:    earliest,
+        isPast:   earliest < hoy,
         nPedidos: orders.length,
         nArts:    nArts,
       };
-    }).sort(function(a,b){ return a.fecha - b.fecha; });
+    }).sort(function(a,b){ return a.fecha - b.fecha; }); // ascendente por fecha entrega
 
-    // ── Layout ────────────────────────────────────────────────────────────
-    var W  = wrap.clientWidth || 300;
-    var H  = 90;
+    // ── Layout vertical ────────────────────────────────────────────────
+    var W       = wrap.clientWidth || 300;
+    var ROW_H   = 44;   // altura por fila
+    var N       = points.length || 1;
+    var H       = Math.max(60, N * ROW_H + 8);
+
     svg.setAttribute('width',  W);
     svg.setAttribute('height', H);
     svg.setAttribute('viewBox', '0 0 '+W+' '+H);
 
-    var LINE_Y = H * 0.45; // línea en 45% de la altura
-    var PAD_X  = 20;
-    var chartW = W - PAD_X * 2;
-
-    // Rango temporal: hoy → hoy + 30 días (o hasta la última entrega si más tarde)
-    var hoy  = new Date(); hoy.setHours(0,0,0,0);
-    var maxD = new Date(hoy.getTime() + 30 * 86400000);
-    if (points.length > 0 && points[points.length-1].fecha > maxD) {
-      maxD = new Date(points[points.length-1].fecha.getTime() + 2 * 86400000);
-    }
-    var rangeMs = maxD - hoy || 1;
-
-    var dateToX = function(d) {
-      return PAD_X + Math.max(0, Math.min(1, (d - hoy) / rangeMs)) * chartW;
-    };
+    var LINE_X  = 20;   // x de la línea vertical
+    var DOT_R   = 7;    // radio del punto
+    var TEXT_X  = LINE_X + DOT_R + 12; // x del texto
 
     var svgParts = [];
     svgParts.push('<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif;overflow:visible">');
 
-    // ── Línea base ────────────────────────────────────────────────────────
-    svgParts.push(
-      '<line x1="'+PAD_X+'" y1="'+LINE_Y+'" x2="'+(W-PAD_X)+'" y2="'+LINE_Y+
-      '" stroke="rgba(0,0,0,0.12)" stroke-width="1.5" stroke-linecap="round"/>'
-    );
-
-    // ── Punto "Hoy" ───────────────────────────────────────────────────────
-    svgParts.push(
-      '<circle cx="'+PAD_X+'" cy="'+LINE_Y+'" r="3" fill="rgba(0,0,0,0.2)"/>'+
-      '<text x="'+PAD_X+'" y="'+(LINE_Y+16)+'" text-anchor="middle" '+
-      'fill="rgba(0,0,0,0.30)" font-size="8">Hoy</text>'
-    );
-
-    // ── Puntos de entrega ─────────────────────────────────────────────────
     if (points.length === 0) {
       // Estado vacío
       svgParts.push(
-        '<text x="'+(W/2)+'" y="'+(LINE_Y+1)+'" text-anchor="middle" '+
-        'fill="rgba(0,0,0,0.25)" font-size="11">Sin entregas programadas</text>'
+        '<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" '+
+        'fill="rgba(0,0,0,0.25)" font-size="12">Sin entregas programadas</text>'
       );
     } else {
-      points.forEach(function(pt, idx) {
-        var x        = dateToX(pt.fecha);
-        var isFirst  = idx === 0;
-        var isPast   = pt.fecha < hoy;
-        var dotR     = isFirst ? 9 : 7;
-        var dotColor = isPast   ? 'rgba(0,0,0,0.20)' :
-                       isFirst  ? '#E53935' : '#EF9A9A';
-        var textCol  = isFirst ? '#B71C1C' : 'rgba(0,0,0,0.45)';
-        var delay    = (idx * 80) + 'ms';
-
-        // Label arriba — nombre proveedor abreviado
-        var label = pt.nombre.split(/[\s\-–]/)[0]; // primera palabra
-        if (label.length > 8) label = label.slice(0,7)+'…';
+      // Línea vertical conectora
+      var lineTop    = ROW_H * 0.5;
+      var lineBottom = ROW_H * (N - 0.5);
+      if (N > 1) {
         svgParts.push(
-          '<text x="'+x+'" y="'+(LINE_Y - dotR - 6)+'" text-anchor="middle" '+
-          'fill="'+textCol+'" font-size="9" font-weight="'+(isFirst?'700':'500')+'">'+
-            label+
-          '</text>'
+          '<line x1="'+LINE_X+'" y1="'+lineTop+'" x2="'+LINE_X+'" y2="'+lineBottom+'" '+
+          'stroke="rgba(0,0,0,0.10)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="3 3"/>'
         );
+      }
 
-        // Dot con animación pop-in
-        var ty = -(LINE_Y); // no vertical translation needed for SVG
+      points.forEach(function(pt, idx) {
+        var cy       = ROW_H * idx + ROW_H * 0.5;
+        var isFirst  = idx === 0;
+        var dotColor = pt.isPast  ? 'rgba(0,0,0,0.15)' :
+                       isFirst    ? '#E53935' : '#EF9A9A';
+        var strokeC  = isFirst && !pt.isPast ? '#B71C1C' : 'rgba(0,0,0,0.08)';
+        var nameCol  = isFirst && !pt.isPast ? 'var(--ink)' : 'rgba(0,0,0,0.55)';
+        var dateCol  = isFirst && !pt.isPast ? '#B71C1C'    : 'rgba(0,0,0,0.35)';
+        var fwName   = isFirst ? '700' : '500';
+        var delay    = (idx * 70) + 'ms';
+
+        // Dot
         svgParts.push(
           '<circle class="snap-tl-dot" '+
-          'data-idx="'+idx+'" '+
-          'data-nombre="'+String(pt.nombre).replace(/"/g,"'").replace(/&/g,'&amp;')+'" '+
+          'data-nombre="'+esc2(pt.nombre)+'" '+
           'data-fecha="'+fmtDate(pt.fecha)+'" '+
           'data-npedidos="'+pt.nPedidos+'" '+
           'data-narts="'+pt.nArts+'" '+
-          'cx="'+x+'" cy="'+LINE_Y+'" r="'+dotR+'" '+
-          'fill="'+dotColor+'" '+
-          'stroke="'+(isFirst?'#B71C1C':'rgba(0,0,0,0.10)')+'" '+
-          'stroke-width="'+(isFirst?'2':'1')+'" '+
+          'cx="'+LINE_X+'" cy="'+cy+'" r="'+DOT_R+'" '+
+          'fill="'+dotColor+'" stroke="'+strokeC+'" stroke-width="1.5" '+
           'cursor="pointer" '+
-          'style="animation:snapDotPop 0.4s cubic-bezier(0.34,1.56,0.64,1) '+delay+' both;'+
+          'style="animation:snapDotPop 0.35s cubic-bezier(0.34,1.56,0.64,1) '+delay+' both;'+
             '-webkit-tap-highlight-color:transparent"/>'
         );
 
-        // Icono del proveedor centrado en el dot (font emoji)
+        // Icono del proveedor en el dot
         svgParts.push(
-          '<text x="'+x+'" y="'+(LINE_Y+4)+'" text-anchor="middle" '+
-          'font-size="'+(isFirst?'9':'8')+'" '+
-          'style="animation:snapDotPop 0.4s cubic-bezier(0.34,1.56,0.64,1) '+delay+' both;pointer-events:none">'+
+          '<text cx="'+LINE_X+'" cy="'+cy+'" '+
+          'x="'+LINE_X+'" y="'+(cy+4)+'" text-anchor="middle" font-size="8" '+
+          'style="animation:snapDotPop 0.35s ease '+delay+' both;pointer-events:none">'+
             pt.icon+
           '</text>'
         );
 
-        // Fecha debajo
-        var fechaLbl = fmtDate(pt.fecha);
+        // Badge número de pedidos si >1
+        if (pt.nPedidos > 1) {
+          svgParts.push(
+            '<circle cx="'+(LINE_X+DOT_R-1)+'" cy="'+(cy-DOT_R+1)+'" r="5" '+
+            'fill="#E53935" stroke="white" stroke-width="1" '+
+            'style="animation:snapDotPop 0.35s ease '+delay+' both"/>'+
+            '<text x="'+(LINE_X+DOT_R-1)+'" y="'+(cy-DOT_R+5)+'" '+
+            'text-anchor="middle" fill="white" font-size="6" font-weight="800" '+
+            'style="animation:snapDotPop 0.35s ease '+delay+' both">'+pt.nPedidos+'</text>'
+          );
+        }
+
+        // Nombre del proveedor — truncado si largo
+        var nombre = pt.nombre.length > 22 ? pt.nombre.slice(0,21)+'…' : pt.nombre;
         svgParts.push(
-          '<text x="'+x+'" y="'+(LINE_Y + dotR + 14)+'" text-anchor="middle" '+
-          'fill="'+textCol+'" font-size="8" font-weight="'+(isFirst?'700':'400')+'">'+
-            fechaLbl+
+          '<text x="'+TEXT_X+'" y="'+(cy-3)+'" '+
+          'fill="'+nameCol+'" font-size="12" font-weight="'+fwName+'" '+
+          'style="animation:snapDotPop 0.35s ease '+delay+' both">'+
+            esc2(nombre)+
           '</text>'
         );
 
-        // Número de pedidos si >1
-        if (pt.nPedidos > 1) {
-          svgParts.push(
-            '<circle cx="'+(x+dotR)+'" cy="'+(LINE_Y-dotR)+'" r="6" '+
-            'fill="#E53935" stroke="white" stroke-width="1.5" '+
-            'style="animation:snapDotPop 0.4s ease '+delay+' both"/>'+
-            '<text x="'+(x+dotR)+'" y="'+(LINE_Y-dotR+4)+'" text-anchor="middle" '+
-            'fill="white" font-size="7" font-weight="800" '+
-            'style="animation:snapDotPop 0.4s ease '+delay+' both">'+pt.nPedidos+'</text>'
-          );
-        }
+        // Fecha de entrega
+        var fechaLbl = pt.isPast ? '⚠ '+fmtDate(pt.fecha) : fmtDate(pt.fecha);
+        svgParts.push(
+          '<text x="'+TEXT_X+'" y="'+(cy+13)+'" '+
+          'fill="'+dateCol+'" font-size="10" '+
+          'style="animation:snapDotPop 0.35s ease '+delay+' both">'+
+            esc2(fechaLbl)+
+            (pt.nArts > 0 ? ' · '+pt.nArts+' art.' : '')+
+          '</text>'
+        );
       });
     }
 
@@ -16105,23 +16092,26 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           var fecha    = dot.dataset.fecha;
           var nPedidos = dot.dataset.npedidos;
           var nArts    = dot.dataset.narts;
-          var cx       = parseFloat(dot.getAttribute('cx'));
-          var cy       = parseFloat(dot.getAttribute('cy'));
-          tip.textContent = nombre + '\n' + fecha + ' · ' + nPedidos + ' pedido'+(nPedidos!=='1'?'s':'') + ' · ' + nArts + ' artículos';
-          tip.style.left = cx+'px';
-          tip.style.top  = Math.max(4, cy - 60)+'px';
+          var cx = parseFloat(dot.getAttribute('cx'));
+          var cy = parseFloat(dot.getAttribute('cy'));
+          tip.textContent = nombre+' · '+fecha+'
+'+nPedidos+' pedido'+(nPedidos!=='1'?'s':'')+' · '+nArts+' art.';
+          tip.style.left = (cx + 40)+'px';
+          tip.style.top  = (cy - 20)+'px';
+          tip.style.transform = 'none';
           tip.classList.add('visible');
-          dot.setAttribute('opacity', '0.6');
+          dot.setAttribute('opacity','0.6');
           setTimeout(function(){
             tip.classList.remove('visible');
             dot.removeAttribute('opacity');
           }, 2500);
-          console.info('[Dashwey snap timeline] tap proveedor:', nombre, 'fecha:', fecha);
+          console.info('[Dashwey snap timeline] tap:', nombre, fecha);
         }, {passive:true});
       });
     }
 
-    console.info('[Dashwey snap timeline] rendered', points.length, 'proveedores, rango:', fmtDate(hoy), '→', fmtDate(maxD));
+    console.info('[Dashwey snap timeline] rendered',points.length,'proveedores, rango:',
+      points.length?fmtDate(points[0].fecha):'—','→',points.length?fmtDate(points[points.length-1].fecha):'—');
   }
 
   // ── Alertas stacked bar chart — v1.3.04 ─────────────────────────────────
