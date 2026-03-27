@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.37-dev</title>
+<title>Dashwey v1.3.38-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1105,6 +1105,7 @@ body[data-dash-snap="1"] .snap-narrative-zone {
   color: var(--ink);
   letter-spacing: -2px;
   line-height: 1;
+  will-change: transform, opacity; /* prevent compositor flicker */
   margin-bottom: 8px;
 }
 .snap-kpi-value.snap-counting { color: var(--ink-mid); }
@@ -3184,14 +3185,6 @@ input:focus, select:focus, textarea:focus {
   contain-intrinsic-size: 0 600px; /* altura estimada para evitar scroll-jump */
 }
 .alm-cat-section-lbl { font-size: 9px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); padding: 8px 2px 4px; }
-@keyframes almSlideIn {
-  from { opacity: 0; transform: translateY(14px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.alm-cat-item.slide-in {
-  animation: almSlideIn 0.28s cubic-bezier(0.25,0.46,0.45,0.94) both;
-}
-
 .alm-cat-item {
   display: flex; align-items: center; gap: 12px;
   padding: 11px 12px;
@@ -6989,10 +6982,13 @@ function _authTabSafe(tab) {
             <!-- Columna derecha: iconos camión + carrito -->
             <div class="alm-header-icons">
               <!-- Icono camión → Pedidos programados -->
-              <button class="alm-hdr-icon-btn" onclick="App.alm.openPendingOrders()" aria-label="Pedidos programados">
+              <button class="alm-hdr-icon-btn" onclick="App.alm._abrirCheckModalPendiente()" aria-label="Comprobar pedido">
                 <svg width="20" height="20" fill="none" stroke="var(--ink)" stroke-width="1.8" viewBox="0 0 24 24">
-                  <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-                  <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
                 </svg>
                 <span class="alm-hdr-badge" id="alm-hdr-truck-badge"></span>
               </button>
@@ -9814,7 +9810,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.37-dev';
+  const _APP_VERSION = 'v1.3.38-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17695,23 +17691,23 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     // Distribución de cuentas + pie chart — solo flujo-caja
     if (cardId === 'flujo-caja') {
-      setTimeout(function() {
+      requestAnimationFrame(function() {
         _snapRenderFCDist();
-      }, 120);
+      });
     }
 
     // Alertas stacked bar chart — solo caducidades
     if (cardId === 'caducidades') {
-      setTimeout(function() {
+      requestAnimationFrame(function() {
         _snapRenderAlertasChart();
-      }, 120);
+      });
     }
 
     // Timeline de entregas — solo agenda
     if (cardId === 'agenda') {
-      setTimeout(function() {
+      requestAnimationFrame(function() {
         _snapRenderTimeline();
-      }, 120);
+      });
     }
   }
 
@@ -19210,16 +19206,6 @@ const alm = (() => {
     '</div>';
     wrap.innerHTML = html;
 
-    // v1.3.37: slide-in reveal — animar cada item al renderizar
-    requestAnimationFrame(function() {
-      var items = wrap.querySelectorAll('.alm-cat-item');
-      items.forEach(function(item, idx) {
-        item.classList.remove('slide-in');
-        item.style.animationDelay = (idx * 30) + 'ms'; // stagger 30ms
-        void item.offsetWidth;
-        item.classList.add('slide-in');
-      });
-    });
   }
 
 function _parseIva(iva) {
@@ -22566,6 +22552,23 @@ function _parseIva(iva) {
   }
 
   // v1.2.52: _abrirCheckModalById — cierra fs-sheet si está abierto, luego abre check-modal
+  // v1.3.38: abre directamente el check modal del primer pedido pendiente
+  // Si hay varios, muestra picker. Si no hay ninguno, muestra aviso.
+  function _abrirCheckModalPendiente() {
+    var orders = (State.get.pendingOrders ? State.get.pendingOrders() : [])
+      .filter(function(o) { return o.status === 'pending'; });
+    if (orders.length === 0) {
+      try { Utils.showToast('No hay pedidos pendientes'); } catch(_) {}
+      return;
+    }
+    if (orders.length === 1) {
+      setTimeout(function() { _abrirCheckModalById(orders[0].id); }, 60);
+      return;
+    }
+    // Varios pedidos — abrir selector
+    openPendingOrders();
+  }
+
   function _abrirCheckModalById(id) {
     try {
       // v1.2.63: cerrar alm-center-overlay si está abierto
@@ -26557,9 +26560,7 @@ window._almCarritoOptions = function() {
         var summaryItems = items;
         var summaryMeta  = meta;
         this.close();
-        setTimeout(function() {
-          _showSummary(summaryItems, summaryMeta);
-        }, 260); // después de la animación de cierre
+        // v1.3.38: summary eliminado — flujo directo sin pantalla de resumención de cierre
 
       } catch(e) {
         console.error('[CheckModal] _doConfirm error:', e);
