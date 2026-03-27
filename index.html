@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.27-dev</title>
+<title>Dashwey v1.3.30-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -959,6 +959,8 @@ body[data-dash-snap="1"] #dash-cards-container {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   height: var(--snap-area-h, calc(100dvh - var(--header-h, 110px) - var(--tab-real, 68px)));
+  overscroll-behavior-y: none;   /* v1.3.30: bloquea overscroll en última tarjeta */
+  scroll-padding-top: 0px;
 }
 body[data-dash-snap="1"] #dash-cards-container::-webkit-scrollbar { display: none; }
 
@@ -971,6 +973,7 @@ body[data-dash-snap="1"] #dash-cards-container .card {
   border-radius: 0;
   box-shadow: none;
   margin: 0;
+  padding-bottom: 0 !important;       /* v1.3.30: sin espacio residual bajo tarjeta */
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -994,6 +997,15 @@ body[data-dash-snap="1"] .card-remove-btn,
 body[data-dash-snap="1"] .dash-add-card-banner,
 body[data-dash-snap="1"] .card-title-wrap,
 body[data-dash-snap="1"] .fade-sep { display: none !important; }
+
+/* v1.3.30: sentinel al final del contenedor — absorbe scroll residual */
+body[data-dash-snap="1"] #dash-cards-container::after {
+  content: '';
+  display: block;
+  height: 1px;              /* mínimo — solo para anclar el último snap */
+  flex-shrink: 0;
+  scroll-snap-align: none;  /* NO participa en el snap */
+}
 
 body[data-dash-snap="1"] #dash-cards-container .card .ev-rings-row,
 body[data-dash-snap="1"] #dash-cards-container .card .ev-chart-wrap,
@@ -9772,7 +9784,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.27-dev';
+  const _APP_VERSION = 'v1.3.30-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17838,13 +17850,18 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   let   _snapActive   = false;
 
   function _snapMeasureArea() {
-    // Calcula el alto disponible y lo pone en --snap-area-h
-    const header = document.querySelector('.dash-page-header');
-    const nav    = document.getElementById('bottom-tabs');
-    const headerH = header ? header.getBoundingClientRect().height : 110;
-    const navH    = nav    ? nav.getBoundingClientRect().height    : 68;
-    const snapH   = Math.floor(window.innerHeight - headerH - navH);
+    // v1.3.30: round all heights to integers — evita gaps sub-pixel entre tarjetas
+    const header  = document.querySelector('.dash-page-header');
+    const nav     = document.getElementById('bottom-tabs');
+    const headerH = Math.ceil(header ? header.getBoundingClientRect().height : 110);
+    const navH    = Math.ceil(nav    ? nav.getBoundingClientRect().height    : 56);
+    // dvh garantiza altura real sin barra de URL en Android Chrome
+    const vh      = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const snapH   = Math.floor(vh - headerH - navH);
     document.documentElement.style.setProperty('--snap-area-h', snapH + 'px');
+    // Sync container height directly for immediate effect
+    const cont = document.getElementById('dash-cards-container');
+    if (cont) cont.style.height = snapH + 'px';
     return snapH;
   }
 
@@ -17875,6 +17892,50 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (_snapObserver) { _snapObserver.disconnect(); _snapObserver = null; }
     const cont = document.getElementById('dash-cards-container');
     if (!cont) return;
+
+    // v1.3.30: snap correction — clamp overscroll + force nearest card
+    var _scrollEndTimer = null;
+    cont.addEventListener('scroll', function() {
+      clearTimeout(_scrollEndTimer);
+      _scrollEndTimer = setTimeout(function() {
+        var snapH = parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')
+        ) || cont.clientHeight;
+        if (snapH <= 0) return;
+
+        var cards  = cont.querySelectorAll('.card[data-card-id]');
+        var maxIdx = Math.max(0, cards.length - 1);
+        var maxTop = maxIdx * snapH;
+
+        // CRÍTICO: clampar overscroll más allá de la última tarjeta
+        if (cont.scrollTop > maxTop + 2) {
+          cont.scrollTo({ top: maxTop, behavior: 'smooth' });
+          return;
+        }
+
+        // Snap al índice más cercano si hay desalineación > 2px
+        var idx    = Math.round(cont.scrollTop / snapH);
+        idx        = Math.max(0, Math.min(idx, maxIdx));
+        var target = idx * snapH;
+        if (Math.abs(cont.scrollTop - target) > 2) {
+          cont.scrollTo({ top: target, behavior: 'smooth' });
+        }
+      }, 80);
+    }, { passive: true });
+        if (snapH <= 0) return;
+        var raw   = cont.scrollTop / snapH;
+        var idx   = Math.round(raw);
+        var cards = cont.querySelectorAll('.card[data-card-id]');
+        var maxIdx = Math.max(0, cards.length - 1);
+        idx = Math.min(idx, maxIdx);
+        var target = idx * snapH;
+        // Only correct if significantly misaligned (>2px)
+        if (Math.abs(cont.scrollTop - target) > 2) {
+          cont.scrollTo({ top: target, behavior: 'smooth' });
+        }
+      }, 80);
+    }, { passive: true });
+
     _snapObserver = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
         if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
