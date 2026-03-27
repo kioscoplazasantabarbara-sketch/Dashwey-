@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.13-dev</title>
+<title>Dashwey v1.3.14-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9359,7 +9359,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.13-dev';
+  const _APP_VERSION = 'v1.3.14-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15904,8 +15904,32 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         return 'Balance positivo de ' + eur(bal) + ' ' + pLbl2 + '. Runway de ' + fmt(rw,0) + ' meses. Sigue controlando los gastos variables.';
       }
       if (cardId === 'agenda') {
-        var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : []).filter(function(o){ return o.status==='pending'; });
-        var visitas = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
+        var rngA = null; try { rngA = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+        var rSA  = rngA ? rngA.start : null;
+        var rEA  = rngA ? rngA.end   : null;
+        var calcEntA = function(fechaISO, provId) {
+          var prov=State.get.prov?State.get.prov(provId):null, de=(prov&&prov.diasEntrega)||[];
+          if(!de.length){var d=new Date(fechaISO);d.setDate(d.getDate()+2);return d;}
+          var base=new Date(fechaISO);
+          for(var i=1;i<=14;i++){var d2=new Date(base);d2.setDate(base.getDate()+i);var dow=d2.getDay()===0?6:d2.getDay()-1;if(de.indexOf(dow)>=0)return d2;}
+          var fb=new Date(fechaISO);fb.setDate(fb.getDate()+3);return fb;
+        };
+        var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
+          .filter(function(o){ return o.status==='pending'; })
+          .filter(function(o){
+            if(!rSA||!rEA) return true;
+            var ent=calcEntA(o.date,o.provId); ent.setHours(0,0,0,0);
+            var s=new Date(rSA);s.setHours(0,0,0,0); var e=new Date(rEA);e.setHours(23,59,59,999);
+            return ent>=s && ent<=e;
+          });
+        var allVA   = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
+        var visitas = allVA.filter(function(v){
+          if(!v.fecha) return false;
+          if(!rSA||!rEA) return true;
+          var vd=new Date(v.fecha);vd.setHours(0,0,0,0);
+          var s=new Date(rSA);s.setHours(0,0,0,0); var e=new Date(rEA);e.setHours(23,59,59,999);
+          return vd>=s && vd<=e;
+        });
         var hoy2    = new Date(); hoy2.setHours(0,0,0,0);
         var proxVis = visitas.filter(function(v){ return v.fecha && new Date(v.fecha)>=hoy2; })
           .sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); })[0];
@@ -15947,6 +15971,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // ── Timeline de entregas — v1.3.08 — HTML vertical, sin SVG ───────────
   // Una tarjeta por proveedor, flex-column, sin solapamientos
   function _snapRenderTimeline() {
+    // Get current period range for filtering
+    var period  = State.get.period ? State.get.period() : { type:'month', offset:0 };
+    var rng = null;
+    try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+    var rangeStart = rng ? rng.start : null;
+    var rangeEnd   = rng ? rng.end   : null;
+
     var wrap = document.getElementById('snap-agenda-timeline');
     if (!wrap) return;
 
@@ -15990,7 +16021,15 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     // Agrupar pedidos por proveedor
     var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
-      .filter(function(o){ return o.status === 'pending'; });
+      .filter(function(o){ return o.status === 'pending'; })
+      .filter(function(o) {
+        if (!rangeStart || !rangeEnd) return true;
+        var entrega = calcEntrega(o.date, o.provId);
+        entrega.setHours(0,0,0,0);
+        var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+        var rE = new Date(rangeEnd);   rE.setHours(23,59,59,999);
+        return entrega >= rS && entrega <= rE;
+      });
 
     var byProv = {};
     pedidos.forEach(function(o) {
@@ -16855,41 +16894,94 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (cardId === 'agenda') {
       var DNAMES  = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
       var MON     = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-      var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : []).filter(function(o) { return o.status === 'pending'; });
-      var visitas = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
+
+      // Calcular rango del periodo actual
+      var rng = null;
+      try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+      var rangeStart = rng ? rng.start : null;
+      var rangeEnd   = rng ? rng.end   : null;
+
+      // Filtrar pedidos por fecha de entrega dentro del rango del periodo
+      var allPedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
+        .filter(function(o) { return o.status === 'pending'; });
+
+      // calcEntrega inline
+      var calcEnt = function(fechaISO, provId) {
+        var prov = State.get.prov ? State.get.prov(provId) : null;
+        var de   = (prov && prov.diasEntrega) || [];
+        if (!de.length) { var d=new Date(fechaISO); d.setDate(d.getDate()+2); return d; }
+        var base = new Date(fechaISO);
+        for (var i=1; i<=14; i++) {
+          var d2=new Date(base); d2.setDate(base.getDate()+i);
+          var dow=d2.getDay()===0?6:d2.getDay()-1;
+          if (de.indexOf(dow)>=0) return d2;
+        }
+        var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
+      };
+
+      // Filtrar por entrega dentro del rango
+      var pedidos = allPedidos.filter(function(o) {
+        if (!rangeStart || !rangeEnd) return true; // sin rango → mostrar todos
+        var entrega = calcEnt(o.date, o.provId);
+        entrega.setHours(0,0,0,0);
+        var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+        var rE = new Date(rangeEnd);   rE.setHours(23,59,59,999);
+        return entrega >= rS && entrega <= rE;
+      });
+
+      // Filtrar visitas por fecha dentro del rango
+      var allVisitas = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
+      var visitas = allVisitas.filter(function(v) {
+        if (!v.fecha) return false;
+        if (!rangeStart || !rangeEnd) return true;
+        var vd = new Date(v.fecha); vd.setHours(0,0,0,0);
+        var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+        var rE = new Date(rangeEnd);   rE.setHours(23,59,59,999);
+        return vd >= rS && vd <= rE;
+      });
+
       var hoy     = new Date(); hoy.setHours(0,0,0,0);
 
-      // Próxima entrega
-      var proxPed = pedidos.sort(function(a,b){ return new Date(a.date)-new Date(b.date); })[0];
-      var valEl   = document.getElementById('snap-val-agenda');
+      // Próxima entrega — la más próxima dentro del rango
+      var pedidosConEnt = pedidos.map(function(o) {
+        return { order: o, entrega: calcEnt(o.date, o.provId) };
+      }).sort(function(a,b){ return a.entrega - b.entrega; });
+
+      var proxPedObj = pedidosConEnt.length > 0 ? pedidosConEnt[0] : null;
+      var proxPed    = proxPedObj ? proxPedObj.order : null;
+      var proxEnt    = proxPedObj ? proxPedObj.entrega : null;
+
+      var valEl = document.getElementById('snap-val-agenda');
       if (valEl) {
-        if (proxPed) {
-          var d = new Date(proxPed.date);
-          valEl.textContent = DNAMES[d.getDay()===0?6:d.getDay()-1] + ' ' + String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+        if (proxEnt) {
+          valEl.textContent = DNAMES[proxEnt.getDay()===0?6:proxEnt.getDay()-1] + ' ' +
+            String(proxEnt.getDate()).padStart(2,'0') + ' ' + MON[proxEnt.getMonth()];
         } else {
-          valEl.textContent = 'Sin entregas';
+          valEl.textContent = pedidos.length === 0 ? 'Sin entregas' : 'Sin entregas';
         }
       }
       var deltaEl = document.getElementById('snap-delta-agenda');
       var prov    = proxPed ? State.get.prov(proxPed.provId) : null;
-      if (deltaEl) deltaEl.textContent = prov ? prov.nombre : (pedidos.length > 0 ? pedidos.length + ' pedidos' : 'Todo al día');
+      if (deltaEl) deltaEl.textContent = prov ? prov.nombre :
+        (pedidos.length > 0 ? pedidos.length + ' pedidos' : 'Todo al día');
 
       var pedEl = document.getElementById('snap-ped-agenda');
       if (pedEl) _snapCounterUp(pedEl, pedidos.length, 'int', 400);
 
-      var proxVisita = visitas.filter(function(v){ return v.fecha && new Date(v.fecha) >= hoy; })
+      var proxVisita = visitas
+        .filter(function(v){ return v.fecha && new Date(v.fecha) >= hoy; })
         .sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); })[0];
       var visEl = document.getElementById('snap-vis-agenda');
       if (visEl) {
         if (proxVisita) {
           var vd = new Date(proxVisita.fecha);
-          visEl.textContent = DNAMES[vd.getDay()===0?6:vd.getDay()-1] + ' ' + String(vd.getDate()).padStart(2,'0') + ' ' + MON[vd.getMonth()];
+          visEl.textContent = DNAMES[vd.getDay()===0?6:vd.getDay()-1] + ' ' +
+            String(vd.getDate()).padStart(2,'0') + ' ' + MON[vd.getMonth()];
         } else {
           visEl.textContent = '—';
         }
       }
     }
-
     // Narrativa con typewriter
     var narrative = _snapBuildNarrative(cardId, period);
     var textEl    = document.getElementById('snap-text-' + cardId);
