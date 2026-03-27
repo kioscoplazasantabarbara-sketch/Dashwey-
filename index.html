@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.14-dev</title>
+<title>Dashwey v1.3.15-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7555,6 +7555,8 @@ const State = (() => {
     // v9.5.24: visitas comerciales programadas
     visitasComerciales: [
       // { id, provId, fecha: ISO, agente, notas, estado: 'pendiente'|'cumplida'|'cancelada' }
+      { id:'v1', provId:'ccep', fecha: (function(){ var d=new Date(); d.setDate(d.getDate()+3); d.setHours(10,0,0,0); return d.toISOString(); })(), agente:'Carlos López', notas:'Revisión catálogo verano', estado:'pendiente' },
+      { id:'v2', provId:'goyo', fecha: (function(){ var d=new Date(); d.setDate(d.getDate()+7); d.setHours(11,0,0,0); return d.toISOString(); })(), agente:'Ana Martínez', notas:'Nuevas referencias', estado:'pendiente' },
     ],
     cuentas: [
       { id:'c1', nombre:'Cuenta Principal', banco:'Banco', saldo:5200, color:'#2563EB', iban:'' },
@@ -9359,7 +9361,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.14-dev';
+  const _APP_VERSION = 'v1.3.15-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16968,7 +16970,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       var pedEl = document.getElementById('snap-ped-agenda');
       if (pedEl) _snapCounterUp(pedEl, pedidos.length, 'int', 400);
 
-      var proxVisita = visitas
+      // Próxima visita: siempre la más próxima desde hoy (no filtrada por periodo)
+      var allVisitasParaProx = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
+      var proxVisita = allVisitasParaProx
         .filter(function(v){ return v.fecha && new Date(v.fecha) >= hoy; })
         .sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); })[0];
       var visEl = document.getElementById('snap-vis-agenda');
@@ -17318,8 +17322,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
       // Escuchar cambios de periodo para re-renderizar la tarjeta activa
       document.addEventListener('date:changed', _snapOnPeriodChange);
-      // Re-render agenda when a pedido is confirmed
+      // Re-render agenda when a pedido is confirmed or deleted
       window.addEventListener('dashwey:pedido-confirmado', _snapOnPedidoConfirmado);
+      window.addEventListener('dashwey:pedido-eliminado',  _snapOnPedidoConfirmado);
     } else {
       delete document.body.dataset.dashSnap;
       document.documentElement.style.removeProperty('--snap-area-h');
@@ -17330,6 +17335,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       console.info('[Dashwey] Snap mode OFF');
       document.removeEventListener('date:changed', _snapOnPeriodChange);
       window.removeEventListener('dashwey:pedido-confirmado', _snapOnPedidoConfirmado);
+      window.removeEventListener('dashwey:pedido-eliminado',  _snapOnPedidoConfirmado);
     }
 
     // Re-observe on resize (keyboard, rotation)
@@ -21894,7 +21900,10 @@ function _parseIva(iva) {
   function _eliminarPedidoProgramado(id) {
     if (!confirm('¿Eliminar este pedido programado?')) return;
     try { State.set.removePendingOrder(id); } catch(e) { console.error(e); return; }
+    console.info('[Dashwey] pedido eliminado:', id);
     updateBadge();
+    // Notificar a Agenda snap para re-render reactivo
+    try { window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { id } })); } catch(_) {}
     // v1.2.63: usa _almOverlay, no fs-sheet
     window._closeAlmOverlay();
     setTimeout(function() { openPendingOrders(); }, 220);
@@ -21913,7 +21922,10 @@ function _parseIva(iva) {
     orders.forEach(function(o){
       try { State.set.removePendingOrder(o.id); } catch(_) {}
     });
+    console.info('[Dashwey] pedidos de proveedor eliminados:', provId, orders.length);
     updateBadge();
+    // Notificar a Agenda snap
+    try { window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { provId } })); } catch(_) {}
     window._closeAlmOverlay();
     setTimeout(function() { openPendingOrders(); }, 220);
   }
@@ -23336,6 +23348,8 @@ function _parseIva(iva) {
       mermas:           State.get.mermas(),
       ventas:           State.get.ventas(),
       // ordenItems: legacy — excluido del sync (no se usa en UI desde v8.9.0)
+      pendingOrders:    State.get.pendingOrders(),   // v1.3.15: incluido en sync para persistencia cross-device
+      visitasComerciales: State.get.visitasComerciales(), // v1.3.15
       selectedProv:     State.get.selectedProv(),
       period:           State.get.period(),
       settings:         State.get.settings(),
