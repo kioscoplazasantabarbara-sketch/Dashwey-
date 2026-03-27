@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-3-03-dev";
+      var CURRENT_CACHE = "dashwey-v1-3-04-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.03-dev</title>
+<title>Dashwey v1.3.04-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6355,6 +6355,13 @@ function _authTabSafe(tab) {
                   <div class="snap-kpi-mini-val" id="snap-bajomn-caducidades">—</div>
                 </div>
               </div>
+              <!-- ALERTAS STACKED BAR CHART -->
+              <div class="snap-chart-wrap" id="snap-chart-caducidades">
+                <svg class="snap-chart-svg" id="snap-chart-svg-caducidades"
+                     xmlns="http://www.w3.org/2000/svg">
+                </svg>
+                <div class="snap-chart-tooltip" id="snap-chart-tip-caducidades"></div>
+              </div>
             </div>
             <!-- SNAP NARRATIVE ZONE -->
             <div class="snap-narrative-zone" id="snap-narrative-caducidades">
@@ -9272,7 +9279,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.03-dev';
+  const _APP_VERSION = 'v1.3.04-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15854,6 +15861,173 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
 
+  // ── Alertas stacked bar chart — v1.3.04 ─────────────────────────────────
+  // 4 categorías: Stock | Caducidad | Margen | Proveedores
+  // Cada barra apilada: [crítico, warning, info]
+  function _snapRenderAlertasChart() {
+    var wrap = document.getElementById('snap-chart-caducidades');
+    var svg  = document.getElementById('snap-chart-svg-caducidades');
+    var tip  = document.getElementById('snap-chart-tip-caducidades');
+    if (!wrap || !svg) return;
+
+    // ── Calcular datos de alertas por categoría ──────────────────────────
+    var prods   = State.get.productos ? (State.get.productos() || []) : [];
+    var pedidos = State.get.pendingOrders ? (State.get.pendingOrders() || []).filter(function(o){ return o.status === 'pending'; }) : [];
+    var alertasCad = [];
+    try { alertasCad = KPI.getCaducidadesAlerta ? KPI.getCaducidadesAlerta() : []; } catch(_) {}
+
+    // STOCK: sin stock (crítico) + bajo mínimo (warning) + caída reciente (info)
+    var stockCrit = prods.filter(function(p){ return (p.stockActual||0) <= 0; }).length;
+    var stockWarn = prods.filter(function(p){ return p.stockMinimo>0 && (p.stockActual||0)>0 && (p.stockActual||0)<=p.stockMinimo; }).length;
+    var stockInfo = prods.filter(function(p){ return p.stockMinimo>0 && (p.stockActual||0)>p.stockMinimo && (p.stockActual||0)<p.stockMinimo*1.5; }).length;
+
+    // CADUCIDAD: ≤3 días (crítico) | ≤7 días (warning) | ≤14 días (info)
+    var cadCrit = alertasCad.filter(function(a){ return a.diasRestantes <= 3; }).length;
+    var cadWarn = alertasCad.filter(function(a){ return a.diasRestantes > 3 && a.diasRestantes <= 7; }).length;
+    var cadInfo = alertasCad.filter(function(a){ return a.diasRestantes > 7; }).length;
+
+    // MARGEN: negativo (crítico) | <15% (warning) | <25% (info)
+    var mgCrit = prods.filter(function(p){ return p.pvp>0 && p.precioCompra>0 && (p.pvp-p.precioCompra)/p.pvp < 0; }).length;
+    var mgWarn = prods.filter(function(p){ return p.pvp>0 && p.precioCompra>0 && (p.pvp-p.precioCompra)/p.pvp >= 0 && (p.pvp-p.precioCompra)/p.pvp < 0.15; }).length;
+    var mgInfo = prods.filter(function(p){ return p.pvp>0 && p.precioCompra>0 && (p.pvp-p.precioCompra)/p.pvp >= 0.15 && (p.pvp-p.precioCompra)/p.pvp < 0.25; }).length;
+
+    // PROVEEDORES: pedidos vencidos (crítico) | >3 pendientes (warning) | pendientes (info)
+    var hoy0 = new Date(); hoy0.setHours(0,0,0,0);
+    var provCrit = pedidos.filter(function(o){ return o.date && new Date(o.date) < hoy0; }).length;
+    var provWarn = pedidos.length > 3 ? pedidos.length - provCrit : 0;
+    var provInfo = pedidos.length <= 3 ? pedidos.length : 0;
+
+    // ── Estructura de categorías ─────────────────────────────────────────
+    var cats = [
+      { label: 'Stock',      crit: stockCrit, warn: stockWarn, info: stockInfo },
+      { label: 'Caducidad',  crit: cadCrit,   warn: cadWarn,   info: cadInfo   },
+      { label: 'Margen',     crit: mgCrit,    warn: mgWarn,    info: mgInfo    },
+      { label: 'Proveed.',   crit: provCrit,  warn: provWarn,  info: provInfo  },
+    ];
+
+    // ── Layout ───────────────────────────────────────────────────────────
+    var W    = wrap.clientWidth  || 300;
+    var H    = wrap.clientHeight || 130;
+    if (H < 60) H = 110;
+
+    var padL = 28; var padR = 8; var padT = 8; var padB = 22;
+    var chartW = W - padL - padR;
+    var chartH = H - padT - padB;
+
+    var nCats  = cats.length;
+    var barW   = Math.floor(chartW / nCats * 0.55);
+    var barGap = (chartW / nCats) - barW;
+
+    // Max Y = max total across all cats, rounded up to nearest 5
+    var maxTotal = cats.reduce(function(m,c){ return Math.max(m, c.crit+c.warn+c.info); }, 0) || 1;
+    var yMax = Math.ceil(maxTotal / 5) * 5 || 5;
+
+    // Crimson palette — 3 severity levels
+    var C_CRIT = '#B71C1C'; // crítico — rojo oscuro
+    var C_WARN = '#E53935'; // warning — crimson
+    var C_INFO = '#EF9A9A'; // info    — crimson claro
+
+    var svgParts = [];
+    svgParts.push('<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif">');
+
+    // Y gridlines (0, 50%, 100%)
+    [0, 0.5, 1].forEach(function(pct) {
+      var y   = padT + chartH * (1 - pct);
+      var lbl = Math.round(yMax * pct);
+      svgParts.push(
+        '<line x1="'+padL+'" y1="'+y+'" x2="'+(padL+chartW)+'" y2="'+y+
+        '" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>' +
+        '<text x="'+(padL-4)+'" y="'+(y+4)+'" text-anchor="end" '+
+        'fill="rgba(0,0,0,0.30)" font-size="8">'+lbl+'</text>'
+      );
+    });
+
+    // Stacked bars
+    cats.forEach(function(cat, ci) {
+      var x      = padL + ci * (barW + barGap) + barGap / 2;
+      var total  = cat.crit + cat.warn + cat.info;
+      var bottom = padT + chartH; // y of bar bottom
+      var segs   = [
+        { val: cat.crit, color: C_CRIT, label: 'Crítico' },
+        { val: cat.warn, color: C_WARN, label: 'Aviso'   },
+        { val: cat.info, color: C_INFO, label: 'Info'     },
+      ];
+      var rx    = Math.min(3, barW / 2);
+      var yBase = bottom;
+
+      segs.forEach(function(seg, si) {
+        if (seg.val <= 0) return;
+        var segH  = Math.max(2, (seg.val / yMax) * chartH);
+        var sy    = yBase - segH;
+        var delay = (ci * 60 + si * 30) + 'ms';
+        var isTop = (si === segs.findIndex(function(s,i){ return i===si; }) &&
+                     segs.slice(si+1).every(function(s){ return s.val === 0; }));
+        svgParts.push(
+          '<rect class="snap-alrt-bar" data-cat="'+cat.label+'" data-total="'+total+'" '+
+          'data-crit="'+cat.crit+'" data-warn="'+cat.warn+'" data-info="'+cat.info+'" '+
+          'x="'+x+'" y="'+sy+'" width="'+barW+'" height="'+segH+'" '+
+          'rx="'+(isTop ? rx : 0)+'" ry="'+(isTop ? rx : 0)+'" '+
+          'fill="'+seg.color+'" '+
+          'style="transform-origin:'+x+'px '+bottom+'px;'+
+            'animation:snapBarGrow 0.45s cubic-bezier(0.25,0.46,0.45,0.94) '+delay+' both;'+
+            '-webkit-tap-highlight-color:transparent" cursor="pointer"/>'
+        );
+        yBase = sy;
+      });
+
+      // If no alerts in category — empty bar placeholder
+      if (total === 0) {
+        svgParts.push(
+          '<rect x="'+x+'" y="'+(bottom-2)+'" width="'+barW+'" height="2" '+
+          'rx="1" fill="rgba(0,0,0,0.08)"/>'
+        );
+      }
+
+      // X label
+      svgParts.push(
+        '<text x="'+(x+barW/2)+'" y="'+(H-6)+'" text-anchor="middle" '+
+        'fill="'+(total>0?'var(--ink)':'rgba(0,0,0,0.30)')+'" font-size="9" font-weight="'+(total>0?'600':'400')+'">'+cat.label+'</text>'
+      );
+    });
+
+    svgParts.push('</svg>');
+    svg.setAttribute('width',  W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', '0 0 '+W+' '+H);
+    svg.innerHTML = svgParts.join('');
+
+    // Tooltip on tap
+    if (tip) {
+      svg.querySelectorAll('.snap-alrt-bar').forEach(function(bar) {
+        bar.addEventListener('touchstart', function(e) {
+          e.stopPropagation();
+          var cat   = bar.dataset.cat;
+          var total = bar.dataset.total;
+          var crit  = bar.dataset.crit;
+          var warn  = bar.dataset.warn;
+          var x     = parseFloat(bar.getAttribute('x')) + parseFloat(bar.getAttribute('width'))/2;
+          var y     = parseFloat(bar.getAttribute('y'));
+          tip.textContent = cat+': '+total+' alertas ('+crit+' críticas)';
+          tip.style.left = x+'px';
+          tip.style.top  = Math.max(4, y-36)+'px';
+          tip.classList.add('visible');
+          bar.style.opacity = '0.75';
+          setTimeout(function(){
+            tip.classList.remove('visible');
+            bar.style.opacity = '';
+          }, 2000);
+          console.info('[Dashwey snap alertas] tap cat:', cat, 'total:', total);
+        }, {passive:true});
+      });
+    }
+
+    console.info('[Dashwey snap alertas chart] rendered. Stock:',
+      cats[0].crit+cats[0].warn+cats[0].info,
+      'Cad:', cats[1].crit+cats[1].warn+cats[1].info,
+      'Mg:', cats[2].crit+cats[2].warn+cats[2].info,
+      'Prov:', cats[3].crit+cats[3].warn+cats[3].info);
+  }
+
   // ── Gráfica de barras por hora — v1.2.99 ────────────────────────────────
   function _snapRenderChart(cardId, period) {
     var wrap = document.getElementById('snap-chart-' + cardId);
@@ -16255,6 +16429,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (cardId === 'flujo-caja') {
       setTimeout(function() {
         _snapRenderFCDist();
+      }, 120);
+    }
+
+    // Alertas stacked bar chart — solo caducidades
+    if (cardId === 'caducidades') {
+      setTimeout(function() {
+        _snapRenderAlertasChart();
       }, 120);
     }
   }
