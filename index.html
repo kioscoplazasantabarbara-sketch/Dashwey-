@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-3-07-dev";
+      var CURRENT_CACHE = "dashwey-v1-3-08-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.07-dev</title>
+<title>Dashwey v1.3.08-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1277,8 +1277,7 @@ body[data-dash-snap="1"] .snap-agenda-timeline {
   position: relative;
 }
 #snap-timeline-svg {
-  flex: 1;
-  min-height: 60px;
+  display: none; /* v1.3.08: replaced by HTML card list */
 }
 .snap-timeline-tip {
   position: absolute;
@@ -9331,7 +9330,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.07-dev';
+  const _APP_VERSION = 'v1.3.08-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15916,14 +15915,26 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // ── Timeline de entregas — v1.3.05 ──────────────────────────────────────
   // Puntos sobre línea horizontal: cada pedido pendiente = 1 punto
   // Posición X = fecha de entrega relativa al rango hoy → hoy+30 días
-  // ── Timeline de entregas — v1.3.07 — layout VERTICAL sin solapamientos ──
-  // Una fila por proveedor, ordenadas por fecha ascendente
-  // Línea vertical izquierda con punto + info a la derecha
+  // ── Timeline de entregas — v1.3.08 — HTML vertical, sin SVG ───────────
+  // Una tarjeta por proveedor, flex-column, sin solapamientos
   function _snapRenderTimeline() {
     var wrap = document.getElementById('snap-agenda-timeline');
-    var svg  = document.getElementById('snap-timeline-svg');
-    var tip  = document.getElementById('snap-timeline-tip');
-    if (!wrap || !svg) return;
+    if (!wrap) return;
+
+    // Limpiar SVG — usamos HTML puro para evitar solapamientos
+    var svg = document.getElementById('snap-timeline-svg');
+    if (svg) svg.style.display = 'none';
+
+    // Contenedor HTML para las tarjetas
+    var listId = 'snap-tl-list';
+    var listEl = document.getElementById(listId);
+    if (!listEl) {
+      listEl = document.createElement('div');
+      listEl.id = listId;
+      listEl.style.cssText = 'display:flex;flex-direction:column;gap:8px;width:100%;';
+      wrap.appendChild(listEl);
+    }
+    listEl.innerHTML = '';
 
     var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
     var MON    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -15931,7 +15942,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       return DNAMES[d.getDay()===0?6:d.getDay()-1]+' '+
              String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()];
     };
-    var esc2 = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+    var feur = function(n) {
+      return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+    };
 
     var calcEntrega = function(fechaISO, provId) {
       var prov = State.get.prov ? State.get.prov(provId) : null;
@@ -15946,7 +15959,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
     };
 
-    // Pedidos → agrupar por proveedor → un punto por proveedor
+    // Agrupar pedidos por proveedor
     var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
       .filter(function(o){ return o.status === 'pending'; });
 
@@ -15959,160 +15972,250 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var hoy = new Date(); hoy.setHours(0,0,0,0);
 
     var points = Object.keys(byProv).map(function(provId) {
-      var orders = byProv[provId];
+      var orders   = byProv[provId];
       var earliest = orders.reduce(function(min, o) {
-        var d = calcEntrega(o.date, provId);
-        return d < min ? d : min;
+        var d = calcEntrega(o.date, provId); return d < min ? d : min;
       }, calcEntrega(orders[0].date, provId));
       var prov  = State.get.prov ? State.get.prov(provId) : null;
       var nArts = orders.reduce(function(s,o){ return s+(o.items||[]).length; }, 0);
+      var total = orders.reduce(function(s,o){
+        return s+(o.items||[]).reduce(function(ss,it){
+          var p=State.get.prod(it.prodId);
+          return ss+(it.ncajas||1)*(it.precio||0)*(1+((p&&p.iva?parseFloat(p.iva):10)/100));
+        },0);
+      },0);
       return {
-        provId:   provId,
-        nombre:   prov ? prov.nombre : provId,
-        icon:     prov ? (prov.icon || '📦') : '📦',
-        fecha:    earliest,
-        isPast:   earliest < hoy,
-        nPedidos: orders.length,
-        nArts:    nArts,
+        provId: provId, nombre: prov?prov.nombre:provId,
+        icon: prov?(prov.icon||'📦'):'📦',
+        banner: prov&&prov.banner?prov.banner:null,
+        fecha: earliest, isPast: earliest<hoy,
+        nPedidos: orders.length, nArts: nArts, total: total,
+        orders: orders,
       };
-    }).sort(function(a,b){ return a.fecha - b.fecha; }); // ascendente por fecha entrega
-
-    // ── Layout vertical ────────────────────────────────────────────────
-    var W       = wrap.clientWidth || 300;
-    var ROW_H   = 44;   // altura por fila
-    var N       = points.length || 1;
-    var H       = Math.max(60, N * ROW_H + 8);
-
-    svg.setAttribute('width',  W);
-    svg.setAttribute('height', H);
-    svg.setAttribute('viewBox', '0 0 '+W+' '+H);
-
-    var LINE_X  = 20;   // x de la línea vertical
-    var DOT_R   = 7;    // radio del punto
-    var TEXT_X  = LINE_X + DOT_R + 12; // x del texto
-
-    var svgParts = [];
-    svgParts.push('<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif;overflow:visible">');
+    }).sort(function(a,b){ return a.fecha-b.fecha; });
 
     if (points.length === 0) {
-      // Estado vacío
-      svgParts.push(
-        '<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" '+
-        'fill="rgba(0,0,0,0.25)" font-size="12">Sin entregas programadas</text>'
-      );
-    } else {
-      // Línea vertical conectora
-      var lineTop    = ROW_H * 0.5;
-      var lineBottom = ROW_H * (N - 0.5);
-      if (N > 1) {
-        svgParts.push(
-          '<line x1="'+LINE_X+'" y1="'+lineTop+'" x2="'+LINE_X+'" y2="'+lineBottom+'" '+
-          'stroke="rgba(0,0,0,0.10)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="3 3"/>'
-        );
+      listEl.innerHTML = '<div style="font-size:12px;color:var(--ink-soft);padding:8px 0">Sin entregas programadas</div>';
+      console.info('[Dashwey snap timeline] no pedidos');
+      return;
+    }
+
+    // Settings SVG icon (wrench)
+    var wenchSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+
+    // Render cada proveedor como tarjeta HTML
+    points.forEach(function(pt, idx) {
+      var isFirst  = idx === 0;
+      var isPast   = pt.isPast;
+      var accentC  = isPast ? 'rgba(0,0,0,0.30)' : isFirst ? '#E53935' : '#EF9A9A';
+      var dotBg    = isPast ? 'rgba(0,0,0,0.12)' : isFirst ? '#E53935' : '#FFCDD2';
+      var fechaLbl = isPast ? '⚠ '+fmtDate(pt.fecha) : fmtDate(pt.fecha);
+      var estado   = isPast ? 'Vencido' : isFirst ? 'Próximo' : 'Pendiente';
+      var estadoBg = isPast ? 'rgba(0,0,0,0.08)' : isFirst ? 'rgba(229,57,53,0.12)' : 'rgba(239,154,154,0.2)';
+      var estadoC  = isPast ? 'rgba(0,0,0,0.40)' : isFirst ? '#B71C1C' : '#E53935';
+      var delay    = (idx * 60) + 'ms';
+
+      var card = document.createElement('div');
+      card.style.cssText = [
+        'display:flex;align-items:center;gap:10px',
+        'padding:10px 0',
+        'border-bottom:1px solid rgba(0,0,0,0.06)',
+        'opacity:0',
+        'animation:snapDotPop 0.35s ease '+delay+' forwards',
+        'position:relative',
+      ].join(';');
+
+      // Dot indicador
+      var dotDiv = document.createElement('div');
+      dotDiv.style.cssText = [
+        'width:36px;height:36px;border-radius:10px',
+        'background:'+dotBg,
+        'display:flex;align-items:center;justify-content:center',
+        'font-size:18px;flex-shrink:0',
+      ].join(';');
+      dotDiv.textContent = pt.icon;
+
+      // Badge # pedidos
+      if (pt.nPedidos > 1) {
+        var badge = document.createElement('div');
+        badge.style.cssText = 'position:absolute;top:6px;left:30px;width:14px;height:14px;'+
+          'background:#E53935;border-radius:50%;border:1.5px solid white;'+
+          'display:flex;align-items:center;justify-content:center;'+
+          'font-size:8px;font-weight:800;color:white;font-family:Inter,sans-serif';
+        badge.textContent = pt.nPedidos;
+        card.appendChild(badge);
       }
 
-      points.forEach(function(pt, idx) {
-        var cy       = ROW_H * idx + ROW_H * 0.5;
-        var isFirst  = idx === 0;
-        var dotColor = pt.isPast  ? 'rgba(0,0,0,0.15)' :
-                       isFirst    ? '#E53935' : '#EF9A9A';
-        var strokeC  = isFirst && !pt.isPast ? '#B71C1C' : 'rgba(0,0,0,0.08)';
-        var nameCol  = isFirst && !pt.isPast ? 'var(--ink)' : 'rgba(0,0,0,0.55)';
-        var dateCol  = isFirst && !pt.isPast ? '#B71C1C'    : 'rgba(0,0,0,0.35)';
-        var fwName   = isFirst ? '700' : '500';
-        var delay    = (idx * 70) + 'ms';
+      // Info centro
+      var infoDiv = document.createElement('div');
+      infoDiv.style.cssText = 'flex:1;min-width:0';
+      infoDiv.innerHTML =
+        '<div style="font-size:13px;font-weight:'+(isFirst?'700':'600')+';color:var(--ink);'+
+             'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Inter,sans-serif">'+
+          String(pt.nombre).replace(/&/g,'&amp;').replace(/</g,'&lt;') +
+        '</div>'+
+        '<div style="font-size:11px;color:'+accentC+';margin-top:2px;font-family:Inter,sans-serif">'+
+          fechaLbl+' · '+pt.nArts+' art.' +
+        '</div>';
 
-        // Dot
-        svgParts.push(
-          '<circle class="snap-tl-dot" '+
-          'data-nombre="'+esc2(pt.nombre)+'" '+
-          'data-fecha="'+fmtDate(pt.fecha)+'" '+
-          'data-npedidos="'+pt.nPedidos+'" '+
-          'data-narts="'+pt.nArts+'" '+
-          'cx="'+LINE_X+'" cy="'+cy+'" r="'+DOT_R+'" '+
-          'fill="'+dotColor+'" stroke="'+strokeC+'" stroke-width="1.5" '+
-          'cursor="pointer" '+
-          'style="animation:snapDotPop 0.35s cubic-bezier(0.34,1.56,0.64,1) '+delay+' both;'+
-            '-webkit-tap-highlight-color:transparent"/>'
-        );
+      // Columna derecha: total + estado + settings
+      var rightDiv = document.createElement('div');
+      rightDiv.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0';
 
-        // Icono del proveedor en el dot
-        svgParts.push(
-          '<text cx="'+LINE_X+'" cy="'+cy+'" '+
-          'x="'+LINE_X+'" y="'+(cy+4)+'" text-anchor="middle" font-size="8" '+
-          'style="animation:snapDotPop 0.35s ease '+delay+' both;pointer-events:none">'+
-            pt.icon+
-          '</text>'
-        );
+      var totalDiv = document.createElement('div');
+      totalDiv.style.cssText = 'font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-0.3px;font-family:Inter,sans-serif';
+      totalDiv.textContent = feur(pt.total);
 
-        // Badge número de pedidos si >1
-        if (pt.nPedidos > 1) {
-          svgParts.push(
-            '<circle cx="'+(LINE_X+DOT_R-1)+'" cy="'+(cy-DOT_R+1)+'" r="5" '+
-            'fill="#E53935" stroke="white" stroke-width="1" '+
-            'style="animation:snapDotPop 0.35s ease '+delay+' both"/>'+
-            '<text x="'+(LINE_X+DOT_R-1)+'" y="'+(cy-DOT_R+5)+'" '+
-            'text-anchor="middle" fill="white" font-size="6" font-weight="800" '+
-            'style="animation:snapDotPop 0.35s ease '+delay+' both">'+pt.nPedidos+'</text>'
-          );
-        }
+      var estadoDiv = document.createElement('div');
+      estadoDiv.style.cssText = 'font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;'+
+        'color:'+estadoC+';background:'+estadoBg+';padding:2px 6px;border-radius:6px;font-family:Inter,sans-serif';
+      estadoDiv.textContent = estado;
 
-        // Nombre del proveedor — truncado si largo
-        var nombre = pt.nombre.length > 22 ? pt.nombre.slice(0,21)+'…' : pt.nombre;
-        svgParts.push(
-          '<text x="'+TEXT_X+'" y="'+(cy-3)+'" '+
-          'fill="'+nameCol+'" font-size="12" font-weight="'+fwName+'" '+
-          'style="animation:snapDotPop 0.35s ease '+delay+' both">'+
-            esc2(nombre)+
-          '</text>'
-        );
+      // Botón settings (llave inglesa)
+      var settingsBtn = document.createElement('button');
+      settingsBtn.style.cssText = [
+        'background:none;border:none;cursor:pointer',
+        'color:rgba(0,0,0,0.30);padding:2px',
+        'display:flex;align-items:center;touch-action:manipulation',
+        '-webkit-tap-highlight-color:transparent',
+      ].join(';');
+      settingsBtn.innerHTML = wenchSvg;
+      settingsBtn.setAttribute('aria-label','Configurar pedido');
 
-        // Fecha de entrega
-        var fechaLbl = pt.isPast ? '⚠ '+fmtDate(pt.fecha) : fmtDate(pt.fecha);
-        svgParts.push(
-          '<text x="'+TEXT_X+'" y="'+(cy+13)+'" '+
-          'fill="'+dateCol+'" font-size="10" '+
-          'style="animation:snapDotPop 0.35s ease '+delay+' both">'+
-            esc2(fechaLbl)+
-            (pt.nArts > 0 ? ' · '+pt.nArts+' art.' : '')+
-          '</text>'
-        );
-      });
-    }
-
-    svgParts.push('</svg>');
-    svg.innerHTML = svgParts.join('');
-
-    // Tooltip en tap
-    if (tip) {
-      svg.querySelectorAll('.snap-tl-dot').forEach(function(dot) {
-        dot.addEventListener('touchstart', function(e) {
+      // Settings action: abrir modal del pedido
+      (function(pdata) {
+        settingsBtn.addEventListener('click', function(e) {
           e.stopPropagation();
-          var nombre   = dot.dataset.nombre;
-          var fecha    = dot.dataset.fecha;
-          var nPedidos = dot.dataset.npedidos;
-          var nArts    = dot.dataset.narts;
-          var cx = parseFloat(dot.getAttribute('cx'));
-          var cy = parseFloat(dot.getAttribute('cy'));
-          tip.textContent = nombre+' · '+fecha+'
-'+nPedidos+' pedido'+(nPedidos!=='1'?'s':'')+' · '+nArts+' art.';
-          tip.style.left = (cx + 40)+'px';
-          tip.style.top  = (cy - 20)+'px';
-          tip.style.transform = 'none';
-          tip.classList.add('visible');
-          dot.setAttribute('opacity','0.6');
-          setTimeout(function(){
-            tip.classList.remove('visible');
-            dot.removeAttribute('opacity');
-          }, 2500);
-          console.info('[Dashwey snap timeline] tap:', nombre, fecha);
-        }, {passive:true});
-      });
-    }
+          _snapShowProvSettings(pdata);
+        });
+      })(pt);
 
-    console.info('[Dashwey snap timeline] rendered',points.length,'proveedores, rango:',
-      points.length?fmtDate(points[0].fecha):'—','→',points.length?fmtDate(points[points.length-1].fecha):'—');
+      rightDiv.appendChild(totalDiv);
+      rightDiv.appendChild(estadoDiv);
+      rightDiv.appendChild(settingsBtn);
+
+      card.appendChild(dotDiv);
+      card.appendChild(infoDiv);
+      card.appendChild(rightDiv);
+
+      // Tap en la card → abrir primer pedido del proveedor
+      card.addEventListener('click', function() {
+        var firstId = pt.orders[0] && pt.orders[0].id;
+        if (firstId) {
+          try { App.alm._abrirCheckModalById(firstId); } catch(_) {}
+        }
+      });
+
+      listEl.appendChild(card);
+    });
+
+    console.info('[Dashwey snap timeline] rendered', points.length, 'proveedores');
   }
+
+  // ── Settings popup por proveedor en timeline ──────────────────────────
+  function _snapShowProvSettings(pt) {
+    // Cerrar si ya existe
+    var existing = document.getElementById('snap-prov-settings-overlay');
+    if (existing) { existing.remove(); return; }
+
+    var feur = function(n) {
+      return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+    };
+
+    var ov = document.createElement('div');
+    ov.id = 'snap-prov-settings-overlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:10050',
+      'display:flex;align-items:center;justify-content:center',
+      'background:rgba(0,0,0,0.55);padding:16px',
+      'font-family:Inter,var(--font),sans-serif',
+      'opacity:0;transition:opacity 0.18s ease',
+    ].join(';');
+
+    var trashSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+    var checkSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+    var truckSvg = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+
+    var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
+    var MON    = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    var fmtDate = function(d) {
+      return DNAMES[d.getDay()===0?6:d.getDay()-1]+' '+String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()];
+    };
+
+    var rows = pt.orders.map(function(o) {
+      var nArts = (o.items||[]).length;
+      var total = (o.items||[]).reduce(function(s,it){
+        var p=State.get.prod(it.prodId);
+        return s+(it.ncajas||1)*(it.precio||0)*(1+((p&&p.iva?parseFloat(p.iva):10)/100));
+      },0);
+      var pedF = new Date(o.date);
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.06)">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--ink)">'+
+            'Pedido '+fmtDate(pedF)+
+          '</div>'+
+          '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">'+nArts+' artículos · '+feur(total)+'</div>'+
+        '</div>'+
+        '<button onclick="event.stopPropagation();try{App.alm._abrirCheckModalById(''+o.id+'');}catch(_){};document.getElementById('snap-prov-settings-overlay').remove();document.body.style.overflow=''" '+
+          'style="display:inline-flex;align-items:center;gap:4px;background:var(--red-s);color:var(--red);'+
+                 'border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;'+
+                 'cursor:pointer;font-family:inherit;touch-action:manipulation">'+
+          checkSvg+'&nbsp;Ver'+
+        '</button>'+
+        '<button onclick="event.stopPropagation();try{App.alm._eliminarPedidoProgramado(''+o.id+'');}catch(_){};document.getElementById('snap-prov-settings-overlay').remove();document.body.style.overflow=''" '+
+          'style="display:inline-flex;align-items:center;gap:4px;background:none;color:var(--red);'+
+                 'border:none;padding:5px 4px;font-size:11px;font-weight:700;'+
+                 'cursor:pointer;font-family:inherit;touch-action:manipulation">'+
+          trashSvg+
+        '</button>'+
+      '</div>';
+    }).join('');
+
+    ov.innerHTML =
+      '<div style="background:var(--surface);border-radius:20px;width:100%;max-width:400px;'+
+                  'max-height:min(calc(100dvh - 160px),480px);display:flex;flex-direction:column;overflow:hidden;'+
+                  'box-shadow:0 20px 60px rgba(0,0,0,0.28);transform:scale(0.94);transition:transform 0.18s var(--spring)">' +
+        '<div style="display:flex;align-items:center;padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0">' +
+          '<div style="font-size:20px;margin-right:10px">'+pt.icon+'</div>'+
+          '<div style="flex:1">' +
+            '<div style="font-size:15px;font-weight:800;color:var(--ink);letter-spacing:-0.3px">'+
+              String(pt.nombre).replace(/&/g,'&amp;').replace(/</g,'&lt;')+
+            '</div>'+
+            '<div style="font-size:11px;color:var(--ink-soft);margin-top:2px">'+
+              pt.nPedidos+' pedido'+(pt.nPedidos!==1?'s':'')+' · '+pt.nArts+' artículos'+
+            '</div>'+
+          '</div>'+
+          '<button onclick="document.getElementById('snap-prov-settings-overlay').remove();document.body.style.overflow=''" '+
+            'style="width:28px;height:28px;border-radius:50%;border:none;background:var(--bg-mid);'+
+                   'color:var(--ink-mid);cursor:pointer;font-size:16px;display:flex;align-items:center;'+
+                   'justify-content:center;flex-shrink:0">×</button>'+
+        '</div>'+
+        '<div style="flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch">'+
+          rows+
+        '</div>'+
+      '</div>';
+
+    document.body.appendChild(ov);
+    document.body.style.overflow = 'hidden';
+
+    ov.addEventListener('click', function(e) {
+      if (e.target === ov) {
+        ov.style.opacity = '0';
+        setTimeout(function(){ ov.remove(); document.body.style.overflow = ''; }, 180);
+      }
+    });
+
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        ov.style.opacity = '1';
+        var box = ov.querySelector('div');
+        if (box) box.style.transform = 'scale(1)';
+      });
+    });
+
+    console.info('[Dashwey snap settings] proveedor:', pt.nombre, 'pedidos:', pt.nPedidos);
+  }
+
 
   // ── Alertas stacked bar chart — v1.3.04 ─────────────────────────────────
   // 4 categorías: Stock | Caducidad | Margen | Proveedores
