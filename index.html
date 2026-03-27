@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.30-dev</title>
+<title>Dashwey v1.3.31-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9784,7 +9784,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.30-dev';
+  const _APP_VERSION = 'v1.3.31-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17818,7 +17818,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Use '.card[data-card-id]' to exclude card-remove-btn (also has data-card-id)
     var cards  = Array.from(cont.querySelectorAll('.card[data-card-id]'));
     var snapH  = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')) || cont.clientHeight;
-    var activeIdx  = Math.round(cont.scrollTop / snapH);
+    var maxIdx     = Math.max(0, cards.length - 1);
+    var rawIdx     = snapH > 0 ? cont.scrollTop / snapH : 0;
+    var activeIdx  = Math.min(maxIdx, Math.max(0, Math.round(rawIdx))); // clamped
     var activeCard = cards[activeIdx];
     var activeId   = activeCard ? activeCard.dataset.cardId : null;
 
@@ -17893,52 +17895,54 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const cont = document.getElementById('dash-cards-container');
     if (!cont) return;
 
-    // v1.3.30: snap correction — clamp overscroll + force nearest card
+    // ── Scroll-end correction — v1.3.30 ──────────────────────────────────
+    // Detecta fin de scroll y fuerza alineación exacta a la tarjeta más cercana.
+    // Evita descentrado al volver desde la última tarjeta.
+    if (cont._snapScrollHandler) {
+      cont.removeEventListener('scroll', cont._snapScrollHandler);
+    }
     var _scrollEndTimer = null;
-    cont.addEventListener('scroll', function() {
+    cont._snapScrollHandler = function() {
       clearTimeout(_scrollEndTimer);
       _scrollEndTimer = setTimeout(function() {
-        var snapH = parseFloat(
+        var snapH  = parseFloat(
           getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')
         ) || cont.clientHeight;
         if (snapH <= 0) return;
 
-        var cards  = cont.querySelectorAll('.card[data-card-id]');
+        var cards  = Array.from(cont.querySelectorAll('.card[data-card-id]'));
         var maxIdx = Math.max(0, cards.length - 1);
         var maxTop = maxIdx * snapH;
 
-        // CRÍTICO: clampar overscroll más allá de la última tarjeta
-        if (cont.scrollTop > maxTop + 2) {
+        // Clamp overscroll más allá de la última tarjeta
+        if (cont.scrollTop > maxTop + 4) {
           cont.scrollTo({ top: maxTop, behavior: 'smooth' });
           return;
         }
 
         // Snap al índice más cercano si hay desalineación > 2px
-        var idx    = Math.round(cont.scrollTop / snapH);
-        idx        = Math.max(0, Math.min(idx, maxIdx));
-        var target = idx * snapH;
-        if (Math.abs(cont.scrollTop - target) > 2) {
-          cont.scrollTo({ top: target, behavior: 'smooth' });
-        }
-      }, 80);
-    }, { passive: true });
-        if (snapH <= 0) return;
-        var raw   = cont.scrollTop / snapH;
-        var idx   = Math.round(raw);
-        var cards = cont.querySelectorAll('.card[data-card-id]');
-        var maxIdx = Math.max(0, cards.length - 1);
-        idx = Math.min(idx, maxIdx);
-        var target = idx * snapH;
-        // Only correct if significantly misaligned (>2px)
-        if (Math.abs(cont.scrollTop - target) > 2) {
-          cont.scrollTo({ top: target, behavior: 'smooth' });
-        }
-      }, 80);
-    }, { passive: true });
+        var rawIdx  = cont.scrollTop / snapH;
+        var snapIdx = Math.min(maxIdx, Math.max(0, Math.round(rawIdx)));
+        var target  = snapIdx * snapH;
 
+        if (Math.abs(cont.scrollTop - target) > 2) {
+          cont.scrollTo({ top: target, behavior: 'smooth' });
+        }
+
+        // Actualizar título + render de la tarjeta activa
+        var activeCard = cards[snapIdx];
+        if (activeCard && activeCard.dataset.cardId) {
+          _snapUpdateTitle(activeCard.dataset.cardId);
+          _snapRenderCard(activeCard.dataset.cardId);
+        }
+      }, 80);
+    };
+    cont.addEventListener('scroll', cont._snapScrollHandler, { passive: true });
+
+    // ── IntersectionObserver — render al entrar en viewport ──────────────
     _snapObserver = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
           var cardId = entry.target.dataset.cardId;
           if (cardId) {
             _snapUpdateTitle(cardId);
@@ -17946,9 +17950,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           }
         }
       });
-    }, { root: cont, threshold: 0.5 });
+    }, { root: cont, threshold: 0.6 });
 
-    // Only observe .card elements, not card-remove-btn (also has data-card-id)
     cont.querySelectorAll('.card[data-card-id]').forEach(function(card) {
       _snapObserver.observe(card);
     });
@@ -17956,6 +17959,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _snapDetachObserver() {
     if (_snapObserver) { _snapObserver.disconnect(); _snapObserver = null; }
+    var cont = document.getElementById('dash-cards-container');
+    if (cont && cont._snapScrollHandler) {
+      cont.removeEventListener('scroll', cont._snapScrollHandler);
+      cont._snapScrollHandler = null;
+    }
   }
 
   function _snapResetTitle() {
