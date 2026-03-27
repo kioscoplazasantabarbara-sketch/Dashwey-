@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.26-dev</title>
+<title>Dashwey v1.3.27-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8394,6 +8394,42 @@ window._dashweyCheckVisibility = checkVisibility;
  *
  * Dependencias: State
  * ═══════════════════════════════════════════════════════════════ */
+// ── _calcMargenProd — helper centralizado de margen unitario real v1.3.27 ──
+// SIEMPRE proratea precio de bulto entre uds/bulto antes de comparar con PVP.
+// Retorna { cu, mg, valid } donde:
+//   cu    = coste unitario real (con IVA)
+//   mg    = % margen sobre PVP
+//   valid = false si los datos son insuficientes para calcular
+function _calcMargenProd(p) {
+  var pvp      = p.pvp      || 0;
+  var pCompra  = p.precioCompra || 0;
+  var udsCaja  = p.udscaja  || p.stockMinimo || 0;
+  var ivaRaw   = p.iva;
+  // IVA: default 10% si no definido
+  var ivaPct   = (ivaRaw === null || ivaRaw === undefined || ivaRaw === '')
+                 ? 10
+                 : parseFloat(String(ivaRaw).replace('%', '')) || 10;
+
+  // Validación: datos insuficientes
+  if (!pvp || pvp <= 0 || !pCompra || pCompra <= 0) {
+    return { cu: 0, mg: null, valid: false, reason: 'precio-invalido' };
+  }
+  if (!udsCaja || udsCaja <= 0) {
+    // Si udsCaja no definido, no podemos prorratear — excluir de alertas
+    return { cu: 0, mg: null, valid: false, reason: 'uds-invalido' };
+  }
+
+  // Coste unitario = (precio bulto * (1 + IVA%)) / uds_por_bulto
+  var cu = (pCompra * (1 + ivaPct / 100)) / udsCaja;
+  cu = +cu.toFixed(4);
+
+  // Margen % = (PVP - cu) / PVP * 100
+  var mg = Math.round((pvp - cu) / pvp * 100);
+
+  return { cu: cu, mg: mg, valid: true };
+}
+
+
 const KPI = (() => {
 
   const ALL_CATS   = State.get.baseCats();
@@ -9736,7 +9772,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.26-dev';
+  const _APP_VERSION = 'v1.3.27-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14286,10 +14322,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     // PVP bajo margen
     prods.filter(function(p){
-      var mg = p.pvp>0?Math.round(((p.pvp-(p.precioCompra||0)*1.1)/p.pvp)*100):100;
+      var _r = _calcMargenProd(p); var mg = _r.valid ? _r.mg : 100;
       return mg < 30;
     }).forEach(function(p) {
-      var mg = p.pvp>0?Math.round(((p.pvp-(p.precioCompra||0)*1.1)/p.pvp)*100):0;
+      var _r2 = _calcMargenProd(p); var mg = _r2.valid ? _r2.mg : 0;
       notifs.push({
         id:     'pvp_'+p.id,
         cat:    'PVP bajo',
@@ -16678,10 +16714,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var listBajoMin  = prods.filter(function(p){
       return p.stockMinimo > 0 && (p.stockActual||0) > 0 && (p.stockActual||0) <= p.stockMinimo;
     });
-    // Margen bajo o negativo (<15%)
+    // Margen bajo o negativo (<15%) — usa coste unitario real v1.3.27
     var listMargen = prods.filter(function(p){
-      if (!p.pvp || !p.precioCompra || p.pvp <= 0) return false;
-      return (p.pvp - p.precioCompra) / p.pvp * 100 < 15;
+      var r = _calcMargenProd(p);
+      if (!r.valid) return false; // datos incompletos → excluir
+      return r.mg < 15;
     });
     // Caducidad próxima (14 días)
     var listCad = [];
@@ -16865,14 +16902,16 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         return;
       }
       data.listMargen.forEach(function(p, idx) {
-        var mg = p.pvp > 0 && p.precioCompra > 0
-          ? Math.round((p.pvp - p.precioCompra) / p.pvp * 100) : 0;
+        var _mgR = _calcMargenProd(p);
+        var mg   = _mgR.valid ? _mgR.mg : 0;
+        var cu   = _mgR.valid ? _mgR.cu : 0;
         var isNeg = mg < 0;
         var color = isNeg ? '#B71C1C' : '#E53935';
         var bgCol = isNeg ? 'rgba(183,28,28,0.10)' : 'rgba(249,115,22,0.10)';
+        var udsCaja = p.udscaja || p.stockMinimo || 1;
         var item = _snapAlrtItem(
           p.e || '📦', p.nombre,
-          'PVP ' + feur(p.pvp) + ' · Compra ' + feur(p.precioCompra) + ' · Margen ' + mg + '%',
+          'PVP ' + feur(p.pvp) + ' · Coste/ud ' + feur(cu) + ' · Margen ' + mg + '%',
           isNeg ? 'NEGATIVO' : mg + '%',
           color, bgCol,
           idx * 50 + 'ms',
@@ -18807,7 +18846,10 @@ const tpv = (() => {
         prodId: i.p.id, nombre: i.p.nombre,
         qty: i.q, pvp: i.p.pvp,
         coste: i.p.precioCompra || 0,
-        margen: ((i.p.pvp || 0) - (i.p.precioCompra || 0)) * i.q
+        margen: (function() {
+          var _r = _calcMargenProd(i.p);
+          return _r.valid ? (i.p.pvp - _r.cu) * i.q : 0;
+        })()
       }))
     };
 
