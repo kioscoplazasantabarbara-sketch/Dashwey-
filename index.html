@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.65-dev</title>
+<title>Dashwey v1.3.66-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7177,7 +7177,6 @@ function _authTabSafe(tab) {
         <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path d="M5 8h14M5 8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v.01a2 2 0 0 1-2 2M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
         </svg>
-        <span class="bt-nav-badge" id="bt-alm-badge"></span>
       </div>
       <span class="bt-lbl">ALMACÉN</span>
     </button>
@@ -9850,7 +9849,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.65-dev';
+  const _APP_VERSION = 'v1.3.66-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20399,16 +20398,8 @@ function _parseIva(iva) {
         truckBadge.classList.remove('visible');
       }
     }
-    // v1.3.62: badge global en tab nav ALMACÉN — visible desde cualquier tab
-    const btAlmBadge = document.getElementById('bt-alm-badge');
-    if (btAlmBadge) {
-      if (nPending > 0) {
-        btAlmBadge.textContent = nPending;
-        btAlmBadge.classList.add('visible');
-      } else {
-        btAlmBadge.classList.remove('visible');
-      }
-    }
+    // v1.3.65: badge nav Almacén eliminado — la info de pendientes está en alm-hdr-truck-badge
+    console.log('[Dashwey] Badge updated:', nPending);
     const cartBadge = document.getElementById('alm-hdr-cart-badge');
     if (cartBadge) {
       if (carritoCount > 0) {
@@ -26178,7 +26169,7 @@ window._almCarritoOptions = function() {
     var pop = document.createElement('div');
     pop.id = 'cm-confirm-popup';
     pop.style.cssText = [
-      'position:fixed;inset:0;z-index:10000',
+      'position:fixed;inset:0;z-index:10300',
       'display:flex;align-items:center;justify-content:center',
       'background:rgba(0,0,0,0.55);padding:20px',
     ].join(';');
@@ -26489,28 +26480,44 @@ window._almCarritoOptions = function() {
       } catch(e) { console.error('[CheckModal] confirm error:', e); }
     },
 
-    /* _doConfirm() — ejecuta la confirmación real tras el popup Sí */
+    /* _doConfirm() — v1.3.65: reescrito limpio, logs de diagnóstico, sin fallos silenciosos */
     _doConfirm: function() {
+      console.log('[Dashwey] _doConfirm START — S._meta:', JSON.stringify(S._meta));
       try {
         _removeConfirmPopup();
 
+        // ── Leer contexto ─────────────────────────────────────────
         var meta    = S._meta || {};
-        var sel     = meta.sel;
         var orderId = meta.orderId || null;
-        var items   = S.items;
+        var sel     = meta.sel    || null;
+        var items   = S.items     || [];
 
-        // ── 1. Actualizar stock en State ──────────────────────────
-        var _St = window.State || null; // v1.3.64: window.State expuesto explícitamente
+        console.log('[Dashwey] Confirm button clicked — orderId:', orderId, 'items:', items.length);
+
+        // ── Guardia: State disponible ─────────────────────────────
+        var St = window.State;
+        if (!St) {
+          console.error('[Dashwey] CRÍTICO: window.State no disponible');
+          try { if (window.Utils) Utils.showToast('Error interno — recarga la app'); } catch(_) {}
+          return;
+        }
+
+        // ── 1. Actualizar stock ────────────────────────────────────
         items.forEach(function(item) {
-          var p = _St ? _St.get.prod(item.prodId) : null;
-          if (p && _St) {
-            var nuevoStock = (p.stockActual || 0) + (item.ncajas || 1) * (item.udscaja || 1);
-            _St.set.updateProd(item.prodId, { stockActual: nuevoStock });
-          }
+          try {
+            var p = St.get.prod(item.prodId);
+            if (p) {
+              var nuevo = (p.stockActual || 0) + (item.ncajas || 1) * (item.udscaja || 1);
+              St.set.updateProd(item.prodId, { stockActual: nuevo });
+            }
+          } catch(e) { console.warn('[Dashwey] updateProd error:', item.prodId, e); }
         });
 
-        // ── 2. Guardar en historialPedidos ────────────────────────
-        var pedidoId = orderId ? orderId.replace('pord_', 'ped_') : ('ped_' + Date.now());
+        // ── 2. Guardar en historial ────────────────────────────────
+        var pedidoId = orderId
+          ? orderId.replace('pord_', 'ped_')
+          : ('ped_' + Date.now());
+
         var pedido = {
           id:     pedidoId,
           fecha:  new Date().toISOString(),
@@ -26525,51 +26532,63 @@ window._almCarritoOptions = function() {
             };
           }),
         };
-        try { if (_St) _St.set.addPedido(pedido); } catch(e) {
-          console.error('[CheckModal] addPedido error:', e);
+
+        try {
+          St.set.addPedido(pedido);
+          console.log('[Dashwey] Order state updated — pedidoId:', pedidoId);
+        } catch(e) {
+          console.error('[Dashwey] Confirm order failed — addPedido:', e);
         }
 
-        // ── 3. v1.2.53: eliminar pending order confirmado
+        // ── 3. Eliminar pending order ─────────────────────────────
         if (orderId) {
           try {
-            if (_St) _St.set.removePendingOrder(orderId);
+            St.set.removePendingOrder(orderId);
+            console.log('[Dashwey] Order persisted — removed pendingOrder:', orderId);
           } catch(e) {
-            console.error('[CheckModal] removePendingOrder error:', e);
+            console.error('[Dashwey] Confirm order failed — removePendingOrder:', e);
           }
           try {
             if (window._orderSelectorState) window._orderSelectorState.currentOrderId = null;
           } catch(_) {}
-          if (typeof _snapLastRenderedCardId !== 'undefined') {
-            _snapLastRenderedCardId = null;
-          }
-          console.info('[CheckModal] pedido confirmado y eliminado:', orderId);
+          if (typeof _snapLastRenderedCardId !== 'undefined') _snapLastRenderedCardId = null;
         } else {
-          // Flujo legacy (sin orderId): limpiar carrito ALM
+          // Flujo legacy sin orderId — limpiar carrito
           try {
-            if (window.App && App.alm) {
-              App.alm._cancelarPedidoCarrito && App.alm._cancelarPedidoCarrito();
+            if (window.App && App.alm && App.alm._cancelarPedidoCarrito) {
+              App.alm._cancelarPedidoCarrito();
             }
-          } catch(e) {}
+          } catch(_) {}
         }
 
-        // ── 4. Sincronización global — v1.3.62: consolidada, un solo tick ──
-        // State ya mutó en pasos 1-3. requestAnimationFrame garantiza que
-        // updateBadge() lee el estado ya actualizado antes de pintar.
+        // ── 4. Sincronización global — un solo tick tras mutación ─
+        var _pedido  = pedido;
+        var _orderId = orderId;
         requestAnimationFrame(function() {
+          // Badge nav + header
           try {
             if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge();
-          } catch(_) {}
+            var pending = (window.State ? window.State.get.pendingOrders() : [])
+              .filter(function(o){ return o.status === 'pending'; });
+            console.log('[Dashwey] Badge updated:', pending.length);
+          } catch(e) { console.warn('[Dashwey] updateBadge error:', e); }
+
+          // Bus global → dash.render + alm.renderOrden + alm.updateBadge
           try {
-            if (window.DashweyBus) window.DashweyBus.emit('pedido_stock', { pedido: pedido });
-          } catch(_) {}
-          try { document.dispatchEvent(new Event('order:checked'));  } catch(_) {}
-          try { document.dispatchEvent(new Event('data:updated'));   } catch(_) {}
-          if (orderId) {
+            if (window.DashweyBus) window.DashweyBus.emit('pedido_stock', { pedido: _pedido });
+          } catch(e) { console.warn('[Dashwey] DashweyBus emit error:', e); }
+
+          // Eventos DOM estándar
+          try { document.dispatchEvent(new Event('order:checked')); } catch(_) {}
+          try { document.dispatchEvent(new Event('data:updated'));  } catch(_) {}
+
+          // Eventos window para módulos snap
+          if (_orderId) {
             try {
-              window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { id: orderId } }));
+              window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { id: _orderId } }));
             } catch(_) {}
             try {
-              window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido: pedido } }));
+              window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido: _pedido } }));
             } catch(_) {}
             try {
               if (typeof _snapRenderAlertasChart === 'function') _snapRenderAlertasChart();
@@ -26577,67 +26596,33 @@ window._almCarritoOptions = function() {
           }
         });
 
-        // ── 5. Haptic + toast + notificación campana ─────────────
+        // ── 5. Feedback ───────────────────────────────────────────
         try { if (window.Utils) Utils.triggerHaptic('medium'); } catch(_) {}
-        var n = items.length;
-
-        // v1.2.77: calcular total e información para notificación
-        var totalConf = 0;
         try {
-          totalConf = items.reduce(function(s, o) {
-            return s + (o.ncajas||1) * (o.precio||0) * (1 + (_parseIva(o.iva)/100));
+          var n = items.length;
+          var total = items.reduce(function(s, o) {
+            return s + (o.ncajas || 1) * (o.precio || 0) * 1.10;
           }, 0);
+          var fmt = (+(total || 0)).toFixed(2).replace('.', ',') + ' €';
+          var pNom = (meta.prov && meta.prov.nombre) || 'Proveedor';
+          if (window.Utils) Utils.showToast(
+            '✅ ' + pNom + ' · ' + n + ' art.' + ' · ' + fmt
+          );
         } catch(_) {}
 
-        // v1.2.77: calcular fecha de entrega inline (calcEntrega es local a openPendingOrders)
-        var entregaStr = '';
-        try {
-          var provConf = (meta && meta.prov) ||
-                         (window.State && window.State.get.prov && window.State.get.prov(meta && meta.sel));
-          var de = (provConf && provConf.diasEntrega) || [];
-          var base = new Date(pedido.fecha);
-          var dEnt = new Date(base);
-          dEnt.setDate(base.getDate() + 2); // fallback +2
-          for (var di = 1; di <= 14; di++) {
-            var d2 = new Date(base);
-            d2.setDate(base.getDate() + di);
-            var dow2 = d2.getDay() === 0 ? 6 : d2.getDay() - 1;
-            if (de.indexOf(dow2) >= 0) { dEnt = d2; break; }
-          }
-          var M2 = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-          var DN2 = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
-          var dow3 = dEnt.getDay() === 0 ? 6 : dEnt.getDay() - 1;
-          entregaStr = DN2[dow3] + ' ' + dEnt.getDate() + ' ' + M2[dEnt.getMonth()];
-        } catch(_) {}
-
-        // Toast mejorado
-        try {
-          if (window.Utils) {
-            var fmtTotal = (+(totalConf||0)).toFixed(2).replace('.',',') + ' €';
-            var provNConf = (meta && meta.prov && meta.prov.nombre) || 'Proveedor';
-            Utils.showToast(
-              '✅ Pedido realizado — ' + provNConf + '\n' +
-              n + ' artículo' + (n!==1?'s':'') + ' · ' + fmtTotal +
-              (entregaStr ? ' · Entrega ' + entregaStr : '')
-            );
-          }
-        } catch(_) {}
-
-        // Enviar notificación a campana
+        // Bell badge
         try {
           if (window.App && App.dash && App.dash._updateBellBadge) {
             App.dash._updateBellBadge();
           }
         } catch(_) {}
 
-        // ── 6. Cerrar check-modal y mostrar resumen ───────────────
-        var summaryItems = items;
-        var summaryMeta  = meta;
+        // ── 6. Cerrar modal ───────────────────────────────────────
         this.close();
-        // v1.3.38: summary eliminado — flujo directo sin pantalla de resumención de cierre
 
       } catch(e) {
-        console.error('[CheckModal] _doConfirm error:', e);
+        console.error('[Dashwey] Confirm order failed — _doConfirm:', e);
+        try { if (window.Utils) Utils.showToast('Error al confirmar — intenta de nuevo'); } catch(_) {}
       }
     },
 
