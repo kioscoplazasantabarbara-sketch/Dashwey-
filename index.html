@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.107-dev</title>
+<title>Dashwey v1.3.108-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10061,7 +10061,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.107-dev';
+  const _APP_VERSION = 'v1.3.108-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -27599,92 +27599,134 @@ window._almCarritoOptions = function() {
 
 
 <script>
-/* ── ALM DYNAMIC SCALE — v1.3.107 ──────────────────────────────────────
-   Escalado dinámico de tarjeta central. Scroll LIBRE con inercia.
-   SIN scroll-snap CSS — no bloquea momentum.
-   
-   Técnica:
-   - scroll listener → rAF → calcula item más cercano al centro del viewport
-   - scrollend / timeout de estabilidad (150ms) → haptic
-   - snap-on class: scale(1.07) en CSS, via transition smooth
+/* ── ALM TOUCH SCALE — v1.3.108 ─────────────────────────────────────────
+   Touch tracking: la tarjeta tocada se convierte en activa (snap-on).
+   Fallback: si no hay tarjeta tocada activa, la más cercana al centro.
+   Scroll LIBRE con inercia — sin scroll-snap CSS.
+
+   Flujo:
+   1. touchstart en item → _setActive(item)  → snap-on inmediato
+   2. touchend en item   → si item visible → haptic (1 sola vez)
+   3. Sin touch activo   → scroll listener → _findCenter() → snap-on
+   4. Haptic: solo 1 disparo por item, con guard de 400ms entre disparos
    ─────────────────────────────────────────────────────────────────── */
 (function() {
   'use strict';
 
-  var _scrollEl   = null;
-  var _lastCentered = null;   // item con snap-on actualmente
-  var _raf        = null;
-  var _hapticTimer = null;    // timer de estabilidad para haptic
-  var _active     = false;
+  var _scrollEl    = null;
+  var _active      = false;
 
-  /* ── Centro visual del viewport del scroll ───────────────────────── */
-  function _viewCenterY() {
-    if (!_scrollEl) return 0;
-    var rect = _scrollEl.getBoundingClientRect();
-    // Centro entre el top del scroll y el bottom (menos navbar)
-    var tabH = parseInt(getComputedStyle(document.documentElement)
-      .getPropertyValue('--tab-real')) || 60;
-    return rect.top + (rect.height - tabH) / 2;
+  // Estado de escala
+  var _scaledItem  = null;   // item con clase snap-on ahora mismo
+  var _touchedItem = null;   // item siendo tocado (touchstart activo)
+
+  // Haptic guard — evita disparos múltiples
+  var _lastHapticItem = null;
+  var _lastHapticTime = 0;
+  var _HAPTIC_COOLDOWN = 400; // ms mínimos entre haptics del mismo item
+
+  // rAF para scroll fallback
+  var _raf = null;
+
+  /* ── Aplicar snap-on a un item ───────────────────────────────────── */
+  function _setScaled(item) {
+    if (item === _scaledItem) return;
+    if (_scaledItem) _scaledItem.classList.remove('snap-on');
+    _scaledItem = item || null;
+    if (_scaledItem) _scaledItem.classList.add('snap-on');
   }
 
-  /* ── Encontrar item más cercano al centro del viewport ───────────── */
+  /* ── Disparar haptic (con guard) ─────────────────────────────────── */
+  function _haptic(item) {
+    var now = Date.now();
+    if (item === _lastHapticItem && now - _lastHapticTime < _HAPTIC_COOLDOWN) return;
+    _lastHapticItem = item;
+    _lastHapticTime = now;
+    try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
+    console.log('[Dashwey][Catalog] Snap centrado OK:', item.dataset.pid || item.id || '?');
+    console.log('[Dashwey][Catalog] Haptic sincronizado OK');
+  }
+
+  /* ── Centro visual del viewport ──────────────────────────────────── */
+  function _viewCenterY() {
+    if (!_scrollEl) return 0;
+    var r    = _scrollEl.getBoundingClientRect();
+    var tabH = parseFloat(getComputedStyle(document.documentElement)
+                 .getPropertyValue('--tab-real')) || 60;
+    return r.top + (r.height - tabH) / 2;
+  }
+
+  /* ── Fallback: item más cercano al centro (sin touch activo) ─────── */
   function _findCenter() {
     var cat = document.getElementById('alm-cat-inline');
     if (!cat) return null;
     var items = cat.querySelectorAll('.alm-cat-item');
     if (!items.length) return null;
-
-    var cy     = _viewCenterY();
-    var best   = null;
-    var bestD  = Infinity;
-
+    var cy = _viewCenterY();
+    var best = null, bestD = Infinity;
     for (var i = 0; i < items.length; i++) {
-      var r     = items[i].getBoundingClientRect();
-      var itemCy = r.top + r.height / 2;
-      var d     = Math.abs(itemCy - cy);
+      var r  = items[i].getBoundingClientRect();
+      var cy2 = r.top + r.height / 2;
+      var d  = Math.abs(cy2 - cy);
       if (d < bestD) { bestD = d; best = items[i]; }
     }
-    // Tolerancia: el item debe estar a menos de mitad de su altura del centro
-    var firstH = items[0].getBoundingClientRect().height || 72;
-    return bestD < firstH ? best : null;
+    var h = (items[0].getBoundingClientRect().height || 72);
+    return bestD < h ? best : null;
   }
 
-  /* ── Actualizar clase snap-on ────────────────────────────────────── */
-  function _update() {
-    _raf = null;
-    if (!_active) return;
-
-    var item = _findCenter();
-
-    if (item === _lastCentered) return; // sin cambio
-
-    // Quitar del anterior
-    if (_lastCentered) _lastCentered.classList.remove('snap-on');
-
-    // Aplicar al nuevo
-    if (item) {
-      item.classList.add('snap-on');
-    }
-    _lastCentered = item || null;
-
-    // Reiniciar timer de estabilidad para haptic
-    if (_hapticTimer) { clearTimeout(_hapticTimer); _hapticTimer = null; }
-    if (item) {
-      _hapticTimer = setTimeout(function() {
-        // Solo dispara si el mismo item sigue centrado
-        if (_lastCentered === item && _active) {
-          try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
-          console.log('[Dashwey][Catalog] Snap centrado OK:', item.dataset.pid || item.id || '?');
-          console.log('[Dashwey][Catalog] Haptic sincronizado OK');
-        }
-      }, 150); // 150ms de estabilidad antes de disparar
-    }
+  /* ── Comprobar si un item es suficientemente visible ─────────────── */
+  function _isVisible(item) {
+    if (!item || !_scrollEl) return false;
+    var r    = item.getBoundingClientRect();
+    var sr   = _scrollEl.getBoundingClientRect();
+    var tabH = parseFloat(getComputedStyle(document.documentElement)
+                 .getPropertyValue('--tab-real')) || 60;
+    // Al menos la mitad del item visible en la zona útil del scroll
+    var visTop = Math.max(r.top, sr.top);
+    var visBot = Math.min(r.bottom, sr.bottom - tabH);
+    return (visBot - visTop) > r.height * 0.5;
   }
 
-  /* ── Scroll listener (rAF-throttled) ────────────────────────────── */
+  /* ── Touch listeners en el catálogo ─────────────────────────────── */
+  function _initTouchListeners() {
+    var cat = document.getElementById('alm-cat-inline');
+    if (!cat || cat._touchScaleReady) return;
+    cat._touchScaleReady = true;
+
+    // touchstart: marcar item activo inmediatamente
+    cat.addEventListener('touchstart', function(e) {
+      var item = e.target.closest('.alm-cat-item');
+      if (!item) return;
+      _touchedItem = item;
+      _setScaled(item);
+    }, { passive: true });
+
+    // touchend: haptic si el item es visible, limpiar touch activo
+    cat.addEventListener('touchend', function(e) {
+      var item = e.target.closest('.alm-cat-item');
+      if (item && item === _touchedItem && _isVisible(item)) {
+        _haptic(item);
+      }
+      _touchedItem = null;
+      // Tras soltar, dejar que el fallback del scroll tome control
+    }, { passive: true });
+
+    // touchcancel: limpiar
+    cat.addEventListener('touchcancel', function() {
+      _touchedItem = null;
+    }, { passive: true });
+  }
+
+  /* ── Scroll listener: fallback cuando no hay touch activo ───────── */
   function _onScroll() {
-    if (!_active || _raf) return;
-    _raf = requestAnimationFrame(_update);
+    if (!_active || _touchedItem || _raf) return; // touch activo tiene prioridad
+    _raf = requestAnimationFrame(function() {
+      _raf = null;
+      if (!_active || _touchedItem) return;
+      var item = _findCenter();
+      _setScaled(item);
+      if (item && _isVisible(item)) _haptic(item);
+    });
   }
 
   /* ── Inicializar ─────────────────────────────────────────────────── */
@@ -27694,62 +27736,32 @@ window._almCarritoOptions = function() {
     _active = true;
 
     _scrollEl.addEventListener('scroll', _onScroll, { passive: true });
+    _initTouchListeners();
 
-    // Update inicial tras render
+    // Update inicial
     requestAnimationFrame(function() {
-      _update();
+      var item = _findCenter();
+      _setScaled(item);
       console.log('[Dashwey][Catalog] Scroll momentum OK');
     });
-
-    _initHitbox();
   }
 
   /* ── Destruir ────────────────────────────────────────────────────── */
   function _destroy() {
     _active = false;
     if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
-    if (_hapticTimer) { clearTimeout(_hapticTimer); _hapticTimer = null; }
     if (_scrollEl) _scrollEl.removeEventListener('scroll', _onScroll);
-    if (_lastCentered) { _lastCentered.classList.remove('snap-on'); _lastCentered = null; }
+    _setScaled(null);
+    _touchedItem    = null;
+    _lastHapticItem = null;
   }
 
   /* ── Tab listener ────────────────────────────────────────────────── */
   window.addEventListener('dashwey:tab-changed', function(e) {
     var tab = e.detail && e.detail.tab;
-    if (tab === 2) {
-      setTimeout(_init, 80); // esperar renderCatInline
-    } else {
-      _destroy();
-    }
+    if (tab === 2) { setTimeout(_init, 80); }
+    else           { _destroy(); }
   });
-
-  /* ── Hitbox ampliado: gaps entre tarjetas ────────────────────────── */
-  function _initHitbox() {
-    var cat = document.getElementById('alm-cat-inline');
-    if (!cat || cat._hitboxReady) return;
-    cat._hitboxReady = true;
-    cat.addEventListener('touchend', function(e) {
-      if (e.target.closest('.alm-cat-item')) return;
-      if (e.target.closest('.alm-cat-section-lbl')) return;
-      var touch = e.changedTouches[0];
-      if (!touch) return;
-      var items  = cat.querySelectorAll('.alm-cat-item');
-      var touchY = touch.clientY;
-      var best = null, bestDist = Infinity;
-      for (var i = 0; i < items.length; i++) {
-        var r = items[i].getBoundingClientRect();
-        var d = Math.abs(touchY - (r.top + r.height / 2));
-        if (d < bestDist) { bestDist = d; best = items[i]; }
-      }
-      if (best && bestDist < 40) {
-        var pid = best.dataset.pid || best.id;
-        if (pid) {
-          try { App.alm._catInlineTap(pid, e); } catch(_) {}
-          console.log('[Dashwey][Catalog] Touch area OK:', pid);
-        }
-      }
-    }, { passive: true });
-  }
 
   /* ── API pública ─────────────────────────────────────────────────── */
   window._almSnapInit    = _init;
