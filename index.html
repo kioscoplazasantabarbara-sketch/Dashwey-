@@ -3071,7 +3071,7 @@ input:focus, select:focus, textarea:focus {
 .bar-lbl  { font-size: 10px; font-weight: 600; color: var(--ink-soft); margin-bottom: 3px; }
 .bar-track { background: rgba(0,0,0,0.07); border-radius: 6px; height: 6px; overflow: hidden; margin-bottom: 6px; }
 .bar-gasto    { background:#94A3B8; border-radius:6px; height:100%; width:100%; transform:scaleX(0); transform-origin:left; transition:transform 1s; } /* v9.5.73 scaleX */
-.bar-ganancia { border-radius: 6px; height: 100%; background: var(--indigo); transition: width 1s; }
+.bar-ganancia { border-radius: 6px; height: 100%; background: var(--indigo); width: 100%; transform: scaleX(0); transform-origin: left; transition: transform 1s cubic-bezier(0.4,0,0.2,1); will-change: transform; } /* v1.3.124: width→scaleX (compositor-only) */
 .ai-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: var(--indigo); background: #EEF2FF; padding: 2px 8px; border-radius: 20px; margin-bottom: 3px; }
 .merma-item { display: flex; align-items: center; gap: 11px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
 .merma-item:last-child { border-bottom: none; }
@@ -7034,8 +7034,10 @@ function _authTabSafe(tab) {
           <!-- Pull-to-refresh indicator — v1.3.22 -->
           <div id="dash-ptr-indicator" style="
             display:flex;align-items:center;justify-content:center;
-            height:0;overflow:hidden;opacity:0;
-            transition:height 0.2s ease,opacity 0.2s ease;
+            height:40px;overflow:hidden;opacity:0;
+            transform:scaleY(0);transform-origin:top;
+            transition:transform 0.18s cubic-bezier(0.4,0,0.2,1),opacity 0.18s cubic-bezier(0.4,0,0.2,1);
+            will-change:transform,opacity;
             flex-shrink:0;pointer-events:none;
           ">
             <div id="dash-ptr-spinner" style="
@@ -10273,7 +10275,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.123-dev';
+  const _APP_VERSION = 'v1.3.124-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15180,9 +15182,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     container.querySelectorAll('[data-notif-id]').forEach(function(row) {
       var x0 = 0, dx = 0;
       row.addEventListener('touchstart', function(e){ x0 = e.touches[0].clientX; }, {passive:true});
+      var y0 = 0;
+      row.addEventListener('touchstart', function(e){ x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, {passive:true});
       row.addEventListener('touchmove',  function(e){
         dx = e.touches[0].clientX - x0;
-        var dy = Math.abs(e.touches[0].clientY - (e.touches[0].clientY));
+        var dy = Math.abs(e.touches[0].clientY - y0); // v1.3.124: fix — usaba clientY-clientY=0
+        // Gesture lock: si el movimiento es más vertical que horizontal → cancelar swipe
+        if (dy > Math.abs(dx) * 0.8) { dx = 0; return; }
         if (Math.abs(dx) > 8) {
           row.style.transform = 'translateX('+dx+'px)';
           row.style.opacity = String(Math.max(0.3, 1 - Math.abs(dx)/140));
@@ -18922,8 +18928,9 @@ initDashDrag();
     if (dy <= 0) { _pulling = false; return; }
     // Mostrar indicador proporcionalmente
     var pct = Math.min(dy / MIN_PULL, 1);
-    ind.style.height  = Math.min(dy * 0.4, 40) + 'px';
-    ind.style.opacity = pct.toFixed(2);
+    // v1.3.124: transform:scaleY en lugar de height (compositor-only, sin layout)
+    ind.style.transform = 'scaleY(' + pct.toFixed(3) + ')';
+    ind.style.opacity   = pct.toFixed(2);
     if (dy >= MIN_PULL && !_triggered) {
       _triggered = true;
       // Haptic feedback
@@ -18935,8 +18942,9 @@ initDashDrag();
     if (!_pulling) return;
     _pulling = false;
     // Colapsar indicador
-    ind.style.height  = '0';
-    ind.style.opacity = '0';
+    // v1.3.124: colapsar con transform (no height)
+    ind.style.transform = 'scaleY(0)';
+    ind.style.opacity   = '0';
 
     if (_triggered) {
       console.info('[Dashwey PTR] sync triggered');
