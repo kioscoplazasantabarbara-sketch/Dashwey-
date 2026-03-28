@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.77-dev</title>
+<title>Dashwey v1.3.78-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7369,7 +7369,8 @@ function _authTabSafe(tab) {
                  font-size:16px;color:var(--ink);font-family:var(--font);"
           oninput="App.alm.onMainSearch(this.value)"
           onfocus="App.alm._permSearchFocus()"
-          onblur="App.alm._permSearchBlur()">
+          onblur="App.alm._permSearchBlur()"
+          onkeydown="if(event.key==='Escape'){event.preventDefault();window._almSearchClose();}">
         <button id="alm-perm-clear" onclick="App.alm._permSearchClear()"
           style="display:none;align-items:center;justify-content:center;
                  background:rgba(0,0,0,0.07);border:none;color:var(--ink-mid);
@@ -10052,7 +10053,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.77-dev';
+  const _APP_VERSION = 'v1.3.78-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22108,14 +22109,16 @@ function _parseIva(iva) {
   // INVARIANTE: _catInlineQ siempre tiene el valor del último keystroke antes
   // del render → el resultado final es idéntico, solo se omiten renders intermedios.
   function onMainSearch(val) {
-    // 1. Filtro inmediato — _catInlineRefreshItem y otros usan este valor
+    // 1. Filtro — solo actualizar _catInlineQ, no re-renderizar el fondo si el overlay está abierto
     _catInlineQ = val;
 
-    // 2. Re-render del DOM — debounce 80ms para evitar burst de innerHTML
-    clearTimeout(_catRenderTimer);
-    _catRenderTimer = setTimeout(() => { renderCatInline(); }, 80);
+    // 2. Re-render del catálogo de fondo — SOLO si el overlay de búsqueda está cerrado
+    if (!window._searchOverlayOpen) {
+      clearTimeout(_catRenderTimer);
+      _catRenderTimer = setTimeout(() => { renderCatInline(); }, 80);
+    }
 
-    // 3. Dropdown de sugerencias — debounce independiente 200ms (sin cambio)
+    // 3. Dropdown de sugerencias — siempre (van al overlay)
     clearTimeout(_almSearchTimer);
     _almSearchTimer = setTimeout(() => _permSearch(val), 200);
   }
@@ -22145,13 +22148,25 @@ function _parseIva(iva) {
     if (prods.length) {
       sugEl.innerHTML = prods.map(p => {
         const inL = inCarrito.has(p.id);
+        // v1.3.77: tap en el item → detalle del producto
+        // Botón "+" explícito → añadir al carrito (acción separada e intencional)
         return `<div class="alm-dock-search-sug-item" onclick="App.alm._permSearchPick('${p.id}')">
           <div class="alm-dock-search-sug-e">${p.foto ? `<img src="${p.foto}" style="width:28px;height:28px;object-fit:cover;border-radius:7px">` : (p.e||'📦')}</div>
           <div class="alm-dock-search-sug-info">
             <div class="alm-dock-search-sug-name">${hi(p.nombre)}</div>
             <div class="alm-dock-search-sug-sub">${esc(p.cat||'')} · ${feur(p.pvp||0)}</div>
           </div>
-          <div class="alm-dock-search-sug-price">${inL ? '✓' : ''}</div>
+          <button onclick="event.stopPropagation();
+            var _p=window.App&&App.alm&&App.alm._catInlineStep?App.alm._catInlineStep('${p.id}',1):null;
+            if(!_p){try{window._almSearchCarritoAdd('${p.id}');}catch(e){}}
+            this.textContent='✓';this.style.background='var(--red)';this.style.color='#fff';"
+            style="flex-shrink:0;width:30px;height:30px;border-radius:50%;border:none;
+                   background:${inL?'var(--red)':'var(--bg)'};
+                   color:${inL?'#fff':'var(--ink-mid)'};
+                   font-size:16px;cursor:pointer;
+                   display:flex;align-items:center;justify-content:center;
+                   touch-action:manipulation;-webkit-tap-highlight-color:transparent;"
+          >${inL ? '✓' : '+'}</button>
         </div>`;
       }).join('') +
       `<div class="alm-dock-search-sug-add" onclick="App.alm._permSearchAddNew('${esc(q)}')">
@@ -22176,6 +22191,9 @@ function _parseIva(iva) {
   }
   function _permSearchBlur() {
     _almKbActive = false;
+    // v1.3.77: no ocultar resultados si el overlay de búsqueda está abierto
+    // El teclado puede cerrar sin que el usuario haya terminado de buscar
+    if (window._searchOverlayOpen) return;
     setTimeout(() => {
       const sugEl = document.getElementById('alm-search-suggestions');
       if (sugEl) sugEl.style.display = 'none';
@@ -22184,8 +22202,19 @@ function _parseIva(iva) {
     }, 180);
   }
   function _permSearchPick(prodId) {
-    // v8.9.3: añadir al carrito directamente
     const p = State.get.prod(prodId); if (!p) return;
+
+    // v1.3.77: si el overlay de búsqueda está abierto → cerrar overlay y abrir detalle
+    // El usuario hace tap explícito en el botón del resultado para añadir al carrito
+    if (window._searchOverlayOpen) {
+      try { window._almSearchClose(); } catch(_) {}
+      setTimeout(function() {
+        try { App.alm.openProdDetail(prodId); } catch(_) {}
+      }, 260); // esperar cierre del overlay
+      return;
+    }
+
+    // Flujo legacy (sin overlay): añadir directo al carrito
     _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
     _catInlineRefreshItem(prodId);
     _updateAcceptBtn();
@@ -27412,7 +27441,8 @@ window._almCarritoOptions = function() {
     panel.style.bottom = '0px';
     panel.classList.remove('morph-enter', 'morph-active');
 
-    // 3. Mostrar overlay — bloquear scroll del body
+    // 3. Mostrar overlay — bloquear scroll del fondo y marcar modo búsqueda activo
+    window._searchOverlayOpen = true;
     overlay.classList.add('search-open');
     document.body.style.overflow = 'hidden';
 
@@ -27448,15 +27478,18 @@ window._almCarritoOptions = function() {
     var inp     = document.getElementById('alm-perm-search');
     var overlay = document.getElementById('alm-search-overlay');
 
+    window._searchOverlayOpen = false;
     if (inp) inp.blur();
     if (overlay) overlay.classList.remove('search-open');
-    document.body.style.overflow = '';  // restaurar scroll
+    document.body.style.overflow = '';
 
     setTimeout(function() {
       try { if (window.App && App.alm) App.alm._permSearchClear(); } catch(_) {}
+      // Restaurar catálogo de fondo con query vacía
+      try { if (window.App && App.alm) App.alm.renderCatInline && App.alm.renderCatInline(); } catch(_) {}
       var resultsEl = document.getElementById('alm-search-results');
       if (resultsEl) resultsEl.innerHTML = '';
-    }, 250);
+    }, 260);
   };
 
   /* ── Puente: _permSearch escribe en #alm-search-suggestions
@@ -27504,6 +27537,21 @@ window._almCarritoOptions = function() {
       console.error('[FAB] openNuevoArtFs error:', e);
     }
     try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
+  };
+
+  /* ── Helper: añadir al carrito desde el overlay de búsqueda ─────── */
+  window._almSearchCarritoAdd = function(prodId) {
+    try {
+      if (window.App && App.alm) {
+        // Usar _catInlineStep si existe, si no añadir directo
+        if (App.alm._catInlineStep) {
+          App.alm._catInlineStep(prodId, 1);
+        } else {
+          // Fallback: añadir directo via orden carrito
+          App.alm.addFromSearch && App.alm.addFromSearch(prodId);
+        }
+      }
+    } catch(e) { console.warn('[FAB] _almSearchCarritoAdd error:', e); }
   };
 
   /* ── INTEGRACIÓN CON goTab ──────────────────────────────────────── */
