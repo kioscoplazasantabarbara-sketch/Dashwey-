@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.62-dev</title>
+<title>Dashwey v1.3.63-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1872,6 +1872,18 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
   pointer-events: none;
 }
 .bt.active::after { transform: translateX(-50%) scaleX(1); }
+/* v1.3.62: badge global en tab nav (pedidos pendientes) */
+.bt-nav-badge {
+  position: absolute; top: 4px; right: calc(50% - 18px);
+  background: var(--red); color: #fff;
+  border-radius: 50%; min-width: 14px; height: 14px;
+  font-size: 8px; font-weight: 800;
+  display: none; align-items: center; justify-content: center;
+  padding: 0 2px; line-height: 1;
+  border: 1.5px solid var(--bg);
+  pointer-events: none;
+}
+.bt-nav-badge.visible { display: inline-flex; }
 body[data-ctx="hogar"]     .bt.active { color: var(--green); }
 body[data-ctx="hogar"]     .bt.active::after { background: var(--green); }
 body[data-ctx="inversion"] .bt.active { color: var(--indigo); }
@@ -7165,6 +7177,7 @@ function _authTabSafe(tab) {
         <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path d="M5 8h14M5 8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v.01a2 2 0 0 1-2 2M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
         </svg>
+        <span class="bt-nav-badge" id="bt-alm-badge"></span>
       </div>
       <span class="bt-lbl">ALMACÉN</span>
     </button>
@@ -9837,7 +9850,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.62-dev';
+  const _APP_VERSION = 'v1.3.63-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20386,6 +20399,16 @@ function _parseIva(iva) {
         truckBadge.classList.remove('visible');
       }
     }
+    // v1.3.62: badge global en tab nav ALMACÉN — visible desde cualquier tab
+    const btAlmBadge = document.getElementById('bt-alm-badge');
+    if (btAlmBadge) {
+      if (nPending > 0) {
+        btAlmBadge.textContent = nPending;
+        btAlmBadge.classList.add('visible');
+      } else {
+        btAlmBadge.classList.remove('visible');
+      }
+    }
     const cartBadge = document.getElementById('alm-hdr-cart-badge');
     if (cartBadge) {
       if (carritoCount > 0) {
@@ -26497,35 +26520,16 @@ window._almCarritoOptions = function() {
           console.error('[CheckModal] addPedido error:', e);
         }
 
-        // ── 3. v1.2.53: eliminar pending order confirmado + actualizar badge
+        // ── 3. v1.2.53: eliminar pending order confirmado
         if (orderId) {
           try {
-            // Eliminar de pendingOrders (ya está guardado en historialPedidos)
             if (_St) _St.set.removePendingOrder(orderId);
           } catch(e) {
             console.error('[CheckModal] removePendingOrder error:', e);
           }
-          // Limpiar currentOrderId del selector
           try {
             if (window._orderSelectorState) window._orderSelectorState.currentOrderId = null;
           } catch(_) {}
-          // Actualizar badge + alertas snap + Dashboard en tiempo real
-          try {
-            if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge();
-          } catch(_) {}
-          try { DashweyBus.emit('pedido_stock', {}); } catch(_) {}
-          try {
-            if (typeof _snapRenderAlertasChart === 'function') _snapRenderAlertasChart();
-          } catch(_) {}
-          // Emitir evento eliminado → Agenda snap + Alertas snap se recalculan
-          try {
-            window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { id: orderId } }));
-          } catch(_) {}
-          // Emitir confirmado → notificaciones
-          try {
-            window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido: pedido } }));
-          } catch(_) {}
-          // Reset render guard → permite re-render de Alertas aunque cardId no cambie
           if (typeof _snapLastRenderedCardId !== 'undefined') {
             _snapLastRenderedCardId = null;
           }
@@ -26539,14 +26543,30 @@ window._almCarritoOptions = function() {
           } catch(e) {}
         }
 
-        // ── 4. Emitir eventos de sincronización ───────────────────
-        try {
-          if (typeof DashweyBus !== 'undefined') {
-            DashweyBus.emit('pedido_stock', { pedido: pedido });
+        // ── 4. Sincronización global — v1.3.62: consolidada, un solo tick ──
+        // State ya mutó en pasos 1-3. requestAnimationFrame garantiza que
+        // updateBadge() lee el estado ya actualizado antes de pintar.
+        requestAnimationFrame(function() {
+          try {
+            if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge();
+          } catch(_) {}
+          try {
+            if (typeof DashweyBus !== 'undefined') DashweyBus.emit('pedido_stock', { pedido: pedido });
+          } catch(_) {}
+          try { document.dispatchEvent(new Event('order:checked'));  } catch(_) {}
+          try { document.dispatchEvent(new Event('data:updated'));   } catch(_) {}
+          if (orderId) {
+            try {
+              window.dispatchEvent(new CustomEvent('dashwey:pedido-eliminado', { detail: { id: orderId } }));
+            } catch(_) {}
+            try {
+              window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido: pedido } }));
+            } catch(_) {}
+            try {
+              if (typeof _snapRenderAlertasChart === 'function') _snapRenderAlertasChart();
+            } catch(_) {}
           }
-        } catch(e) {}
-        try { document.dispatchEvent(new Event('order:checked'));  } catch(_) {}
-        try { document.dispatchEvent(new Event('data:updated'));   } catch(_) {}
+        });
 
         // ── 5. Haptic + toast + notificación campana ─────────────
         try { if (window.Utils) Utils.triggerHaptic('medium'); } catch(_) {}
