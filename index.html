@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.98-dev</title>
+<title>Dashwey v1.3.99-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3354,19 +3354,29 @@ input:focus, select:focus, textarea:focus {
   padding: 11px 12px;
   background: var(--surface); border: 1.5px solid var(--border);
   border-radius: 14px; cursor: pointer;
-  transition: border-color 0.13s, background 0.13s, transform 0.1s var(--spring);
+  transition: border-color 0.13s, background 0.13s, transform 0.18s var(--ease), opacity 0.18s var(--ease);
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
   touch-action: pan-y;
   position: relative;
-  /* v1.3.97: snap-to-start — cada tarjeta pega su borde superior al header */
+  /* v1.3.97: snap-to-start */
   scroll-snap-align: start;
   scroll-snap-stop: always;
+  /* v1.3.98: escala reducida por defecto — el item centrado sube al 100% */
+  transform: scale(0.94);
+  opacity: 0.78;
+}
+/* Item centrado en el snap — escala completa + visible */
+.alm-cat-item.snap-centered {
+  transform: scale(1.0);
+  opacity: 1;
 }
 .alm-cat-item:active { transform: scale(0.975); }
+.alm-cat-item.snap-centered:active { transform: scale(0.97); }
 .alm-cat-item.in-cart { border-color: var(--red); background: var(--red-s); }
+.alm-cat-item.in-cart.snap-centered { border-color: var(--red); background: var(--red-s); }
 .alm-cat-item.lp-active { transform: scale(0.96); border-color: var(--red); }
 .alm-cat-thumb {
   width: 44px; height: 44px; border-radius: 11px;
@@ -10053,7 +10063,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.98-dev';
+  const _APP_VERSION = 'v1.3.99-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11849,16 +11859,19 @@ const nav = (() => {
         (function() {
           try {
             var scrollEl = document.getElementById('alm-scroll-el');
-            // Altura del contenido fijo encima del scroll: header + info-bar
             var pageHeader = document.querySelector('.alm-page-header');
             var dockInfo   = document.getElementById('alm-dock-info');
-            var offset = 8; // margen mínimo para que el texto no quede justo al borde
+            var offset = 8;
             if (pageHeader) offset += pageHeader.offsetHeight;
             if (dockInfo)   offset += dockInfo.offsetHeight;
             if (scrollEl) scrollEl.style.setProperty('--alm-snap-offset', offset + 'px');
           } catch(_) {}
         })();
         App.alm.renderCatInline();
+        // v1.3.98: iniciar escalado dinámico tras render
+        requestAnimationFrame(function() {
+          if (window._almInitSnapScale) window._almInitSnapScale();
+        });
         // Posicionar botón Aceptar sobre navbar
         requestAnimationFrame(() => {
           if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn();
@@ -26081,6 +26094,80 @@ window._almCarritoOptions = function() {
     return 'true';
   };
 
+  // ── SNAP ESCALADO DINÁMICO — v1.3.98 ──────────────────────────────
+  // IntersectionObserver detecta el item más cercano al punto de snap
+  // (top + scroll-padding-top) y le aplica clase snap-centered.
+  // Haptic solo cuando cambia el item — no en cada scroll event.
+
+  var _snapCatObserver  = null;
+  var _snapCatLastEl    = null;
+
+  function _almInitSnapScale() {
+    _almDestroySnapScale();
+    var scrollEl = document.getElementById('alm-scroll-el');
+    var catEl    = document.getElementById('alm-cat-inline');
+    if (!scrollEl || !catEl) return;
+
+    var items = catEl.querySelectorAll('.alm-cat-item');
+    if (!items.length) return;
+
+    // Leer el offset de snap calculado por JS en goTab(2)
+    var snapOffset = parseInt(
+      getComputedStyle(scrollEl).getPropertyValue('--alm-snap-offset') || '0'
+    ) || 0;
+
+    // rootMargin: contraer el área de intersección para que solo
+    // detecte el item que está exactamente en la zona de snap (top del scroll)
+    // top negativo = ignorar lo que está encima del snap point
+    // bottom negativo = ignorar lo que está debajo
+    var viewH      = scrollEl.clientHeight || window.innerHeight;
+    var itemH      = items[0].getBoundingClientRect().height || 72;
+    var topMargin  = -(snapOffset);                        // excluir header
+    var botMargin  = -(viewH - snapOffset - itemH - 4);   // excluir todo excepto la franja del item
+
+    _snapCatObserver = new IntersectionObserver(function(entries) {
+      // Buscar el entry con mayor intersectionRatio (el más centrado en la franja)
+      var best = null;
+      entries.forEach(function(e) {
+        if (!best || e.intersectionRatio > best.intersectionRatio) best = e;
+      });
+      if (!best || best.intersectionRatio < 0.3) return;
+
+      var el = best.target;
+      if (el === _snapCatLastEl) return; // mismo item — nada que hacer
+
+      // Quitar centrado del anterior
+      if (_snapCatLastEl) _snapCatLastEl.classList.remove('snap-centered');
+      el.classList.add('snap-centered');
+      _snapCatLastEl = el;
+
+      // Haptic micro-tick
+      try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
+      console.log('[Dashwey][Snap] Item centrado:', el.id || el.dataset.pid || '?');
+    }, {
+      root: scrollEl,
+      rootMargin: topMargin + 'px 0px ' + botMargin + 'px 0px',
+      threshold: [0, 0.3, 0.6, 1.0]
+    });
+
+    items.forEach(function(item) { _snapCatObserver.observe(item); });
+
+    // Forzar centrado en el primer item visible
+    if (items.length > 0) {
+      items[0].classList.add('snap-centered');
+      _snapCatLastEl = items[0];
+    }
+  }
+
+  function _almDestroySnapScale() {
+    if (_snapCatObserver) { _snapCatObserver.disconnect(); _snapCatObserver = null; }
+    if (_snapCatLastEl)   { _snapCatLastEl.classList.remove('snap-centered'); _snapCatLastEl = null; }
+  }
+
+  // Exponer para llamar desde goTab(2) tras renderCatInline
+  window._almInitSnapScale   = _almInitSnapScale;
+  window._almDestroySnapScale = _almDestroySnapScale;
+
   // Inicializar tras DOMContentLoaded
   document.addEventListener('DOMContentLoaded', function() {
     var usedCapacitor = _initCapacitorBack();
@@ -27583,6 +27670,8 @@ window._almCarritoOptions = function() {
       sys.style.display = 'block';
     } else {
       window._spotlightClose();
+      // v1.3.98: destruir observer de escalado al salir de Almacén
+      if (window._almDestroySnapScale) window._almDestroySnapScale();
       setTimeout(function() { sys.style.display = 'none'; }, 210);
     }
   });
