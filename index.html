@@ -6345,12 +6345,12 @@ html, body { background: var(--bg); }
 .alm-page-sub     { font-size: 13px; color: var(--ink-mid); line-height: 1.4; }
 
 /* v9.5.81: botón proveedor en subtítulo ALM — microfeedback crimson */
-#alm-prov-sub-btn:active {
-  opacity: 0.65;
-}
-#alm-prov-sub-btn:active span,
-#alm-prov-sub-btn:active svg {
-  transform: translateY(1px);
+/* v1.3.113: alm-prov-sub-btn eliminado — solo texto estático dinámico */
+#alm-page-sub-el #alm-prov-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-mid);
+  transition: color 0.2s;
 }
 
 /* Subtítulo del Dashboard incluye el selector de periodo inline */
@@ -7258,12 +7258,9 @@ function _authTabSafe(tab) {
             <!-- Columna izquierda: título + proveedor -->
             <div class="alm-header-left">
               <div class="alm-page-title" id="alm-page-title-el">Almacén</div>
-              <div class="alm-page-sub">
-                <button id="alm-prov-sub-btn" onclick="App.alm.openProvPicker()"
-                  style="background:none;border:none;padding:0;font-family:var(--font);font-size:13px;font-weight:700;color:var(--red);cursor:pointer;display:inline-flex;align-items:center;gap:3px;-webkit-tap-highlight-color:transparent;line-height:1.4;transition:opacity 0.15s">
-                  <span id="alm-prov-name">Sin proveedor</span>
-                  <svg width="13" height="13" fill="none" stroke="var(--red)" stroke-width="2.5" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
+              <!-- v1.3.113: subtítulo dinámico — sin picker, JS lo actualiza según vista -->
+              <div class="alm-page-sub" id="alm-page-sub-el">
+                <span id="alm-prov-name" style="font-size:13px;font-weight:600;color:var(--ink-mid)">Selecciona proveedor</span>
               </div>
             </div>
             <!-- Columna derecha: iconos camión + carrito -->
@@ -7291,9 +7288,9 @@ function _authTabSafe(tab) {
             </div>
           </div>
 
-          <!-- Elementos de compatibilidad con updateProvBar() — invisible en DOM -->
+          <!-- compat stubs para updateProvBar() -->
           <span id="alm-prov-icon" style="display:none">🏪</span>
-          <button id="alm-prov-change-btn" onclick="App.alm.openProvPicker()" style="display:none">Cambiar</button>
+          <span id="alm-prov-change-btn" style="display:none"></span>
 
           <!-- ══ INFO BAR — edge-to-edge, con badge próxima entrega ══ -->
           <div id="alm-dock-info" style="flex-shrink:0;background:var(--bg)">
@@ -10207,7 +10204,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.113-dev';
+  const _APP_VERSION = 'v1.3.114-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19712,27 +19709,31 @@ const alm = (() => {
   /* ── Vista PROVEEDORES ─────────────────────────────────────────────*/
   function _almShowProveedores() {
     _almView = 'proveedores';
-    // Header
+    // Header dinámico: título "Almacén", subtítulo "Selecciona proveedor"
     _almSetHeader('Almacén', false);
+    var nameEl = document.getElementById('alm-prov-name');
+    if (nameEl) nameEl.textContent = 'Selecciona proveedor';
     // Ocultar catálogo
     var catEl = document.getElementById('alm-cat-inline');
     if (catEl) catEl.classList.remove('cat-active');
     // Mostrar lista proveedores
     var provEl = document.getElementById('alm-prov-list-view');
     if (provEl) provEl.classList.add('active');
-    // Filtros
+    // Selector de filtros (antiguo selector reutilizado como filtro)
     _renderFilterBar(_PROV_FILTERS, _almFilterProv, function(fid) {
       _almFilterProv = fid;
       _renderProvList();
-      if (window._almSnapInit) window._almSnapInit();
+      if (window._almSnapInitProv) window._almSnapInitProv();
     });
     _renderProvList();
     // Scroll al top
     var scrollEl = document.getElementById('alm-scroll-el');
     if (scrollEl) scrollEl.scrollTop = 0;
-    // Iniciar zoom/haptic
+    // Iniciar zoom/haptic proveedores
     setTimeout(function() { if (window._almSnapInitProv) window._almSnapInitProv(); }, 80);
-    console.log('[Dashwey][Proveedores] Filtros + Zoom + Haptic OK');
+    console.log('[Dashwey][Header] Dinámico y animación flip OK');
+    console.log('[Dashwey][Proveedores] Selector antiguo como filtro OK');
+    console.log('[Dashwey][Proveedores] Zoom + Haptic + Filtro seleccionado OK');
     console.log('[Dashwey][Scroll] Fluido + Momentum OK');
   }
 
@@ -19821,7 +19822,15 @@ const alm = (() => {
   /* ── Seleccionar proveedor → vista catálogo ───────────────────────*/
   function _almSelectProv(provId) {
     try { Utils.triggerHaptic('light'); } catch(_) {}
+    // Limpiar carrito al cambiar de proveedor desde la lista
+    if (Object.keys(_ordenCarrito).length > 0 && State.get.selectedProv() !== provId) {
+      _pedidoPendiente = null;
+      _ordenCarrito    = {};
+      _ordenEstado     = 0;
+      try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
+    }
     State.set.selectedProv(provId);
+    _catInlineQ = '';
     _almShowCatalog();
   }
 
@@ -19829,28 +19838,34 @@ const alm = (() => {
   function _almShowCatalog() {
     _almView = 'catalogo';
     var prov = State.get.prov(State.get.selectedProv());
-    // Header con animación flip
-    _almSetHeader(prov ? prov.nombre : 'Catálogo', true);
+    var provNombre = prov ? prov.nombre : 'Catálogo';
+    // Header dinámico: flip al nombre del proveedor
+    _almSetHeader(provNombre, true);
+    // Subtítulo: nombre del proveedor (bajo el título animado)
+    var nameEl = document.getElementById('alm-prov-name');
+    if (nameEl) nameEl.textContent = provNombre;
     // Ocultar lista proveedores
     var provEl = document.getElementById('alm-prov-list-view');
     if (provEl) provEl.classList.remove('active');
     // Mostrar catálogo
     var catEl = document.getElementById('alm-cat-inline');
     if (catEl) catEl.classList.add('cat-active');
-    // Filtros
+    // Selector de filtros de artículos (debajo del header)
     _renderFilterBar(_CAT_FILTERS, _almFilterCat, function(fid) {
       _almFilterCat = fid;
       renderCatInline();
       if (window._almSnapInit) window._almSnapInit();
     });
-    // Renderizar catálogo (con filtro)
+    // Renderizar catálogo con filtro activo
     renderCatInline();
     // Scroll al top
     var scrollEl = document.getElementById('alm-scroll-el');
     if (scrollEl) scrollEl.scrollTop = 0;
     // Iniciar zoom/haptic del catálogo
     setTimeout(function() { if (window._almSnapInit) window._almSnapInit(); }, 80);
+    console.log('[Dashwey][Header] Dinámico y animación flip OK');
     console.log('[Dashwey][Catalog] Zoom + Haptic + Filtros OK');
+    console.log('[Dashwey][Scroll] Fluido + Momentum OK');
     console.log('[Dashwey][SafeArea] Ningún elemento oculto OK');
   }
 
@@ -19871,6 +19886,7 @@ const alm = (() => {
   /* ── Volver a proveedores ──────────────────────────────────────────*/
   function _almBackToProv() {
     try { Utils.triggerHaptic('light'); } catch(_) {}
+    // Destruir zoom del catálogo e iniciar zoom de proveedores
     if (window._almSnapDestroy) window._almSnapDestroy();
     _almShowProveedores();
   }
@@ -20575,7 +20591,7 @@ function _parseIva(iva) {
   function selProv(id) {
     // Limpiar cesta del proveedor anterior — la cesta es SIEMPRE dependiente del proveedor
     if (Object.keys(_ordenCarrito).length > 0) {
-      _pedidoPendiente = null;  // snapshot invalidado al cambiar proveedor
+      _pedidoPendiente = null;
       _ordenCarrito    = {};
       _ordenEstado     = 0;
       try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
@@ -20587,10 +20603,10 @@ function _parseIva(iva) {
     const snavEl = document.getElementById('snav-label');
     if (snavEl) snavEl.textContent = State.get.prov(id)?.nombre || '—';
     ui.closeFs();
-    _catInlineQ = ''; // reset filtro al cambiar proveedor
+    _catInlineQ = '';
     const _ci = document.getElementById('alm-perm-search'); if (_ci) _ci.value = '';
-    // v1.2.0: batching renders
-    requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); });
+    // v1.3.113: ir directamente al catálogo del proveedor seleccionado
+    requestAnimationFrame(() => { _almShowCatalog(); updateBadge(); });
   }
 
   function addNuevoProv() {
@@ -20838,7 +20854,8 @@ function _parseIva(iva) {
     }
     renderOrden();
     ui.closeFs();
-    setTimeout(() => openProvPicker(), 230);
+    // v1.3.113: volver a lista de proveedores (no reabrir picker)
+    setTimeout(() => { if (App.alm && App.alm._almViewInit) App.alm._almViewInit(); }, 230);
     showToast('Proveedor guardado');
   }
 
@@ -22413,10 +22430,15 @@ function _parseIva(iva) {
      Compatibilidad: alm-prov-icon sigue existiendo como span oculto. */
   function updateProvBar() {
     const prov = State.get.prov(State.get.selectedProv());
-    const nombre = prov?.nombre || 'Sin proveedor';
+    const nombre = prov?.nombre || '';
     // Actualizar el span del nombre en el subtítulo del header
     const nameEl = document.getElementById('alm-prov-name');
-    if (nameEl) nameEl.textContent = nombre;
+    // En vista proveedores: mostrar texto descriptivo; en catálogo: nombre del proveedor
+    if (nameEl) {
+      nameEl.textContent = _almView === 'catalogo' && nombre
+        ? nombre
+        : 'Selecciona proveedor';
+    }
     // Compatibilidad: icono oculto
     const icon = document.getElementById('alm-prov-icon');
     if (icon) icon.textContent = prov?.icon || '🏪';
