@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.91-dev</title>
+<title>Dashwey v1.3.92-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3611,7 +3611,8 @@ input:focus, select:focus, textarea:focus {
 #alm-cat-inline.snap-mode {
   display: flex;
   flex-direction: column;
-  padding: calc(38dvh - 60px) 0 calc(var(--tab-real) + 38dvh - 60px);
+  /* v1.3.92: padding reducido para evitar hueco visual con la primera categoría */
+  padding: calc(35dvh - 55px) 0 calc(var(--tab-real) + 35dvh - 55px);
   gap: 0;
   scroll-snap-type: y mandatory;
   overflow-y: scroll;
@@ -3628,11 +3629,15 @@ input:focus, select:focus, textarea:focus {
   font-weight: 800;
   letter-spacing: 0.08em;
   color: var(--ink-soft);
-  padding: 14px 16px 6px;
+  padding: 8px 16px 4px;
   background: var(--bg);
-  position: sticky;
-  top: 0;
+  /* v1.3.92: NO sticky — causaba que los artículos se vieran bajo el label */
+  position: relative;
   z-index: 2;
+}
+/* Primera categoría: sin padding-top extra (el snap-padding ya centra) */
+#alm-cat-inline.snap-mode .alm-cat-section-lbl:first-child {
+  padding-top: 0;
 }
 #alm-cat-inline.snap-mode .alm-cat-item {
   scroll-snap-align: center;
@@ -10197,7 +10202,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.91-dev';
+  const _APP_VERSION = 'v1.3.92-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19605,7 +19610,8 @@ const alm = (() => {
     if (catInline) { catInline.style.display = 'none'; catInline.classList.remove('snap-mode'); }
     if (emptyEl)    emptyEl.style.display = 'none';
     if (titleEl)    titleEl.textContent = 'Almacén';
-    if (provName)   provName.textContent = 'Proveedores'; // selector muestra "Proveedores"
+    if (provName)   provName.textContent = 'Proveedores';
+    console.log('[Dashwey][Catalog] Texto dinámico header: Proveedores');
     if (provView) {
       provView.classList.add('active');
       _renderProvListView();
@@ -19649,6 +19655,12 @@ const alm = (() => {
       var card = e.target.closest('.js-prov-card');
       if (card && card.dataset.provid) _almSelectProv(card.dataset.provid);
     };
+    // v1.3.92: scroll al primer item tras render (centra automáticamente)
+    requestAnimationFrame(function() {
+      var first = provView.querySelector('.js-prov-card');
+      if (first) first.scrollIntoView({ block: 'center', behavior: 'instant' });
+      console.log('[Dashwey][Catalog] Scroll límites aplicados: OK');
+    });
   }
 
   function _almSelectProv(provId) {
@@ -19672,7 +19684,8 @@ const alm = (() => {
     if (provView)  { provView.classList.remove('active'); }
     var prov = State.get.prov(State.get.selectedProv());
     if (titleEl)   titleEl.textContent = prov ? prov.nombre : 'Catálogo';
-    if (provName)  provName.textContent = 'Proveedores'; // v1.3.91: siempre fijo
+    if (provName)  provName.textContent = 'Artículos'; // v1.3.92: Artículos en vista catálogo
+    console.log('[Dashwey][Catalog] Texto dinámico header: Artículos');
     if (catInline) {
       catInline.style.display = '';
       catInline.classList.add('snap-mode');
@@ -19681,9 +19694,14 @@ const alm = (() => {
     if (scrollEl) scrollEl.classList.add('snap-active');
     // Renderizar catálogo
     renderCatInline();
-    // Iniciar observer de snap
+    // Iniciar observer de snap + scroll al primer item
     requestAnimationFrame(function() {
       _almInitSnapObserver();
+      var catEl = document.getElementById('alm-cat-inline');
+      if (catEl) {
+        var firstItem = catEl.querySelector('.alm-cat-item');
+        if (firstItem) firstItem.scrollIntoView({ block: 'center', behavior: 'instant' });
+      }
     });
   }
 
@@ -22310,12 +22328,9 @@ function _parseIva(iva) {
      alm-prov-name ahora vive dentro de alm-prov-sub-btn (en alm-page-header).
      Compatibilidad: alm-prov-icon sigue existiendo como span oculto. */
   function updateProvBar() {
+    // v1.3.92: alm-prov-name es controlado SOLO por _almShowProvList/_almShowCatalog
+    // updateProvBar NO toca el texto del selector — solo actualiza el icono compat oculto
     const prov = State.get.prov(State.get.selectedProv());
-    const nombre = prov?.nombre || 'Sin proveedor';
-    // Actualizar el span del nombre en el subtítulo del header
-    const nameEl = document.getElementById('alm-prov-name');
-    if (nameEl) nameEl.textContent = nombre;
-    // Compatibilidad: icono oculto
     const icon = document.getElementById('alm-prov-icon');
     if (icon) icon.textContent = prov?.icon || '🏪';
     /* Próximo pedido: gestionado por updateBadge() en alm-dock-info */
@@ -26385,9 +26400,30 @@ window._almCarritoOptions = function() {
     }
 
     // Pantalla principal — sin overlay
-    // Si estamos en TPV (0) o Almacén (2), primer back → Dashboard
     var _curTab = (typeof nav !== 'undefined') ? nav._cTab : -1;
-    if (_curTab === 0 || _curTab === 2) {
+
+    // v1.3.92: en Almacén, si estamos en vista catálogo → volver a proveedores
+    if (_curTab === 2) {
+      try {
+        if (window.App && App.alm && App.alm._almView === 'catalogo') {
+          console.log('[Dashwey][Catalog] Back gesture: OK');
+          App.alm._almBackToProv();
+          _backPressedOnce = false;
+          clearTimeout(_backPressTimer);
+          if (canExit === false) history.pushState({ dashwey: true }, '');
+          return;
+        }
+      } catch(_) {}
+      // En vista proveedores o sin vista → ir a Dashboard
+      try { App.nav.goTab(1); } catch(e) {}
+      _backPressedOnce = false;
+      clearTimeout(_backPressTimer);
+      if (canExit === false) history.pushState({ dashwey: true }, '');
+      return;
+    }
+
+    // TPV → Dashboard
+    if (_curTab === 0) {
       try { App.nav.goTab(1); } catch(e) {}
       _backPressedOnce = false;
       clearTimeout(_backPressTimer);
