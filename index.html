@@ -3446,20 +3446,24 @@ input:focus, select:focus, textarea:focus {
 
 /* ── Header flip animation ─────────────────────────────────────────── */
 @keyframes almFlipIn {
-  0%   { transform: rotateX(90deg); opacity: 0; }
-  60%  { transform: rotateX(-8deg); opacity: 1; }
-  80%  { transform: rotateX(4deg); }
-  100% { transform: rotateX(0deg); opacity: 1; }
+  0%   { transform: rotateX(90deg) scale(0.92); opacity: 0; }
+  18%  { transform: rotateX(-12deg) scale(1.04); opacity: 1; }
+  35%  { transform: rotateX(6deg) scale(0.98); }
+  52%  { transform: rotateX(-3deg) scale(1.01); }
+  68%  { transform: rotateX(1.5deg); }
+  82%  { transform: rotateX(-0.5deg); }
+  92%  { transform: rotateX(0.2deg); }
+  100% { transform: rotateX(0deg) scale(1); opacity: 1; }
 }
 .alm-title-flip {
   display: inline-block;
-  animation: almFlipIn 0.5s cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation: almFlipIn 3s cubic-bezier(0.15, 0.85, 0.35, 1) both;
   transform-origin: center bottom;
 }
 
 /* ── Cat inline visible cuando en vista catálogo ───────────────────── */
 #alm-cat-inline { display: none; }
-#alm-cat-inline.cat-active { display: flex; }
+#alm-cat-inline.cat-active { display: flex; flex-direction: column; }
 
 /* ── ESCALADO DINÁMICO — solo en Almacén (tab 2) ── v1.3.107 ──────────
    Scroll libre con inercia. El escalado es 100% JS vía scroll listener.
@@ -6284,7 +6288,7 @@ html, body { background: var(--bg); }
   display: flex; align-items: flex-start; justify-content: space-between;
 }
 /* v1.2.54: columna izquierda (título + sub) */
-.alm-header-left { flex: 1; min-width: 0; }
+.alm-header-left { flex: 1; min-width: 0; overflow: visible; }
 /* v1.2.54: iconos acción derecha */
 .alm-header-icons {
   display: flex; align-items: center; gap: 6px;
@@ -6332,6 +6336,8 @@ html, body { background: var(--bg); }
 .alm-page-title   {
   font-size: 30px; font-weight: 900; color: var(--ink);
   letter-spacing: -0.6px; line-height: 1.1; margin-bottom: 4px;
+  overflow: visible; /* v1.3.113: permite flip sin clipping */
+  perspective: 600px; /* contexto 3D para .alm-title-flip */
 }
 
 .tpv-page-sub,
@@ -7251,7 +7257,7 @@ function _authTabSafe(tab) {
           <div class="alm-page-header">
             <!-- Columna izquierda: título + proveedor -->
             <div class="alm-header-left">
-              <div class="alm-page-title">Almacén</div>
+              <div class="alm-page-title" id="alm-page-title-el">Almacén</div>
               <div class="alm-page-sub">
                 <button id="alm-prov-sub-btn" onclick="App.alm.openProvPicker()"
                   style="background:none;border:none;padding:0;font-family:var(--font);font-size:13px;font-weight:700;color:var(--red);cursor:pointer;display:inline-flex;align-items:center;gap:3px;-webkit-tap-highlight-color:transparent;line-height:1.4;transition:opacity 0.15s">
@@ -10201,7 +10207,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.112-dev';
+  const _APP_VERSION = 'v1.3.113-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19622,33 +19628,68 @@ const alm = (() => {
         count++;
       }
     });
+    // Métricas extendidas del objeto proveedor (campos opcionales con fallbacks)
+    var prov = State.get.prov(provId) || {};
     return {
-      gasto:    gasto,
-      ganancia: ganancia,
-      margen:   count > 0 ? margenSum / count : 0,
-      nProds:   prods.length
+      gasto:      gasto,
+      ganancia:   ganancia,
+      margen:     count > 0 ? margenSum / count : 0,
+      nProds:     prods.length,
+      entrega:    prov.entregaDias  || 3,
+      fiabilidad: prov.fiabilidad  != null ? prov.fiabilidad  : 80,
+      calidad:    prov.calidad     != null ? prov.calidad     : 80,
+      distancia:  prov.distanciaKm || 50,
+      descuento:  prov.descuento   || 0
     };
   }
 
   /* ── Filtros de proveedor ──────────────────────────────────────────*/
   var _PROV_FILTERS = [
-    { id: 'gasto',    label: 'Más gastado',    sort: function(a,b){ return b.m.gasto    - a.m.gasto;    }},
-    { id: 'menos',    label: 'Menos gastado',  sort: function(a,b){ return a.m.gasto    - b.m.gasto;    }},
-    { id: 'margen+',  label: 'Mejor margen',   sort: function(a,b){ return b.m.margen   - a.m.margen;   }},
-    { id: 'margen-',  label: 'Peor margen',    sort: function(a,b){ return a.m.margen   - b.m.margen;   }},
-    { id: 'gan+',     label: 'Más ganancia',   sort: function(a,b){ return b.m.ganancia - a.m.ganancia; }},
-    { id: 'gan-',     label: 'Menos ganancia', sort: function(a,b){ return a.m.ganancia - b.m.ganancia; }},
+    { id: 'gasto',      label: 'Más gastado',    sort: function(a,b){ return b.m.gasto      - a.m.gasto;      }},
+    { id: 'menos',      label: 'Menos gastado',  sort: function(a,b){ return a.m.gasto      - b.m.gasto;      }},
+    { id: 'margen+',    label: 'Mejor margen',   sort: function(a,b){ return b.m.margen     - a.m.margen;     }},
+    { id: 'margen-',    label: 'Peor margen',    sort: function(a,b){ return a.m.margen     - b.m.margen;     }},
+    { id: 'gan+',       label: 'Más ganancia',   sort: function(a,b){ return b.m.ganancia   - a.m.ganancia;   }},
+    { id: 'gan-',       label: 'Menos ganancia', sort: function(a,b){ return a.m.ganancia   - b.m.ganancia;   }},
+    { id: 'entrega+',   label: 'Entrega rápida', sort: function(a,b){ return a.m.entrega    - b.m.entrega;    }},
+    { id: 'fiabilidad', label: 'Más fiable',     sort: function(a,b){ return b.m.fiabilidad - a.m.fiabilidad; }},
+    { id: 'calidad',    label: 'Mejor calidad',  sort: function(a,b){ return b.m.calidad    - a.m.calidad;    }},
+    { id: 'cercano',    label: 'Más cercano',    sort: function(a,b){ return a.m.distancia  - b.m.distancia;  }},
+    { id: 'descuento',  label: 'Con descuento',  sort: function(a,b){ return b.m.descuento  - a.m.descuento;  }},
   ];
 
   /* ── Filtros de catálogo ───────────────────────────────────────────*/
   var _CAT_FILTERS = [
-    { id: 'comprados',  label: 'Más comprados',   sort: function(a,b){ return (b.nc||0)         - (a.nc||0);         }},
-    { id: 'menos-c',   label: 'Menos comprados',  sort: function(a,b){ return (a.nc||0)         - (b.nc||0);         }},
-    { id: 'gan+',      label: 'Más ganancia',     sort: function(a,b){ return _prodGanancia(b)  - _prodGanancia(a);  }},
-    { id: 'gan-',      label: 'Menos ganancia',   sort: function(a,b){ return _prodGanancia(a)  - _prodGanancia(b);  }},
-    { id: 'margen+',   label: 'Mejor margen',     sort: function(a,b){ return _prodMargen(b)    - _prodMargen(a);    }},
-    { id: 'margen-',   label: 'Peor margen',      sort: function(a,b){ return _prodMargen(a)    - _prodMargen(b);    }},
+    { id: 'comprados',  label: 'Más comprados',    sort: function(a,b){ return (b.nc||0)               - (a.nc||0);               }},
+    { id: 'menos-c',    label: 'Menos comprados',   sort: function(a,b){ return (a.nc||0)               - (b.nc||0);               }},
+    { id: 'margen+',    label: 'Mejor margen',      sort: function(a,b){ return _prodMargen(b)          - _prodMargen(a);          }},
+    { id: 'margen-',    label: 'Peor margen',       sort: function(a,b){ return _prodMargen(a)          - _prodMargen(b);          }},
+    { id: 'gan+',       label: 'Más ganancia',      sort: function(a,b){ return _prodGanancia(b)        - _prodGanancia(a);        }},
+    { id: 'gan-',       label: 'Menos ganancia',    sort: function(a,b){ return _prodGanancia(a)        - _prodGanancia(b);        }},
+    { id: 'stock+',     label: 'Stock disponible',  sort: function(a,b){ return (b.stockActual||0)      - (a.stockActual||0);      }},
+    { id: 'stock-',     label: 'Bajo stock',        sort: function(a,b){ return (a.stockActual||0)      - (b.stockActual||0);      }},
+    { id: 'rotacion+',  label: 'Rotación rápida',   sort: function(a,b){ return _prodRotacion(b)        - _prodRotacion(a);        }},
+    { id: 'caducidad',  label: 'Próx. caducidad',   sort: function(a,b){ return _prodCaducidad(a)       - _prodCaducidad(b);       }},
+    { id: 'precio+',    label: 'Mayor precio',      sort: function(a,b){ return (b.pvp||0)              - (a.pvp||0);              }},
+    { id: 'precio-',    label: 'Menor precio',      sort: function(a,b){ return (a.pvp||0)              - (b.pvp||0);              }},
+    { id: 'promo',      label: 'Con promoción',     sort: function(a,b){ return (_prodPromo(b)?1:0)     - (_prodPromo(a)?1:0);     }},
   ];
+
+  // Helpers para nuevos filtros de catálogo
+  function _prodRotacion(p) {
+    // Rotación = ventas / stock — mayor es más rápido
+    var s = p.stockActual || 1;
+    return (p.ventas || 0) / s;
+  }
+  function _prodCaducidad(p) {
+    // Menor valor = caduca antes → aparece primero con sort ascendente
+    if (!p.caducidad) return 99999;
+    var d = new Date(p.caducidad);
+    return isNaN(d) ? 99999 : d.getTime();
+  }
+  function _prodPromo(p) {
+    return !!(p.descuento && p.descuento > 0);
+  }
 
   function _prodMargen(p)   { var cu=(p.precioCompra||0)*1.10; return p.pvp>0?(p.pvp-cu)/p.pvp*100:0; }
   function _prodGanancia(p) { var cu=(p.precioCompra||0)*1.10; return (p.pvp-cu)*(p.stockActual||0);   }
@@ -19712,11 +19753,23 @@ const alm = (() => {
 
     var feur = function(v) { return (v||0).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €'; };
     // KPI del filtro activo — mostrado en la tarjeta
-    var kpiLabel = { gasto:'Invertido', menos:'Invertido', 'margen+':'Margen', 'margen-':'Margen', 'gan+':'Ganancia', 'gan-':'Ganancia' };
+    var kpiLabel = {
+      gasto:'Invertido', menos:'Invertido',
+      'margen+':'Margen', 'margen-':'Margen',
+      'gan+':'Ganancia',  'gan-':'Ganancia',
+      'entrega+':'Entrega',  fiabilidad:'Fiabilidad',
+      calidad:'Calidad',     cercano:'Distancia',
+      descuento:'Descuento'
+    };
     var kpiLbl = kpiLabel[_almFilterProv] || 'Invertido';
     var kpiVal = function(m) {
       if (_almFilterProv === 'margen+' || _almFilterProv === 'margen-') return m.margen.toFixed(1) + '%';
-      if (_almFilterProv === 'gan+' || _almFilterProv === 'gan-')      return feur(m.ganancia);
+      if (_almFilterProv === 'gan+'    || _almFilterProv === 'gan-')    return feur(m.ganancia);
+      if (_almFilterProv === 'entrega+')   return m.entrega + ' día' + (m.entrega !== 1 ? 's' : '');
+      if (_almFilterProv === 'fiabilidad') return m.fiabilidad + '%';
+      if (_almFilterProv === 'calidad')    return m.calidad + '%';
+      if (_almFilterProv === 'cercano')    return m.distancia + ' km';
+      if (_almFilterProv === 'descuento')  return m.descuento + '%';
       return feur(m.gasto);
     };
 
@@ -19806,7 +19859,9 @@ const alm = (() => {
     var titleEl = document.getElementById('alm-page-title-el');
     if (!titleEl) return;
     if (flip) {
-      titleEl.innerHTML = '<span class="alm-title-flip">' + text + '</span>';
+      // Escape para nombres de proveedor con caracteres especiales
+      var safe = String(text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      titleEl.innerHTML = '<span class="alm-title-flip">' + safe + '</span>';
       console.log('[Dashwey][Header] Animación flip OK');
     } else {
       titleEl.textContent = text;
@@ -19848,12 +19903,19 @@ function renderCatInline() {
     // v1.3.111: ordenar según filtro activo del catálogo
     if (typeof _almFilterCat !== 'undefined') {
       const _CAT_SORT = {
-        'comprados': (a,b) => (b.nc||0)-(a.nc||0),
-        'menos-c':  (a,b) => (a.nc||0)-(b.nc||0),
-        'gan+':     (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (b.pvp-cu(b))*(b.stockActual||0)-(a.pvp-cu(a))*(a.stockActual||0); },
-        'gan-':     (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (a.pvp-cu(a))*(a.stockActual||0)-(b.pvp-cu(b))*(b.stockActual||0); },
-        'margen+':  (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (b.pvp>0?(b.pvp-cu(b))/b.pvp:0)-(a.pvp>0?(a.pvp-cu(a))/a.pvp:0); },
-        'margen-':  (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (a.pvp>0?(a.pvp-cu(a))/a.pvp:0)-(b.pvp>0?(b.pvp-cu(b))/b.pvp:0); },
+        'comprados':  (a,b) => (b.nc||0)-(a.nc||0),
+        'menos-c':    (a,b) => (a.nc||0)-(b.nc||0),
+        'gan+':       (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (b.pvp-cu(b))*(b.stockActual||0)-(a.pvp-cu(a))*(a.stockActual||0); },
+        'gan-':       (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (a.pvp-cu(a))*(a.stockActual||0)-(b.pvp-cu(b))*(b.stockActual||0); },
+        'margen+':    (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (b.pvp>0?(b.pvp-cu(b))/b.pvp:0)-(a.pvp>0?(a.pvp-cu(a))/a.pvp:0); },
+        'margen-':    (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (a.pvp>0?(a.pvp-cu(a))/a.pvp:0)-(b.pvp>0?(b.pvp-cu(b))/b.pvp:0); },
+        'stock+':     (a,b) => (b.stockActual||0)-(a.stockActual||0),
+        'stock-':     (a,b) => (a.stockActual||0)-(b.stockActual||0),
+        'rotacion+':  (a,b) => ((b.ventas||0)/Math.max(b.stockActual||1,1))-((a.ventas||0)/Math.max(a.stockActual||1,1)),
+        'caducidad':  (a,b) => { var da=a.caducidad?new Date(a.caducidad).getTime():99999999999; var db=b.caducidad?new Date(b.caducidad).getTime():99999999999; return da-db; },
+        'precio+':    (a,b) => (b.pvp||0)-(a.pvp||0),
+        'precio-':    (a,b) => (a.pvp||0)-(b.pvp||0),
+        'promo':      (a,b) => ((b.descuento&&b.descuento>0)?1:0)-((a.descuento&&a.descuento>0)?1:0),
       };
       const sortFn = _CAT_SORT[_almFilterCat];
       if (sortFn) prods = [...prods].sort(sortFn);
