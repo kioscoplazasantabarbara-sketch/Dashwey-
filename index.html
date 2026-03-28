@@ -742,6 +742,8 @@ html.theme-switching *::after {
   transform: translateY(100%);
   transition: transform var(--sheet-duration) var(--sheet-spring);
   will-change: transform;
+  overscroll-behavior: contain; /* v1.3.117: evita cierre brusco por swipe */
+  touch-action: pan-y;
 }
 #alm-filter-sheet.open #alm-filter-sheet-inner {
   transform: translateY(0);
@@ -3536,10 +3538,11 @@ body[data-tab="2"] #alm-cat-inline .alm-cat-item:active {
 /* Catálogo inline permanente */
 #alm-cat-inline {
   display: flex; flex-direction: column; gap: 6px;
+  padding-bottom: calc(var(--tab-real) + 80px); /* v1.3.117: safe area navbar */
   /* v9.5.83: content-visibility:auto — items fuera del viewport
      no se pintan hasta que entran en el área visible (CPU/GPU savings) */
-  content-visibility: auto;
-  contain-intrinsic-size: 0 600px; /* altura estimada para evitar scroll-jump */
+  /* v1.3.117: content-visibility:auto eliminado — causaba flickering en Android WebView */
+  /* contain:content es más estable para lazy loading sin parpadeos */
 }
 .alm-cat-section-lbl { font-size: 9px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); padding: 8px 2px 4px; }
 .alm-cat-item {
@@ -7304,7 +7307,7 @@ function _authTabSafe(tab) {
           <div class="alm-page-header">
             <!-- Columna izquierda: título + proveedor -->
             <div class="alm-header-left">
-              <div class="alm-page-title" id="alm-page-title-el">Almacén</div>
+              <div class="alm-page-title" id="alm-page-title-el">Proveedores</div>
               <!-- v1.3.115: selector de filtros — botón tipo snav que abre sheet desde abajo -->
               <button id="alm-filter-btn"
                 ontouchend="event.preventDefault();App.alm._openAlmFilterSheet();"
@@ -10255,7 +10258,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.116-dev';
+  const _APP_VERSION = 'v1.3.117-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19762,7 +19765,7 @@ const alm = (() => {
   function _almShowProveedores() {
     _almView = 'proveedores';
     // Header dinámico: título "Almacén", subtítulo "Selecciona proveedor"
-    _almSetHeader('Almacén', false);
+    _almSetHeader('Proveedores', false);
     var nameEl = document.getElementById('alm-prov-name');
     if (nameEl) nameEl.textContent = 'Selecciona proveedor';
     // Ocultar catálogo
@@ -19833,11 +19836,27 @@ const alm = (() => {
     var esc = function(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
     var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
 
-    // Event delegation
+    // Event delegation — tap + long press
+    var _pvLpTimer = null, _pvLpEl = null, _pvLpFired = false;
     provEl.onclick = function(e) {
+      if (_pvLpFired) { _pvLpFired = false; return; } // long press ya gestionado
       var card = e.target.closest('.alm-pv-card');
       if (card && card.dataset.provid) _almSelectProv(card.dataset.provid);
     };
+    provEl.addEventListener('touchstart', function(e) {
+      var card = e.target.closest('.alm-pv-card');
+      if (!card || !card.dataset.provid) return;
+      _pvLpEl    = card;
+      _pvLpFired = false;
+      _pvLpTimer = setTimeout(function() {
+        _pvLpFired = true;
+        try { Utils.triggerHaptic('medium'); } catch(_) {}
+        _openProvCtxMenu(card.dataset.provid, card);
+      }, 500);
+    }, { passive: true });
+    provEl.addEventListener('touchend',    function() { clearTimeout(_pvLpTimer); }, { passive: true });
+    provEl.addEventListener('touchcancel', function() { clearTimeout(_pvLpTimer); }, { passive: true });
+    provEl.addEventListener('touchmove',   function() { clearTimeout(_pvLpTimer); }, { passive: true });
 
     provEl.innerHTML = provs.map(function(x) {
       var p = x.p, m = x.m;
@@ -19927,8 +19946,9 @@ const alm = (() => {
     // Iniciar zoom/haptic del catálogo
     setTimeout(function() { if (window._almSnapInit) window._almSnapInit(); }, 80);
     console.log('[Dashwey][Header] Dinámico y animación flip OK');
-    console.log('[Dashwey][Catálogo] Zoom + Haptic + Filtros OK');
+    console.log('[Dashwey][Catálogo] Filtros orden correctos + SafeArea OK');
     console.log('[Dashwey][Filtro] Selector visual + Filtro aplicado OK');
+    console.log('[Dashwey][Stability] Sin flickering ni parpadeos OK');
     console.log('[Dashwey][Scroll] Fluido + Momentum OK');
     console.log('[Dashwey][SafeArea] Ningún elemento oculto OK');
   }
@@ -22419,6 +22439,65 @@ function _parseIva(iva) {
     if (typeof calcIAAnalysis === 'function') calcIAAnalysis();
   }
 
+  /* ── Menú contextual de proveedor — long press — v1.3.117 ──────────
+     Mismo patrón que _openCatInlineCtxMenu.
+     Acciones: Editar, Pedido, Borrar.                                  */
+  function _openProvCtxMenu(provId, sourceEl) {
+    var prev = document.getElementById('prov-ctx-menu');
+    if (prev) prev.remove();
+    var rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
+
+    var menu = document.createElement('div');
+    menu.id = 'prov-ctx-menu';
+    menu.className = 'cat-float-menu'; // reutiliza CSS existente
+
+    var actions = [
+      {
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+        label: 'Editar', cls: '',
+        fn: function() { menu.remove(); try { App.alm.openEditProv(provId); } catch(_) {} }
+      },
+      {
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
+        label: 'Pedido', cls: '',
+        fn: function() { menu.remove(); try { State.set.selectedProv(provId); App.alm._almShowCatalog(); } catch(_) {} }
+      },
+      {
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+        label: 'Borrar', cls: 'danger',
+        fn: function() { menu.remove(); try { App.alm.confirmarBorrarProv(provId); } catch(_) {} }
+      },
+    ];
+
+    menu.style.cssText = 'display:flex;flex-direction:row;gap:4px;padding:6px 8px;border-radius:16px;';
+    actions.forEach(function(a) {
+      var btn = document.createElement('button');
+      btn.className = 'cat-float-btn' + (a.cls ? ' ' + a.cls : '');
+      btn.style.cssText = 'flex-direction:column;gap:3px;min-width:52px;padding:8px 6px;';
+      btn.innerHTML = a.icon + '<span style="font-size:10px;font-weight:600;letter-spacing:0.2px">' + a.label + '</span>';
+      btn.addEventListener('touchstart', function(e) { e.stopPropagation(); e.preventDefault(); a.fn(); }, { passive: false });
+      btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
+      menu.appendChild(btn);
+    });
+
+    // Posicionar encima del elemento
+    var estW = 200, estH = 72;
+    var left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
+    var top  = rect ? rect.top  - estH - 8 : window.innerHeight / 2 - estH / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - estW - 8));
+    top  = Math.max(60, top);
+    menu.style.left = left + 'px';
+    menu.style.top  = top + 'px';
+    document.body.appendChild(menu);
+
+    function _closeProvCtx(e) { if (!menu.contains(e.target)) menu.remove(); }
+    requestAnimationFrame(function() {
+      document.addEventListener('touchstart', _closeProvCtx, { capture: true, passive: true, once: true });
+      document.addEventListener('click',      _closeProvCtx, { capture: true, once: true });
+    });
+    console.log('[Dashwey][UX] Pulsación larga proveedor OK');
+  }
+
   /* ── ALM FILTER SHEET v1.3.115 ─────────────────────────────────────
      Sheet desde abajo — mismo patrón que dash-period-sheet.
      Dinámico: muestra filtros de proveedores o de artículos según _almView. */
@@ -22464,6 +22543,7 @@ function _parseIva(iva) {
     var activeId   = isProvView ? _almFilterProv    : _almFilterCat;
 
     if (title) title.textContent = isProvView ? 'Ordenar proveedores' : 'Ordenar artículos';
+    // v1.3.117: cerrar swipe hacia arriba/abajo desactivado — solo X o tap fuera
 
     list.innerHTML = opts.map(function(o) {
       var sel = o.id === activeId ? ' sel' : '';
@@ -22493,7 +22573,7 @@ function _parseIva(iva) {
   }
 
   function _pickAlmFilter(id) {
-    _closeAlmFilterSheet();
+    // v1.3.117: NO cerrar el sheet al seleccionar — solo cierra con la X
     if (_almView === 'proveedores') {
       _almFilterProv = id;
       _renderProvList();
@@ -22519,6 +22599,7 @@ function _parseIva(iva) {
     shiftProv, openProvPicker, selProv, addNuevoProv, openEditProv, saveProvEdit, confirmarBorrarProv, borrarProv,
     _almViewInit, _almShowProveedores, _almShowCatalog, _almSelectProv, _almBackToProv,
     _openAlmFilterSheet, _closeAlmFilterSheet, _pickAlmFilter,
+    _openProvCtxMenu,
     get _almView() { return _almView; },
     // v9.5.91: periodicidad
     _openProvPeriodSheet, _refreshProvPeriodBtn,
@@ -26966,7 +27047,14 @@ window._almCarritoOptions = function() {
 <div id="alm-filter-sheet" onclick="if(event.target===this)App.alm._closeAlmFilterSheet()">
   <div id="alm-filter-sheet-inner">
     <div class="dps-handle"></div>
-    <div class="dps-header" id="alm-filter-sheet-title">Ordenar proveedores</div>
+    <div class="dps-header" style="display:flex;align-items:center;justify-content:space-between;">
+      <span id="alm-filter-sheet-title">Filtros</span>
+      <button onclick="App.alm._closeAlmFilterSheet()"
+        style="width:28px;height:28px;border-radius:50%;border:none;background:var(--bg);
+               color:var(--ink-soft);font-size:16px;cursor:pointer;display:flex;
+               align-items:center;justify-content:center;flex-shrink:0;
+               -webkit-tap-highlight-color:transparent;">✕</button>
+    </div>
     <div class="dps-scroll" id="alm-filter-sheet-list">
       <!-- Opciones generadas por JS según vista (proveedores / catálogo) -->
     </div>
