@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.79-dev</title>
+<title>Dashwey v1.3.80-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7357,6 +7357,7 @@ function _authTabSafe(tab) {
     <!-- RESULTADOS — crece, scrollable, encima del input -->
     <div id="alm-search-results"
       style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+             overscroll-behavior:contain;
              min-height:60px;padding:0 12px 8px;"></div>
 
     <!-- INPUT — fijo al fondo del panel, que a su vez sube con el teclado -->
@@ -10065,7 +10066,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.79-dev';
+  const _APP_VERSION = 'v1.3.80-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22123,16 +22124,19 @@ function _parseIva(iva) {
   // INVARIANTE: _catInlineQ siempre tiene el valor del último keystroke antes
   // del render → el resultado final es idéntico, solo se omiten renders intermedios.
   function onMainSearch(val) {
-    // 1. Filtro — solo actualizar _catInlineQ, no re-renderizar el fondo si el overlay está abierto
-    _catInlineQ = val;
-
-    // 2. Re-render del catálogo de fondo — SOLO si el overlay de búsqueda está cerrado
-    if (!window._searchOverlayOpen) {
-      clearTimeout(_catRenderTimer);
-      _catRenderTimer = setTimeout(() => { renderCatInline(); }, 80);
+    // v1.3.79: estado completamente separado cuando el overlay está abierto
+    // El overlay tiene su propio estado searchQuery — NO tocar _catInlineQ
+    if (window._searchOverlayOpen) {
+      // Solo disparar la búsqueda del overlay — sin contaminar el catálogo
+      clearTimeout(_almSearchTimer);
+      _almSearchTimer = setTimeout(() => _permSearch(val), 150); // debounce 150ms
+      return;
     }
 
-    // 3. Dropdown de sugerencias — siempre (van al overlay)
+    // Modo normal: filtrar catálogo de fondo
+    _catInlineQ = val;
+    clearTimeout(_catRenderTimer);
+    _catRenderTimer = setTimeout(() => { renderCatInline(); }, 80);
     clearTimeout(_almSearchTimer);
     _almSearchTimer = setTimeout(() => _permSearch(val), 200);
   }
@@ -22147,6 +22151,12 @@ function _parseIva(iva) {
       sugEl.style.display = 'none';
       const sb = document.getElementById('alm-search-bar-inline');
       if (sb) sb.classList.remove('sug-open');
+      // Limpiar panel del overlay
+      if (window._searchOverlayOpen && window._almSyncResults) {
+        window._almSyncResults('');
+        var dest = document.getElementById('alm-search-results');
+        if (dest) dest.innerHTML = '<div id="alm-search-results-empty">Escribe para buscar artículos…</div>';
+      }
       return;
     }
     const sel    = State.get.selectedProv();
@@ -22193,9 +22203,17 @@ function _parseIva(iva) {
         Añadir "${esc(q)}" como nuevo artículo
       </div>`;
     }
-    sugEl.style.display = '';
-    const searchBar = document.getElementById('alm-search-bar-inline');
-    if (searchBar) searchBar.classList.add('sug-open');
+    // v1.3.79: sincronización directa — sin MutationObserver
+    if (window._searchOverlayOpen && window._almSyncResults) {
+      // Overlay abierto → escribir directamente en el panel de resultados
+      window._almSyncResults(sugEl.innerHTML);
+      // No mostrar el dropdown legacy
+    } else {
+      // Modo legacy (sin overlay) → mostrar dropdown bajo el input
+      sugEl.style.display = '';
+      const searchBar = document.getElementById('alm-search-bar-inline');
+      if (searchBar) searchBar.classList.add('sug-open');
+    }
   }
 
   function _permSearchFocus() {
@@ -22339,9 +22357,19 @@ function _parseIva(iva) {
     if (clear) clear.style.display = 'none';
     if (sugEl) sugEl.style.display = 'none';
     if (sb)    sb.classList.remove('sug-open');
-    // v9.5.96: cancelar render pendiente — clear debe mostrar catálogo completo inmediatamente
     clearTimeout(_catRenderTimer);
     clearTimeout(_almSearchTimer);
+
+    // v1.3.79: si el overlay está abierto, NO tocar _catInlineQ ni renderizar el fondo
+    if (window._searchOverlayOpen) {
+      // Limpiar solo el panel del overlay
+      if (window._almSyncResults) window._almSyncResults('');
+      var dest = document.getElementById('alm-search-results');
+      if (dest) dest.innerHTML = '<div id="alm-search-results-empty">Escribe para buscar artículos…</div>';
+      return;
+    }
+
+    // Modo normal: resetear catálogo de fondo
     _catInlineQ = '';
     renderCatInline();
   }
@@ -27498,49 +27526,27 @@ window._almCarritoOptions = function() {
     document.body.style.overflow = '';
 
     setTimeout(function() {
-      try { if (window.App && App.alm) App.alm._permSearchClear(); } catch(_) {}
-      // Restaurar catálogo de fondo con query vacía
-      try { if (window.App && App.alm) App.alm.renderCatInline && App.alm.renderCatInline(); } catch(_) {}
+      // v1.3.79: resetear _catInlineQ manualmente antes de llamar _permSearchClear
+      // para garantizar que el catálogo vuelve a estado limpio
+      try {
+        if (window.App && App.alm) {
+          // Acceder al state interno via la función pública clearMainSearch
+          App.alm.clearMainSearch ? App.alm.clearMainSearch() : App.alm._permSearchClear();
+        }
+      } catch(_) {}
       var resultsEl = document.getElementById('alm-search-results');
       if (resultsEl) resultsEl.innerHTML = '';
     }, 260);
   };
 
-  /* ── Puente: _permSearch escribe en #alm-search-suggestions
-     pero en Spotlight los resultados van en #alm-search-results.
-     MutationObserver sincroniza el contenido sin tocar el JS de alm. ── */
-  (function() {
-    var _syncTimer = null;
-    function _syncResults() {
-      var src  = document.getElementById('alm-search-suggestions');
-      var dest = document.getElementById('alm-search-results');
-      if (!src || !dest) return;
-      var html = src.innerHTML.trim();
-      dest.innerHTML = html
-        ? html
-        : '<div id="alm-search-results-empty">Sin resultados</div>';
-    }
-
-    // Observar cambios en el dropdown oculto y reflejarlos en el panel visible
-    var obs = new MutationObserver(function() {
-      clearTimeout(_syncTimer);
-      _syncTimer = setTimeout(_syncResults, 0);
-    });
-
-    // Iniciar observer cuando el DOM esté listo
-    function _initObs() {
-      var src = document.getElementById('alm-search-suggestions');
-      if (src) {
-        obs.observe(src, { childList: true, subtree: true, characterData: true });
-      }
-    }
-
-    if (document.readyState === 'complete') {
-      _initObs();
-    } else {
-      window.addEventListener('load', _initObs, { once: true });
-    }
-  })();
+  /* ── v1.3.79: MutationObserver eliminado — _permSearch escribe directamente
+     en #alm-search-results cuando el overlay está abierto.
+     Función exportada via window._almSyncResults para uso desde _permSearch. ── */
+  window._almSyncResults = function(html) {
+    var dest = document.getElementById('alm-search-results');
+    if (!dest) return;
+    dest.innerHTML = html || '<div id="alm-search-results-empty">Sin resultados</div>';
+  };
 
   /* ── ADD ITEM MORPH — mismo lenguaje visual que search ─────────── */
   window._almFabOpenAdd = function(srcEl) {
