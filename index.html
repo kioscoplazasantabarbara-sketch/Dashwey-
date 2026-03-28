@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.92-dev</title>
+<title>Dashwey v1.3.93-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3506,18 +3506,16 @@ input:focus, select:focus, textarea:focus {
   display: none;
   flex-direction: column;
   gap: 12px;
-  /* Padding vertical para centrar primer/último item en snap:
-     50dvh - mitad de tarjeta (~70px) → ítem queda exactamente en centro */
-  padding: calc(40dvh - 70px) 14px calc(var(--tab-real) + 40dvh - 70px);
+  /* Snap centering: padding = ~40dvh - mitad de tarjeta */
+  padding: max(16px, calc(38dvh - 70px)) 14px max(calc(var(--tab-real) + 16px), calc(var(--tab-real) + 38dvh - 70px));
   overflow-y: auto;
-  /* Tomar toda la altura del alm-scroll */
   flex: 1;
   min-height: 0;
   scroll-snap-type: y mandatory;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
-#alm-prov-list-view.active { display: flex; }
+#alm-prov-list-view.active { display: flex; flex: 1; min-height: 0; }
 /* Tarjeta snap-focused: escala al 107% (7% más grande) */
 #alm-prov-list-view .js-prov-card {
   scroll-snap-align: center;
@@ -10202,7 +10200,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.92-dev';
+  const _APP_VERSION = 'v1.3.93-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12002,14 +12000,19 @@ const nav = (() => {
       // v1.2.25: defer ALM renders a rAF — la transición CSS (.38s) corre libre
       // sin ser bloqueada por el trabajo síncrono del render del almacén
       requestAnimationFrame(() => {
+        // v1.3.93: orden correcto — init vista PRIMERO, luego datos secundarios
+        App.alm._almViewInit(); // vista proveedores o catálogo según _almView
         App.alm.renderOrden();
         App.alm.updateBadge();
+        // updateProvBar NO toca alm-prov-name (v1.3.92)
         App.alm.updateProvBar();
-        App.alm._almViewInit(); // v1.3.89: iniciar con vista proveedores
-        App.alm.renderCatInline();
-        // Posicionar botón Aceptar sobre navbar
+        // renderCatInline solo si estamos en vista catálogo
+        if (window.App && App.alm && App.alm._almView === 'catalogo') {
+          App.alm.renderCatInline();
+        }
         requestAnimationFrame(() => {
           if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn();
+          console.log('[Dashwey][Almacén] Render OK');
         });
       });
     }
@@ -19617,11 +19620,14 @@ const alm = (() => {
       _renderProvListView();
     }
     _almDestroySnapObserver();
-    // Activar modo snap en el contenedor padre
-    var scrollEl = document.getElementById('alm-scroll-el');
-    if (scrollEl) scrollEl.classList.add('snap-active');
-    // Snap en lista de proveedores
-    requestAnimationFrame(function() { _almInitProvSnap(); });
+    // v1.3.93: activar snap-active en el mismo rAF que el snap observer
+    // para evitar que el contenedor quede vacío con overflow:hidden antes del paint
+    requestAnimationFrame(function() {
+      var scrollEl = document.getElementById('alm-scroll-el');
+      if (scrollEl) scrollEl.classList.add('snap-active');
+      _almInitProvSnap();
+      console.log('[Dashwey][Almacén] Render OK');
+    });
   }
 
   function _renderProvListView() {
@@ -19690,27 +19696,33 @@ const alm = (() => {
       catInline.style.display = '';
       catInline.classList.add('snap-mode');
     }
-    var scrollEl = document.getElementById('alm-scroll-el');
-    if (scrollEl) scrollEl.classList.add('snap-active');
-    // Renderizar catálogo
+    // Renderizar catálogo ANTES de activar snap-active
     renderCatInline();
-    // Iniciar observer de snap + scroll al primer item
+    // v1.3.93: snap-active y observer después del paint
     requestAnimationFrame(function() {
+      var scrollEl = document.getElementById('alm-scroll-el');
+      if (scrollEl) scrollEl.classList.add('snap-active');
       _almInitSnapObserver();
       var catEl = document.getElementById('alm-cat-inline');
       if (catEl) {
         var firstItem = catEl.querySelector('.alm-cat-item');
         if (firstItem) firstItem.scrollIntoView({ block: 'center', behavior: 'instant' });
       }
+      console.log('[Dashwey][Almacén] Render OK');
     });
   }
 
   function _almBackToProv() {
     try { Utils.triggerHaptic('light'); } catch(_) {}
+    // v1.3.93: destruir todos los observers antes de cambiar vista
     _almDestroySnapObserver();
-    // Restaurar scroll normal en el contenedor padre
+    _almDestroyProvSnap();
+    // Quitar snap-active ANTES de cambiar vista (restaura overflow del padre)
     var scrollEl = document.getElementById('alm-scroll-el');
     if (scrollEl) scrollEl.classList.remove('snap-active');
+    // Limpiar catálogo
+    var catEl = document.getElementById('alm-cat-inline');
+    if (catEl) { catEl.classList.remove('snap-mode'); catEl.style.display = 'none'; }
     _almShowProvList();
   }
 
@@ -19806,7 +19818,21 @@ const alm = (() => {
   }
 
   function _almViewInit() {
-    // Al entrar en Almacén siempre empezar en vista proveedores
+    // v1.3.93: resetear estado snap ANTES de mostrar la vista
+    // evita que snap-active quede activo de una sesión anterior
+    var scrollEl = document.getElementById('alm-scroll-el');
+    if (scrollEl) scrollEl.classList.remove('snap-active');
+    // Limpiar modo snap del catálogo
+    var catEl = document.getElementById('alm-cat-inline');
+    if (catEl) { catEl.classList.remove('snap-mode'); catEl.style.display = ''; }
+    // Limpiar vista proveedores
+    var provEl = document.getElementById('alm-prov-list-view');
+    if (provEl) provEl.classList.remove('active');
+    // Destruir observers
+    _almDestroySnapObserver();
+    _almDestroyProvSnap();
+    // Siempre arrancar en vista proveedores
+    _almView = 'proveedores';
     _almShowProvList();
   }
 
