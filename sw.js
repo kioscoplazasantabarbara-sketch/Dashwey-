@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.104-dev
-   Cache: dashwey-v1-3-104-dev
+   Dashwey Service Worker v1.3.105-dev
+   Cache: dashwey-v1-3-105-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-104-dev';
+const CACHE_NAME  = 'dashwey-v1-3-105-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -215,13 +215,19 @@ self.addEventListener('fetch', e => {
   }
 
   /* HTML principal: NETWORK-ONLY — NUNCA se cachea.
-     Offline: página de error con botón Reintentar. */
+     cache:'no-store' + headers para romper caché HTTP de Android WebView */
   if (url.pathname.endsWith(HTML_URL) ||
       url.pathname.endsWith('/') ||
       url.pathname === '/Dashwey-/' ||
       url.pathname === '/Dashwey-/index.html') {
+    /* Crear request con headers anti-caché para Android WebView */
+    const bustReq = new Request(e.request.url, {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' },
+      cache: 'no-store'
+    });
     e.respondWith(
-      fetch(e.request, { cache: 'no-store' })
+      fetch(bustReq, { cache: 'no-store' })
         .catch(() => {
           /* Sin red: intentar cache como último recurso offline */
           return caches.match(e.request).then(cached => {
