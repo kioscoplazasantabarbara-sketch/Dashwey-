@@ -24853,6 +24853,10 @@ return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess, limpi
 window.App = App;
 // Exponer también Utils para acceso desde otros script blocks y onclicks
 if (typeof Utils !== 'undefined') window.Utils = Utils;
+// v1.3.64: exponer State y DashweyBus — necesario para scripts externos (CheckModal)
+// const no se asigna a window automáticamente en scripts clásicos
+if (typeof State !== 'undefined') window.State = State;
+if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
 // ──────────────────────────────────────────────────────────────────────
 
 /* Splash controller moved to inline script before App script */
@@ -25092,9 +25096,9 @@ window._cmShowOptions = function() {
       if (!orderId) return;
       window._checkModal.close();
       setTimeout(function(){
-        try { State.set.removePendingOrder(orderId); } catch(_) {}
+        try { if (window.State) window.State.set.removePendingOrder(orderId); } catch(_) {}
         try { App.alm.updateBadge(); } catch(_) {}
-        try { DashweyBus.emit('pedido_stock', {}); } catch(_) {}
+        try { if (window.DashweyBus) window.DashweyBus.emit('pedido_stock', {}); } catch(_) {}
         try { Utils.showToast('Pedido eliminado'); } catch(_) {}
       }, 260);
     }},
@@ -25315,9 +25319,9 @@ window._almCarritoOptions = function() {
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
     try {
-      const settings = State.get.settings();
-      if (!settings.notifOn) return; // notifOn global desactivado
-      const prefs = State.get.notifPrefs();
+      const settings = (window.State || {get:()=>({})}).get.settings?.() || {};
+      if (!settings.notifOn) return;
+      const prefs = (window.State || {get:()=>({})}).get.notifPrefs?.() || {};
       if (!prefs.whatsNew) return; // tipo whatsNew desactivado por usuario
     } catch(_) { return; }
 
@@ -26518,7 +26522,7 @@ window._almCarritoOptions = function() {
         var items   = S.items;
 
         // ── 1. Actualizar stock en State ──────────────────────────
-        var _St = (typeof State !== 'undefined') ? State : null; // v1.3.62: guard centralizado
+        var _St = window.State || null; // v1.3.64: window.State expuesto explícitamente
         items.forEach(function(item) {
           var p = _St ? _St.get.prod(item.prodId) : null;
           if (p && _St) {
@@ -26578,7 +26582,7 @@ window._almCarritoOptions = function() {
             if (window.App && App.alm && App.alm.updateBadge) App.alm.updateBadge();
           } catch(_) {}
           try {
-            if (typeof DashweyBus !== 'undefined') DashweyBus.emit('pedido_stock', { pedido: pedido });
+            if (window.DashweyBus) window.DashweyBus.emit('pedido_stock', { pedido: pedido });
           } catch(_) {}
           try { document.dispatchEvent(new Event('order:checked'));  } catch(_) {}
           try { document.dispatchEvent(new Event('data:updated'));   } catch(_) {}
@@ -26611,7 +26615,7 @@ window._almCarritoOptions = function() {
         var entregaStr = '';
         try {
           var provConf = (meta && meta.prov) ||
-                         (window.State && State.get.prov && State.get.prov(meta && meta.sel));
+                         (window.State && window.State.get.prov && window.State.get.prov(meta && meta.sel));
           var de = (provConf && provConf.diasEntrega) || [];
           var base = new Date(pedido.fecha);
           var dEnt = new Date(base);
@@ -26683,10 +26687,10 @@ window._almCarritoOptions = function() {
                       '💰 Inversión: '+fmt2(totalInv)+'\n'+
                       items.slice(0,5).map(function(i){ return '  • '+i.nombre+' ×'+(i.ncajas||1); }).join('\n')+
                       (n>5?'\n  ...y '+(n-5)+' más':'');
-        var perfil  = (typeof State!=='undefined'&&State.get.perfil)?State.get.perfil():{};
+        var perfil  = (typeof State!=='undefined'&&window.State.get.perfil)?window.State.get.perfil():{};
         var myEmail = perfil.email||'yo';
         var myName  = perfil.nombre||myEmail;
-        var users   = (typeof State!=='undefined'&&State.get.chatUsers)?State.get.chatUsers():[];
+        var users   = (typeof State!=='undefined'&&window.State.get.chatUsers)?window.State.get.chatUsers():[];
         var sent = 0;
         users.forEach(function(u) {
           if (!u.uid || u.uid===myEmail) return;
@@ -26695,7 +26699,7 @@ window._almCarritoOptions = function() {
             from: myEmail, fromName: myName, to: u.uid, toName: u.name||u.email,
             text: msgText, read: false, type: 'informe',
           };
-          try { if(typeof State!=='undefined') State.set.addChatMessage(msg); } catch(_) {}
+          try { if(typeof State!=='undefined') window.State.set.addChatMessage(msg); } catch(_) {}
           sent++;
         });
         if (typeof Utils!=='undefined') {
@@ -26882,12 +26886,12 @@ window._almCarritoOptions = function() {
         e.stopPropagation();
         var oid = this.dataset.delOrder;
         if (!confirm('¿Eliminar este pedido programado?')) return;
-        try { State.set.removePendingOrder(oid); } catch(_) {}
+        try { window.State.set.removePendingOrder(oid); } catch(_) {}
         // Recargar lista
         var allOrders = [];
-        try { allOrders = State.get.pendingOrders() || []; } catch(_) {}
+        try { allOrders = window.State.get.pendingOrders() || []; } catch(_) {}
         var sel = '';
-        try { sel = State.get.selectedProv(); } catch(_) {}
+        try { sel = window.State.get.selectedProv(); } catch(_) {}
         var remaining = allOrders.filter(function(o){ return o.provId === sel && o.status === 'pending'; });
         if (remaining.length === 0) {
           window._orderSelector.close();
@@ -26912,10 +26916,10 @@ window._almCarritoOptions = function() {
         if (!overlay) return;
 
         var allOrders = [];
-        try { allOrders = State.get.pendingOrders() || []; } catch(_) {}
+        try { allOrders = window.State.get.pendingOrders() || []; } catch(_) {}
 
         var sel = '';
-        try { sel = State.get.selectedProv(); } catch(_) {}
+        try { sel = window.State.get.selectedProv(); } catch(_) {}
         // Solo pending — checked ya están completados
         var filtered = allOrders.filter(function(o) {
           return o.provId === sel && o.status === 'pending';
@@ -26954,12 +26958,12 @@ window._almCarritoOptions = function() {
         this.close();
 
         var allOrders = [];
-        try { allOrders = State.get.pendingOrders() || []; } catch(_) {}
+        try { allOrders = window.State.get.pendingOrders() || []; } catch(_) {}
         var order = allOrders.find(function(o){ return o.id === id; });
         if (!order) { console.error('[OrderSelector] order not found:', id); return; }
 
         var prov = null;
-        try { prov = State.get.prov(order.provId); } catch(_) {}
+        try { prov = window.State.get.prov(order.provId); } catch(_) {}
         var provNombre = (prov && prov.nombre) || order.provId || 'Proveedor';
         var provIcon   = (prov && prov.icon)   || '\u{1F4E6}';
         var isPending  = order.status === 'pending';
@@ -26985,7 +26989,7 @@ window._almCarritoOptions = function() {
 
         // Enriquecer items
         var items = (order.items||[]).map(function(o) {
-          var p = null; try { p = State.get.prod(o.prodId); } catch(_) {}
+          var p = null; try { p = window.State.get.prod(o.prodId); } catch(_) {}
           var ncajas   = o.ncajas||1;
           var udscaja  = o.udscaja||(p&&p.udscaja)||12;
           var precio   = o.precio||(p&&p.precioCompra)||0;
