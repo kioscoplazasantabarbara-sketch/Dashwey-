@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.72-dev</title>
+<title>Dashwey v1.3.73-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1872,15 +1872,68 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
 .bt.active::after { transform: translateX(-50%) scaleX(1); }
 /* v1.3.68: el botón MENÚ (bt-3) nunca muestra indicador de tab activa */
 
-/* ── § FAB SYSTEM — Almacén v1.3.71 ── */
-/* FAB principal y mini-FABs usan estilos inline para flexibilidad */
-/* Estado expandido del FAB principal */
+/* ── § FAB SYSTEM — Almacén v1.3.73 ── */
 #alm-fab.fab-expanded {
   transform: rotate(45deg);
   box-shadow: 0 6px 20px rgba(139,26,47,0.40);
 }
-#alm-fab:active { transform: scale(0.91); }
+#alm-fab:active         { transform: scale(0.91); }
 #alm-fab.fab-expanded:active { transform: rotate(45deg) scale(0.91); }
+
+/* ── MORPH — ghost pill que vuela desde el mini-FAB al overlay ── */
+/* Técnica: scale + border-radius + clip-path en el overlay panel  */
+/* El panel empieza pequeño en la posición del FAB y crece al full */
+
+/* Search overlay — morph desde posición del mini-FAB */
+#alm-search-panel {
+  transform-origin: var(--morph-x, 50%) var(--morph-y, 100%);
+}
+/* Estado inicial del morph: pequeño, circular, en el origen */
+#alm-search-panel.morph-enter {
+  transform: scale(0.08) translateY(0);
+  border-radius: 50%;
+  opacity: 0;
+}
+/* Estado final: panel completo */
+#alm-search-panel.morph-active {
+  transform: scale(1) translateY(0);
+  border-radius: 20px 20px 0 0;
+  opacity: 1;
+  transition:
+    transform    210ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 210ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity      140ms ease;
+}
+
+/* fs-box morph desde mini-FAB add */
+#fs-box.morph-from-fab {
+  transform-origin: var(--morph-x, 50%) var(--morph-y, 100%);
+}
+#fs-box.morph-enter-fab {
+  transform: scale(0.08) translateY(0) !important;
+  border-radius: 50% !important;
+  opacity: 0 !important;
+  transition: none !important;
+}
+#fs-box.morph-active-fab {
+  transform: translateY(0) !important;
+  border-radius: var(--sheet-radius) !important;
+  opacity: 1 !important;
+  transition:
+    transform     210ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 210ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity       140ms ease !important;
+}
+
+/* Mini-FAB: pulso de confirmación al tap */
+@keyframes fab-mini-pulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.25); }
+  100% { transform: scale(0.6); opacity: 0; }
+}
+.fab-mini-pulsing {
+  animation: fab-mini-pulse 180ms ease-in forwards;
+}
 /* ── SPOTLIGHT SEARCH — estados — v1.3.72 ── */
 #alm-search-overlay.search-open {
   background: rgba(0,0,0,0.45);
@@ -7259,8 +7312,8 @@ function _authTabSafe(tab) {
 
   <!-- Mini-FAB: Añadir artículo -->
   <button id="alm-fab-add"
-    ontouchend="event.preventDefault();window._almFabCollapse();App.alm.openNuevoArtFs();"
-    onclick="if(event.pointerType!=='touch'){window._almFabCollapse();App.alm.openNuevoArtFs();}"
+    ontouchend="event.preventDefault();window._almFabOpenAdd(this);"
+    onclick="if(event.pointerType!=='touch')window._almFabOpenAdd(this);"
     aria-label="Añadir artículo"
     style="position:fixed;right:20px;z-index:9010;
            width:46px;height:46px;border-radius:50%;border:none;cursor:pointer;
@@ -10045,7 +10098,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.72-dev';
+  const _APP_VERSION = 'v1.3.73-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -27306,6 +27359,18 @@ window._almCarritoOptions = function() {
     _expanded ? window._almFabCollapse() : window._almFabExpand();
   };
 
+  /* Calcular --morph-x / --morph-y de un elemento relativo al panel padre */
+  function _setMorphOrigin(panelEl, sourceEl) {
+    if (!panelEl || !sourceEl) return;
+    var pr = panelEl.getBoundingClientRect();
+    var sr = sourceEl.getBoundingClientRect();
+    // Centro del sourceEl en coordenadas del panelEl
+    var cx = sr.left + sr.width  / 2 - pr.left;
+    var cy = sr.top  + sr.height / 2 - pr.top;
+    panelEl.style.setProperty('--morph-x', cx + 'px');
+    panelEl.style.setProperty('--morph-y', cy + 'px');
+  }
+
   window._almFabExpand = function() {
     if (_expanded) return;
     _expanded = true;
@@ -27317,11 +27382,9 @@ window._almCarritoOptions = function() {
 
     _positionMiniFabs();
 
-    // Mostrar mini-FABs
     if (fabAdd)    { fabAdd.style.display    = 'inline-flex'; }
     if (fabSearch) { fabSearch.style.display = 'inline-flex'; }
 
-    // Animar tras un frame para que display:flex sea efectivo antes del transition
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         if (fab)       fab.classList.add('fab-expanded');
@@ -27379,65 +27442,115 @@ window._almCarritoOptions = function() {
   }
 
   window._almFabOpenSearch = function() {
+    var fabSearchEl = document.getElementById('alm-fab-search');
+
+    // 1. Pulso de salida en el mini-FAB (180ms)
+    if (fabSearchEl) {
+      fabSearchEl.classList.add('fab-mini-pulsing');
+    }
+
+    // 2. Colapsar FAB expandido
     window._almFabCollapse();
 
     var overlay = document.getElementById('alm-search-overlay');
-    if (!overlay) return;
+    var panel   = document.getElementById('alm-search-panel');
+    if (!overlay || !panel) return;
 
-    // Mostrar overlay sin teclado aún (panel en bottom:0)
-    var panel = document.getElementById('alm-search-panel');
-    if (panel) panel.style.bottom = '0px';
+    // 3. Calcular transform-origin: centro del mini-FAB relativo al panel
+    //    El panel empieza en bottom:0, así que su bottom edge = window.innerHeight
+    if (fabSearchEl) {
+      var sr = fabSearchEl.getBoundingClientRect();
+      var vw = window.innerWidth;
+      var vh = window.innerHeight;
+      // % relativo al panel (que ocupa todo el ancho y crece desde abajo)
+      var pct_x = ((sr.left + sr.width  / 2) / vw * 100).toFixed(1) + '%';
+      var pct_y = ((sr.top  + sr.height / 2) / vh * 100).toFixed(1) + '%'; // aprox
+      panel.style.setProperty('--morph-x', pct_x);
+      panel.style.setProperty('--morph-y', pct_y);
+    }
+
+    // 4. Estado inicial morph (pequeño, en origen)
+    panel.style.bottom   = '0px';
+    panel.style.transition = 'none';
+    panel.classList.remove('morph-active');
+    panel.classList.add('morph-enter');
+
+    // 5. Activar overlay dim
     overlay.classList.add('search-open');
 
-    // Placeholder inicial en resultados
+    // 6. Trigger morph (doble rAF: frame N aplica morph-enter, frame N+1 dispara transición)
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        panel.classList.remove('morph-enter');
+        panel.classList.add('morph-active');
+        panel.style.transition = ''; // restaurar transitions CSS
+      });
+    });
+
+    // 7. Placeholder resultados
     var resultsEl = document.getElementById('alm-search-results');
     if (resultsEl && !resultsEl.innerHTML.trim()) {
       resultsEl.innerHTML = '<div id="alm-search-results-empty">Escribe para buscar artículos…</div>';
     }
 
-    // Registrar listener de visualViewport ANTES de abrir el teclado
+    // 8. visualViewport para teclado
     if (window.visualViewport && !_vvListener) {
-      _vvListener = function() {
-        requestAnimationFrame(_almSearchUpdatePanelBottom);
-      };
+      _vvListener = function() { requestAnimationFrame(_almSearchUpdatePanelBottom); };
       window.visualViewport.addEventListener('resize', _vvListener);
       window.visualViewport.addEventListener('scroll', _vvListener);
     }
 
-    // Focus input — esto abre el teclado
-    // Delay mínimo para que la animación del panel empiece primero
+    // 9. Focus input — abre teclado después del morph
     setTimeout(function() {
       var inp = document.getElementById('alm-perm-search');
       if (inp) inp.focus();
-    }, 80);
+    }, 120);
 
     try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
   };
 
   window._almSearchClose = function() {
-    // Quitar listener visualViewport
     if (window.visualViewport && _vvListener) {
       window.visualViewport.removeEventListener('resize', _vvListener);
       window.visualViewport.removeEventListener('scroll', _vvListener);
       _vvListener = null;
     }
 
-    // Reset posición del panel antes de cerrar
-    var panel = document.getElementById('alm-search-panel');
-    if (panel) panel.style.bottom = '0px';
-
+    var inp     = document.getElementById('alm-perm-search');
+    var panel   = document.getElementById('alm-search-panel');
     var overlay = document.getElementById('alm-search-overlay');
-    if (overlay) overlay.classList.remove('search-open');
 
-    // Blur primero → cierra teclado → luego limpiar
-    var inp = document.getElementById('alm-perm-search');
+    // Blur primero → cierra teclado
     if (inp) inp.blur();
 
+    // Morph inverso: panel colapsa hacia el origen
+    if (panel) {
+      panel.style.transition = 'none';
+      // Quitar morph-active, añadir morph-enter (estado colapsado)
+      // Pero hacerlo en orden correcto para que la transición CSS se active
+      requestAnimationFrame(function() {
+        if (panel) {
+          panel.style.transition = 'transform 180ms cubic-bezier(0.4,0,1,1), border-radius 180ms ease, opacity 140ms ease';
+          panel.classList.remove('morph-active');
+          panel.classList.add('morph-enter');
+        }
+      });
+    }
+
+    // Quitar dim
+    if (overlay) overlay.classList.remove('search-open');
+
+    // Limpiar tras la transición
     setTimeout(function() {
+      if (panel) {
+        panel.classList.remove('morph-enter', 'morph-active');
+        panel.style.transition = '';
+        panel.style.bottom = '0px';
+      }
       try { if (window.App && App.alm) App.alm._permSearchClear(); } catch(_) {}
       var resultsEl = document.getElementById('alm-search-results');
       if (resultsEl) resultsEl.innerHTML = '';
-    }, 50);
+    }, 200);
   };
 
   /* ── Puente: _permSearch escribe en #alm-search-suggestions
@@ -27475,6 +27588,61 @@ window._almCarritoOptions = function() {
       window.addEventListener('load', _initObs, { once: true });
     }
   })();
+
+  /* ── ADD ITEM MORPH — mismo lenguaje visual que search ─────────── */
+  window._almFabOpenAdd = function(srcEl) {
+    // 1. Pulso de salida en el mini-FAB
+    if (srcEl) srcEl.classList.add('fab-mini-pulsing');
+
+    // 2. Colapsar FAB
+    window._almFabCollapse();
+
+    // 3. Guardar posición del mini-FAB para animar el fs-box desde allí
+    var rect = srcEl ? srcEl.getBoundingClientRect() : null;
+
+    if (rect) {
+      // Setear transform-origin del fs-box como % del viewport
+      var fsBox = document.getElementById('fs-box');
+      if (fsBox) {
+        var cx = ((rect.left + rect.width  / 2) / window.innerWidth  * 100).toFixed(1);
+        var cy = ((rect.top  + rect.height / 2) / window.innerHeight * 100).toFixed(1);
+        fsBox.style.setProperty('--morph-x', cx + '%');
+        fsBox.style.setProperty('--morph-y', cy + '%');
+        // Estado inicial: colapsado en el origen
+        fsBox.style.transition = 'none';
+        fsBox.classList.add('morph-from-fab', 'morph-enter-fab');
+        fsBox.style.opacity    = '0';
+        fsBox.style.borderRadius = '50%';
+        fsBox.style.transform  = 'translateY(100%) scale(0.08)';
+      }
+    }
+
+    // 4. Abrir el fs-sheet — openNuevoArtFs llama ui.setFs() que añade .open al overlay
+    setTimeout(function() {
+      try { if (window.App && App.alm) App.alm.openNuevoArtFs(); } catch(_) {}
+
+      // 5. Tras un frame, disparar el morph de apertura
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          var fsBox = document.getElementById('fs-box');
+          if (fsBox) {
+            fsBox.classList.remove('morph-enter-fab');
+            fsBox.classList.add('morph-active-fab');
+            // Limpiar estilos inline tras la transición
+            setTimeout(function() {
+              fsBox.classList.remove('morph-from-fab', 'morph-active-fab');
+              fsBox.style.transition   = '';
+              fsBox.style.opacity      = '';
+              fsBox.style.borderRadius = '';
+              fsBox.style.transform    = '';
+            }, 230);
+          }
+        });
+      });
+    }, 30);
+
+    try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
+  };
 
   /* ── INTEGRACIÓN CON goTab ──────────────────────────────────────── */
   // Escuchar cambios de tab para mostrar/ocultar el FAB system
