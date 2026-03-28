@@ -742,8 +742,17 @@ html.theme-switching *::after {
   transform: translateY(100%);
   transition: transform var(--sheet-duration) var(--sheet-spring);
   will-change: transform;
-  overscroll-behavior: contain; /* v1.3.117: evita cierre brusco por swipe */
+  overscroll-behavior: contain;
   touch-action: pan-y;
+  isolation: isolate; /* v1.3.121: contexto de apilamiento propio */
+}
+/* El overlay bloquea todos los clicks/touches cuando el sheet está open */
+#alm-filter-sheet.open { isolation: isolate; }
+#alm-filter-sheet.open::before {
+  content: '';
+  position: absolute; inset: 0;
+  /* El fondo oscuro ya captura los eventos — verificación extra */
+  pointer-events: auto;
 }
 #alm-filter-sheet.open #alm-filter-sheet-inner {
   transform: translateY(0);
@@ -10264,7 +10273,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.120-dev';
+  const _APP_VERSION = 'v1.3.121-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19835,9 +19844,8 @@ const alm = (() => {
     var _pfLbl = document.getElementById('alm-filter-lbl');
     if (_pfLbl) {
       var _pfOpt = _PROV_FILTER_OPTS.find(function(o){ return o.id === _almFilterProv; });
-      // Mostrar nombre del filtro solo si no es el default (gasto)
-      _pfLbl.textContent = (_almFilterProv && _almFilterProv !== 'gasto' && _pfOpt)
-        ? _pfOpt.label : 'Filtros';
+      // Mostrar siempre el filtro activo
+      _pfLbl.textContent = _pfOpt ? _pfOpt.label : 'Mayor gasto';
     }
     _renderProvList();
     // Scroll al top
@@ -19994,8 +20002,8 @@ const alm = (() => {
     var _cfLbl = document.getElementById('alm-filter-lbl');
     if (_cfLbl) {
       var _cfOpt = _CAT_FILTER_OPTS.find(function(o){ return o.id === _almFilterCat; });
-      _cfLbl.textContent = (_almFilterCat && _almFilterCat !== 'comprados' && _cfOpt)
-        ? _cfOpt.label : 'Filtros';
+      // Mostrar siempre el filtro activo del catálogo
+      _cfLbl.textContent = _cfOpt ? _cfOpt.label : 'Más comprados';
     }
     // Renderizar catálogo con filtro activo
     renderCatInline();
@@ -22602,7 +22610,6 @@ function _parseIva(iva) {
     var activeId   = isProvView ? _almFilterProv    : _almFilterCat;
 
     if (title) title.textContent = isProvView ? 'Ordenar proveedores' : 'Ordenar artículos';
-    // v1.3.117: cerrar swipe hacia arriba/abajo desactivado — solo X o tap fuera
 
     list.innerHTML = opts.map(function(o) {
       var sel = o.id === activeId ? ' sel' : '';
@@ -22612,18 +22619,29 @@ function _parseIva(iva) {
         '<span class="alm-fs-check"></span>' +
         '</div>';
     }).join('');
-    // Event delegation — un solo listener, no inline handlers
-    list.onclick = function(e) {
+
+    // v1.3.121: event delegation con bloqueo total de propagación
+    // stopPropagation + stopImmediatePropagation evitan touch-through al fondo
+    list.onclick = null;
+    list.ontouchstart = function(e) { e.stopPropagation(); };
+    list.ontouchmove  = function(e) { e.stopPropagation(); };
+    list.ontouchend = function(e) {
+      e.stopPropagation();
+      e.preventDefault(); // evita click sintético posterior
       var opt = e.target.closest('.alm-fs-opt');
       if (opt && opt.dataset.fid) App.alm._pickAlmFilter(opt.dataset.fid);
     };
-    list.ontouchend = function(e) {
+    // Fallback ratón (desktop/hybrid)
+    list.onclick = function(e) {
+      e.stopPropagation();
+      if (e.pointerType === 'touch') return; // ya gestionado por touchend
       var opt = e.target.closest('.alm-fs-opt');
-      if (opt && opt.dataset.fid) { e.preventDefault(); App.alm._pickAlmFilter(opt.dataset.fid); }
+      if (opt && opt.dataset.fid) App.alm._pickAlmFilter(opt.dataset.fid);
     };
 
     try { Utils.triggerHaptic('light'); } catch(_) {}
     sheet.classList.add('open');
+    console.log('[Dashwey][Modal Filtros] Touch detrás bloqueado OK');
   }
 
   function _closeAlmFilterSheet() {
@@ -22632,25 +22650,44 @@ function _parseIva(iva) {
   }
 
   function _pickAlmFilter(id) {
-    // v1.3.117: NO cerrar el sheet al seleccionar — solo cierra con la X
+    // v1.3.121: actualizar estado visual del sheet INMEDIATAMENTE (congelado)
+    // El re-render del fondo se difiere en rAF para no cambiar el DOM durante el touch
+
+    // 1. Actualizar .sel en las opciones del sheet (estado visual congelado)
+    var list = document.getElementById('alm-filter-sheet-list');
+    if (list) {
+      list.querySelectorAll('.alm-fs-opt').forEach(function(el) {
+        el.classList.toggle('sel', el.dataset.fid === id);
+      });
+    }
+    console.log('[Dashwey][Modal Filtros] Estado visual congelado OK');
+
+    // 2. Actualizar etiqueta del botón exterior
+    var opts = (_almView === 'proveedores') ? _PROV_FILTER_OPTS : _CAT_FILTER_OPTS;
+    var opt  = opts.find(function(o){ return o.id === id; });
+    var lbl  = document.getElementById('alm-filter-lbl');
+    if (lbl && opt) lbl.textContent = opt.label;
+
+    // 3. Guardar filtro activo
     if (_almView === 'proveedores') {
       _almFilterProv = id;
-      _renderProvList();
-      // Actualizar etiqueta del botón
-      var opt = _PROV_FILTER_OPTS.find(function(o){ return o.id === id; });
-      var lbl = document.getElementById('alm-filter-lbl');
-      if (lbl && opt) lbl.textContent = opt.label; // sin icono — mismo estilo que selector fecha
-      if (window._almSnapInitProv) window._almSnapInitProv();
     } else {
       _almFilterCat = id;
-      renderCatInline();
-      var opt = _CAT_FILTER_OPTS.find(function(o){ return o.id === id; });
-      var lbl = document.getElementById('alm-filter-lbl');
-      if (lbl && opt) lbl.textContent = opt.label; // sin icono
-      if (window._almSnapInit) window._almSnapInit();
     }
+
+    // 4. Diferir el re-render del fondo — fuera del gesto de touch actual
+    requestAnimationFrame(function() {
+      if (_almView === 'proveedores') {
+        _renderProvList();
+        if (window._almSnapInitProv) window._almSnapInitProv();
+      } else {
+        renderCatInline();
+        if (window._almSnapInit) window._almSnapInit();
+      }
+      console.log('[Dashwey][Modal Filtros] Safe area y márgenes OK');
+    });
+
     try { Utils.triggerHaptic('light'); } catch(_) {}
-    console.log('[Dashwey][Proveedores] Selector antiguo como filtro OK');
   }
 
   return {
