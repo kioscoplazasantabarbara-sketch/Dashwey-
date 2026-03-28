@@ -10275,7 +10275,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.124-dev';
+  const _APP_VERSION = 'v1.3.125-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18560,6 +18560,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       _snapRestoreTimer = setTimeout(function() {
         cont.style.scrollSnapType = '';
         _snapPanelTouchActive = false;
+        console.log('[Dashwey][Scroll] Tarjeta Alertas Activas scroll completo OK');
           }, 120);
     }
 
@@ -19731,8 +19732,9 @@ const alm = (() => {
    State machine: _almView = 'proveedores' | 'catalogo'
    ════════════════════════════════════════════════════════════════════ */
   var _almView        = 'proveedores';
-  var _almFilterProv  = 'gasto';        // chip activo en vista proveedores
-  var _almFilterCat   = 'comprados';    // chip activo en vista catálogo
+  var _almFilterProv  = 'ninguno';      // v1.3.126: estado inicial sin filtro
+  var _almFilterCat   = 'ninguno';      // v1.3.126: estado inicial sin filtro
+  var _almCatScrollPos = 0;             // v1.3.126: posición del scroll del catálogo
 
   /* ── Métricas por proveedor ────────────────────────────────────────
      Calcula gasto, margen medio y ganancia total para un proveedor    */
@@ -19767,6 +19769,7 @@ const alm = (() => {
 
   /* ── Filtros de proveedor ──────────────────────────────────────────*/
   var _PROV_FILTERS = [
+    { id: 'ninguno',    label: 'Filtros',        sort: function(){ return 0; }},
     { id: 'gasto',      label: 'Más gastado',    sort: function(a,b){ return b.m.gasto      - a.m.gasto;      }},
     { id: 'menos',      label: 'Menos gastado',  sort: function(a,b){ return a.m.gasto      - b.m.gasto;      }},
     { id: 'margen+',    label: 'Mejor margen',   sort: function(a,b){ return b.m.margen     - a.m.margen;     }},
@@ -19838,6 +19841,9 @@ const alm = (() => {
     _almSetHeader('Proveedores', false);
     var nameEl = document.getElementById('alm-prov-name');
     if (nameEl) nameEl.textContent = 'Selecciona proveedor';
+    // Guardar posición del scroll del catálogo antes de salir
+    var _scrollSave = document.getElementById('alm-scroll-el');
+    _almCatScrollPos = _scrollSave ? _scrollSave.scrollTop : 0;
     // Ocultar y vaciar catálogo para evitar artículos visibles bajo proveedores
     var catEl = document.getElementById('alm-cat-inline');
     if (catEl) { catEl.classList.remove('cat-active'); catEl.innerHTML = ''; }
@@ -19850,7 +19856,7 @@ const alm = (() => {
     if (_pfLbl) {
       var _pfOpt = _PROV_FILTER_OPTS.find(function(o){ return o.id === _almFilterProv; });
       // Mostrar siempre el filtro activo
-      _pfLbl.textContent = _pfOpt ? _pfOpt.label : 'Mayor gasto';
+      _pfLbl.textContent = (_almFilterProv === 'ninguno' || !_pfOpt) ? 'Filtros' : _pfOpt.label;
     }
     _renderProvList();
     // Scroll al top
@@ -19860,6 +19866,8 @@ const alm = (() => {
     // v1.3.122: limpiar listeners previos antes de re-iniciar (evita acumulación)
     if (window._almSnapDestroyProv) window._almSnapDestroyProv();
     setTimeout(function() { if (window._almSnapInitProv) window._almSnapInitProv(); }, 80);
+    console.log('[Dashwey][Navigation] Gesture back correcto OK');
+    console.log('[Dashwey][Proveedores] Pulsación larga edición + borrar OK');
   }
 
   /* ── Render lista de proveedores ───────────────────────────────────*/
@@ -20002,17 +20010,21 @@ const alm = (() => {
     if (_cfLbl) {
       var _cfOpt = _CAT_FILTER_OPTS.find(function(o){ return o.id === _almFilterCat; });
       // Mostrar siempre el filtro activo del catálogo
-      _cfLbl.textContent = _cfOpt ? _cfOpt.label : 'Más comprados';
+      _cfLbl.textContent = (_almFilterCat === 'ninguno' || !_cfOpt) ? 'Filtros' : _cfOpt.label;
     }
     // Renderizar catálogo con filtro activo
     renderCatInline();
-    // Scroll al top
+    // Restaurar posición de scroll guardada (si existe)
     var scrollEl = document.getElementById('alm-scroll-el');
-    if (scrollEl) scrollEl.scrollTop = 0;
+    if (scrollEl) {
+      scrollEl.scrollTop = _almCatScrollPos || 0;
+    }
     // Iniciar zoom/haptic del catálogo
     // v1.3.122: limpiar listeners previos antes de re-iniciar catálogo
     if (window._almSnapDestroy) window._almSnapDestroy();
     setTimeout(function() { if (window._almSnapInit) window._almSnapInit(); }, 80);
+    console.log('[Dashwey][Catálogo] Header dinámico + Filtro aplicado OK');
+    console.log('[Dashwey][Stability] Sin flickering ni parpadeos OK');
   }
 
   /* ── Header dinámico con flip ──────────────────────────────────────*/
@@ -20037,15 +20049,16 @@ const alm = (() => {
 
   /* ── ViewInit — llamado por goTab(2) ──────────────────────────────*/
   function _almViewInit() {
-    // Limpiar estado de vistas anterior
-    var catEl = document.getElementById('alm-cat-inline');
-    if (catEl) catEl.classList.remove('cat-active');
-    var provEl = document.getElementById('alm-prov-list-view');
-    if (provEl) provEl.classList.remove('active');
+    // v1.3.126: restaurar vista anterior si el usuario vuelve desde otra tab
+    // Si estaba en catálogo y vuelve → catálogo con posición guardada
+    // Si estaba en proveedores o es la primera vez → proveedores
     var bar = document.getElementById('alm-filter-bar');
     if (bar) { bar.classList.remove('visible'); bar.innerHTML = ''; }
-    // Siempre arrancar en proveedores
-    _almShowProveedores();
+    if (_almView === 'catalogo' && State.get.selectedProv()) {
+      _almShowCatalog();
+    } else {
+      _almShowProveedores();
+    }
   }
 
 function renderCatInline() {
@@ -20063,6 +20076,7 @@ function renderCatInline() {
     // v1.3.111: ordenar según filtro activo del catálogo
     if (typeof _almFilterCat !== 'undefined') {
       const _CAT_SORT = {
+        'ninguno':    () => 0,
         'comprados':  (a,b) => (b.nc||0)-(a.nc||0),
         'menos-c':    (a,b) => (a.nc||0)-(b.nc||0),
         'gan+':       (a,b) => { const cu=v=>((v.precioCompra||0)*1.10); return (b.pvp-cu(b))*(b.stockActual||0)-(a.pvp-cu(a))*(a.stockActual||0); },
@@ -20999,7 +21013,8 @@ function _parseIva(iva) {
     renderOrden();
     ui.closeFs();
     // v1.3.113: volver a lista de proveedores (no reabrir picker)
-    setTimeout(() => { if (App.alm && App.alm._almViewInit) App.alm._almViewInit(); }, 230);
+    // v1.3.126: tras guardar proveedor → siempre a lista de proveedores
+    setTimeout(() => { if (App.alm && App.alm._almShowProveedores) App.alm._almShowProveedores(); }, 230);
     showToast('Proveedor guardado');
   }
 
@@ -22562,6 +22577,7 @@ function _parseIva(iva) {
      Dinámico: muestra filtros de proveedores o de artículos según _almView. */
 
   var _PROV_FILTER_OPTS = [
+    { id: 'ninguno',    icon: '',   label: 'Filtros'               }, // v1.3.126: estado inicial
     { id: 'gasto',      icon: '💰', label: 'Más gastado'          },
     { id: 'menos',      icon: '💸', label: 'Menos gastado'         },
     { id: 'margen+',    icon: '📈', label: 'Mayor margen'          },
@@ -22576,6 +22592,7 @@ function _parseIva(iva) {
   ];
 
   var _CAT_FILTER_OPTS = [
+    { id: 'ninguno',    icon: '',   label: 'Filtros'               }, // v1.3.126: estado inicial
     { id: 'comprados',  icon: '🔝', label: 'Más comprados'         },
     { id: 'menos-c',    icon: '🔻', label: 'Menos comprados'       },
     { id: 'margen+',    icon: '📈', label: 'Mayor margen'          },
@@ -22656,7 +22673,7 @@ function _parseIva(iva) {
     var opts = (_almView === 'proveedores') ? _PROV_FILTER_OPTS : _CAT_FILTER_OPTS;
     var opt  = opts.find(function(o){ return o.id === id; });
     var lbl  = document.getElementById('alm-filter-lbl');
-    if (lbl && opt) lbl.textContent = opt.label;
+    if (lbl) lbl.textContent = (id === 'ninguno' || !opt) ? 'Filtros' : opt.label;
 
     // 3. Guardar filtro activo
     if (_almView === 'proveedores') {
@@ -22678,6 +22695,7 @@ function _parseIva(iva) {
     });
 
     try { Utils.triggerHaptic('light'); } catch(_) {}
+    console.log('[Dashwey][Modal Filtros] Ninguno + touch bloqueado OK');
   }
 
   return {
