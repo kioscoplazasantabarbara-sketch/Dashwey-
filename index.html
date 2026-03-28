@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.90-dev</title>
+<title>Dashwey v1.3.91-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3325,6 +3325,8 @@ input:focus, select:focus, textarea:focus {
 /* El layout de 2 paneles se activa cuando el contenido del panel
    derecho esté implementado. Por ahora el almacén es mobile-only. */
 .alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--tab-real) + 100px); touch-action: pan-y; /* v9.5.79: propaga swipe horizontal al track */ }
+/* v1.3.91: en modo snap, alm-scroll cede el scroll a los hijos */
+.alm-scroll.snap-active { overflow-y: hidden; padding-bottom: 0; display: flex; flex-direction: column; }
 
 /* Catálogo inline permanente */
 #alm-cat-inline {
@@ -3503,29 +3505,33 @@ input:focus, select:focus, textarea:focus {
 #alm-prov-list-view {
   display: none;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px 20px;
-  /* snap en lista de proveedores */
+  gap: 12px;
+  /* Padding vertical para centrar primer/último item en snap:
+     50dvh - mitad de tarjeta (~70px) → ítem queda exactamente en centro */
+  padding: calc(40dvh - 70px) 14px calc(var(--tab-real) + 40dvh - 70px);
   overflow-y: auto;
-  height: 100%;
+  /* Tomar toda la altura del alm-scroll */
+  flex: 1;
+  min-height: 0;
   scroll-snap-type: y mandatory;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
 #alm-prov-list-view.active { display: flex; }
-/* Tarjeta snap-focused: escala al 100% — resto al 93% */
+/* Tarjeta snap-focused: escala al 107% (7% más grande) */
 #alm-prov-list-view .js-prov-card {
   scroll-snap-align: center;
   scroll-snap-stop: always;
   flex-shrink: 0;
   transition: transform 0.2s var(--ease), opacity 0.2s var(--ease), box-shadow 0.2s var(--ease);
   transform: scale(0.93);
-  opacity: 0.75;
+  opacity: 0.72;
+  transform-origin: center center;
 }
 #alm-prov-list-view .js-prov-card.snap-focused {
   transform: scale(1.0);
   opacity: 1;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.13);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.14);
 }
 
 /* Tarjeta proveedor en la vista lista */
@@ -3605,14 +3611,14 @@ input:focus, select:focus, textarea:focus {
 #alm-cat-inline.snap-mode {
   display: flex;
   flex-direction: column;
-  padding: 0;
+  padding: calc(38dvh - 60px) 0 calc(var(--tab-real) + 38dvh - 60px);
   gap: 0;
   scroll-snap-type: y mandatory;
   overflow-y: scroll;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-  /* Quitar el scroll del padre cuando snap está activo */
-  height: 100%;
+  overscroll-behavior-y: contain;
+  flex: 1;
+  min-height: 0;
 }
 #alm-cat-inline.snap-mode .alm-cat-section-lbl {
   scroll-snap-align: none; /* cabeceras NO snappables */
@@ -3622,7 +3628,7 @@ input:focus, select:focus, textarea:focus {
   font-weight: 800;
   letter-spacing: 0.08em;
   color: var(--ink-soft);
-  padding: 16px 16px 6px;
+  padding: 14px 16px 6px;
   background: var(--bg);
   position: sticky;
   top: 0;
@@ -3636,6 +3642,7 @@ input:focus, select:focus, textarea:focus {
   opacity: 0.72;
   margin: 4px 12px;
   border-radius: 18px;
+  transform-origin: center center;
 }
 #alm-cat-inline.snap-mode .alm-cat-item.snap-focused {
   transform: scale(1.0);
@@ -10190,7 +10197,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.90-dev';
+  const _APP_VERSION = 'v1.3.91-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11918,9 +11925,20 @@ const nav = (() => {
 
   function goTab(i) {
     try { // v1.2.29: error boundary — navegación nunca puede romper la app
-    // Guard: no re-render completo si ya estamos en esta tab
+    // Guard: si ya estamos en esta tab
     if (_cTab === i) {
       _syncNavActive(i);
+      // v1.3.91: si estamos en Almacén en vista catálogo → volver a proveedores
+      if (i === 2) {
+        try {
+          if (window.App && App.alm && typeof App.alm._almView !== 'undefined') {
+            if (App.alm._almView === 'catalogo') {
+              console.log('[Dashwey][Proveedores] Navbar Almacén pulsado: OK');
+              App.alm._almBackToProv();
+            }
+          }
+        } catch(_) {}
+      }
       return;
     }
     // v9.5.93: blur any active input BEFORE tab transition.
@@ -19593,6 +19611,9 @@ const alm = (() => {
       _renderProvListView();
     }
     _almDestroySnapObserver();
+    // Activar modo snap en el contenedor padre
+    var scrollEl = document.getElementById('alm-scroll-el');
+    if (scrollEl) scrollEl.classList.add('snap-active');
     // Snap en lista de proveedores
     requestAnimationFrame(function() { _almInitProvSnap(); });
   }
@@ -19651,11 +19672,13 @@ const alm = (() => {
     if (provView)  { provView.classList.remove('active'); }
     var prov = State.get.prov(State.get.selectedProv());
     if (titleEl)   titleEl.textContent = prov ? prov.nombre : 'Catálogo';
-    if (provName)  provName.textContent = prov ? (prov.icon||'') + ' ' + prov.nombre : 'Proveedores';
+    if (provName)  provName.textContent = 'Proveedores'; // v1.3.91: siempre fijo
     if (catInline) {
       catInline.style.display = '';
       catInline.classList.add('snap-mode');
     }
+    var scrollEl = document.getElementById('alm-scroll-el');
+    if (scrollEl) scrollEl.classList.add('snap-active');
     // Renderizar catálogo
     renderCatInline();
     // Iniciar observer de snap
@@ -19667,6 +19690,9 @@ const alm = (() => {
   function _almBackToProv() {
     try { Utils.triggerHaptic('light'); } catch(_) {}
     _almDestroySnapObserver();
+    // Restaurar scroll normal en el contenedor padre
+    var scrollEl = document.getElementById('alm-scroll-el');
+    if (scrollEl) scrollEl.classList.remove('snap-active');
     _almShowProvList();
   }
 
@@ -19707,7 +19733,7 @@ const alm = (() => {
           if (pid !== _snapProvLastId) {
             _snapProvLastId = pid;
             try { Utils.triggerHaptic('light'); } catch(_) {}
-            console.log('[Dashwey][Proveedores] Snap item centered:', pid);
+            console.log('[Dashwey][Proveedores] Snap centrado item:', pid);
           }
         }
       });
@@ -22214,6 +22240,7 @@ function _parseIva(iva) {
     // Proveedor
     shiftProv, openProvPicker, selProv, addNuevoProv, openEditProv, saveProvEdit, confirmarBorrarProv, borrarProv,
     _almSelectProv, _almBackToProv, _almShowProvList, _almShowCatalog, _almViewInit, _almProvSubTap,
+    get _almView() { return _almView; },
     // v9.5.91: periodicidad
     _openProvPeriodSheet, _refreshProvPeriodBtn,
     openOrdenReport, openArticulosReport, openTotalReport,
@@ -26322,6 +26349,10 @@ window._almCarritoOptions = function() {
     ['modal-overlay',      'open', function() { try { App?.ui?.closeModal?.(); } catch(e) {} }],
     ['fs-overlay',         'open', function() { try { App?.ui?.closeFs?.(); } catch(e) {} }],
     ['tickets-sheet',      'open', function() { try { App?.tpv?.closeTickets?.(); } catch(e) {} }],
+    // v1.3.91: back desde vista catálogo → volver a lista de proveedores
+    ['alm-cat-inline', 'snap-mode', function() {
+      try { if (window.App && App.alm && App.alm._almBackToProv) App.alm._almBackToProv(); } catch(e) {}
+    }],
     ['settings-drawer',    'open', function() { try { App?.ui?.closeSettings?.(); setTimeout(function(){ try{ App?.nav?.goTab?.(2); }catch(e){} }, 50); } catch(e) {} }],
     ['whats-new-overlay',  'open', function() { try { App?.ui?.closeWhatsNew?.(); } catch(e) {} }],
     ['tpv-cobro-sheet',    'open', function() { try { App?.tpv?.closeCobro?.(); } catch(e) {} }],
