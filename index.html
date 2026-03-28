@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.102-dev</title>
+<title>Dashwey v1.3.104-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3324,7 +3324,39 @@ input:focus, select:focus, textarea:focus {
 /* ── Tablet Almacén — reservado para implementación futura ── */
 /* El layout de 2 paneles se activa cuando el contenido del panel
    derecho esté implementado. Por ahora el almacén es mobile-only. */
-.alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--tab-real) + 100px); touch-action: pan-y; /* v9.5.79: propaga swipe horizontal al track */ }
+.alm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--tab-real) + 100px); touch-action: pan-y; }
+
+/* ── SNAP CATÁLOGO — solo en Almacén (tab 2) ── v1.3.104 ──────────────
+   Aislado con body[data-tab="2"] — no afecta Dashboard ni TPV          */
+body[data-tab="2"] .alm-scroll {
+  scroll-snap-type: y mandatory;
+  scroll-padding-top: var(--alm-snap-top, 0px);    /* calculado por JS */
+  scroll-padding-bottom: var(--tab-real);
+}
+/* Cada tarjeta: snap al inicio */
+body[data-tab="2"] #alm-cat-inline .alm-cat-item {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  /* Estado base: ligeramente reducida */
+  transform: scale(0.94);
+  opacity: 0.80;
+  transition: transform 200ms ease, opacity 200ms ease;
+  will-change: transform, opacity;
+}
+/* Tarjeta centrada: tamaño completo */
+body[data-tab="2"] #alm-cat-inline .alm-cat-item.snap-on {
+  transform: scale(1.0);
+  opacity: 1;
+}
+/* Encabezados de sección: fuera del snap */
+body[data-tab="2"] #alm-cat-inline .alm-cat-section-lbl {
+  scroll-snap-align: none;
+}
+/* :active compatible con snap-on */
+body[data-tab="2"] #alm-cat-inline .alm-cat-item:active,
+body[data-tab="2"] #alm-cat-inline .alm-cat-item.snap-on:active {
+  transform: scale(0.97);
+}
 
 /* Catálogo inline permanente */
 #alm-cat-inline {
@@ -10040,7 +10072,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.102-dev';
+  const _APP_VERSION = 'v1.3.104-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -10306,6 +10338,15 @@ const ui = (() => {
     s.classList.remove('visible');
     s.classList.add('hidden');
     s.style.display = 'none';
+    // v1.3.103: goTab(1) para inicializar navbar, track y tab activa correctamente
+    requestAnimationFrame(function() {
+      try {
+        if (window.App && App.nav) {
+          App.nav.goTab(1);
+          console.log('[Dashwey][Navbar] Render visible OK');
+        }
+      } catch(_) {}
+    });
   }
 
   // Cambiar pestaña login/registro
@@ -25010,6 +25051,8 @@ function _parseIva(iva) {
 
   // ── 1. Scroll hide/show ──
   function _onScroll(e) {
+    // v1.3.104: snap en Almacén genera eventos scroll grandes — bypass
+    if (document.body.getAttribute('data-tab') === '2') return;
     if (_ticking) return;
     _ticking = true;
     requestAnimationFrame(() => {
@@ -27565,5 +27608,130 @@ window._almCarritoOptions = function() {
 </script>
 
 
+
+<script>
+/* ── ALM SNAP SCALE — v1.3.104 ─────────────────────────────────────────
+   Escalado dinámico de tarjetas en el catálogo de artículos.
+   - scroll listener: detecta item en snap-point → clase snap-on
+   - scrollend listener: haptic al terminar el snap
+   - Aislado: solo activo en tab 2 (Almacén)
+   ─────────────────────────────────────────────────────────────────── */
+(function() {
+  'use strict';
+
+  var _scrollEl  = null;   // #alm-scroll-el
+  var _snapTop   = 0;      // scroll-padding-top calculado
+  var _lastSnap  = null;   // último item con snap-on
+  var _raf       = null;   // rAF pendiente
+  var _active    = false;  // true solo en tab 2
+
+  /* ── Calcular offset del snap-point ─────────────────────────────── */
+  function _calcOffset() {
+    var header = document.querySelector('.alm-page-header');
+    var dock   = document.getElementById('alm-dock-info');
+    var off    = 4;
+    if (header) off += header.offsetHeight;
+    if (dock)   off += dock.offsetHeight;
+    _snapTop = off;
+    if (_scrollEl) _scrollEl.style.setProperty('--alm-snap-top', off + 'px');
+  }
+
+  /* ── Encontrar el item en el snap-point ──────────────────────────── */
+  function _findSnapItem() {
+    if (!_scrollEl) return null;
+    var snapY   = _scrollEl.scrollTop + _snapTop;
+    var cat     = document.getElementById('alm-cat-inline');
+    if (!cat) return null;
+    var items   = cat.querySelectorAll('.alm-cat-item');
+    var best    = null;
+    var bestDist = Infinity;
+    for (var i = 0; i < items.length; i++) {
+      var item  = items[i];
+      var itemTop = item.offsetTop;
+      var dist  = Math.abs(itemTop - snapY);
+      if (dist < bestDist) { bestDist = dist; best = item; }
+    }
+    // Solo activar si el item está cerca del snap-point (tolerancia 60px)
+    return bestDist < 60 ? best : null;
+  }
+
+  /* ── Actualizar snap-on ──────────────────────────────────────────── */
+  function _update() {
+    _raf = null;
+    if (!_active) return;
+    var item = _findSnapItem();
+    if (!item || item === _lastSnap) return;
+    if (_lastSnap) _lastSnap.classList.remove('snap-on');
+    item.classList.add('snap-on');
+    _lastSnap = item;
+  }
+
+  /* ── Scroll listener (ligero — solo schedula rAF) ────────────────── */
+  function _onScroll() {
+    if (!_active || _raf) return;
+    _raf = requestAnimationFrame(_update);
+  }
+
+  /* ── scrollend listener — haptic al terminar el snap ────────────── */
+  function _onScrollEnd() {
+    if (!_active) return;
+    // Forzar update final con el item exacto
+    if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
+    _update();
+    // Haptic solo si hay item activo
+    if (_lastSnap) {
+      try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
+      console.log('[Dashwey][Catalog] Snap centrado OK:', _lastSnap.dataset.pid || _lastSnap.id || '?');
+      console.log('[Dashwey][Catalog] Haptic disparado OK');
+    }
+  }
+
+  /* ── Inicializar ─────────────────────────────────────────────────── */
+  function _init() {
+    _scrollEl = document.getElementById('alm-scroll-el');
+    if (!_scrollEl) return;
+    _calcOffset();
+    _active = true;
+
+    _scrollEl.addEventListener('scroll',    _onScroll,    { passive: true });
+    _scrollEl.addEventListener('scrollend', _onScrollEnd, { passive: true });
+
+    // Forzar snap-on en el primer item visible al entrar
+    requestAnimationFrame(function() {
+      var cat   = document.getElementById('alm-cat-inline');
+      var first = cat && cat.querySelector('.alm-cat-item');
+      if (first) { first.classList.add('snap-on'); _lastSnap = first; }
+      console.log('[Dashwey][Catalog] Scroll fluido OK');
+    });
+  }
+
+  /* ── Destruir ────────────────────────────────────────────────────── */
+  function _destroy() {
+    _active = false;
+    if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
+    if (_scrollEl) {
+      _scrollEl.removeEventListener('scroll',    _onScroll);
+      _scrollEl.removeEventListener('scrollend', _onScrollEnd);
+    }
+    if (_lastSnap) { _lastSnap.classList.remove('snap-on'); _lastSnap = null; }
+  }
+
+  /* ── Escuchar cambios de tab ─────────────────────────────────────── */
+  window.addEventListener('dashwey:tab-changed', function(e) {
+    var tab = e.detail && e.detail.tab;
+    if (tab === 2) {
+      // Pequeño delay para que renderCatInline() haya terminado
+      setTimeout(_init, 80);
+    } else {
+      _destroy();
+    }
+  });
+
+  /* ── API pública ─────────────────────────────────────────────────── */
+  window._almSnapInit    = _init;
+  window._almSnapDestroy = _destroy;
+
+})();
+</script>
 </body>
 </html>
