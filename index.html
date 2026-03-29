@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.137-dev</title>
+<title>Dashwey v1.3.138-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3499,13 +3499,26 @@ input:focus, select:focus, textarea:focus {
   text-overflow: ellipsis;
 }
 
-/* Timeline — 3 pasos conectados por línea más larga */
-/* v1.3.137: mayor separación entre iconos — línea más larga + padding lateral */
+/* v1.3.138: timeline con ancho fijo — space-between centra el paso Confirmar exactamente */
 .alm-banner-timeline {
   display: flex;
   align-items: flex-start;
-  gap: 0;
+  justify-content: space-between;
+  width: 180px;              /* ancho fijo: los 3 iconos se reparten uniformemente */
   flex-shrink: 0;
+  position: relative;
+}
+/* Línea de fondo continua debajo de los 3 pasos */
+.alm-banner-timeline::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  height: 2px;
+  background: rgba(255,255,255,0.35);
+  border-radius: 1px;
+  z-index: 0;
 }
 .alm-banner-step {
   display: flex;
@@ -3513,18 +3526,41 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   gap: 3px;
   position: relative;
-  padding: 0 8px;            /* 8px a cada lado — separa los pasos */
+  z-index: 1;
 }
-/* Línea conectora ampliada — ocupa el padding entre pasos */
-.alm-banner-step:not(:last-child)::after {
-  content: '';
+/* Sin ::after individual — la línea continua ya conecta los pasos */
+.alm-banner-step:not(:last-child)::after { display: none; }
+
+/* Badge número de ítems sobre Cesta */
+.alm-banner-cesta-badge {
   position: absolute;
-  top: 18px;                 /* centrada en el botón de 36px */
-  left: calc(50% + 18px);
-  width: 16px;               /* línea + padding derecho (8px) + padding izq siguiente (8px) = 16px visible */
-  height: 2px;
-  background: rgba(255,255,255,0.50);
-  border-radius: 1px;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--red);
+  font-size: 9px;
+  font-weight: 800;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  border: 1.5px solid rgba(139,20,60,0.20);
+  z-index: 2;
+}
+.alm-banner-cesta-badge.visible { display: flex; }
+
+/* Puntos suspensivos animados — intermitente */
+@keyframes almDotBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+.alm-banner-dots {
+  display: inline-block;
+  animation: almDotBlink 1.2s ease-in-out infinite;
+  letter-spacing: 1px;
 }
 .alm-banner-step-btn {
   width: 36px;               /* más compacto en altura para el 3/4 */
@@ -7292,6 +7328,8 @@ function _authTabSafe(tab) {
                     <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
                     <line x1="12" y1="1" x2="12" y2="6"/><line x1="9.5" y1="3.5" x2="14.5" y2="3.5"/>
                   </svg>
+                  <!-- Badge: número de ítems en cesta -->
+                  <span class="alm-banner-cesta-badge" id="alm-banner-cesta-badge"></span>
                 </button>
                 <span class="alm-banner-step-lbl">Cesta</span>
               </div>
@@ -10248,7 +10286,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.137-dev';
+  const _APP_VERSION = 'v1.3.138-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21212,30 +21250,49 @@ function _parseIva(iva) {
     // Sincronizar botón Aceptar rojo
     if (typeof _updateAcceptBtn === 'function') _updateAcceptBtn();
 
-    // v1.3.135: Progress Banner timeline — aparece al añadir artículos
+    // v1.3.138: Progress Banner — meta animada + badge Cesta + badge Recibir
     (function() {
       var banner = document.getElementById('alm-progress-banner');
       if (!banner) return;
+
       if (carritoCount > 0) {
-        // Meta: "X ítem · 14,26€"
+        // Meta: total dinero + puntos animados + "Creando Pedido"
         var metaEl = document.getElementById('alm-banner-meta');
-        var nuevaMeta = carritoCount + ' ítem' + (carritoCount !== 1 ? 's' : '') +
-                        ' · ' + feur(carritoTotal).replace(' ', '');
-        if (metaEl && metaEl.textContent !== nuevaMeta) {
-          metaEl.textContent = nuevaMeta;
-          // Pop en paso Cesta al cambiar
-          var cestaBtn = document.getElementById('alm-step-cesta');
-          if (cestaBtn) {
-            cestaBtn.classList.remove('pop');
-            void cestaBtn.offsetWidth;
-            cestaBtn.classList.add('pop');
+        if (metaEl) {
+          var totalStr = feur(carritoTotal).replace(' ', '');
+          // Solo reconstruir si cambió el total (evitar reflow continuo)
+          var currentTotal = metaEl.dataset.lastTotal || '';
+          if (currentTotal !== totalStr) {
+            metaEl.dataset.lastTotal = totalStr;
+            metaEl.innerHTML =
+              totalStr +
+              ' <span class="alm-banner-dots">···</span> Creando Pedido…';
+            // Pop en Cesta al cambiar valor
+            var cestaBtn = document.getElementById('alm-step-cesta');
+            if (cestaBtn) {
+              cestaBtn.classList.remove('pop');
+              void cestaBtn.offsetWidth;
+              cestaBtn.classList.add('pop');
+            }
           }
+        }
+        // Badge Cesta: número de ítems únicos en carrito
+        var cestaBadge = document.getElementById('alm-banner-cesta-badge');
+        if (cestaBadge) {
+          cestaBadge.textContent = carritoCount;
+          cestaBadge.classList.add('visible');
         }
         banner.classList.add('alm-banner-visible');
       } else {
         banner.classList.remove('alm-banner-visible');
+        // Limpiar badge y meta
+        var cestaBadge2 = document.getElementById('alm-banner-cesta-badge');
+        if (cestaBadge2) cestaBadge2.classList.remove('visible');
+        var metaEl2 = document.getElementById('alm-banner-meta');
+        if (metaEl2) { metaEl2.innerHTML = '—'; metaEl2.dataset.lastTotal = ''; }
       }
-      // Badge en paso Recibir (pedidos pendientes)
+
+      // Badge Recibir: pedidos pendientes
       var truckBadge = document.getElementById('alm-banner-truck-badge');
       if (truckBadge) {
         if (nPending > 0) {
