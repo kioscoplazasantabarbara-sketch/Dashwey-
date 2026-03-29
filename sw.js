@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.109-dev
+   Dashwey Service Worker v1.3.110-dev
    Cache: dashwey-v1-2-84-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
@@ -61,7 +61,7 @@ self.addEventListener('activate', e => {
           clients.forEach(client => {
             client.postMessage({
               action: 'SW_UPDATED',
-              version: '1.3.109-dev'
+              version: '1.3.110-dev'
             });
           });
         } else {
@@ -70,14 +70,14 @@ self.addEventListener('activate', e => {
           const permission = (typeof Notification !== 'undefined')
             ? Notification.permission : 'denied';
           if (permission === 'granted') {
-            self.registration.showNotification('🆕 Dashwey v1.3.109-dev disponible', {
+            self.registration.showNotification('🆕 Dashwey v1.3.110-dev disponible', {
               body:     'Abre la app para aplicar la actualización.',
               icon:     'icon-192.png',
               badge:    'icon-192.png',
               tag:      'dashwey-update',
               renotify: true,
               vibrate:  [100, 50, 100],
-              data:     { action: 'update', version: '1.3.109-dev', url: '/' },
+              data:     { action: 'update', version: '1.3.110-dev', url: '/' },
             }).catch(() => {});
           }
         }
