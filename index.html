@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.107-dev</title>
+<title>Dashwey v1.3.108-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6957,7 +6957,9 @@ function _authTabSafe(tab) {
               </div>
             </div>
             <!-- SNAP NARRATIVE ZONE -->
-            <div class="snap-narrative-zone" id="snap-narrative-compras">
+            <div class="snap-narrative-zone" id="snap-narrative-compras"
+              onclick="try{Utils.triggerHaptic('selection');}catch(_){}"
+              style="cursor:pointer;-webkit-tap-highlight-color:transparent">
               <div class="snap-narrative-badge">Insight</div>
               <div class="snap-narrative-text" id="snap-text-compras"></div>
             </div>
@@ -10145,7 +10147,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.107-dev';
+  const _APP_VERSION = 'v1.3.108-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16711,30 +16713,90 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         return 'Llevas ' + eur(ing) + ' en ventas con un margen del ' + fmt(mg,0) + '%. ' + (hora ? 'Concentra tus esfuerzos en la hora pico: ' + hora + '.' : 'Sigue así.');
       }
 
-      // ── COMPRAS Y SUMINISTROS ────────────────────────────────────────
+      // ── COMPRAS Y SUMINISTROS — 3 prioridades, 1 insight visible ───────
       if (cardId === 'compras') {
-        var comprasTotal2 = snap.compras || 0;
-        var comprometido2 = snap.comprometido || 0;
-        var historial2    = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
-        var range3 = null;
+        var prods2     = State.get.productos ? (State.get.productos() || []) : [];
+        var historial2 = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+        var range3     = null;
         try { range3 = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
-        var recepciones2 = range3
-          ? historial2.filter(function(p){ var d=new Date(p.fecha); return d>=range3.start && d<range3.end; }).length
-          : historial2.length;
 
-        if (comprasTotal2 <= 0) {
-          return 'Sin compras registradas en este periodo. Si has recibido pedidos, asegúrate de confirmarlos en Almacén para actualizar el stock.';
+        var pedsPeriodo = range3
+          ? historial2.filter(function(p){ var d=new Date(p.fecha); return d>=range3.start && d<range3.end; })
+          : historial2;
+
+        // ── PRIORIDAD 1: Alerta de subida de precios ──────────────────
+        // Compara precio pagado en pedido vs precioCompra de referencia del producto
+        var subidasPorProv = {};  // provId → {nombre, count}
+        var subidasTotal   = 0;
+        pedsPeriodo.forEach(function(ped) {
+          (ped.items || []).forEach(function(it) {
+            if (!it.prodId || !it.precio) return;
+            var prod = prods2.find(function(p){ return p.id === it.prodId; });
+            if (!prod || !prod.precioCompra) return;
+            var umbral = prod.precioCompra * 1.05; // tolerancia +5%
+            if (it.precio > umbral) {
+              subidasTotal++;
+              var provId = ped.provId || 'desconocido';
+              if (!subidasPorProv[provId]) {
+                var provObj = State.get.prov ? State.get.prov(provId) : null;
+                subidasPorProv[provId] = { nombre: provObj ? provObj.nombre : provId, count: 0 };
+              }
+              subidasPorProv[provId].count++;
+            }
+          });
+        });
+        if (subidasTotal > 0) {
+          // Proveedor con más subidas
+          var maxProvId = Object.keys(subidasPorProv).sort(function(a,b){
+            return subidasPorProv[b].count - subidasPorProv[a].count;
+          })[0];
+          var maxProv = subidasPorProv[maxProvId];
+          return '⚠️ ' + maxProv.nombre + ' ha subido precios en ' + maxProv.count + ' artículo' + (maxProv.count !== 1 ? 's' : '') + '. Revisa el catálogo y ajusta PVP si es necesario.';
         }
-        if (comprometido2 > comprasTotal2 * 0.5) {
-          return 'Tienes ' + eur(comprometido2) + ' comprometidos en pedidos pendientes — más del 50% de lo ya gastado. Revisa si puedes optimizar las cantidades antes de confirmar.';
+
+        // ── PRIORIDAD 2: Margen bajo ──────────────────────────────────
+        // Usar margenBruto del snapshot (ya calculado, sin coste adicional)
+        var mg2 = snap.margenBruto || 0;
+        if (mg2 > 0 && mg2 < 20) {
+          // Encontrar proveedor/categoría con mayor peso en compras
+          var gastoPorCat = {};
+          pedsPeriodo.forEach(function(ped) {
+            (ped.items || []).forEach(function(it) {
+              var prod = prods2.find(function(p){ return p.id === it.prodId; });
+              var cat  = (prod && prod.cat) ? prod.cat : 'Sin categoría';
+              var coste = (it.ncajas || 0) * (it.precio || 0);
+              gastoPorCat[cat] = (gastoPorCat[cat] || 0) + coste;
+            });
+          });
+          var topCat = Object.keys(gastoPorCat).sort(function(a,b){ return gastoPorCat[b]-gastoPorCat[a]; })[0];
+          var catLabel = topCat ? ' en ' + topCat : '';
+          return 'Margen bajo' + catLabel + ' (' + fmt(mg2,0) + '%). Negocia mejor precio de compra o ajusta el PVP de los artículos menos rentables.';
         }
-        if (recepciones2 === 1) {
-          return 'Una recepción de ' + eur(comprasTotal2) + ' en el periodo. Consolida pedidos con tus proveedores para reducir costes de envío y negociar mejor precio.';
+
+        // ── PRIORIDAD 3: Concentración de gasto ──────────────────────
+        var comprasTotal2 = snap.compras || 0;
+        if (comprasTotal2 > 0 && pedsPeriodo.length > 0) {
+          var gastoPorProv = {};
+          pedsPeriodo.forEach(function(ped) {
+            var coste = 0;
+            try { coste = FinEngine.pedidoCoste(ped); } catch(_) {}
+            var provId = ped.provId || 'desconocido';
+            gastoPorProv[provId] = (gastoPorProv[provId] || 0) + coste;
+          });
+          var provIds = Object.keys(gastoPorProv);
+          if (provIds.length > 0) {
+            var topProvId = provIds.sort(function(a,b){ return gastoPorProv[b]-gastoPorProv[a]; })[0];
+            var topGasto  = gastoPorProv[topProvId];
+            var pct       = comprasTotal2 > 0 ? Math.round(topGasto / comprasTotal2 * 100) : 0;
+            if (pct >= 70) {
+              var provNom = (State.get.prov && State.get.prov(topProvId)) ? State.get.prov(topProvId).nombre : topProvId;
+              return pct + '% de tu inversión está en ' + provNom + '. Diversificar proveedores reduce el riesgo de rotura de stock.';
+            }
+          }
         }
-        if (recepciones2 >= 5) {
-          return recepciones2 + ' recepciones en el periodo. Considera consolidar pedidos — menos frecuencia puede mejorar condiciones con proveedores.';
-        }
-        return recepciones2 + ' recepciones por ' + eur(comprasTotal2) + ' en el periodo. Compara coste de compra con margen de venta para optimizar tu catálogo.';
+
+        // ── Sin ninguna condición → estado neutro ─────────────────────
+        return 'Compras estables este período. Sin alertas de precio ni concentración de gasto.';
       }
 
       // ── CADUCIDADES ──────────────────────────────────────────────────
