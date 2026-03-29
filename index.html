@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.106-dev</title>
+<title>Dashwey v1.3.107-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6940,12 +6940,12 @@ function _authTabSafe(tab) {
                   <div class="snap-kpi-mini-val" id="snap-recepciones-compras">—</div>
                 </div>
                 <div class="snap-kpi-mini">
-                  <div class="snap-kpi-mini-lbl">Coste medio</div>
-                  <div class="snap-kpi-mini-val" id="snap-coste-compras">—</div>
+                  <div class="snap-kpi-mini-lbl">Margen medio</div>
+                  <div class="snap-kpi-mini-val" id="snap-margen-compras">—</div>
                 </div>
                 <div class="snap-kpi-mini">
-                  <div class="snap-kpi-mini-lbl">Comprometido</div>
-                  <div class="snap-kpi-mini-val" id="snap-comprometido-compras">—</div>
+                  <div class="snap-kpi-mini-lbl">Variación costes</div>
+                  <div class="snap-kpi-mini-val" id="snap-variacion-compras">—</div>
                 </div>
               </div>
               <!-- SNAP CHART — barras de compras por periodo -->
@@ -10145,7 +10145,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.106-dev';
+  const _APP_VERSION = 'v1.3.107-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18179,8 +18179,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // ── Compras y Suministros ─────────────────────────────────────────
     if (cardId === 'compras') {
       var comprasTotal  = snap.compras || 0;
-      var comprometido  = snap.comprometido || 0;
       var historial     = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+
       // Recepciones del periodo
       var range2 = null;
       try { range2 = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
@@ -18190,23 +18190,74 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
             return d >= range2.start && d < range2.end;
           }).length
         : historial.length;
-      var costeMedio = recepciones > 0 ? comprasTotal / recepciones : 0;
 
+      // Margen medio = avg (pvp - precioCompra) / pvp en productos con ambos valores (v1.3.107)
+      var prods = State.get.productos ? (State.get.productos() || []) : [];
+      var prodsConMargen = prods.filter(function(p) {
+        return p.pvp > 0 && (p.precioCompra || 0) > 0;
+      });
+      var margenMedio = 0;
+      if (prodsConMargen.length > 0) {
+        margenMedio = prodsConMargen.reduce(function(s, p) {
+          return s + (p.pvp - (p.precioCompra || 0)) / p.pvp * 100;
+        }, 0) / prodsConMargen.length;
+      }
+
+      // Variación costes = comparar compras periodo actual vs anterior (v1.3.107)
+      var variacionCostes = null;
+      try {
+        if (range2 && KPI.getRange) {
+          var durMs    = range2.end - range2.start;
+          var prevEnd  = new Date(range2.start);
+          var prevStart = new Date(range2.start.getTime() - durMs);
+          var prevPedidos = historial.filter(function(p) {
+            var d = new Date(p.fecha);
+            return d >= prevStart && d < prevEnd;
+          });
+          var prevTotal = prevPedidos.reduce(function(s, p) {
+            return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(p) : 0);
+          }, 0);
+          if (prevTotal > 0) {
+            variacionCostes = (comprasTotal - prevTotal) / prevTotal * 100;
+          }
+        }
+      } catch(_) {}
+
+      // Render KPIs
       _snapCounterUp(document.getElementById('snap-val-compras'), comprasTotal, 'eur');
 
       var deltaEl = document.getElementById('snap-delta-compras');
       if (deltaEl) {
         deltaEl.textContent = recepciones > 0
-          ? recepciones + ' pedidos recibidos en el periodo'
+          ? recepciones + (recepciones === 1 ? ' recepción en el periodo' : ' recepciones en el periodo')
           : 'Sin recepciones en el periodo';
         deltaEl.className = 'snap-kpi-delta ' + (recepciones > 0 ? 'neutral' : 'neutral');
       }
       var recEl = document.getElementById('snap-recepciones-compras');
       if (recEl) _snapCounterUp(recEl, recepciones, 'int', 350);
-      var costeEl = document.getElementById('snap-coste-compras');
-      if (costeEl) _snapCounterUp(costeEl, costeMedio, 'eur', 400);
-      var compEl = document.getElementById('snap-comprometido-compras');
-      if (compEl) _snapCounterUp(compEl, comprometido, 'eur', 450);
+
+      var margenEl = document.getElementById('snap-margen-compras');
+      if (margenEl) {
+        if (prodsConMargen.length > 0) {
+          _snapCounterUp(margenEl, margenMedio, 'pct', 400);
+        } else {
+          margenEl.textContent = '—';
+        }
+      }
+
+      var varEl = document.getElementById('snap-variacion-compras');
+      if (varEl) {
+        if (variacionCostes !== null) {
+          var sign = variacionCostes >= 0 ? '+' : '';
+          varEl.textContent = sign + _snapFmt(variacionCostes, 1) + '%';
+          varEl.style.color = variacionCostes > 5
+            ? 'var(--red)'
+            : variacionCostes < -5 ? '#16A34A' : 'var(--ink)';
+        } else {
+          varEl.textContent = '—';
+          varEl.style.color = '';
+        }
+      }
     }
 
     // Narrativa con typewriter
@@ -18445,6 +18496,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   const _SNAP_TITLES = {
     'rendimiento': 'Rendimiento',
+    'compras':     'Compras del período',  // v1.3.107
     'caducidades': 'Alertas de Riesgo',
     'flujo-caja':  'Flujo de Caja',
     'agenda':      'Agenda',
