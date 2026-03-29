@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.112-dev
-   Cache: dashwey-v1-3-112-dev
+   Dashwey Service Worker v1.3.87-dev
+   Cache: dashwey-v1-2-84-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-125-dev';
+const CACHE_NAME  = 'dashwey-v1-3-66-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -70,7 +70,7 @@ self.addEventListener('activate', e => {
           const permission = (typeof Notification !== 'undefined')
             ? Notification.permission : 'denied';
           if (permission === 'granted') {
-            self.registration.showNotification('🆕 Dashwey v1.3.88-dev disponible', {
+            self.registration.showNotification('🆕 Dashwey v1.3.87-dev disponible', {
               body:     'Abre la app para aplicar la actualización.',
               icon:     'icon-192.png',
               badge:    'icon-192.png',
@@ -215,19 +215,13 @@ self.addEventListener('fetch', e => {
   }
 
   /* HTML principal: NETWORK-ONLY — NUNCA se cachea.
-     cache:'no-store' + headers para romper caché HTTP de Android WebView */
+     Offline: página de error con botón Reintentar. */
   if (url.pathname.endsWith(HTML_URL) ||
       url.pathname.endsWith('/') ||
       url.pathname === '/Dashwey-/' ||
       url.pathname === '/Dashwey-/index.html') {
-    /* Crear request con headers anti-caché para Android WebView */
-    const bustReq = new Request(e.request.url, {
-      method: 'GET',
-      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' },
-      cache: 'no-store'
-    });
     e.respondWith(
-      fetch(bustReq, { cache: 'no-store' })
+      fetch(e.request, { cache: 'no-store' })
         .catch(() => {
           /* Sin red: intentar cache como último recurso offline */
           return caches.match(e.request).then(cached => {
