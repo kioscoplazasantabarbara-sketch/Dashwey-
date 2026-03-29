@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v1.1.8-dev -->
 <meta http-equiv="Expires" content="0">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-visual">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.101-dev</title>
+<title>Dashwey v1.3.102-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -815,8 +815,14 @@ select, label[for],
 }
 /* ──────────────────────────────────────────────────────────────────── */
 
-html, body {
-  height: 100%; overflow: hidden;
+html {
+  height: 100%;
+  background: var(--bg);  /* v1.3.102: zero-flicker — mismo color que navbar en carga */
+}
+body {
+  height: 100%;
+  /* v1.3.102: overflow eliminado — body no debe bloquear scroll global.
+     El scroll está controlado por .tab-page y #dash-cards-container. */
   font-family: var(--font);
   background: var(--bg);
   color: var(--ink);
@@ -1862,6 +1868,12 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
   transition: transform var(--dur-std) var(--ease), opacity var(--dur-std) var(--ease);
 }
 #bottom-tabs.nav-hidden { transform: translateY(100%); opacity: 0; pointer-events: none; }
+/* v1.3.102: teclado abierto — navbar se retira con la misma animación que nav-hidden */
+body.keyboard-open #bottom-tabs {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+}
 /* v9.5.76: GPU layer durante nav transitions — se activa/desactiva via JS */
 #bottom-tabs.nav-animating { will-change: transform, opacity; }
 .bt {
@@ -10069,7 +10081,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.101-dev';
+  const _APP_VERSION = 'v1.3.102-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -25100,10 +25112,11 @@ function _parseIva(iva) {
   };
 
   // Keyboard awareness — Visual Viewport API (iOS/Android)
-  // Cuando aparece el teclado software, desplaza la píldora y oculta la tab bar.
-  // Debounced 60ms para no disparar en cada frame del resize del viewport.
+  // v1.3.102: conectado a body.keyboard-open + nav-hidden para retiro suave del navbar
   if(window.visualViewport) {
     let _kbTimer = null;
+    let _kbWasOpen = false;
+
     function _onVVResize() {
       clearTimeout(_kbTimer);
       _kbTimer = setTimeout(() => {
@@ -25111,12 +25124,28 @@ function _parseIva(iva) {
         const kbH  = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
         const kbOn = kbH > 80;
 
+        // v1.3.102: body.keyboard-open + navbar retiro/restauración suave
+        if (kbOn !== _kbWasOpen) {
+          _kbWasOpen = kbOn;
+          const nav = document.getElementById('bottom-tabs');
+          if (kbOn) {
+            document.body.classList.add('keyboard-open');
+            if (nav) nav.classList.add('nav-hidden', 'nav-animating');
+          } else {
+            document.body.classList.remove('keyboard-open');
+            if (nav) {
+              nav.classList.add('nav-animating');
+              nav.classList.remove('nav-hidden');
+              // Liberar GPU layer después de la transición
+              setTimeout(() => nav.classList.remove('nav-animating'), 260);
+            }
+          }
+        }
+
         // Comprobar si el buscador del almacén tiene foco activo
         const almInputFocused = document.activeElement &&
           document.activeElement.id === 'alm-perm-search';
 
-        // Buscador inline — no necesita posicionamiento con el teclado
-        // Solo ajustar scroll del tab para que el input sea visible
         if (kbOn && almInputFocused) {
           const inp = document.getElementById('alm-perm-search');
           if (inp) inp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
