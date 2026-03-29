@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.90-dev</title>
+<title>Dashwey v1.3.91-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1608,7 +1608,7 @@ body[data-dash-snap="1"] .snap-alrt-panel {
   margin-top: 10px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;  /* v1.3.88: aisla scroll interno del snap padre */
+  overscroll-behavior: auto;     /* v1.3.91: permite handoff JS al snap padre (contain bloqueaba propagación) */
 }
 .snap-alrt-item {
   display: flex;
@@ -10041,7 +10041,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.90-dev';
+  const _APP_VERSION = 'v1.3.91-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17302,6 +17302,62 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (_insightEl && _insightTxt) {
       _snapTypewriter(_insightEl, _insightTxt);
     }
+
+    // v1.3.91: handoff scroll — propaga gesto al snap-container cuando panel llega a límite
+    _snapAlrtAttachScrollHandoff(panelEl);
+  }
+
+  // ── Scroll handoff: panel interno → #dash-cards-container ────────────────
+  // Cuando snap-alrt-panel llega a top/bottom y el usuario sigue deslizando,
+  // el gesto se delega al contenedor snap padre. .card tiene overflow:hidden
+  // así que CSS no puede hacerlo — se hace via JS.
+  function _snapAlrtAttachScrollHandoff(panel) {
+    if (!panel) return;
+    // Limpiar listener anterior si existe (re-render de panel)
+    if (panel._handoffCleanup) { panel._handoffCleanup(); }
+
+    var container = document.getElementById('dash-cards-container');
+    if (!container) return;
+
+    var _startY   = 0;
+    var _active   = false;
+
+    function onTouchStart(e) {
+      _startY = e.touches[0].clientY;
+      _active = true;
+    }
+
+    function onTouchMove(e) {
+      if (!_active) return;
+      var dy        = e.touches[0].clientY - _startY;
+      var atTop     = panel.scrollTop <= 0;
+      var atBottom  = panel.scrollTop >= (panel.scrollHeight - panel.clientHeight - 1);
+
+      // Si el panel puede scrollear en esa dirección → no interceptar (scroll nativo)
+      if (dy > 0 && atTop) {
+        // Gesto hacia abajo Y panel en top → delegar al padre
+        container.scrollBy({ top: -Math.abs(dy) * 0.6, behavior: 'auto' });
+      } else if (dy < 0 && atBottom) {
+        // Gesto hacia arriba Y panel en bottom → delegar al padre
+        container.scrollBy({ top: Math.abs(dy) * 0.6, behavior: 'auto' });
+      }
+      // Si no está en límite → scroll nativo del panel (no se hace nada)
+    }
+
+    function onTouchEnd() {
+      _active = false;
+    }
+
+    panel.addEventListener('touchstart', onTouchStart, { passive: true });
+    panel.addEventListener('touchmove',  onTouchMove,  { passive: true });
+    panel.addEventListener('touchend',   onTouchEnd,   { passive: true });
+
+    // Cleanup para re-renders
+    panel._handoffCleanup = function() {
+      panel.removeEventListener('touchstart', onTouchStart);
+      panel.removeEventListener('touchmove',  onTouchMove);
+      panel.removeEventListener('touchend',   onTouchEnd);
+    };
   }
 
   // ── Insight dinámico por pestaña en Alertas — v1.3.41 ────────────────────
