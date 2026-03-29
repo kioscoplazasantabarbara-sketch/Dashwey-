@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.111-dev</title>
+<title>Dashwey v1.3.112-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1146,9 +1146,10 @@ body[data-dash-snap="1"] .snap-narrative-zone {
   border-radius: 20px;
   margin-bottom: 24px;
 }
-.snap-kpi-delta.positive { background: rgba(22,163,74,0.10); color: #16A34A; }
-.snap-kpi-delta.negative { background: rgba(229,57,53,0.10);  color: var(--red); }
-.snap-kpi-delta.neutral  { background: rgba(0,0,0,0.06); color: var(--ink-soft); }
+.snap-kpi-delta.positive { background: rgba(22,163,74,0.10);   color: #16A34A; }
+.snap-kpi-delta.warning  { background: rgba(245,158,11,0.10);  color: #D97706; } /* v1.3.112: estado alerta */
+.snap-kpi-delta.negative { background: rgba(229,57,53,0.10);   color: var(--red); }
+.snap-kpi-delta.neutral  { background: rgba(0,0,0,0.06);       color: var(--ink-soft); }
 
 .snap-kpi-row { display: flex; gap: 28px; }
 .snap-kpi-mini { display: flex; flex-direction: column; gap: 3px; }
@@ -10073,7 +10074,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.111-dev';
+  const _APP_VERSION = 'v1.3.112-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17986,6 +17987,60 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }
 
   // ── Render completo de una tarjeta en modo snap ───────────────────────────
+  // ── Sistema central de estados visuales — v1.3.112 ──────────────────────
+  // Una sola fuente de verdad para el color de estado en todas las tarjetas.
+  // Devuelve: 'success' | 'warning' | 'danger' | 'neutral'
+  // Mapeo CSS: positive=success, warning=warning, negative=danger, neutral=neutral
+  var _SNAP_STATUS_COLORS = {
+    success: '#3B82F6',   // azul gráfico ventas (neutral positivo)
+    warning: '#F59E0B',   // ámbar
+    danger:  '#DC143C',   // rojo
+    neutral: '#3B82F6',   // azul
+  };
+
+  var _SNAP_STATUS_CHART = {
+    success: '#10B981',   // verde esmeralda — gráfico
+    warning: '#F59E0B',   // ámbar
+    danger:  '#DC2626',   // rojo puro
+    neutral: '#3B82F6',   // azul (compras base)
+  };
+
+  function _snapGetStatus(metric, value) {
+    switch (metric) {
+      // Flujo de caja: runway en meses
+      case 'runway':
+        if (value > 6)  return 'success';
+        if (value >= 3) return 'warning';
+        return 'danger';
+
+      // Ventas: margen neto %
+      case 'margen':
+        if (value > 25) return 'success';
+        if (value >= 0) return 'warning';
+        return 'danger';
+
+      // Compras: variación de costes (precio subido sin PVP ajustado)
+      // value = número de artículos con subida de precio detectada
+      case 'subidas':
+        if (value > 0) return 'warning';
+        return 'neutral';
+
+      // Balance: positivo/negativo
+      case 'balance':
+        if (value > 0) return 'success';
+        if (value === 0) return 'neutral';
+        return 'danger';
+
+      default: return 'neutral';
+    }
+  }
+
+  // Mapea estado a clase CSS del delta badge
+  function _snapStatusClass(status) {
+    var map = { success: 'positive', warning: 'warning', danger: 'negative', neutral: 'neutral' };
+    return 'snap-kpi-delta ' + (map[status] || 'neutral');
+  }
+
   function _snapRenderCard(cardId) {
     var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
     var snap   = null;
@@ -18004,11 +18059,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
       _snapCounterUp(document.getElementById('snap-val-rendimiento'), ing, 'eur');
 
+      // v1.3.112: estado basado en margen neto (fuente de verdad central)
+      var rendStatus = _snapGetStatus('margen', mg);
       var deltaEl = document.getElementById('snap-delta-rendimiento');
       if (deltaEl) {
         var sign = delta >= 0 ? '+' : '';
         deltaEl.textContent = sign + fmt(delta, 1) + '% vs periodo anterior';
-        deltaEl.className   = 'snap-kpi-delta ' + (delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral');
+        deltaEl.className   = _snapStatusClass(rendStatus);
       }
       var ticketEl = document.getElementById('snap-ticket-rendimiento');
       if (ticketEl) _snapCounterUp(ticketEl, ticket, 'eur', 400);
@@ -18048,13 +18105,15 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       var bal   = ing2 - gst;
 
       _snapCounterUp(document.getElementById('snap-val-flujo-caja'), saldo, 'eur');
+      // v1.3.112: estado basado en runway (fuente de verdad central)
+      var fcStatus = _snapGetStatus('runway', rw);
       var deltaEl = document.getElementById('snap-delta-flujo-caja');
       if (deltaEl) {
         var sign = bal >= 0 ? '+' : '';
         var pLabels = { today:'hoy', hours:'hoy', week:'la semana', month:'el mes', year:'el año' };
         var pLabel  = pLabels[period ? period.type : 'month'] || 'el periodo';
         deltaEl.textContent = 'balance ' + sign + eur(bal) + ' de ' + pLabel;
-        deltaEl.className   = 'snap-kpi-delta ' + (bal >= 0 ? 'positive' : 'negative');
+        deltaEl.className   = _snapStatusClass(fcStatus);
       }
       var ingEl = document.getElementById('snap-ing-flujo-caja');
       if (ingEl) _snapCounterUp(ingEl, ing2, 'eur', 350);
@@ -18206,12 +18265,21 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       // Render KPIs
       _snapCounterUp(document.getElementById('snap-val-compras'), comprasTotal, 'eur');
 
+      // v1.3.112: estado basado en subidas de precio detectadas
+      var comprasSubidas = 0;
+      pedsPeriodo.forEach(function(ped) {
+        (ped.items || []).forEach(function(it) {
+          var prod = prods2.find(function(p){ return p.id === it.prodId; });
+          if (prod && prod.precioCompra && it.precio > prod.precioCompra * 1.05) comprasSubidas++;
+        });
+      });
+      var comprasStatus = _snapGetStatus('subidas', comprasSubidas);
       var deltaEl = document.getElementById('snap-delta-compras');
       if (deltaEl) {
         deltaEl.textContent = recepciones > 0
           ? recepciones + (recepciones === 1 ? ' recepción en el periodo' : ' recepciones en el periodo')
           : 'Sin recepciones en el periodo';
-        deltaEl.className = 'snap-kpi-delta ' + (recepciones > 0 ? 'neutral' : 'neutral');
+        deltaEl.className = _snapStatusClass(comprasStatus);
       }
       var recEl = document.getElementById('snap-recepciones-compras');
       if (recEl) _snapCounterUp(recEl, recepciones, 'int', 350);
@@ -18252,14 +18320,26 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     // Gráfica de barras — rendimiento y compras
     if (cardId === 'rendimiento') {
+      // v1.3.112: color del gráfico refleja estado del margen
+      var _rendChartColor = _SNAP_STATUS_CHART[_snapGetStatus('margen', snap.margenBruto || 0)];
       setTimeout(function() {
-        _snapRenderChart(cardId, period);
+        _snapRenderChart(cardId, period, _rendChartColor);
       }, 120);
     }
     if (cardId === 'compras') {
-      // v1.3.106: gráfico de compras — mismo motor, color azul
+      // v1.3.112: color del gráfico refleja estado (subidas detectadas → ámbar)
+      var _compSubidas2 = 0;
+      var _compHist = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+      var _compProds = State.get.productos ? (State.get.productos() || []) : [];
+      _compHist.forEach(function(ped) {
+        (ped.items || []).forEach(function(it) {
+          var prod = _compProds.find(function(p){ return p.id === it.prodId; });
+          if (prod && prod.precioCompra && it.precio > prod.precioCompra * 1.05) _compSubidas2++;
+        });
+      });
+      var _compChartColor = _SNAP_STATUS_CHART[_snapGetStatus('subidas', _compSubidas2)];
       setTimeout(function() {
-        _snapRenderChart('compras', period, '#3B82F6');
+        _snapRenderChart('compras', period, _compChartColor);
       }, 120);
     }
 
