@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.100-dev</title>
+<title>Dashwey v1.3.101-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9488,69 +9488,95 @@ const Utils = (() => {
     label.textContent = m.txt;
   }
 
-  // ══ HAPTIC FEEDBACK SYSTEM v9.5.73 ════════════════════════════
-  // triggerHaptic(type) — centralized, Capacitor-ready
+  // ══ HAPTIC ENGINE v1.3.101 ══════════════════════════════════════
+  // Motor háptico único y centralizado. PROHIBIDO usar navigator.vibrate
+  // directamente en componentes — toda vibración pasa por triggerHaptic().
   //
-  // Types:
-  //   light   → 8ms          (tap ligero: nav, toggle, añadir al carrito)
-  //   medium  → 15ms         (acción confirmada: guardar, completar venta, pedido)
-  //   error   → [10,30,10]   (error/validación: campo vacío, acción inválida)
+  // TIPOS PRIMARIOS (spec):
+  //   selection → 8ms            microfeedback: nav, toggle, checkbox
+  //   impact    → 20ms           acción confirmada: añadir, guardar, pedido
+  //   success   → [10, 80, 10]   éxito: venta completa, pago confirmado
+  //   error     → [8, 50, 8, 50, 8]  error: stock 0, validación, fallo
   //
-  // Reglas de uso:
-  //   ✅ Usar en: tap de botón clave, confirmación de acción, error de validación
-  //   ❌ No usar en: scroll, drag start, animaciones, bucles, autoplay
-  //   ❌ Una sola llamada por acción de usuario — nunca encadenar
+  // ALIASES LEGACY (retrocompatibilidad — no migrar call sites):
+  //   light   → selection
+  //   medium  → impact
+  //   heavy   → impact
+  //   tap     → selection
+  //   confirm → impact
+  //   save    → impact
+  //   drop    → impact
+  //   add     → selection
   //
-  // Capacitor upgrade path:
-  //   Replace navigator.vibrate with Capacitor.Plugins.Haptics
-  //   without changing call sites — API stays identical.
+  // ZONAS PROHIBIDAS (nunca llamar desde):
+  //   scroll, swipe, drag-start, animaciones, modals, sheets, teclado
+  //
+  // ANTI-SPAM: debounce interno 60ms — 1 vibración por acción real
+  // DESKTOP GUARD: no vibra fuera de Android WebView
   // ─────────────────────────────────────────────────────────────
-  const HAPTIC_PATTERNS = {
-    light:   6,              // tap ligero — interacción UI micro
-    medium:  12,             // confirmación — acción completada
-    heavy:   20,             // acción destructiva / alerta
-    error:   [8, 60, 8],     // error — patrón doble para distinguirse
-    success: [6, 40, 6],     // éxito — patrón suave doble
-    // Aliases semánticos
-    tap:     6,
-    confirm: 12,
-    save:    12,
-    drop:    10,
-    add:     6,
+  const _HAPTIC_PATTERNS = {
+    // Tipos primarios
+    selection: 8,
+    impact:    20,
+    success:   [10, 80, 10],
+    error:     [8, 50, 8, 50, 8],
+    // Aliases legacy — mapean a tipos primarios
+    light:     8,
+    medium:    20,
+    heavy:     20,
+    tap:       8,
+    confirm:   20,
+    save:      20,
+    drop:      20,
+    add:       8,
   };
 
-  function triggerHaptic(type) {
-    // Guard: not supported — silent no-op
-    if (!('vibrate' in navigator)) return;
-    // Guard: only fire if user has interacted (autoplay policy)
-    const pattern = HAPTIC_PATTERNS[type] || HAPTIC_PATTERNS.light;
-    try {
-      navigator.vibrate(pattern);
-    } catch(e) { /* silently ignore — some browsers throw */ }
+  // Debounce state — 1 vibración por acción real
+  let _hapticLastFired = 0;
+  const _HAPTIC_DEBOUNCE = 60; // ms
+
+  // Desktop guard — solo Android WebView o dispositivos con vibration API real
+  function _isHapticAllowed() {
+    if (!('vibrate' in navigator)) return false;
+    // Bloquear Chrome desktop: userAgent sin Android
+    const ua = navigator.userAgent || '';
+    if (!ua.includes('Android') && !ua.includes('Mobile')) return false;
+    return true;
   }
 
-  // ── haptic — legacy alias, kept for existing call sites ────────
-  // tipo: 'light' | 'medium' | 'success' | 'error'
-  // Capacitor-ready: swap navigator.vibrate for Haptics.impact() here
-  function haptic(tipo) {
-    // Capacitor Haptics bridge (APK native) — future upgrade path
+  function triggerHaptic(type) {
+    if (!_isHapticAllowed()) return;
+    // Anti-spam: debounce 60ms
+    const now = Date.now();
+    if (now - _hapticLastFired < _HAPTIC_DEBOUNCE) return;
+    _hapticLastFired = now;
+
+    // Capacitor native bridge — mejor feedback en APK
     try {
       const { Haptics, ImpactStyle } = window.Capacitor?.Plugins || {};
       if (Haptics) {
-        const styleMap = {
-          light: ImpactStyle?.Light   || 'LIGHT',
-          medium: ImpactStyle?.Medium || 'MEDIUM',
-          success: ImpactStyle?.Medium || 'MEDIUM',
-          error:  ImpactStyle?.Heavy  || 'HEAVY',
+        const capMap = {
+          selection: () => Haptics.impact({ style: ImpactStyle?.Light   || 'LIGHT'  }),
+          impact:    () => Haptics.impact({ style: ImpactStyle?.Medium  || 'MEDIUM' }),
+          success:   () => Haptics.notification({ type: 'SUCCESS' }),
+          error:     () => Haptics.notification({ type: 'ERROR'   }),
+          // Aliases
+          light: () => Haptics.impact({ style: ImpactStyle?.Light  || 'LIGHT'  }),
+          medium:() => Haptics.impact({ style: ImpactStyle?.Medium || 'MEDIUM' }),
         };
-        Haptics.impact({ style: styleMap[tipo] || styleMap.light });
+        const fn = capMap[type] || capMap.light;
+        fn();
         return;
       }
     } catch(e) {}
-    // Web fallback — delegate to triggerHaptic
-    const typeMap = { light:'light', medium:'medium', success:'medium', error:'error' };
-    triggerHaptic(typeMap[tipo] || 'light');
+
+    // Web fallback — navigator.vibrate
+    const pattern = _HAPTIC_PATTERNS[type] ?? _HAPTIC_PATTERNS.selection;
+    try { navigator.vibrate(pattern); } catch(e) {}
   }
+
+  // ── haptic() — legacy alias, kept for existing call sites ──────
+  function haptic(tipo) { triggerHaptic(tipo); }
 
     // v9.5.91: openPeriodSheet — componente global de selección de periodo
   // Reutiliza el #dash-period-sheet (HTML estático, CSS dps-*) para cualquier módulo.
@@ -10043,7 +10069,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.100-dev';
+  const _APP_VERSION = 'v1.3.101-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11803,8 +11829,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.37: haptic feedback al navegar + data-tab para CSS
-    try { Utils.triggerHaptic('light'); } catch(_) {}
+    // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     document.body.setAttribute('data-tab', String(i));
     // ── Cerrar todos los overlays abiertos antes de navegar ─────
     // Garantiza que modales, FS, SAC o tickets sheets no queden
