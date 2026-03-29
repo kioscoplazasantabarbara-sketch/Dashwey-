@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.125-dev
-   Cache: dashwey-v1-3-125-dev
+   Dashwey Service Worker v1.3.118-dev
+   Cache: dashwey-v1-3-118-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-125-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
+const CACHE_NAME  = 'dashwey-v1-3-118-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
@@ -61,7 +61,7 @@ self.addEventListener('activate', e => {
           clients.forEach(client => {
             client.postMessage({
               action: 'SW_UPDATED',
-              version: '1.3.125-dev'
+              version: '1.3.118-dev'
             });
           });
         } else {
@@ -70,14 +70,14 @@ self.addEventListener('activate', e => {
           const permission = (typeof Notification !== 'undefined')
             ? Notification.permission : 'denied';
           if (permission === 'granted') {
-            self.registration.showNotification('🆕 Dashwey v1.3.125-dev disponible', {
+            self.registration.showNotification('🆕 Dashwey v1.3.118-dev disponible', {
               body:     'Abre la app para aplicar la actualización.',
               icon:     'icon-192.png',
               badge:    'icon-192.png',
               tag:      'dashwey-update',
               renotify: true,
               vibrate:  [100, 50, 100],
-              data:     { action: 'update', version: '1.3.125-dev', url: '/' },
+              data:     { action: 'update', version: '1.3.118-dev', url: '/' },
             }).catch(() => {});
           }
         }
@@ -222,20 +222,6 @@ self.addEventListener('fetch', e => {
       url.pathname === '/Dashwey-/index.html') {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' })
-        .then(response => {
-          /* v1.3.121: reescribir headers — fuerza no-cache en Android WebView
-             WebView tiene su propia capa HTTP cache que ignora el SW.
-             Al reescribir los headers de la respuesta, el WebView respeta no-cache. */
-          const headers = new Headers(response.headers);
-          headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-          headers.set('Pragma', 'no-cache');
-          headers.set('Expires', '0');
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: headers
-          });
-        })
         .catch(() => {
           /* Sin red: intentar cache como último recurso offline */
           return caches.match(e.request).then(cached => {

@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.125-dev</title>
+<title>Dashwey v1.3.118-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -458,7 +458,7 @@ html.theme-switching *::after {
   }
   .tl-track-fill, .tl-track-icon { transition: none !important; }
   .card-shimmer { animation: none !important; }
-  /* v1.3.119: .agenda-online-dot eliminado */
+  .agenda-online-dot { animation: none !important; }
 }
 
 
@@ -1709,10 +1709,15 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
 }
 
 .snap-narrative-badge {
-  display: none; /* v1.3.125: badge "● INSIGHT" eliminado completamente — el texto narrativo es suficiente */
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--red);
+  margin-bottom: 7px;
 }
 .snap-narrative-badge::before {
-  display: none;
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--red);
+  /* v1.3.111: animación infinita eliminada — el punto estático ya comunica el estado */
 }
 .snap-narrative-text {
   font-size: 14px; font-weight: 400; line-height: 1.6;
@@ -2012,13 +2017,12 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 }
 /* ::before pseudo-element shimmer — zero DOM mutations during animation */
 /* v1.3.118: shimmer reutilizado en Almacén — mismo keyframe, mismo estilo */
-/* v1.3.125: duración aumentada a 1.2s para ser visible en conexiones rápidas */
 .alm-scroll.is-shimmering::before {
   content: '';
   position: fixed; inset: 0; z-index: 4;
-  background: rgba(139,20,60,0.05);
+  background: rgba(139,20,60,0.03);
   pointer-events: none;
-  animation: shimmerFade 1.2s ease-in-out both;
+  animation: shimmerFade 0.55s ease-out both;
   will-change: opacity;
 }
 .card.is-shimmering::before {
@@ -2034,17 +2038,6 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
   will-change: opacity;
 }
 /* v1.3.108: .card-shimmer legacy eliminado — reemplazado por .is-shimmering (v9.5.73) */
-
-/* v1.3.125: shimmer en snap mode — actúa sobre snap-kpi-zone en lugar de card::before
-   (card::before está desactivado en snap mode con content:none) */
-body[data-dash-snap="1"] .card.is-shimmering .snap-kpi-zone {
-  animation: shimmerFade 0.6s ease-out both;
-  animation-delay: var(--shimmer-delay, 0ms);
-}
-body[data-dash-snap="1"] .card.is-shimmering .snap-narrative-zone {
-  animation: shimmerFade 0.6s ease-out both;
-  animation-delay: var(--shimmer-delay, 80ms);
-}
 /* Fade-in al aparecer tarjeta */
 @keyframes cardFadeIn {
   from { opacity:0; transform:translateY(8px); }
@@ -2113,7 +2106,14 @@ body[data-dash-snap="1"] .card.is-shimmering .snap-narrative-zone {
 .agenda-type-icon svg { width: 14px; height: 14px; stroke: var(--ink-mid); fill: none; stroke-width: 1.8; }
 /* Estado online dot junto al título */
 /* v9.5.73: online dot — shared class for Agenda + KPIs, flex-aligned */
-/* v1.3.119: .agenda-online-dot eliminado — decorativo sin lógica funcional */
+.agenda-online-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #22c55e; opacity: 0.85;
+  margin-left: 5px; margin-bottom: 1px;
+  vertical-align: middle; flex-shrink: 0;
+  position: relative; top: -0.5px; /* optical center with uppercase text */
+  /* v1.3.111: animación infinita eliminada — el color verde ya comunica "online" */
+}
 /* v1.2.78: animación bocadillo chat */
 @keyframes chatBubbleIn {
   from { opacity: 0; transform: scale(0.85) translateY(4px); }
@@ -6979,7 +6979,7 @@ function _authTabSafe(tab) {
             <button class="card-remove-btn" data-card-id="agenda"
               onclick="App.dash.removeCard('agenda')" title="Quitar tarjeta">×</button>
             <div class="card-title-wrap">
-              <div class="card-title-text" onclick="App.dash._openCardInsights('agenda')">Agenda <span class="card-title-chevron">▾</span></div>
+              <div class="card-title-text" onclick="App.dash._openCardInsights('agenda')">Agenda<span class="agenda-online-dot" title="Sincronizado"></span> <span class="card-title-chevron">▾</span></div>
             </div>
             <div class="fade-sep"></div>
             <!-- SNAP KPI ZONE -->
@@ -10070,7 +10070,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.125-dev';
+  const _APP_VERSION = 'v1.3.118-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12620,12 +12620,23 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     }
   }
 
-  // Pull-to-refresh Dashboard
-  // v1.3.123: pill eliminado — refresh() llama _shimmerAllCards(280) que es el único feedback
+  // Pull-to-refresh
   (function setupPullRefresh() {
-    let ptStart = 0, ptActive = false;
+    let ptStart = 0, ptActive = false, ptIndicator = null;
+    function getPTI() {
+      if(!ptIndicator) {
+        // v1.3.117: círculo eliminado — pill de texto "Sincronizando…"
+        ptIndicator = document.createElement('div');
+        ptIndicator.innerHTML = '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);font-family:Inter,var(--font),sans-serif">Sincronizando…</span>';
+        ptIndicator.style.cssText = 'position:absolute;top:8px;left:50%;transform:translateX(-50%) translateY(-40px);z-index:50;transition:transform .2s ease;pointer-events:none;background:var(--surface);border-radius:20px;padding:6px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.10);';
+        const dashTab = document.querySelectorAll('.tab-page')[1];
+        if(dashTab) { dashTab.style.position = 'relative'; dashTab.appendChild(ptIndicator); }
+      }
+      return ptIndicator;
+    }
     document.addEventListener('touchstart', e => {
       if(nav._cTab !== 1) return;
+      // v1.1.9: no activar PTR si hay sheet/overlay abierto
       if(document.getElementById('fs-overlay')?.classList.contains('open')) return;
       if(document.getElementById('modal-overlay')?.classList.contains('open')) return;
       const dt = document.querySelectorAll('.tab-page')[1];
@@ -12635,24 +12646,50 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     function _ptDashTouchMove(e) {
       if(!ptActive || nav._cTab !== 1) return;
       if(document.getElementById('fs-overlay')?.classList.contains('open')) { ptActive = false; return; }
+      const dy = e.touches[0].clientY - ptStart;
+      if(dy < 10) return;
+      const pull = Math.min(dy * 0.4, 60);
+      const ind = getPTI();
+      ind.style.transform = `translateX(-50%) translateY(${pull-52}px)`;
+      // v1.3.117: sin SVG — solo pill de texto
     }
-    document.addEventListener('touchmove', _ptDashTouchMove, { passive: true });
+    document.addEventListener('touchmove', _ptDashTouchMove, { passive: true }); // v1.2.65: passive
     document.addEventListener('touchend', e => {
       if(!ptActive || nav._cTab !== 1) { ptActive = false; return; }
       const dy = e.changedTouches[0].clientY - ptStart;
       ptActive = false;
-      if(dy > 55) refresh(); // shimmer activado dentro de refresh()
+      const ind = getPTI();
+      if(dy > 55) {
+        ind.style.transform = 'translateX(-50%) translateY(0px)';
+        refresh();
+        setTimeout(() => { ind.style.transform = 'translateX(-50%) translateY(-40px)'; }, 700);
+      } else {
+        ind.style.transform = 'translateX(-50%) translateY(-52px)';
+      }
     }, {passive:true});
   })();
 
 
   // ── Pull-to-refresh Almacén (tab 2) ──────────────────────────
-  // v1.3.123: PTR Almacén — pill eliminado, shimmer activado por almRefresh()
   (function setupAlmPullRefresh() {
-    let _ptStart = 0, _ptActive = false, _ptBusy = false;
+    let _ptStart = 0, _ptActive = false, _ptInd = null, _ptBusy = false;
+
+    function _getInd() {
+      if (!_ptInd) {
+        // v1.3.117: círculo eliminado — pill de texto "Sincronizando…" (mismo que Dashboard)
+        _ptInd = document.createElement('div');
+        _ptInd.id = 'alm-ptr-ind';
+        _ptInd.innerHTML = '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);font-family:Inter,var(--font),sans-serif">Sincronizando…</span>';
+        _ptInd.style.cssText = 'position:absolute;top:8px;left:50%;transform:translateX(-50%) translateY(-40px);z-index:50;transition:transform .2s ease;pointer-events:none;background:var(--surface);border-radius:20px;padding:6px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.10);';
+        const almWrap = document.getElementById('tab-alm');
+        if (almWrap) { almWrap.style.position = 'relative'; almWrap.appendChild(_ptInd); }
+      }
+      return _ptInd;
+    }
 
     document.addEventListener('touchstart', e => {
       if (nav._cTab !== 2) return;
+      // v1.1.9: no activar PTR si hay algún sheet o modal abierto
       if (document.getElementById('fs-overlay')?.classList.contains('open'))  return;
       if (document.getElementById('modal-overlay')?.classList.contains('open')) return;
       const el = document.getElementById('alm-scroll-el');
@@ -12661,25 +12698,41 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       _ptActive = true;
     }, { passive: true });
 
-    document.addEventListener('touchmove', function(e) {
+    function _ptAlmTouchMove(e) {
       if (!_ptActive || nav._cTab !== 2 || _ptBusy) return;
-      if (document.getElementById('fs-overlay')?.classList.contains('open')) { _ptActive = false; }
-    }, { passive: true });
+      if (document.getElementById('fs-overlay')?.classList.contains('open')) { _ptActive = false; return; }
+      const dy = e.touches[0].clientY - _ptStart;
+      if (dy < 10) return;
+      const pull = Math.min(dy * 0.4, 60);
+      const ind = _getInd();
+      ind.style.transform = 'translateX(-50%) translateY(' + (pull - 52) + 'px)';
+      // v1.3.117: sin SVG
+    }
+    document.addEventListener('touchmove', _ptAlmTouchMove, { passive: true }); // v1.2.65
 
     document.addEventListener('touchend', e => {
       if (!_ptActive || nav._cTab !== 2) { _ptActive = false; return; }
       const dy = e.changedTouches[0].clientY - _ptStart;
       _ptActive = false;
+      const ind = _getInd();
       if (dy > 55 && !_ptBusy) {
         _ptBusy = true;
-        // almRefresh() activa shimmer en #alm-scroll-el al inicio y lo quita al final
+        ind.style.transform = 'translateX(-50%) translateY(0px)';
+        // v1.3.117: sin SVG
+        // almRefresh es async — usar Promise con .then/.catch para compatibilidad
         const p = App.alm.almRefresh();
-        const done = () => { _ptBusy = false; };
+        const done = () => {
+          // v1.3.117: sin SVG
+          ind.style.transform = 'translateX(-50%) translateY(-52px)';
+          _ptBusy = false;
+        };
         if (p && typeof p.then === 'function') {
           p.then(done).catch(done);
         } else {
           setTimeout(done, 800);
         }
+      } else {
+        ind.style.transform = 'translateX(-50%) translateY(-52px)';
       }
     }, { passive: true });
   })();
@@ -22185,10 +22238,10 @@ function _parseIva(iva) {
     } catch(e) {
       // Error silencioso — los datos locales siguen disponibles
     } finally {
-      // v1.3.125: shimmer dura mínimo 1.4s para ser visible
+      // Shimmer desaparece al completar (animación 0.55s, luego remove class)
       setTimeout(function() {
         if (scrollEl) scrollEl.classList.remove('is-shimmering');
-      }, 1400);
+      }, 600);
     }
     renderOrden();
     renderCatInline();
@@ -24921,7 +24974,7 @@ function _parseIva(iva) {
         window._DashweySavingCtrl.isSaving = false;
       }
       _renderAll();
-      // v1.3.120: toast eliminado — sync silencioso, sin interrupciones visuales
+      showToast('☁️ Datos sincronizados');
       // NO subir de vuelta — ya tenemos los datos remotos
     } else if (localTs > 0) {
       // Local más reciente → subir a Firebase (solo si hay datos reales)
@@ -25894,27 +25947,11 @@ window._almCarritoOptions = function() {
         _lastRemoteVer = remoteVer;
         // Guardar versión pendiente para que Ajustes la detecte
         sessionStorage.setItem('dashwey_pending_ver', remoteVer);
-
-        // v1.3.122: AUTO-UPDATE — limpiar caché y recargar automáticamente
-        // Android WebView no actualiza por sí solo aunque el SW esté correcto.
-        // Al detectar versión nueva en version.json → forzar recarga inmediata.
-        console.info('[Dashwey] Nueva versión detectada:', remoteVer, '→ recargando…');
-        if ('caches' in window) {
-          caches.keys()
-            .then(function(keys) { return Promise.all(keys.map(function(k) { return caches.delete(k); })); })
-            .then(function() {
-              if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.getRegistrations()
-                  .then(function(regs) { return Promise.all(regs.map(function(r) { return r.unregister(); })); })
-                  .then(function() { location.reload(true); })
-                  .catch(function() { location.reload(true); });
-              } else {
-                location.reload(true);
-              }
-            })
-            .catch(function() { location.reload(true); });
-        } else {
-          location.reload(true);
+        // Notificación nativa Android (si app en background y permisos ok)
+        _notifUpdate(remoteVer);
+        // Toast discreto si app en foreground (no banner invasivo)
+        if (document.visibilityState === 'visible') {
+          _showUpdateBanner(remoteVer);
         }
       })
       .catch(() => {});
