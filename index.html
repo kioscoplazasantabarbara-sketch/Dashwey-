@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.178-dev</title>
+<title>Dashwey v1.3.179-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6485,6 +6485,40 @@ html, body { background: var(--bg); }
     background: rgba(247,242,242,0.97);
   }
 }
+
+/* v1.3.179: Collapsing header — transición suave título + subtítulo ───── */
+.tpv-page-title,
+.dash-page-title,
+.alm-page-title {
+  transition: font-size 0.25s ease, letter-spacing 0.25s ease;
+  transform-origin: left center;
+}
+.tpv-page-sub,
+.dash-page-sub,
+.alm-page-sub {
+  transition: font-size 0.25s ease, opacity 0.25s ease;
+}
+/* Estado colapsado — aplicado vía JS al hacer scroll */
+.tpv-page-header.hdr-collapsed .tpv-page-title,
+.dash-page-header.hdr-collapsed .dash-page-title,
+.alm-page-header.hdr-collapsed .alm-page-title {
+  font-size: 16px;
+  letter-spacing: -0.2px;
+  font-weight: 700;
+}
+.tpv-page-header.hdr-collapsed .tpv-page-sub,
+.dash-page-header.hdr-collapsed .dash-page-sub,
+.alm-page-header.hdr-collapsed .alm-page-sub {
+  font-size: 11px;
+  opacity: 0.75;
+}
+/* El header colapsado es más compacto */
+.tpv-page-header.hdr-collapsed,
+.dash-page-header.hdr-collapsed,
+.alm-page-header.hdr-collapsed {
+  padding-top: 4px;
+  padding-bottom: 6px;
+}
 /* v1.2.54: columna izquierda (título + sub) */
 .alm-header-left { flex: 1; min-width: 0; }
 /* v1.2.54: iconos acción derecha */
@@ -7021,7 +7055,7 @@ function _authTabSafe(tab) {
           <!-- PAGE HEADER -->
           <div class="tpv-page-header">
             <div class="tpv-page-title">Terminal de Venta</div>
-            <div class="tpv-page-sub">Selecciona productos para la orden actual</div>
+            <div class="tpv-page-sub" id="tpv-header-sub">Selecciona productos para comenzar</div>
           </div>
 
           <!-- HOT PRODUCTS GRID -->
@@ -10515,7 +10549,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.178-dev';
+  const _APP_VERSION = 'v1.3.179-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19365,6 +19399,50 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       if (hh > 0) document.documentElement.style.setProperty('--header-h', hh + 'px');
     }
   });
+
+  // v1.3.179: collapsing header scroll listeners ─────────────────────────
+  (function _initCollapsingHeaders() {
+    var SCROLL_THRESHOLD = 12; // px — margen mínimo antes de colapsar
+
+    function _attachCollapseListener(tabPage, headerSelector) {
+      if (!tabPage) return;
+      var _ticking = false;
+      tabPage.addEventListener('scroll', function() {
+        if (_ticking) return;
+        _ticking = true;
+        requestAnimationFrame(function() {
+          var hdr = document.querySelector(headerSelector);
+          if (hdr) {
+            var shouldCollapse = tabPage.scrollTop > SCROLL_THRESHOLD;
+            if (shouldCollapse !== hdr.classList.contains('hdr-collapsed')) {
+              hdr.classList.toggle('hdr-collapsed', shouldCollapse);
+              // Recalculate --header-h after collapse state changes
+              setTimeout(function() {
+                var hh = Math.ceil(hdr.getBoundingClientRect().height);
+                if (hh > 0) document.documentElement.style.setProperty('--header-h', hh + 'px');
+              }, 260); // after CSS transition completes
+            }
+          }
+          _ticking = false;
+        });
+      }, { passive: true });
+    }
+
+    // Attach after DOM is ready — tab-pages are siblings inside swipe-track
+    document.addEventListener('DOMContentLoaded', function() {
+      var pages = document.querySelectorAll('.tab-page');
+      if (pages[0]) _attachCollapseListener(pages[0], '.tpv-page-header');
+      if (pages[1]) _attachCollapseListener(pages[1], '.dash-page-header');
+      if (pages[2]) _attachCollapseListener(pages[2], '.alm-page-header');
+    });
+    // Also try immediately (if DOM already loaded)
+    if (document.readyState !== 'loading') {
+      var pages = document.querySelectorAll('.tab-page');
+      if (pages[0]) _attachCollapseListener(pages[0], '.tpv-page-header');
+      if (pages[1]) _attachCollapseListener(pages[1], '.dash-page-header');
+      if (pages[2]) _attachCollapseListener(pages[2], '.alm-page-header');
+    }
+  })();
 })();
 
 // ── Pull-to-refresh Dashboard — v1.3.22 ──────────────────────────────────
@@ -19675,6 +19753,7 @@ const tpv = (() => {
     // Render items expandidos
     _renderDockItems();
     _renderTicketBadge();
+    _updateTpvHeaderSub();
   }
 
   function _renderDockItems() {
@@ -19857,6 +19936,21 @@ const tpv = (() => {
     if (!t) return;
     t.items = _cartToItems();
     State.set.saveTicket(t);
+  }
+
+  // v1.3.179: subtítulo dinámico TPV — artículos y total del ticket activo
+  function _updateTpvHeaderSub() {
+    var el = document.getElementById('tpv-header-sub');
+    if (!el) return;
+    var items = cartItems();
+    if (!items.length) {
+      el.textContent = 'Selecciona productos para comenzar';
+    } else {
+      var nArts = items.reduce(function(s, i) { return s + (i.q || 1); }, 0);
+      var total = cartTotal();
+      var feur = function(v) { return v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €'; };
+      el.textContent = nArts + ' artículo' + (nArts !== 1 ? 's' : '') + ' · ' + feur(total);
+    }
   }
 
   function _renderTicketBadge() {
