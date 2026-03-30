@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.199-dev</title>
+<title>Dashwey v1.3.200-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10561,7 +10561,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.199-dev';
+  const _APP_VERSION = 'v1.3.200-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19652,8 +19652,80 @@ const tpv = (() => {
       el._tapTimer = setTimeout(() => el.classList.remove('tapped'), 250);
     }
 
-    // 3. Mini toast
+    // 3. Fly animation con imagen real (v1.3.200)
+    _tpvFlyToCart(id, el);
+
+    // 4. Mini toast
     _showMiniToast('+ ' + nombre);
+  }
+
+  function _tpvFlyToCart(prodId, triggerEl) {
+    try {
+      const p = State.get.prod(prodId);
+      if (!p) return;
+      const foto = p.foto || null;
+
+      // Origen: thumbnail del elemento tocado o su centro
+      const thumbEl = triggerEl ? triggerEl.querySelector('img, .hot-e') : null;
+      const srcRect = (thumbEl || triggerEl)?.getBoundingClientRect();
+      if (!srcRect) return;
+      const ox = srcRect.left + srcRect.width  / 2;
+      const oy = srcRect.top  + srcRect.height / 2;
+
+      // Destino: botón Cobrar o dock del TPV
+      const destEl = document.getElementById('tpv-cobrar-btn')
+                  || document.getElementById('tpv-ticket-dock')
+                  || document.querySelector('.tpv-dock-total');
+      const destRect = destEl?.getBoundingClientRect();
+      const tx = destRect ? (destRect.left + destRect.width  / 2) : window.innerWidth  - 60;
+      const ty = destRect ? (destRect.top  + destRect.height / 2) : window.innerHeight - 80;
+
+      // Elemento volador
+      const pill = document.createElement('div');
+      if (foto) {
+        pill.innerHTML = '<img src="' + foto + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px;">';
+        pill.style.cssText = [
+          'position:fixed', 'z-index:9999', 'pointer-events:none',
+          'width:40px', 'height:40px', 'border-radius:10px',
+          'overflow:hidden', 'background:var(--surface)',
+          'box-shadow:0 4px 16px rgba(0,0,0,0.20)',
+          'left:' + ox + 'px', 'top:' + oy + 'px',
+          'transform:translate(-50%,-50%)'
+        ].join(';');
+      } else {
+        // Fallback: pill "+1"
+        pill.className = 'alm-fly-pill';
+        pill.textContent = '+1';
+        pill.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;' +
+          'left:' + ox + 'px;top:' + oy + 'px;transform:translate(-50%,-50%)';
+      }
+      document.body.appendChild(pill);
+
+      // Cálculo trayectoria
+      const dx = tx - ox;
+      const dy = ty - oy;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const dur  = Math.min(500, Math.max(320, dist * 0.5));
+      const arcH = Math.max(40, Math.abs(dy) * 0.30);
+
+      // Web Animations API
+      const anim = pill.animate([
+        { transform: 'translate(-50%,-50%) translate(0,0) scale(1)',         opacity: 1 },
+        { transform: \`translate(-50%,-50%) translate(\${dx*0.5}px,\${dy*0.3-arcH}px) scale(0.85)\`, opacity: 1, offset: 0.45 },
+        { transform: \`translate(-50%,-50%) translate(\${dx}px,\${dy}px) scale(0.3)\`,  opacity: 0 }
+      ], { duration: dur, easing: 'cubic-bezier(0.25,0.46,0.45,0.94)', fill: 'forwards' });
+
+      anim.onfinish = () => {
+        pill.remove();
+        // Bump en destino
+        if (destEl) {
+          destEl.classList.remove('alm-cart-bump');
+          void destEl.offsetWidth;
+          destEl.classList.add('alm-cart-bump');
+          destEl.addEventListener('animationend', () => destEl.classList.remove('alm-cart-bump'), { once: true });
+        }
+      };
+    } catch(e) {}
   }
 
   function _showMiniToast(msg) {
@@ -20368,7 +20440,7 @@ function _parseIva(iva) {
     _updateAcceptBtn();
     updateBadge();
     // Pasar coordenadas ya capturadas a _flyToCart
-    _flyToCart({ clientX: _ox, clientY: _oy });
+    _flyToCart({ clientX: _ox, clientY: _oy }, prodId);
     _saveCarritoLocal();
     showToast(esc(p.nombre) + ' +1');
   }
@@ -22855,13 +22927,26 @@ function _parseIva(iva) {
   //   4. Al llegar: bump en el icono destino
   //   5. Al terminar: limpiar elemento del DOM
   // ─────────────────────────────────────────────────────────────────
-  function _flyToCart(evt) {
+  function _flyToCart(evt, prodId) {
     try {
-      // ── Origen: posición del toque ──────────────────────────────
-      const ox = evt?.changedTouches?.[0]?.clientX ?? evt?.clientX ?? (window.innerWidth / 2);
-      const oy = evt?.changedTouches?.[0]?.clientY ?? evt?.clientY ?? (window.innerHeight / 2);
+      // v1.3.200: usar imagen real del artículo si existe ──────────
+      const p = prodId ? State.get.prod(prodId) : null;
+      const foto = p?.foto || null;
 
-      // v1.3.141: destino = icono Cesta en la progress bar (alm-step-cesta)
+      // ── Origen: thumbnail del artículo si es posible ────────────
+      // Buscar el thumb en el item del catálogo
+      const itemEl = prodId ? document.getElementById('aci-' + prodId) : null;
+      const thumbEl = itemEl ? itemEl.querySelector('.alm-cat-thumb img, .alm-cat-thumb') : null;
+      const thumbRect = thumbEl ? thumbEl.getBoundingClientRect() : null;
+
+      const ox = thumbRect
+        ? (thumbRect.left + thumbRect.width / 2)
+        : (evt?.changedTouches?.[0]?.clientX ?? evt?.clientX ?? (window.innerWidth / 2));
+      const oy = thumbRect
+        ? (thumbRect.top + thumbRect.height / 2)
+        : (evt?.changedTouches?.[0]?.clientY ?? evt?.clientY ?? (window.innerHeight / 2));
+
+      // ── Destino: icono Cesta en la progress bar ─────────────────
       const destEl = document.getElementById('alm-step-cesta')
                   || document.getElementById('alm-hdr-cart-badge')?.closest('.alm-hdr-icon-btn')
                   || document.getElementById('alm-pedido-col');
@@ -22869,14 +22954,27 @@ function _parseIva(iva) {
       const tx = destRect ? (destRect.left + destRect.width  / 2) : window.innerWidth  - 40;
       const ty = destRect ? (destRect.top  + destRect.height / 2) : window.innerHeight - 80;
 
-      // ── Crear pill "+1" ──────────────────────────────────────────
+      // ── Crear elemento volador: imagen real o pill fallback ──────
       const pill = document.createElement('div');
       pill.className = 'alm-fly-pill';
-      pill.textContent = '+1';
-      // Centrar la pill sobre el punto de origen
-      pill.style.left = ox + 'px';
-      pill.style.top  = oy + 'px';
-      pill.style.transform = 'translate(-50%, -50%)';
+      if (foto) {
+        // Imagen real: thumbnail cuadrado que vuela
+        pill.innerHTML = '<img src="' + foto + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px;">';
+        pill.style.cssText = [
+          'position:fixed', 'z-index:9999', 'pointer-events:none',
+          'width:44px', 'height:44px', 'border-radius:10px',
+          'overflow:hidden', 'background:var(--surface)',
+          'box-shadow:0 4px 16px rgba(0,0,0,0.22)',
+          'left:' + ox + 'px', 'top:' + oy + 'px',
+          'transform:translate(-50%,-50%)'
+        ].join(';');
+      } else {
+        // Fallback: pill "+1" original
+        pill.textContent = '+1';
+        pill.style.left = ox + 'px';
+        pill.style.top  = oy + 'px';
+        pill.style.transform = 'translate(-50%, -50%)';
+      }
       document.body.appendChild(pill);
 
       // ── Calcular desplazamiento relativo ────────────────────────
