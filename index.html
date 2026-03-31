@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.248-dev</title>
+<title>Dashwey v1.3.249-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11281,7 +11281,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.248-dev';
+  const _APP_VERSION = 'v1.3.249-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11878,11 +11878,14 @@ const ui = (() => {
     try { // v1.2.29: error boundary
     const drawer  = document.getElementById('settings-drawer');
     const overlay = document.getElementById('settings-overlay');
-    // v1.2.27: activar will-change solo durante el cierre
     if (drawer) drawer.style.willChange = 'transform';
-    if (drawer)  drawer.classList.remove('open');
+    // v1.3.248: limpiar sub-panel y sub-open al cerrar settings — evita estado corrupto
+    if (drawer)  drawer.classList.remove('open', 'sub-open');
+    document.getElementById('sd-sub-panel')?.classList.remove('open');
     if (overlay) overlay.classList.remove('open');
     document.getElementById('header')?.classList.remove('menu-open');
+    // Cerrar SideSheets si hay alguno abierto
+    try { if (window.SideSheet) window.SideSheet.closeAll(); } catch(_) {}
     setTimeout(() => { if (drawer) drawer.style.willChange = ''; }, Utils.ANIM_DELAY);
     } catch(e) { console.error('[Dashwey] closeSettings error:', e); } // v1.2.29
   }
@@ -20276,28 +20279,34 @@ window.SideSheet = (function() {
 
   function closeAll() {
     var overlay = document.getElementById('ss-overlay');
-    if (overlay) {
-      overlay.classList.remove('ss-active');
-      // v1.3.212: immediate hide + transition fallback
-      overlay.style.display = 'none';
-    }
-    // v1.3.211: also close settings drawer if open
+    // v1.3.248: quitar ss-active primero (fade del backdrop)
+    // NO ocultar display:none todavía — los paneles necesitan 350ms para animar fuera
+    if (overlay) overlay.classList.remove('ss-active');
+
+    // v1.3.211: cerrar settings drawer si está abierto
     try {
       var drawer = document.getElementById('settings-drawer');
       var sdOvl  = document.getElementById('settings-overlay');
       if (drawer && drawer.classList.contains('open')) {
-        drawer.classList.remove('open');
+        drawer.classList.remove('open', 'sub-open');
         if (sdOvl) sdOvl.classList.remove('open');
+        document.getElementById('sd-sub-panel')?.classList.remove('open');
       }
     } catch(e) {}
+
+    var total = _stack.length;
     _stack.slice().reverse().forEach(function(panel, i) {
       setTimeout(function() {
         panel.classList.remove('ss-open', 'ss-behind');
-        // v1.3.216: hard timeout — transitionend unreliable on Android WebView
-        var _removeTimer = setTimeout(function() { if (panel.parentNode) panel.remove(); }, 350);
+        var _removeTimer = setTimeout(function() {
+          if (panel.parentNode) panel.remove();
+          // Ocultar overlay solo cuando el último panel se elimina
+          if (i === total - 1 && overlay) overlay.style.display = 'none';
+        }, 350);
         panel.addEventListener('transitionend', function() {
           clearTimeout(_removeTimer);
           if (panel.parentNode) panel.remove();
+          if (i === total - 1 && overlay) overlay.style.display = 'none';
         }, { once: true });
       }, i * 40);
     });
