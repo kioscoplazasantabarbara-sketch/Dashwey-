@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.234-dev</title>
+<title>Dashwey v1.3.235-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8497,8 +8497,8 @@ function _authTabSafe(tab) {
            box-shadow:0 4px 16px rgba(139,26,47,0.32),0 2px 6px rgba(0,0,0,0.12);
            touch-action:manipulation;-webkit-tap-highlight-color:transparent;
            transition:transform 180ms var(--spring),opacity 160ms ease,box-shadow 180ms var(--spring);">
-    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" style="pointer-events:none">
-      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="pointer-events:none">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
     </svg>
   </button>
 </div>
@@ -11267,7 +11267,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.234-dev';
+  const _APP_VERSION = 'v1.3.235-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20736,6 +20736,27 @@ const tpv = (() => {
       const div = document.createElement('div');
       div.className = 'tpv-prod-item';
       div.onclick = () => addCart(p.id, div);
+      // v1.3.235: long press → menú contextual artículo en TPV
+      (function(pid, el) {
+        let _t = null, _sx = 0, _sy = 0;
+        el.addEventListener('touchstart', function(e) {
+          if (e.touches[0]) { _sx = e.touches[0].clientX; _sy = e.touches[0].clientY; }
+          _t = setTimeout(function() {
+            _t = null;
+            try { Utils.triggerHaptic('medium'); } catch(_) {}
+            _openTpvProdCtxMenu(pid, el);
+          }, 500);
+        }, { passive: true });
+        el.addEventListener('touchmove', function(e) {
+          if (!_t) return;
+          const dx = Math.abs(e.touches[0].clientX - _sx);
+          const dy = Math.abs(e.touches[0].clientY - _sy);
+          if (dx > 14 || dy > 14) { clearTimeout(_t); _t = null; }
+        }, { passive: true });
+        el.addEventListener('touchend', function() {
+          if (_t) { clearTimeout(_t); _t = null; }
+        }, { passive: true });
+      })(p.id, div);
       div.innerHTML = `
         <div class="tpv-prod-thumb">${thumb}</div>
         <div class="tpv-prod-info">
@@ -21350,6 +21371,55 @@ const tpv = (() => {
   _applyTabletClass();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
+
+  // v1.3.235: menú contextual long press en lista de productos TPV
+  function _openTpvProdCtxMenu(prodId, sourceEl) {
+    const p = State.get.prod(prodId); if (!p) return;
+    const prev = document.getElementById('cat-ctx-menu'); if (prev) prev.remove();
+    const rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
+    const menu = document.createElement('div');
+    menu.id = 'cat-ctx-menu';
+    menu.className = 'cat-float-menu';
+    menu.style.cssText = 'display:flex;flex-direction:row;gap:4px;padding:6px 8px;border-radius:16px;';
+    const actions = [
+      {
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+        label: 'Editar',
+        fn: () => { menu.remove(); try { App.alm.openEditArt(prodId); } catch(_) {} }
+      },
+      {
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+        label: 'Al carrito',
+        fn: () => { menu.remove(); addCart(prodId, sourceEl); }
+      },
+    ];
+    actions.forEach(function(a) {
+      const btn = document.createElement('button');
+      btn.className = 'cat-float-btn';
+      btn.style.cssText = 'flex-direction:column;gap:3px;min-width:52px;padding:8px 6px;';
+      btn.innerHTML = a.icon + '<span style="font-size:10px;font-weight:600;letter-spacing:0.2px">' + a.label + '</span>';
+      btn.addEventListener('touchstart', function(e) { e.stopPropagation(); e.preventDefault(); a.fn(); }, { passive: false });
+      btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
+      menu.appendChild(btn);
+    });
+    const estW = 140, estH = 80, tabH = 60;
+    const safeBottom = window.innerHeight - tabH - 8;
+    let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - estW - 8));
+    let top;
+    if (rect && rect.top - estH - 8 >= 60) { top = rect.top - estH - 8; }
+    else if (rect) { top = Math.min(rect.bottom + 8, safeBottom - estH); }
+    else { top = window.innerHeight / 2 - estH / 2; }
+    top = Math.max(60, Math.min(top, safeBottom - estH));
+    menu.style.left = left + 'px';
+    menu.style.top  = top  + 'px';
+    document.body.appendChild(menu);
+    requestAnimationFrame(function() {
+      function _closeCtx(e) { if (!menu.contains(e.target)) menu.remove(); }
+      document.addEventListener('touchstart', _closeCtx, { capture: true, passive: true, once: true });
+      document.addEventListener('click',      _closeCtx, { capture: true, once: true });
+    });
+  }
 
   return {
     render, addCart, chgQ, setcat, catsScroll, onSearch, clearSearch, toggleDock,
