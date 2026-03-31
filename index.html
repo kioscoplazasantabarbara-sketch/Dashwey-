@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-3-260-dev";
+      var CURRENT_CACHE = "dashwey-v1-3-261-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.260-dev</title>
+<title>Dashwey v1.3.261-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5238,9 +5238,9 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
 .sd-scroll::-webkit-scrollbar { display: none; }
 .sd-section-lbl { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-soft); padding: 14px 0 6px; }
 .sd-group { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; margin-bottom: 4px; }
-.sd-row { display: flex; align-items: center; gap: 13px; padding: 13px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; }
+.sd-row { display: flex; align-items: center; gap: 13px; padding: 13px 14px; min-height: 48px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .sd-row:last-child { border-bottom: none; }
-.sd-row:active { background: rgba(0,0,0,0.03); }
+.sd-row:active { background: rgba(0,0,0,0.05); opacity: 0.82; transform: scale(0.99); transition: transform 0.08s, opacity 0.08s; }
 .sd-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
 .sd-info { flex: 1; }
 .sd-title { font-size: 14px; font-weight: 500; color: var(--ink); }
@@ -5299,12 +5299,17 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
   width: 200%;        /* 2 × 100% del viewport */
   height: 100%;
   transform: translateX(0);
-  transition: transform 0.28s var(--ease);
+  /* v1.3.260b: cubic-bezier explícito — no depende de --ease; 0.26s = rápido sin parecer abrupto */
+  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: transform;
 }
-/* Cuando hay sección activa → deslizar a la derecha (mostrar sd-section) */
+/* Cuando hay sección activa → deslizar a la izquierda (mostrar sd-section) */
 #sd-track.sd-in-section {
   transform: translateX(-50%);  /* 50% de 200% = 100% del viewport */
+}
+/* Bloquear interacción durante la transición — evita taps accidentales */
+#sd-track.sd-transitioning {
+  pointer-events: none;
 }
 
 /* Cada vista ocupa exactamente el ancho del viewport */
@@ -11385,7 +11390,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.260-dev';
+  const _APP_VERSION = 'v1.3.261-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11987,9 +11992,11 @@ const ui = (() => {
     if (drawer)  drawer.classList.remove('open', 'sub-open');
     try {
       var _track = document.getElementById('sd-track');
-      if (_track) _track.classList.remove('sd-in-section');
+      if (_track) _track.classList.remove('sd-in-section', 'sd-transitioning');
       var _sc = document.getElementById('sd-section-content');
       if (_sc) { setTimeout(function(){ _sc.innerHTML=''; }, 300); }
+      // Reset guard
+      try { if (typeof _sdTransitioning !== 'undefined') _sdTransitioning = false; } catch(_i) {}
     } catch(_) {}
     document.getElementById('sd-sub-panel')?.classList.remove('open');
     if (overlay) overlay.classList.remove('open');
@@ -12013,38 +12020,67 @@ const ui = (() => {
   // Header fijo (avatar + ctx-selector) NUNCA se re-renderiza.
   // Un solo overflow-x:hidden en #sd-body, sin capas absolutas.
 
+  // ── _sdTransitioning: bloquea clicks durante la animación del slide ──
+  var _sdTransitioning = false;
+
   function sdSubOpen(title, html) {
+    // GUARD: transición en curso — ignorar tap accidental
+    if (_sdTransitioning) return;
+
     var track   = document.getElementById('sd-track');
     var content = document.getElementById('sd-section-content');
     var titleEl = document.getElementById('sd-section-title');
     if (!track || !content) return;
-    // GUARD: misma sección ya activa
+
+    // GUARD: misma sección ya activa — no re-renderizar
     if (track.classList.contains('sd-in-section') && titleEl && titleEl.textContent === title) return;
-    // Scroll al top del contenido antes de mostrar
-    content.scrollTop = 0;
+
+    // Actualizar solo el contenido dinámico (header nunca se toca)
     if (titleEl) titleEl.textContent = title;
+    content.scrollTop = 0;
     content.innerHTML = html;
-    // Trigger slide: un rAF para garantizar que el DOM se pintó antes de animar
+
+    // Marcar transición activa + bloquear pointer-events
+    _sdTransitioning = true;
+    track.classList.add('sd-transitioning');
+
+    // Doble rAF: primer frame pinta el contenido, segundo dispara la transición CSS
     requestAnimationFrame(function() {
-      track.classList.add('sd-in-section');
+      requestAnimationFrame(function() {
+        track.classList.add('sd-in-section');
+        // Liberar guard al finalizar la transición (260ms + 20ms buffer)
+        setTimeout(function() {
+          _sdTransitioning = false;
+          track.classList.remove('sd-transitioning');
+        }, 280);
+      });
     });
   }
 
   function sdSubClose() {
+    // GUARD: transición en curso — ignorar
+    if (_sdTransitioning) return;
+
     var track   = document.getElementById('sd-track');
     var content = document.getElementById('sd-section-content');
     var mainEl  = document.getElementById('sd-main');
     if (!track) return;
+
+    // Marcar transición
+    _sdTransitioning = true;
+    track.classList.add('sd-transitioning');
     track.classList.remove('sd-in-section');
-    // Limpiar contenido tras la transición (evita flash en próxima apertura)
-    if (content) {
-      setTimeout(function() {
-        // Solo limpiar si ya no estamos en sección
-        if (!track.classList.contains('sd-in-section')) {
-          content.innerHTML = '';
-        }
-      }, 300);
-    }
+
+    // Liberar guard + limpiar contenido tras la transición
+    setTimeout(function() {
+      _sdTransitioning = false;
+      track.classList.remove('sd-transitioning');
+      // Limpiar solo si efectivamente volvimos a main
+      if (content && !track.classList.contains('sd-in-section')) {
+        content.innerHTML = '';
+      }
+    }, 280);
+
     // Scroll sd-main al top para consistencia
     if (mainEl) mainEl.scrollTop = 0;
   }
