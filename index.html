@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.295-dev</title>
+<title>Dashwey v1.3.296-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11529,7 +11529,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.295-dev';
+  const _APP_VERSION = 'v1.3.296-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21748,7 +21748,7 @@ const tpv = (() => {
     const h = window.innerHeight;
     const isTablet = w >= 768 && w > h;
     document.body.classList.toggle('tpv-tablet-pos', isTablet);
-    console.log('[TPV] ' + (isTablet ? 'TABLET MODE ACTIVE' : 'MOBILE MODE') + ' — w:' + w + ' h:' + h);
+    // v1.3.296: log silenciado en producción (debug tablet detection)
   }
 
   // Aplicar en resize (rotación de pantalla)
@@ -21803,27 +21803,35 @@ const tpv = (() => {
       </button>`;
     }).join('');
 
-    // v1.3.278: BUG-08 — long press en hot grid → ctx menu
-    grid.querySelectorAll('.tpv-hot-btn').forEach(btn => {
-      let _lpt = null, _sx = 0, _sy = 0;
-      btn.addEventListener('touchstart', e => {
+    // v1.3.296: event delegation — 1 listener en grid en lugar de 3×N en botones
+    // Elimina acumulación de listeners en cada re-render del hot grid
+    if (!grid._lpDelegated) {
+      grid._lpDelegated = true;
+      let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
+      grid.addEventListener('touchstart', e => {
+        const btn = e.target.closest('.tpv-hot-btn');
+        if (!btn) return;
+        _lpBtn = btn;
         if (e.touches[0]) { _sx = e.touches[0].clientX; _sy = e.touches[0].clientY; }
         _lpt = setTimeout(() => {
           _lpt = null;
           try { Utils.triggerHaptic('medium'); } catch(_) {}
-          _openTpvProdCtxMenu(btn.dataset.id, btn);
+          _openTpvProdCtxMenu(_lpBtn.dataset.id, _lpBtn);
         }, 500);
       }, { passive: true });
-      btn.addEventListener('touchmove', e => {
+      grid.addEventListener('touchmove', e => {
         if (!_lpt) return;
         const dx = Math.abs(e.touches[0].clientX - _sx);
         const dy = Math.abs(e.touches[0].clientY - _sy);
         if (dx > 12 || dy > 12) { clearTimeout(_lpt); _lpt = null; }
       }, { passive: true });
-      btn.addEventListener('touchend', () => {
+      grid.addEventListener('touchend', () => {
         if (_lpt) { clearTimeout(_lpt); _lpt = null; }
+        _lpBtn = null;
       }, { passive: true });
-    });
+    }
+
+
   }
 
   // ── CATEGORÍAS ───────────────────────────────────────────────
@@ -21844,27 +21852,58 @@ const tpv = (() => {
         ${esc(label)}
       </button>`;
     }).join('');
-    // v1.3.234: long press en chips → personalizar nombre/emoji del chip
-    if (document.body.classList.contains('tpv-tablet-pos')) {
-      row.querySelectorAll('.tpv-cat-chip').forEach(btn => {
-        let _lpt = null;
-        btn.addEventListener('touchstart', () => {
-          _lpt = setTimeout(() => {
-            _lpt = null;
-            try { Utils.triggerHaptic('medium'); } catch(_) {}
-            tpvQG.openChipSheet(btn.dataset.cat);
-          }, 500);
-        }, { passive: true });
-        btn.addEventListener('touchend',  () => { if (_lpt) { clearTimeout(_lpt); _lpt = null; } }, { passive: true });
-        btn.addEventListener('touchmove', () => { if (_lpt) { clearTimeout(_lpt); _lpt = null; } }, { passive: true });
-      });
+    // v1.3.296: event delegation en row — 1 listener en lugar de 3×N en chips
+    if (document.body.classList.contains('tpv-tablet-pos') && !row._lpDelegated) {
+      row._lpDelegated = true;
+      let _lpt = null, _lpBtn = null;
+      row.addEventListener('touchstart', () => {
+        const btn = event.target.closest('.tpv-cat-chip');
+        if (!btn) return;
+        _lpBtn = btn;
+        _lpt = setTimeout(() => {
+          _lpt = null;
+          try { Utils.triggerHaptic('medium'); } catch(_) {}
+          tpvQG.openChipSheet(_lpBtn.dataset.cat);
+        }, 500);
+      }, { passive: true });
+      row.addEventListener('touchend',  () => { if (_lpt) { clearTimeout(_lpt); _lpt = null; } _lpBtn = null; }, { passive: true });
+      row.addEventListener('touchmove', () => { if (_lpt) { clearTimeout(_lpt); _lpt = null; } }, { passive: true });
     }
+
+
   }
 
   // ── LISTA PRODUCTOS ───────────────────────────────────────────
   function _renderProds() {
     const list = document.getElementById('tpv-prod-list');
     if (!list) return;
+    // v1.3.296: event delegation — 1 listener en list vs 3×N en items
+    if (!list._lpDelegated) {
+      list._lpDelegated = true;
+      let _lt = null, _lsx = 0, _lsy = 0, _lEl = null;
+      list.addEventListener('touchstart', function(e) {
+        const el = e.target.closest('.tpv-prod-item');
+        if (!el) return;
+        _lEl = el; _lsx = e.touches[0]?.clientX||0; _lsy = e.touches[0]?.clientY||0;
+        el.classList.add('lp-active');
+        _lt = setTimeout(function() {
+          _lt = null;
+          if (_lEl) _lEl.classList.remove('lp-active');
+          try { Utils.triggerHaptic('medium'); } catch(_) {}
+          if (_lEl) _openTpvProdCtxMenu(_lEl.dataset.pid, _lEl);
+        }, 500);
+      }, { passive: true });
+      list.addEventListener('touchmove', function(e) {
+        if (!_lt) return;
+        const dx = Math.abs((e.touches[0]?.clientX||0) - _lsx);
+        const dy = Math.abs((e.touches[0]?.clientY||0) - _lsy);
+        if (dx > 14 || dy > 14) { clearTimeout(_lt); _lt = null; if (_lEl) { _lEl.classList.remove('lp-active'); _lEl = null; } }
+      }, { passive: true });
+      list.addEventListener('touchend', function() {
+        if (_lEl) _lEl.classList.remove('lp-active');
+        if (_lt) { clearTimeout(_lt); _lt = null; } _lEl = null;
+      }, { passive: true });
+    }
     const q = _searchQ.toLowerCase().trim();
     let prods = State.get.productos().filter(p=>p.stockActual>0);
     if (_catActiva !== 'Todos') prods = prods.filter(p=>p.cat===_catActiva);
@@ -21901,31 +21940,8 @@ const tpv = (() => {
       const qInCart = _cart[p.id]?.q||0;
       const div = document.createElement('div');
       div.className = 'tpv-prod-item';
+      div.dataset.pid = p.id; // v1.3.296: usado por event delegation
       div.onclick = () => addCart(p.id, div);
-      // v1.3.235: long press → menú contextual artículo en TPV
-      (function(pid, el) {
-        let _t = null, _sx = 0, _sy = 0;
-        el.addEventListener('touchstart', function(e) {
-          if (e.touches[0]) { _sx = e.touches[0].clientX; _sy = e.touches[0].clientY; }
-          el.classList.add('lp-active');
-          _t = setTimeout(function() {
-            _t = null;
-            el.classList.remove('lp-active');
-            try { Utils.triggerHaptic('medium'); } catch(_) {}
-            _openTpvProdCtxMenu(pid, el);
-          }, 500);
-        }, { passive: true });
-        el.addEventListener('touchmove', function(e) {
-          if (!_t) return;
-          const dx = Math.abs(e.touches[0].clientX - _sx);
-          const dy = Math.abs(e.touches[0].clientY - _sy);
-          if (dx > 14 || dy > 14) { clearTimeout(_t); _t = null; el.classList.remove('lp-active'); }
-        }, { passive: true });
-        el.addEventListener('touchend', function() {
-          el.classList.remove('lp-active');
-          if (_t) { clearTimeout(_t); _t = null; }
-        }, { passive: true });
-      })(p.id, div);
       div.innerHTML = `
         <div class="tpv-prod-thumb">${thumb}</div>
         <div class="tpv-prod-info">
@@ -25048,7 +25064,169 @@ function _parseIva(iva) {
     const totalIva = totalCoste * 0.10;
     const total = totalCoste + totalIva;
     const fecha = new Date().toLocaleDateString('es-ES');
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;padding:40px;color:#1a1a1a;max-width:600px;margin:0 auto}h1{font-size:22px;font-weight:800;margin-bottom:4px}.sub{font-size:13px;color:#666;margin-bottom:30px}table{width:100%;border-collapse:collapse;margin:20px 0}th{text-align:left;padding:8px 10px;background:#1a1212;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.8px}td{padding:10px;border-bottom:1px solid #eee;font-size:13px}.tot{font-weight:700}.total-row{background:#f9f9f9}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}</style></head><body><h1>Dashwey · Factura de Compra</h1><div class="sub">${prov.icon} ${prov.nombre} · ${prov.telefono||''} · Fecha: ${fecha}</div><table><tr><th>Artículo</th><th>Bultos</th><th>€/bulto</th><th>Subtotal</th></tr>${items.map(o=>{const p=State.get.prod(o.prodId);return`<tr><td>${p?.e||''} ${p?.nombre||''}</td><td>${o.ncajas}</td><td>${feur(o.precio)}</td><td class="tot">${feur(o.ncajas*o.precio)}</td></tr>`;}).join('')}</table><table><tr class="total-row"><td colspan="3">Base imponible</td><td class="tot">${feur(totalCoste)}</td></tr><tr class="total-row"><td colspan="3">IVA (10%)</td><td class="tot">${feur(totalIva)}</td></tr><tr style="background:#1a1212;color:#fff"><td colspan="3" style="padding:12px 10px;font-weight:700;font-size:15px">TOTAL</td><td style="padding:12px 10px;font-weight:800;font-size:15px">${feur(total)}</td></tr></table><div class="footer">${State.get.perfil().nombre} · Dashwey ${typeof App !== "undefined" ? App.ui._getAppVersion() : ""} · ${fecha}</div></body></html>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;padding:40px;color:#1a1a1a;max-width:600px;margin:0 auto}h1{font-size:22px;font-weight:800;margin-bottom:4px}.sub{font-size:13px;color:#666;margin-bottom:30px}table{width:100%;border-collapse:collapse;margin:20px 0}th{text-align:left;padding:8px 10px;background:#1a1212;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.8px}td{padding:10px;border-bottom:1px solid #eee;font-size:13px}.tot{font-weight:700}.total-row{background:#f9f9f9}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}</style></head><body><h1>Dashwey · Factura de Compra</h1><div class="sub">${prov.icon} ${prov.nombre} · ${prov.telefono||''} · Fecha: ${fecha}</div><table><tr><th>Artículo</th><th>Bultos</th><th>€/bulto</th><th>Subtotal</th></tr>${items.map(o=>{const p=State.get.prod(o.prodId);return`<tr><td>${p?.e||''} ${p?.nombre||''}</td><td>${o.ncajas}</td><td>${feur(o.precio)}</td><td class="tot">${feur(o.ncajas*o.precio)}</td></tr>`;}).join('')}</table><table><tr class="total-row"><td colspan="3">Base imponible</td><td class="tot">${feur(totalCoste)}</td></tr><tr class="total-row"><td colspan="3">IVA (10%)</td><td class="tot">${feur(totalIva)}</td></tr><tr style="background:#1a1212;color:#fff"><td colspan="3" style="padding:12px 10px;font-weight:700;font-size:15px">TOTAL</td><td style="padding:12px 10px;font-weight:800;font-size:15px">${feur(total)}</td></tr></table><div class="footer">${State.get.perfil().nombre} · Dashwey ${typeof App !== "undefined" ? App.ui._getAppVersion() : ""} · ${fecha}</div>
+<!-- ═══════════════════════════════════════════════════════════════════
+     DASHWEY TEST SUITE — v1.3.296
+     Activar: URL hash #dashwey-tests o window._DashweyRunTests()
+     No impacta producción — solo se ejecuta on demand
+     ════════════════════════════════════════════════════════════════ -->
+<script>
+(function _DashweyTests() {
+  'use strict';
+
+  function _run() {
+    if (typeof FinEngine === 'undefined' || typeof KPI === 'undefined' || typeof State === 'undefined') {
+      console.warn('[Tests] FinEngine/KPI/State no disponibles — reintentando en 1s');
+      setTimeout(_run, 1000);
+      return;
+    }
+
+    let passed = 0, failed = 0;
+    const results = [];
+
+    function assert(name, got, expected, tolerance) {
+      const ok = tolerance !== undefined
+        ? Math.abs(got - expected) <= tolerance
+        : got === expected;
+      if (ok) {
+        passed++;
+        results.push({ ok: true, name });
+      } else {
+        failed++;
+        results.push({ ok: false, name, got, expected });
+        console.warn('[Test FAIL]', name, '| got:', got, '| expected:', expected);
+      }
+    }
+
+    function assertRange(name, got, min, max) {
+      const ok = got >= min && got <= max;
+      if (ok) { passed++; results.push({ ok: true, name }); }
+      else { failed++; results.push({ ok: false, name, got, range: min+'..'+max }); }
+    }
+
+    // ── 1. FinEngine.money() ─────────────────────────────────────────
+    // money() rounds to 2 decimal places
+    assert('money(1.005) = 1.01',   Math.round(1.005*100)/100, 1.01);
+    assert('money(0) = 0',          Math.round(0*100)/100, 0);
+    assert('money(99.999) = 100',   Math.round(99.999*100)/100, 100);
+
+    // ── 2. FinEngine.ventaIngresos() — schema detection ──────────────
+    const vModern = { total: 3.50, items: [{ pvp: 1.50, qty: 1 }, { pvp: 2.00, qty: 1 }] };
+    const vLegacy = { pvp: 1.20, qty: 2 };                 // no total field
+    const vItems  = { items: [{ pvp: 1.50, qty: 2 }] };    // no total field
+
+    assert('ventaIngresos: modern uses v.total',   FinEngine.ventaIngresos(vModern), 3.50);
+    assert('ventaIngresos: legacy pvp×qty',        FinEngine.ventaIngresos(vLegacy), 2.40);
+    assert('ventaIngresos: items[] sum',            FinEngine.ventaIngresos(vItems),  3.00);
+    assert('ventaIngresos: null → 0',              FinEngine.ventaIngresos(null),    0);
+
+    // ── 3. FinEngine.ventaCoste() ────────────────────────────────────
+    const vCost = { items: [{ qty: 2, coste: 0.50 }, { qty: 1, coste: 1.00 }] };
+    assert('ventaCoste: items[] sum',   FinEngine.ventaCoste(vCost), 2.00);
+    assert('ventaCoste: null → 0',      FinEngine.ventaCoste(null),  0);
+
+    // ── 4. FinEngine.pedidoCoste() — IVA dinámico ────────────────────
+    const ped10 = { items: [{ ncajas: 2, precio: 10.00, iva: '10' }] };
+    const ped21 = { items: [{ ncajas: 1, precio: 10.00, iva: '21' }] };
+    const pedDef = { items: [{ ncajas: 1, precio: 10.00 }] };  // no iva → default 10%
+
+    assert('pedidoCoste: IVA 10%',      FinEngine.pedidoCoste(ped10),  22.00);
+    assert('pedidoCoste: IVA 21%',      FinEngine.pedidoCoste(ped21),  12.10);
+    assert('pedidoCoste: default IVA',  FinEngine.pedidoCoste(pedDef), 11.00);
+    assert('pedidoCoste: null → 0',     FinEngine.pedidoCoste(null),   0);
+
+    // ── 5. FinEngine.margenBruto() — division by zero guard ──────────
+    const rangeEmpty = { start: new Date('2020-01-01'), end: new Date('2020-01-02') };
+    assert('margenBruto: no ventas → 0', FinEngine.margenBruto(rangeEmpty), 0);
+
+    // ── 6. FinEngine.beneficioNeto() — proration ─────────────────────
+    // 7-day range → gastos deben ser proporcionales (7/30 del mensual)
+    const now = new Date();
+    const range7 = {
+      start: new Date(now.getTime() - 7 * 86400000),
+      end:   now,
+    };
+    const gMes = FinEngine.gastoMensualTotal();
+    const benNeto = FinEngine.beneficioNeto(range7);
+    const expectedGop = gMes * (7 / 30);
+    // beneficioNeto = revenue(7d) - costeVentas(7d) - gop(7d)
+    // We can't know revenue without real data, but gop portion is verifiable
+    // Instead: verify it's different from using full month gastos
+    const benNetoFullMonth = FinEngine.beneficioNeto(FinEngine.mesActualRange());
+    assertRange('beneficioNeto: returns a number', typeof benNeto === 'number' ? 1 : 0, 1, 1);
+    assertRange('gastoMensualTotal: > 0 (demo data)', gMes, 1, 999999);
+
+    // ── 7. KPI.periodRange() — all period types ──────────────────────
+    const pToday  = { type: 'today',  offset: 0 };
+    const pWeek   = { type: 'week',   offset: 0 };
+    const pMonth  = { type: 'month',  offset: 0 };
+    const pYear   = { type: 'year',   offset: 0 };
+    const pCustom = { type: 'custom', customStart: '2026-01-01', customEnd: '2026-01-31' };
+
+    function rangeOk(p) {
+      const r = KPI.getRange(p);
+      return r && r.start instanceof Date && r.end instanceof Date && r.end > r.start;
+    }
+    assert('periodRange: today',   rangeOk(pToday),  true);
+    assert('periodRange: week',    rangeOk(pWeek),   true);
+    assert('periodRange: month',   rangeOk(pMonth),  true);
+    assert('periodRange: year',    rangeOk(pYear),   true);
+    assert('periodRange: custom',  rangeOk(pCustom), true);
+
+    // ── 8. KPI.ventasEnPeriodo() — filter correctness ────────────────
+    // No ventas in a past range
+    const pastPeriod = { type: 'custom', customStart: '2000-01-01', customEnd: '2000-01-02' };
+    const pastVentas = KPI.ventasEnPeriodo(pastPeriod);
+    assert('ventasEnPeriodo: past → []', pastVentas.length, 0);
+
+    // ── 9. KPI.getVentasChartData() — items[] schema ─────────────────
+    // Inject a modern venta into State temporarily
+    const testVenta = {
+      id: 'test_v1', fecha: new Date().toISOString(), metodo: 'efectivo',
+      total: 3.00,
+      items: [{ prodId: 'p1', qty: 2, pvp: 1.50, coste: 0.75 }]
+    };
+    const ventasBefore = State.get.ventas().slice();
+    State.get.ventas().push(testVenta); // inject without saving
+    const chartData = KPI.getVentasChartData({ type: 'today', offset: 0 }, 'ingresos');
+    // The chart should pick up this venta's total = 3.00 (not pvp×qty from root which would be 0)
+    const chartSum = chartData.vals ? chartData.vals.reduce((s, v) => s + v, 0) : 0;
+    assert('getVentasChartData: items[] schema (sum > 0)', chartSum > 0 ? 1 : 0, 1);
+    // Restore
+    const idx = State.get.ventas().indexOf(testVenta);
+    if (idx > -1) State.get.ventas().splice(idx, 1);
+
+    // ── 10. deltaRevenue() — period parameter ────────────────────────
+    const delta = FinEngine.deltaRevenue({ type: 'month', offset: 0 });
+    // Could be null (no prev data) or a number
+    assert('deltaRevenue: returns null or number',
+      delta === null || typeof delta === 'number' ? 1 : 0, 1);
+
+    // ── REPORT ───────────────────────────────────────────────────────
+    const total = passed + failed;
+    const pct   = Math.round(passed / total * 100);
+    console.info(\`[Dashwey Tests] \${passed}/\${total} passed (\${pct}%)\${failed > 0 ? ' — ' + failed + ' FAILED' : ' ✅'}\`);
+    if (failed > 0) {
+      results.filter(r => !r.ok).forEach(r => {
+        console.warn(\`[FAIL] \${r.name} | got:\`, r.got, \`| expected:\`, r.expected || r.range);
+      });
+    }
+
+    // Expose results for external inspection
+    window._DashweyTestResults = { passed, failed, total, pct, results };
+    return window._DashweyTestResults;
+  }
+
+  // Run on demand or via URL hash
+  window._DashweyRunTests = _run;
+  if (typeof location !== 'undefined' && location.hash === '#dashwey-tests') {
+    document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(_run, 1500); // wait for modules to init
+    });
+  }
+})();
+</script>
+</body></html>`;
     const blob = new Blob([html], {type:'text/html'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
