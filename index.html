@@ -3400,7 +3400,9 @@ body.tpv-tablet-pos {
   padding: 8px 14px 12px;
   flex-shrink: 0;
 }
-.tpv-ticket-dock.expanded .tpv-dock-items  { display: block; }
+.tpv-ticket-dock.expanded .tpv-dock-items  { display: flex; flex-direction: column; }
+.tpv-ticket-dock.expanded .tpv-dock-chevron { transform: rotate(180deg); transition: transform 0.22s ease; }
+.tpv-dock-chevron { transition: transform 0.22s ease; }
 .tpv-ticket-dock.expanded .tpv-dock-actions { display: flex; }
 .tpv-dock-item-row {
   display: flex;
@@ -8077,7 +8079,7 @@ function _authTabSafe(tab) {
             <!-- Renderizado por JS -->
           </div>
           <!-- Acciones dock expandido -->
-          <div class="tpv-dock-actions" id="tpv-dock-actions" style="display:none">
+          <div class="tpv-dock-actions" id="tpv-dock-actions">
             <button class="tpv-dock-tickets-btn" onclick="App.tpv.openTickets()">🎫 Tickets (<span id="tpv-dock-tickets-cnt">0</span>)</button>
             <button class="tpv-dock-nuevo-btn" onclick="App.tpv.nuevoTicket()">+ Nuevo</button>
           </div>
@@ -21880,10 +21882,12 @@ const tpv = (() => {
     if (totEl) {
       totEl.textContent = feur(tot);
       if (flashId) {
+        // v1.3.276: sin reflow — reiniciar via rAF (compositor-safe)
         totEl.classList.remove('tpv-total-pop');
-        void totEl.offsetWidth; // reflow para reiniciar
-        totEl.classList.add('tpv-total-pop');
-        totEl.addEventListener('animationend', () => totEl.classList.remove('tpv-total-pop'), { once: true });
+        requestAnimationFrame(() => {
+          totEl.classList.add('tpv-total-pop');
+          totEl.addEventListener('animationend', () => totEl.classList.remove('tpv-total-pop'), { once: true });
+        });
       }
     }
 
@@ -21931,12 +21935,7 @@ const tpv = (() => {
         <span class="tpv-dock-item-price">${feur(i.p.pvp*i.q)}</span>
       </div>`).join('');
 
-    // v1.3.271: swipe-to-delete en cada fila
-    list.querySelectorAll('.tpv-dock-item-row').forEach(row => {
-      _attachSwipeDelete(row);
-    });
-
-    // v1.3.271: auto-scroll + flash al item recién añadido
+    // v1.3.276: auto-scroll + flash al item recién añadido
     if (flashId) {
       requestAnimationFrame(() => {
         const el = list.querySelector('[data-id="' + flashId + '"]');
@@ -21949,23 +21948,34 @@ const tpv = (() => {
     }
   }
 
-  // v1.3.271: swipe-to-delete individual row
-  function _attachSwipeDelete(row) {
-    let x0 = 0, dx = 0, swiping = false;
-    row.addEventListener('touchstart', e => {
-      x0 = e.touches[0].clientX; dx = 0; swiping = true;
+  // v1.3.276: swipe-to-delete via delegación (un solo listener en el contenedor)
+  function _initDockSwipe() {
+    const list = document.getElementById('tpv-dock-items');
+    if (!list || list._swipeInit) return;
+    list._swipeInit = true;
+    let x0 = 0, dx = 0, activeRow = null;
+
+    list.addEventListener('touchstart', e => {
+      const row = e.target.closest('.tpv-dock-item-row');
+      if (!row) return;
+      activeRow = row;
+      x0 = e.touches[0].clientX;
+      dx = 0;
       row.style.transition = 'none';
     }, { passive: true });
-    row.addEventListener('touchmove', e => {
-      if (!swiping) return;
+
+    list.addEventListener('touchmove', e => {
+      if (!activeRow) return;
       dx = e.touches[0].clientX - x0;
-      if (dx < 0) row.style.transform = 'translateX(' + dx + 'px)';
+      if (dx < 0) activeRow.style.transform = 'translateX(' + dx + 'px)';
     }, { passive: true });
-    row.addEventListener('touchend', () => {
-      swiping = false;
+
+    list.addEventListener('touchend', () => {
+      if (!activeRow) return;
+      const row = activeRow;
+      activeRow = null;
       row.style.transition = '';
       if (dx < -80) {
-        // Eliminar item
         const id = row.dataset.id;
         row.classList.add('swipe-deleting');
         row.addEventListener('transitionend', () => {
@@ -21976,6 +21986,7 @@ const tpv = (() => {
       } else {
         row.style.transform = '';
       }
+      dx = 0;
     }, { passive: true });
   }
 
@@ -21983,7 +21994,8 @@ const tpv = (() => {
     _dockExpanded = !_dockExpanded;
     const dock = document.getElementById('tpv-ticket-dock');
     if (dock) dock.classList.toggle('expanded', _dockExpanded);
-    // v1.3.274: CSS controla display de items/acciones via .expanded
+    // v1.3.276: inicializar swipe delegado al expandir (una sola vez)
+    if (_dockExpanded) _initDockSwipe();
   }
 
   // ── PANEL TICKET TABLET (columna derecha) ─────────────────────
@@ -22088,7 +22100,8 @@ const tpv = (() => {
     _updateQtyIndicator(id);
     _updateDock();
     _updateTabletTicket();
-    _renderCobroItems();
+    // v1.3.276: solo re-render cobro si el sheet está abierto
+    if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open')) _renderCobroItems();
     _saveCurrentToTicket();
   }
 
