@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.288-dev</title>
+<title>Dashwey v1.3.289-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11515,7 +11515,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.288-dev';
+  const _APP_VERSION = 'v1.3.289-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12149,7 +12149,7 @@ const ui = (() => {
   var _sdTransitioning = false;
 
   function sdSubOpen(title, html) {
-    // GUARD: transición en curso — ignorar tap accidental
+    // v1.3.289: SET-03 — guard de transición (ya protege contra doble-tap durante 280ms)
     if (_sdTransitioning) return;
 
     var track   = document.getElementById('sd-track');
@@ -12157,13 +12157,21 @@ const ui = (() => {
     var titleEl = document.getElementById('sd-section-title');
     if (!track || !content) return;
 
-    // GUARD: misma sección ya activa — no re-renderizar
-    if (track.classList.contains('sd-in-section') && titleEl && titleEl.textContent === title) return;
+    // v1.3.289: SET-02 — eliminado guard de mismo título
+    // El guard de _sdTransitioning (280ms) ya previene doble-tap.
+    // El guard de título impedía refrescar la sección activa tras cambios de datos.
 
     // Actualizar solo el contenido dinámico (header nunca se toca)
     if (titleEl) titleEl.textContent = title;
     content.scrollTop = 0;
-    content.innerHTML = html;
+
+    // v1.3.289: SET-03 — try/finally para que _sdTransitioning nunca quede bloqueado
+    try {
+      content.innerHTML = html;
+    } catch(e) {
+      content.innerHTML = '<p style="padding:16px;color:var(--red)">Error al cargar sección</p>';
+      console.error('[sdSubOpen] innerHTML error:', e);
+    }
 
     // Marcar transición activa + bloquear pointer-events
     _sdTransitioning = true;
@@ -12172,12 +12180,15 @@ const ui = (() => {
     // Doble rAF: primer frame pinta el contenido, segundo dispara la transición CSS
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
-        track.classList.add('sd-in-section');
-        // Liberar guard al finalizar la transición (260ms + 20ms buffer)
-        setTimeout(function() {
-          _sdTransitioning = false;
-          track.classList.remove('sd-transitioning');
-        }, 280);
+        try {
+          track.classList.add('sd-in-section');
+        } finally {
+          // v1.3.289: SET-03 — siempre liberar guard, incluso si classList falla
+          setTimeout(function() {
+            _sdTransitioning = false;
+            track.classList.remove('sd-transitioning');
+          }, 280);
+        }
       });
     });
   }
@@ -12196,17 +12207,18 @@ const ui = (() => {
     track.classList.add('sd-transitioning');
     track.classList.remove('sd-in-section');
 
-    // Liberar guard + limpiar contenido tras la transición
+    // v1.3.289: SET-03 — setTimeout siempre libera el guard
     setTimeout(function() {
-      _sdTransitioning = false;
-      track.classList.remove('sd-transitioning');
-      // Limpiar solo si efectivamente volvimos a main
-      if (content && !track.classList.contains('sd-in-section')) {
-        content.innerHTML = '';
+      try {
+        track.classList.remove('sd-transitioning');
+        if (content && !track.classList.contains('sd-in-section')) {
+          content.innerHTML = '';
+        }
+      } finally {
+        _sdTransitioning = false;  // siempre liberar, incluso si algo falla
       }
     }, 280);
 
-    // Scroll sd-main al top para consistencia
     if (mainEl) mainEl.scrollTop = 0;
   }
   function sdSubOpenPerfil() {
