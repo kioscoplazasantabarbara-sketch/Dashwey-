@@ -21614,13 +21614,35 @@ const tpv = (() => {
     grid.parentElement.style.display = '';
     grid.innerHTML = prods.map(p => {
       const q = _cart[p.id]?.q || 0;
-      return `<button class="tpv-hot-btn" onclick="App.tpv.addCart('${p.id}',this)" id="tpv-hot-${p.id}">
+      return `<button class="tpv-hot-btn" onclick="App.tpv.addCart('${p.id}',this)" id="tpv-hot-${p.id}" data-id="${p.id}">
         <span class="hot-e">${p.e||'🛍️'}</span>
         <span class="hot-name">${esc(p.nombre)}</span>
         <span class="hot-price">${feur(p.pvp)}</span>
         <span class="tpv-hot-qty${q>0?' show':''}" id="tpv-hq-${p.id}">${q}</span>
       </button>`;
     }).join('');
+
+    // v1.3.278: BUG-08 — long press en hot grid → ctx menu
+    grid.querySelectorAll('.tpv-hot-btn').forEach(btn => {
+      let _lpt = null, _sx = 0, _sy = 0;
+      btn.addEventListener('touchstart', e => {
+        if (e.touches[0]) { _sx = e.touches[0].clientX; _sy = e.touches[0].clientY; }
+        _lpt = setTimeout(() => {
+          _lpt = null;
+          try { Utils.triggerHaptic('medium'); } catch(_) {}
+          _openTpvProdCtxMenu(btn.dataset.id, btn);
+        }, 500);
+      }, { passive: true });
+      btn.addEventListener('touchmove', e => {
+        if (!_lpt) return;
+        const dx = Math.abs(e.touches[0].clientX - _sx);
+        const dy = Math.abs(e.touches[0].clientY - _sy);
+        if (dx > 12 || dy > 12) { clearTimeout(_lpt); _lpt = null; }
+      }, { passive: true });
+      btn.addEventListener('touchend', () => {
+        if (_lpt) { clearTimeout(_lpt); _lpt = null; }
+      }, { passive: true });
+    });
   }
 
   // ── CATEGORÍAS ───────────────────────────────────────────────
@@ -21746,7 +21768,7 @@ const tpv = (() => {
     if (!p) return;
     _cart[id] = _cart[id] || { p, q: 0 };
     _cart[id].q++;
-    State.set.updateProd(id, { ventas: (p.ventas||0)+1 });
+    // v1.3.278: ventas se incrementa en procesarPago, no aquí (BUG-10)
     // v1.2.25: invalidar dirty-checks — carrito mutado
     _prodsHash = ''; _hotGridHash = '';
 
@@ -22423,6 +22445,21 @@ const tpv = (() => {
         icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
         label: 'Al carrito',
         fn: () => { menu.remove(); addCart(prodId, sourceEl); }
+      },
+      {
+        // v1.3.278: BUG-09 — eliminar del carrito si está añadido
+        icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
+        label: 'Del carrito',
+        fn: () => {
+          menu.remove();
+          if (_cart[prodId]) {
+            _undoStack = { id: prodId, q: _cart[prodId].q, p: _cart[prodId].p };
+            chgQ(prodId, -999);
+            _showUndoToast(_undoStack.p ? _undoStack.p.nombre : '');
+          } else {
+            showToast('No está en el carrito');
+          }
+        }
       },
     ];
     actions.forEach(function(a) {
