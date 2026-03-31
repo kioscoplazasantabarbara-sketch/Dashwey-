@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.236-dev</title>
+<title>Dashwey v1.3.237-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11267,7 +11267,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.236-dev';
+  const _APP_VERSION = 'v1.3.237-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23848,8 +23848,16 @@ function _parseIva(iva) {
     }
     // _naIvaChange se define como función permanente del módulo (ver abajo)
     // FIX v1.2.12: 'full' — formulario largo necesita altura máxima
+    // v1.3.235: anti-flicker — ocultar fs-content durante inyección del DOM
+    // El browser no hace layout del contenido hasta que el overlay está animando
+    const _fsContent = document.getElementById('fs-content');
+    if (_fsContent) _fsContent.style.visibility = 'hidden';
     ui.openFs('full');
     Utils.triggerHaptic('light');
+    // Revelar contenido en el segundo rAF — mismo ciclo que .open se aplica
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (_fsContent) _fsContent.style.visibility = '';
+    }));
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -23870,19 +23878,19 @@ function _parseIva(iva) {
     const wrap = document.getElementById(wrapId);
     const dd   = _sacDd();
     if (!wrap || !dd) return;
-    const r         = wrap.getBoundingClientRect();
-    const scrollTop = window.pageYOffset  || 0;
-    const scrollLft = window.pageXOffset  || 0;
-    const vvH       = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    const below     = vvH - r.bottom - 8;
-    const above     = r.top - 8;
-    const panelH    = below >= 100 ? Math.min(252, below) : Math.min(252, above);
+    const r    = wrap.getBoundingClientRect();
+    // v1.3.235: position:fixed — usar coordenadas viewport directas (sin scroll offset)
+    // visualViewport.height refleja el espacio real cuando el teclado está abierto
+    const vvH  = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const below = vvH - r.bottom - 8;
+    const above = r.top - 8;
+    const panelH = below >= 100 ? Math.min(252, below) : Math.min(252, above);
     if (below >= 100) {
-      dd.style.top = (r.bottom + scrollTop + 4) + 'px';
+      dd.style.top = (r.bottom + 4) + 'px';
     } else {
-      dd.style.top = (r.top + scrollTop - panelH - 4) + 'px';
+      dd.style.top = (r.top - panelH - 4) + 'px';
     }
-    dd.style.left      = (r.left + scrollLft) + 'px';
+    dd.style.left      = r.left + 'px';
     dd.style.width     = r.width + 'px';
     dd.style.maxHeight = panelH + 'px';
   }
@@ -23904,7 +23912,7 @@ function _parseIva(iva) {
     document.addEventListener('keydown',     _sacHandleEsc);
     const fs = document.getElementById('fs-content');
     if (fs) fs.addEventListener('scroll', _sacHandleScroll, { passive: true });
-    if (window.visualViewport) window.visualViewport.addEventListener('resize', _sacHandleVV, { passive: true });
+    if (window.visualViewport) { window.visualViewport.addEventListener('resize', _sacHandleVV, { passive: true }); window.visualViewport.addEventListener('scroll', _sacHandleVV, { passive: true }); }
   }
 
   function _sacDetachGlobals() {
@@ -23914,7 +23922,7 @@ function _parseIva(iva) {
     document.removeEventListener('keydown',     _sacHandleEsc);
     const fs = document.getElementById('fs-content');
     if (fs) fs.removeEventListener('scroll', _sacHandleScroll);
-    if (window.visualViewport) window.visualViewport.removeEventListener('resize', _sacHandleVV);
+    if (window.visualViewport) { window.visualViewport.removeEventListener('resize', _sacHandleVV); window.visualViewport.removeEventListener('scroll', _sacHandleVV); }
   }
 
   function _sacCloseAll() {
@@ -24250,9 +24258,15 @@ function _parseIva(iva) {
     let descuento = 0;
     if (descRaw) descuento = parseFloat(descRaw) || 0;
 
+    // v1.3.235: capturar formato activo — 's'=por unidad, 'c'=por bulto
+    const lv_fmt = getLV('nuevoArt', {fmt:'c'}).fmt || 'c';
+    // Si formato es 's' (por unidad): udscaja=1, precioCompra=precio unitario directo
+    const ucFinal = lv_fmt === 's' ? 1 : uc;
+
     const ahora = new Date().toISOString();
     return {
-      id: 'p' + Date.now(), nombre, provId, cat, iva, pr, pvp, nc, uc,
+      id: 'p' + Date.now(), nombre, provId, cat, iva, pr, pvp, nc, uc: ucFinal,
+      fmt: lv_fmt,
       cad, descuento, descRaw,
       foto: _prodPhotoData || null,
       historialPrecios: pr > 0 ? [{ fecha: ahora, precio: pr, pvp }] : []
@@ -28060,7 +28074,7 @@ if (!window.Utils) {
 </div>
 
 <!-- SAC GLOBAL DROPDOWN -->
-<div id="sac-global-dd" style="position:absolute;display:none;z-index:10200;background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:0 12px 40px rgba(80,100,140,0.20);overflow:hidden;overflow-y:auto;"></div>
+<div id="sac-global-dd" style="position:fixed;display:none;z-index:10200;background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:0 12px 40px rgba(80,100,140,0.20);overflow:hidden;overflow-y:auto;"></div>
 
 <script>
 /* ── Check modal + Carrito options helpers — v1.3.32 ─────────────────────── */
