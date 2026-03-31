@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.282-dev</title>
+<title>Dashwey v1.3.283-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11489,7 +11489,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.282-dev';
+  const _APP_VERSION = 'v1.3.283-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13792,6 +13792,13 @@ const dash = (() => {
     const xEl     = document.getElementById('ev-chart-x');
     const tooltip = document.getElementById('ev-tooltip');
     if (!barsEl || !yEl || !xEl) return;
+
+    // v1.3.283: DASH-04 — dirty-check: skip si datos y periodo no cambiaron
+    const _newHash = ventas.map(v => v.id + '|' + (v.total||0)).join(',')
+                   + '|' + (period.type||'') + '|' + (period.offset||0)
+                   + '|' + (period.customStart||'') + '|' + (period.customEnd||'');
+    if (_newHash === barsEl._evHash) return;
+    barsEl._evHash = _newHash;
 
     // v9.5.73: chart strategy based on period type
     // today/hours → 24-hour buckets using ALL ventas in period
@@ -18153,6 +18160,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function _snapCounterUp(el, target, format, duration) {
     if (!el) return;
     duration = duration || 700;
+    // v1.3.283: DASH-06 — cancelar rAF anterior para evitar loops concurrentes
+    if (el._snapRafId) { cancelAnimationFrame(el._snapRafId); el._snapRafId = null; }
     var start     = 0;
     var startTime = null;
     var isEur     = format === 'eur';
@@ -18162,21 +18171,21 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     function step(ts) {
       if (!startTime) startTime = ts;
       var progress = Math.min((ts - startTime) / duration, 1);
-      // Ease out cubic
       var ease     = 1 - Math.pow(1 - progress, 3);
       var current  = start + (target - start) * ease;
       if (isEur)      el.textContent = _snapFeur(current);
       else if (isPct) el.textContent = _snapFmt(current, 1) + '%';
       else            el.textContent = _snapFmt(Math.round(current));
       if (progress < 1) {
-        requestAnimationFrame(step);
+        el._snapRafId = requestAnimationFrame(step);
       } else {
+        el._snapRafId = null;
         el.classList.remove('snap-counting');
         el.classList.add('snap-pop');
         setTimeout(function() { el.classList.remove('snap-pop'); }, 400);
       }
     }
-    requestAnimationFrame(step);
+    el._snapRafId = requestAnimationFrame(step);
   }
 
   // ── Typewriter con cifras resaltadas en rojo (tipo E) ────────────────────
@@ -20305,6 +20314,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     cont.addEventListener('scroll', cont._snapScrollHandler, { passive: true });
 
     // ── IntersectionObserver — render al entrar en viewport ──────────────
+    // v1.3.283: DASH-07 — con fallback getBoundingClientRect para Android WebView
     _snapObserver = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
@@ -20321,6 +20331,48 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     cont.querySelectorAll('.card[data-card-id]').forEach(function(card) {
       _snapObserver.observe(card);
     });
+
+    // v1.3.283: DASH-07 — fallback scroll listener con getBoundingClientRect
+    // IntersectionObserver es unreliable en Android WebView con scroll-snap-type
+    if (cont._snapFallbackHandler) {
+      cont.removeEventListener('scrollend', cont._snapFallbackHandler);
+      cont.removeEventListener('scroll',    cont._snapFallbackTimer);
+    }
+    var _snapFbTimer = null;
+    var _snapFbPoll = function() {
+      var cards  = Array.from(cont.querySelectorAll('.card[data-card-id]'));
+      var contR  = cont.getBoundingClientRect();
+      var center = contR.top + contR.height / 2;
+      var best   = null, bestDist = Infinity;
+      cards.forEach(function(card) {
+        var r    = card.getBoundingClientRect();
+        var cardCenter = r.top + r.height / 2;
+        var dist = Math.abs(cardCenter - center);
+        if (dist < bestDist) { bestDist = dist; best = card; }
+      });
+      if (best && best.dataset.cardId && best.dataset.cardId !== _snapLastRenderedCardId) {
+        var visRatio = Math.max(0,
+          Math.min(best.getBoundingClientRect().bottom, contR.bottom) -
+          Math.max(best.getBoundingClientRect().top, contR.top)
+        ) / best.getBoundingClientRect().height;
+        if (visRatio >= 0.55) {
+          _snapLastRenderedCardId = best.dataset.cardId;
+          _snapUpdateTitle(best.dataset.cardId);
+          _snapRenderCard(best.dataset.cardId);
+        }
+      }
+    };
+    cont._snapFallbackHandler = function() {
+      clearTimeout(_snapFbTimer);
+      _snapFbTimer = setTimeout(_snapFbPoll, 120);
+    };
+    // scrollend disponible en Chrome 114+ / Android WebView basado en Chromium 114+
+    if ('onscrollend' in cont) {
+      cont.addEventListener('scrollend', cont._snapFallbackHandler, { passive: true });
+    } else {
+      // Fallback: debounce 200ms en scroll
+      cont.addEventListener('scroll', cont._snapFallbackHandler, { passive: true });
+    }
   }
 
   function _snapDetachObserver() {
