@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.289-dev</title>
+<title>Dashwey v1.3.290-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11515,7 +11515,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.289-dev';
+  const _APP_VERSION = 'v1.3.290-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12477,14 +12477,34 @@ const ui = (() => {
       <button class="btn-ok" onclick="App.ui.sdSavePassword()">Cambiar contraseña</button>`);
   }
   function sdSavePassword() {
-    const oldP=document.getElementById('sd-seg-old')?.value;
-    const newP=document.getElementById('sd-seg-new')?.value;
-    const newP2=document.getElementById('sd-seg-new2')?.value;
-    const err=document.getElementById('sd-seg-err');
-    if (!oldP||!newP){if(err)err.textContent='Rellena todos los campos';return;}
-    if (newP!==newP2){if(err)err.textContent='Las contraseñas no coinciden';return;}
-    if (newP.length<6){if(err)err.textContent='Mínimo 6 caracteres';return;}
-    changePassword(oldP,newP,()=>{sdSubClose();showToast('✅ Contraseña actualizada');},(e)=>{if(err)err.textContent=e;});
+    const oldP = document.getElementById('sd-seg-old')?.value || '';
+    const newP = document.getElementById('sd-seg-new')?.value || '';
+    const newP2= document.getElementById('sd-seg-new2')?.value || '';
+    const err  = document.getElementById('sd-seg-err');
+    const setErr = (msg) => { if (err) err.textContent = msg; };
+    if (!oldP || !newP)    { setErr('Rellena todos los campos'); return; }
+    if (newP !== newP2)    { setErr('Las contraseñas no coinciden'); return; }
+    if (newP.length < 6)   { setErr('Mínimo 6 caracteres'); return; }
+    // v1.3.290: SET-04 — usar Firebase directamente; traducir errores en español
+    const FB = window._DashweyFirebase;
+    if (!FB || !FB.changePassword) { setErr('Función no disponible'); return; }
+    setErr('');
+    FB.changePassword(newP, oldP)
+      .then(() => { sdSubClose(); showToast('✅ Contraseña actualizada'); })
+      .catch((e) => {
+        const code = e && (e.code || e.message || '');
+        if (!navigator.onLine || code.includes('network'))
+          setErr('Sin conexión — inténtalo de nuevo');
+        else if (code.includes('wrong-password') || code.includes('invalid-credential'))
+          setErr('Contraseña actual incorrecta');
+        else if (code.includes('too-many-requests'))
+          setErr('Demasiados intentos — espera unos minutos');
+        else if (code.includes('requires-recent-login'))
+          setErr('Sesión expirada — cierra sesión y vuelve a entrar');
+        else
+          setErr('Error al cambiar contraseña');
+        console.warn('[sdSavePassword]', e);
+      });
   }
   // ══ FIN SUBPANEL ══
 
@@ -20780,6 +20800,22 @@ window.SideSheet = (function() {
   return { open: open, back: back, closeAll: closeAll };
 })();
 
+
+// v1.3.290: SET-01 — tog() extraída como función global _sdTog
+function _sdTog(icon, bg, title, sub, key, val) {
+  return (
+    '<div class="sd-row sd-toggle-row">' +
+      '<div class="sd-icon" style="background:' + bg + '">' + icon + '</div>' +
+      '<div class="sd-info"><div class="sd-title">' + title + '</div>' +
+        (sub ? '<div class="sd-sub">' + sub + '</div>' : '') +
+      '</div>' +
+      '<button class="sd-toggle' + (val ? ' on' : '') + '"' +
+      ' data-setting="' + key + '"' +
+      ' onclick="App.ui.toggleSetting(this.dataset.setting,this)">' +
+      '</button>' +
+    '</div>'
+  );
+}
 // ══ Dashboard settings sheet ══════════════════════════════════════════
 // ══ SETTINGS INTERNAL NAVIGATION — v1.3.252 ═══════════════════════
 // Todas las secciones se renderizan dentro del settings-drawer existente
@@ -20862,20 +20898,7 @@ window.openDashSideSheet = function() {
     var period = State.get.period ? State.get.period() : {};
 
     // Helper: toggle row
-    function tog(icon, bg, title, sub, key, val) {
-      return (
-        '<div class="sd-row sd-toggle-row">' +
-          '<div class="sd-icon" style="background:' + bg + '">' + icon + '</div>' +
-          '<div class="sd-info"><div class="sd-title">' + title + '</div>' +
-            (sub ? '<div class="sd-sub">' + sub + '</div>' : '') +
-          '</div>' +
-          '<button class="sd-toggle' + (val ? ' on' : '') + '"' +
-          ' data-setting="' + key + '"' +
-          ' onclick="App.ui.toggleSetting(this.dataset.setting,this)">' +
-          '</button>' +
-        '</div>'
-      );
-    }
+    var tog = _sdTog; // v1.3.290: SET-01 — usar función global
 
     // Settings con defaults seguros
     var comparativas   = s.dashComparativas   !== false; // ON
@@ -20981,20 +21004,7 @@ window.openTpvSideSheet = function() {
   _sdNav('TPV', function() {
     var s = State.get.settings ? State.get.settings() : {};
     // Helper: toggle row — usa data-setting para evitar quoting bugs
-    function tog(icon, bg, title, sub, key, val) {
-      return (
-        '<div class="sd-row sd-toggle-row">' +
-          '<div class="sd-icon" style="background:' + bg + '">' + icon + '</div>' +
-          '<div class="sd-info"><div class="sd-title">' + title + '</div>' +
-            (sub ? '<div class="sd-sub">' + sub + '</div>' : '') +
-          '</div>' +
-          '<button class="sd-toggle' + (val ? ' on' : '') + '"' +
-            ' data-setting="' + key + '"' +
-            ' onclick="App.ui.toggleSetting(this.dataset.setting,this)">' +
-          '</button>' +
-        '</div>'
-      );
-    }
+    var tog = _sdTog; // v1.3.290: SET-01
 
     // Leer settings con fallbacks seguros
     var modoRapido     = s.tpvModoRapido     !== false;  // default ON
@@ -21077,20 +21087,7 @@ window.openAlmSideSheet = function() {
   _sdNav('Almacén', function() {
     var s = State.get.settings ? State.get.settings() : {};
 
-    function tog(icon, bg, title, sub, key, val) {
-      return (
-        '<div class="sd-row sd-toggle-row">' +
-          '<div class="sd-icon" style="background:' + bg + '">' + icon + '</div>' +
-          '<div class="sd-info"><div class="sd-title">' + title + '</div>' +
-            (sub ? '<div class="sd-sub">' + sub + '</div>' : '') +
-          '</div>' +
-          '<button class="sd-toggle' + (val ? ' on' : '') + '"' +
-          ' data-setting="' + key + '"' +
-          ' onclick="App.ui.toggleSetting(this.dataset.setting,this)">' +
-          '</button>' +
-        '</div>'
-      );
-    }
+    var tog = _sdTog; // v1.3.290: SET-01 — usar función global
 
     function numInput(icon, bg, title, sub, key, val, placeholder) {
       return (
@@ -21246,20 +21243,7 @@ window.openPrefSideSheet = function() {
   _sdNav('Preferencias', function() {
     var s = State.get.settings ? State.get.settings() : {};
 
-    function tog(icon, bg, title, sub, key, val) {
-      return (
-        '<div class="sd-row sd-toggle-row">' +
-          '<div class="sd-icon" style="background:' + bg + '">' + icon + '</div>' +
-          '<div class="sd-info"><div class="sd-title">' + title + '</div>' +
-            (sub ? '<div class="sd-sub">' + sub + '</div>' : '') +
-          '</div>' +
-          '<button class="sd-toggle' + (val ? ' on' : '') + '"' +
-          ' data-setting="' + key + '"' +
-          ' onclick="App.ui.toggleSetting(this.dataset.setting,this)">' +
-          '</button>' +
-        '</div>'
-      );
-    }
+    var tog = _sdTog; // v1.3.290: SET-01 — usar función global
 
     // Leer valores con defaults seguros
     var currentTheme   = 'auto';
@@ -21509,14 +21493,20 @@ window._sdCuentaGuardarPerfil = function() {
   var nombre = (document.getElementById('sd-pf2-nombre')||{}).value || '';
   var zona   = (document.getElementById('sd-pf2-zona')||{}).value   || 'Europe/Madrid';
   try {
+    // v1.3.290: SET-05 — incluir moneda del chip activo en el guardado
+    var activeChip = document.querySelector('.sd-chip-group .sd-chip-active[data-moneda]');
     var p = Object.assign(State.get.perfil ? State.get.perfil() : {}, {
       nombre: nombre.trim(),
-      zona:   zona
+      zona:   zona,
     });
+    if (activeChip) {
+      p.moneda = activeChip.dataset.moneda;
+      try { State.set.settings({ prefMoneda: activeChip.dataset.moneda }); } catch(_) {}
+    }
     State.set.perfil(p);
-    showToast('\u2705 Perfil guardado');
+    showToast('✅ Perfil guardado');
   } catch(e) {
-    showToast('\u26a0\ufe0f Error al guardar');
+    showToast('⚠️ Error al guardar');
   }
 };
 
