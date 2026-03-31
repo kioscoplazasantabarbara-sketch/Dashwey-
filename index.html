@@ -13498,6 +13498,7 @@ const dash = (() => {
     // v1.2.38: tarjetas fusionadas
     try { renderRendimiento(period); } catch(e) {}
     try { renderFlujoCaja(); } catch(e) {}
+    try { renderAgenda(); } catch(e) {}  // v1.3.281: DASH-03 — agenda en render() principal
     // legacy — mantener llamadas para evitar romper listeners externos
     try { renderVentas(period); } catch(e) {}
     try { renderTopArticulos(period); } catch(e) {}
@@ -13649,10 +13650,13 @@ const dash = (() => {
     // ventaPayload: { id, fecha, metodo, total, items:[{prodId, qty, pvp, ...}] }
     // Fallback: root-level pvp*qty for legacy ventas
     function ventaTotal(v) {
+      // v1.3.281: DASH-01 — v.total es la fuente primaria (total real cobrado)
+      // Solo recalcular si v.total no existe (legacy) o es 0 con items reales
+      if (v.total > 0) return v.total;
       if (v.items && v.items.length) {
         return v.items.reduce((s, it) => s + (it.pvp||0) * (it.qty||0), 0);
       }
-      // Legacy format
+      // Legacy format (ventas sin items[])
       return (v.pvp||0) * (v.qty||0);
     }
 
@@ -13690,6 +13694,27 @@ const dash = (() => {
 
   // Período inmediatamente anterior al actual (para delta %)
   function _prevPeriod(p) {
+    // v1.3.281: DASH-02 — soporte para periodos custom
+    if (p.type === 'custom' && p.customStart && p.customEnd) {
+      const start  = new Date(p.customStart);
+      const end    = new Date(p.customEnd);
+      const durMs  = end.getTime() - start.getTime();
+      const toISO  = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+      const prevEnd   = new Date(start.getTime() - 1);          // 1ms antes del inicio
+      const prevStart = new Date(start.getTime() - durMs - 1);  // mismo intervalo atrás
+      const fmtLbl = d => {
+        const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        return String(d.getDate()).padStart(2,'0') + ' ' + M[d.getMonth()];
+      };
+      return {
+        type: 'custom',
+        label: fmtLbl(prevStart) + ' → ' + fmtLbl(prevEnd),
+        offset: 0,
+        customStart: toISO(prevStart),
+        customEnd:   toISO(prevEnd),
+      };
+    }
+    // Periodos estándar: retroceder un offset
     const off = (p.offset || 0) - 1;
     return Object.assign({}, p, { offset: off });
   }
