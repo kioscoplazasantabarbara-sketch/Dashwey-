@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.252-dev</title>
+<title>Dashwey v1.3.253-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10963,6 +10963,28 @@ function getLV(id,defaults) { return Utils.getLV(id,defaults); }
 // ══════════════════════════════════════════
 // 4. UI ENGINE — Overlays y modales
 // ══════════════════════════════════════════
+// == UI MODULE - REGLAS DE ARQUITECTURA ==================================
+// v1.3.253 — bugs resueltos como invariantes de codigo
+//
+// [MODAL]     Solo un modal activo. Botones: id + addEventListener(once:true).
+//             PROHIBIDO: onclick con escape \' en strings dinamicos.
+//
+// [FS-SHEET]  Patron: setFs(html) -> openFs(level) -> closeFs().
+//             Cleanup SIEMPRE en setTimeout(220ms). Nunca antes de la transicion.
+//             PROHIBIDO: abrir fs-overlay desde dentro de settings-drawer.
+//
+// [SETTINGS]  Navegacion interna al drawer. NUNCA SideSheet.open() desde Ajustes.
+//             Patron: sdSubOpen(title, html) -> back -> sdSubClose().
+//
+// [SIDESHEET] Max 1 panel activo. Swipe solo en top panel (_isTop()).
+//             overlay.style.display=none SOLO tras transitionend.
+//
+// [BANNER]    PROHIBIDO: bannerEl.style.display=none inline.
+//             updateBadge() controla el banner via classList unicamente.
+//
+// [HANDLERS]  PROHIBIDO: onclick="fn(\'id\')" en strings dinamicos.
+//             Usar data-pid + event.currentTarget.dataset.pid.
+// =========================================================================
 const ui = (() => {
 
   function setFs(html) { (document.getElementById('fs-content')||{}).innerHTML = html; }
@@ -10979,6 +11001,11 @@ const ui = (() => {
   //   2. Doble rAF: primero asegurar estado inicial, luego añadir .open
   //      Esto garantiza que el browser pinta el estado "cerrado" ANTES de
   //      disparar la transición, sin ningún frame intermedio visible.
+  // ── ARQUITECTURA: openFs ─────────────────────────────────────────────
+  // REGLA: fs-overlay es el único sheet de formulario — no apilar dos.
+  // REGLA: setFs() inyecta HTML ANTES de openFs() — el DOM existe antes de animar.
+  // REGLA: fs-content.visibility se gestiona con doble-rAF para evitar flicker.
+  // PATRÓN: setFs(html) → openFs(level) → [usuario interactúa] → closeFs()
   function openFs(level) {
     try { // v1.2.29: error boundary
     const overlay  = document.getElementById('fs-overlay');
@@ -11011,6 +11038,10 @@ const ui = (() => {
     });
     } catch(e) { console.error('[Dashwey] openFs error:', e); } // v1.2.29
   }
+  // ── ARQUITECTURA: closeFs ────────────────────────────────────────────
+  // REGLA: .open se quita primero (dispara CSS transition), cleanup SIEMPRE en setTimeout.
+  // REGLA: nunca hacer display:none en el overlay — dejar que la transición CSS lo gestione.
+  // REGLA: CLOSE_DUR debe coincidir con --sheet-duration en CSS (220ms).
   function closeFs() {
     try { // v1.2.29: error boundary
     const overlay  = document.getElementById('fs-overlay');
@@ -11019,27 +11050,35 @@ const ui = (() => {
 
     if (!overlay || !overlay.classList.contains('open')) return; // ya cerrado
 
-    // Quitar .open → dispara la transición de salida (translateY 0→100%, opacity 1→0)
+    // GUARD: quitar .open primero — la transición CSS corre libre sin bloqueo JS
     overlay.classList.remove('open');
     if (backdrop) backdrop.classList.remove('open');
     document.getElementById('header')?.classList.remove('menu-open');
-    // v1.2.13: restaurar scroll del body al cerrar
     document.body.style.overflow = '';
 
-    // Limpiar clase half y SAC tras la transición (no durante — evita layout jank)
-    const CLOSE_DUR = 220; // ms — alineado con --sheet-duration 0.22s (v1.2.27)
+    // GUARD: cleanup SIEMPRE después de CLOSE_DUR — nunca antes (evita layout jank)
+    const CLOSE_DUR = 220; // ms — alineado con CSS transition 0.22s
     setTimeout(() => {
       if (box) box.classList.remove('fs-settings', 'sheet-half');
       if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
-      // v1.2.45: restaurar botón Guardar si corresponde (solo tab Almacén con carrito)
       try { if (App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
     }, CLOSE_DUR);
     } catch(e) { console.error('[Dashwey] closeFs error:', e); } // v1.2.29
   }
   function closeFsOvl(e) { const box = document.getElementById('fs-box'); if(box && !box.contains(e.target)) closeFs(); }
 
+  // ── ARQUITECTURA: openModal ──────────────────────────────────────────
+  // REGLA: solo un modal activo simultáneamente.
+  // REGLA: nunca pasar html con onclick que use escape \' — usar addEventListener.
+  // REGLA: el botón de confirmación debe tener id único + addEventListener(once:true).
   function openModal(html) {
     try { // v1.2.29
+    const overlay = document.getElementById('modal-overlay');
+    // GUARD: si ya hay un modal abierto, cerrarlo primero (nunca apilar)
+    if (overlay && overlay.classList.contains('open')) {
+      console.warn('[Dashwey] openModal: modal ya activo — cerrando antes de abrir nuevo');
+      closeModal();
+    }
     (document.getElementById('modal-content')||{}).innerHTML = html;
     document.getElementById('modal-overlay').classList.add('open');
     document.getElementById('modal-backdrop').classList.add('open');
@@ -11283,7 +11322,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.252-dev';
+  const _APP_VERSION = 'v1.3.253-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11893,12 +11932,20 @@ const ui = (() => {
   }
 
   // ══ SUBPANEL EN CASCADA v7.9 ══════════════════════════════════
+  // ── ARQUITECTURA: sdSubOpen / sdSubClose ─────────────────────────────
+  // REGLA: navegación de Ajustes es SIEMPRE interna al settings-drawer.
+  // REGLA: NUNCA abrir SideSheet secundario desde dentro de Ajustes.
+  // REGLA: NUNCA abrir fs-overlay desde dentro de Ajustes.
+  // PATRÓN correcto: fila en drawer → sdSubOpen(title, html) → ‹ → sdSubClose()
+  // PATRÓN incorrecto: fila en drawer → SideSheet.open() / openFs()
   function sdSubOpen(title, html) {
     const p = document.getElementById('sd-sub-panel');
     const c = document.getElementById('sd-sub-content');
     const t = document.getElementById('sd-sub-title');
     const d = document.getElementById('settings-drawer');
     if (!p || !c) return;
+    // GUARD: si ya está abierto con el mismo título, no re-renderizar
+    if (p.classList.contains('open') && t && t.textContent === title) return;
     if (t) t.textContent = title;
     c.innerHTML = html;
     p.classList.add('open');
@@ -20192,8 +20239,21 @@ window.SideSheet = (function() {
     return el;
   }
 
+  // ── ARQUITECTURA: SideSheet ──────────────────────────────────────────
+  // REGLA: max 1 panel activo (stack.length <= 1).
+  // REGLA: SideSheet SOLO se usa fuera de Ajustes (settings-drawer).
+  // REGLA: swipe solo en top panel — _isTop() verifica en cada evento.
+  // REGLA: overlay.style.display = 'none' SOLO después de transición completa.
   function open(cfg) {
     // cfg: { title, back (bool), html, onBack }
+    // GUARD: máximo 1 panel — si ya hay uno, cerrarlo antes (nunca apilar)
+    if (_stack.length >= 1) {
+      console.warn('[SideSheet] ya hay un panel activo — cerrando antes de abrir');
+      closeAll();
+      // Abrir tras la transición de cierre
+      setTimeout(function() { open(cfg); }, 300);
+      return;
+    }
     var overlay = _getOverlay();
     overlay.style.display = 'block';
     requestAnimationFrame(function() {
