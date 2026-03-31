@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.293-dev</title>
+<title>Dashwey v1.3.294-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9697,9 +9697,11 @@ const State = (() => {
       // Guard de concurrencia: no escribir si ya hay un write en curso
       if (_isSaving) return;
       // Guard de duplicados: no escribir si el estado no ha cambiado
+      // v1.3.294: FIX — pendingOrders e ingresosFin incluidos para evitar sync silenciosa fallida
       const _hashable = JSON.stringify({
         p: _state.productos, v: _state.proveedores, vt: _state.ventas,
-        c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre
+        c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre,
+        po: _state.pendingOrders, ig: _state.ingresosFin
       });
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
@@ -10201,6 +10203,10 @@ const KPI = (() => {
     const pedidos = pedidosEnPeriodo(period);
     const { start } = periodRange(period);
     let labels = [], vals = [], yMax = 0;
+    // v1.3.294: FIX IVA — usar FinEngine.pedidoCoste (respeta campo iva dinámico)
+    const _pedCoste = (ped) => typeof FinEngine !== 'undefined'
+      ? FinEngine.pedidoCoste(ped)
+      : ped.items.reduce((s, i) => s + (i.ncajas||0)*(i.precio||0)*(1+(parseFloat(i.iva||'10')/100)), 0);
 
     if (period.type === 'today') {
       labels = ['9h','11h','13h','15h','17h','19h','21h'];
@@ -10208,7 +10214,7 @@ const KPI = (() => {
       pedidos.forEach(ped => {
         const h = new Date(ped.fecha).getHours();
         const idx = Math.min(Math.max(Math.floor((h - 8) / 2), 0), 6);
-        ped.items.forEach(i => { vals[idx] += i.ncajas * i.precio * 1.10; });
+        vals[idx] += _pedCoste(ped);
       });
     } else if (period.type === 'week') {
       labels = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
@@ -10216,28 +10222,26 @@ const KPI = (() => {
       pedidos.forEach(ped => {
         const d = new Date(ped.fecha).getDay();
         const idx = d === 0 ? 6 : d - 1;
-        ped.items.forEach(i => { vals[idx] += i.ncajas * i.precio * 1.10; });
+        vals[idx] += _pedCoste(ped);
       });
     } else if (period.type === 'month') {
       const daysInMonth = new Date(start.getFullYear(), start.getMonth()+1, 0).getDate();
-      // Agrupamos en semanas o en días según cantidad
       const weeks = Math.ceil(daysInMonth / 7);
       labels = Array.from({length: weeks}, (_,i) => `S${i+1}`);
       vals = new Array(weeks).fill(0);
       pedidos.forEach(ped => {
         const day = new Date(ped.fecha).getDate();
         const idx = Math.min(Math.floor((day - 1) / 7), weeks - 1);
-        ped.items.forEach(i => { vals[idx] += i.ncajas * i.precio * 1.10; });
+        vals[idx] += _pedCoste(ped);
       });
     } else if (period.type === 'year') {
       labels = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
       vals = new Array(12).fill(0);
       pedidos.forEach(ped => {
         const m = new Date(ped.fecha).getMonth();
-        ped.items.forEach(i => { vals[m] += i.ncajas * i.precio * 1.10; });
+        vals[m] += _pedCoste(ped);
       });
     } else {
-      // custom: dividimos en 7 bloques
       const { end } = periodRange(period);
       const range = end - start;
       const block = range / 7;
@@ -10249,10 +10253,9 @@ const KPI = (() => {
       pedidos.forEach(ped => {
         const t = new Date(ped.fecha).getTime();
         const idx = Math.min(Math.floor((t - start) / block), 6);
-        ped.items.forEach(i => { vals[idx] += i.ncajas * i.precio * 1.10; });
+        vals[idx] += _pedCoste(ped);
       });
     }
-
     yMax = Math.max(...vals, 1);
     const steps = 5;
     const stepVal = Math.ceil(yMax / steps);
@@ -10276,7 +10279,18 @@ const KPI = (() => {
     const { start } = periodRange(period);
     let labels = [], vals = [];
 
-    const addV = (arr, idx, v) => { arr[idx] = (arr[idx] || 0) + (mode === 'ingresos' ? v.pvp * v.qty : v.qty); };
+    // v1.3.294: FIX — ventas v9.5.x tienen items[], no pvp/qty en raíz
+    // ventaIngresos() y ventaUds() respetan ambos schemas (legacy + moderno)
+    const _ventaIng = (v) => {
+      if (v.total > 0) return v.total;
+      if (v.items && v.items.length) return v.items.reduce((s,i) => s + (i.pvp||0)*(i.qty||0), 0);
+      return (v.pvp||0)*(v.qty||0);
+    };
+    const _ventaUds = (v) => {
+      if (v.items && v.items.length) return v.items.reduce((s,i) => s + (i.qty||0), 0);
+      return (v.qty||0);
+    };
+    const addV = (arr, idx, v) => { arr[idx] = (arr[idx] || 0) + (mode === 'ingresos' ? _ventaIng(v) : _ventaUds(v)); };
 
     if (period.type === 'today') {
       labels = ['9h','11h','13h','15h','17h','19h','21h'];
@@ -10532,13 +10546,18 @@ const FinEngine = (() => {
   // ═══════════════════════════════════════════════════
 
   // ── 1. INGRESOS ──────────────────────────────────────────────────
-  // revenue({ start, end }): suma de ventas en el rango de fechas
+  // revenue({ start, end }): suma de ventas TPV + ingresos financieros manuales
+  // v1.3.294: ingresosFin incluidos para beneficioNeto y margenBruto correctos
   function revenue(range) {
     const ventas = State.get.ventas();
-    return money(ventas
+    const vtaTotal = ventas
       .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
-      .reduce((s, v) => s + ventaIngresos(v), 0)
-    );
+      .reduce((s, v) => s + ventaIngresos(v), 0);
+    // Ingresos financieros manuales (rentas, transferencias, etc.)
+    const ingFin = (State.get.ingresosFin ? State.get.ingresosFin() : [])
+      .filter(i => { const d = new Date(i.fecha); return d >= range.start && d < range.end; })
+      .reduce((s, i) => s + (i.importe || 0), 0);
+    return money(vtaTotal + ingFin);
   }
 
   // revenueMesActual(): ingresos del mes calendario actual
@@ -10602,11 +10621,15 @@ const FinEngine = (() => {
   }
 
   // ── 5. BENEFICIO ─────────────────────────────────────────────────
-  // beneficioNeto(range): ingresos - COGS - gastos operativos
+  // beneficioNeto(range): ingresos - COGS - gastos proporcionales al rango
+  // v1.3.294: FIX — gastos normalizados al nº de días del rango, no siempre mes completo
   function beneficioNeto(range) {
     const ing  = revenue(range);
     const cogs = costeVentas(range);
-    const gop  = gastoMensualTotal();          // gastos fijos/mes (normalizados)
+    // Calcular fracción del mes que cubre el rango para prorratear gastos
+    const rangeDays = Math.max(1, Math.round((range.end - range.start) / 86400000));
+    const gopMes    = gastoMensualTotal();
+    const gop       = money(gopMes * (rangeDays / 30));
     return money(ing - cogs - gop);
   }
 
@@ -10670,14 +10693,27 @@ const FinEngine = (() => {
   }
 
   // ── 9. DELTA VS MES ANTERIOR ─────────────────────────────────────
-  function deltaRevenue() {
-    const now  = new Date();
-    const rangeMes  = mesActualRange();
-    const rangeAnt  = {
-      start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-      end:   new Date(now.getFullYear(), now.getMonth(), 1)
-    };
-    const actual   = revenue(rangeMes);
+  // v1.3.294: FIX — acepta periodo activo; fallback a mes actual si no se pasa
+  function deltaRevenue(period) {
+    const now = new Date();
+    let rangeActual, rangeAnt;
+    if (period && period.type) {
+      rangeActual = _rangeFromPeriod(period);
+      // Período anterior: mismo intervalo desplazado atrás
+      const durMs = rangeActual.end - rangeActual.start;
+      rangeAnt = {
+        start: new Date(rangeActual.start.getTime() - durMs),
+        end:   new Date(rangeActual.start)
+      };
+    } else {
+      // Comportamiento legacy: mes actual vs mes anterior
+      rangeActual = mesActualRange();
+      rangeAnt = {
+        start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        end:   new Date(now.getFullYear(), now.getMonth(), 1)
+      };
+    }
+    const actual   = revenue(rangeActual);
     const anterior = revenue(rangeAnt);
     if (anterior === 0) return null;
     return Math.round((actual - anterior) / anterior * 100);
@@ -10709,7 +10745,7 @@ const FinEngine = (() => {
     const ratio      = ratioLiquidez();
     const valStock   = valorStock();
     const tkMedio    = ticketMedio(range);
-    const delta      = deltaRevenue();
+    const delta      = deltaRevenue(period); // v1.3.294: pasar period para delta correcto
     const comp       = comprometido();
 
     return {
@@ -11494,7 +11530,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.293-dev';
+  const _APP_VERSION = 'v1.3.294-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14619,7 +14655,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     const benefNeto   = FinEngine.beneficioNetoMesActual();
 
     // ── Delta vs mes anterior (FinEngine) ─────────────────────
-    const _rawDelta = FinEngine.deltaRevenue();
+    const _rawDelta = FinEngine.deltaRevenue(period); // v1.3.294: periodo activo
     const delta     = _rawDelta ?? 0; // null si no hay mes anterior
     // FIX: totalPrev siempre definido (evita ReferenceError)
     const totalPrev = (() => { try {
