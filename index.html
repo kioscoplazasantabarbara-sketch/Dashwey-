@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.285-dev</title>
+<title>Dashwey v1.3.286-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11515,7 +11515,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.285-dev';
+  const _APP_VERSION = 'v1.3.286-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24956,24 +24956,39 @@ function _parseIva(iva) {
       }
     });
 
+    // v1.3.286: ALM-01 — limpiar carrito tras confirmar pedido
+    _ordenCarrito = {};
+    _saveCarritoLocal();
+
     // v9.5.76: haptic de confirmación — pedido procesado
     Utils.triggerHaptic('medium');
 
-    // v9.5.76: emit único con rAF batching — evita doble render (renderFinanciero×2, renderOrden×2)
-    // 'pedido_stock' es un evento compuesto que maneja dash.render() completo + agenda + alm en un solo tick
+    // v9.5.76: emit único con rAF batching
     DashweyBus.emit('pedido_stock', { pedido });
 
-    // Persistir en Firebase (asíncrono)
+    // Actualizar badge y banner inmediatamente (carrito ya limpio)
+    updateBadge();
+
+    // v1.3.286: ALM-02 — Firebase retry (3 intentos, backoff 1s/2s)
     (async () => {
-      try {
-        const FB = window._DashweyFirebase;
-        if (FB && FB.enabled && FB.ready) {
+      const _fbWriteAlm = async (attempt) => {
+        try {
+          const FB = window._DashweyFirebase;
+          if (!FB || !FB.enabled || !FB.ready) return;
           const cur = await FB.read('historialPedidos') || { lista: [] };
           const lista = (cur.lista || []).concat([pedido]);
           await FB.write('historialPedidos', { lista });
           await FB.write('productos', { lista: State.get.productos() });
+        } catch(e) {
+          console.warn('[Dashwey/Alm] FB pedido intento ' + attempt + ':', e);
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, attempt * 1000));
+            return _fbWriteAlm(attempt + 1);
+          }
+          console.error('[Dashwey/Alm] FB: 3 intentos fallidos para pedido ' + pedidoId);
         }
-      } catch(e) { console.warn('[Dashwey/Alm] FB pedido error:', e); }
+      };
+      _fbWriteAlm(1);
     })();
 
     showToast('📦 Stock actualizado — ' + items.length + ' producto' + (items.length !== 1 ? 's' : '') + ' recibido' + (items.length !== 1 ? 's' : ''));
