@@ -116,7 +116,7 @@
       });
     }).catch(function(){});
     if ("caches" in window) {
-      var CURRENT_CACHE = "dashwey-v1-3-270-dev";
+      var CURRENT_CACHE = "dashwey-v1-3-271-dev";
       caches.keys().then(function(keys) {
         keys.forEach(function(key) {
           if (key.startsWith("dashwey-") && key !== CURRENT_CACHE) {
@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.270-dev</title>
+<title>Dashwey v1.3.271-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3416,6 +3416,53 @@ body.tpv-tablet-pos {
 .tpv-dock-qty-num { font-size: 14px; font-weight: 700; color: var(--ink); min-width: 20px; text-align: center; }
 .tpv-dock-item-price { font-size: 13px; font-weight: 600; color: var(--ink-mid); }
 .tpv-dock-item-qty { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* v1.3.271: TPV speed UX */
+@keyframes tpvItemIn {
+  from { background: rgba(139,26,47,0.12); }
+  to   { background: transparent; }
+}
+.tpv-item-flash {
+  animation: tpvItemIn 0.6s ease-out forwards;
+  border-radius: 8px;
+}
+@keyframes tpvTotalPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.18); color: var(--red); }
+  100% { transform: scale(1); }
+}
+.tpv-total-pop {
+  animation: tpvTotalPop 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
+}
+/* Swipe-to-delete feedback */
+.tpv-dock-item-row {
+  transition: transform 0.18s ease, opacity 0.18s ease, background 0.15s;
+  touch-action: pan-y;
+}
+.tpv-dock-item-row.swipe-deleting {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+/* Undo toast */
+#tpv-undo-toast {
+  position: fixed;
+  bottom: calc(var(--tab-real) + 12px);
+  left: 50%; transform: translateX(-50%);
+  background: rgba(26,28,36,0.92); color: #fff;
+  padding: 9px 18px; border-radius: 24px;
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px;
+  pointer-events: none; opacity: 0;
+  transition: opacity 0.18s; white-space: nowrap;
+  z-index: 9100;
+}
+#tpv-undo-toast.show { opacity: 1; pointer-events: auto; }
+#tpv-undo-btn {
+  background: var(--red); border: none; color: #fff;
+  border-radius: 12px; padding: 3px 10px;
+  font-size: 12px; font-weight: 700; font-family: var(--font);
+  cursor: pointer; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 .tpv-dock-actions { display: flex; gap: 8px; padding: 8px 14px 12px; }
 .tpv-dock-tickets-btn, .tpv-dock-nuevo-btn {
   background: rgba(0,0,0,0.07); border: none; border-radius: 12px;
@@ -8029,6 +8076,10 @@ function _authTabSafe(tab) {
 
         <!-- Mini toast tap-to-add -->
         <div id="tpv-mini-toast"></div>
+        <div id="tpv-undo-toast">
+          <span id="tpv-undo-msg">Añadido</span>
+          <button id="tpv-undo-btn" onclick="App.tpv._undoLast()">Deshacer</button>
+        </div>
 
       </div>
 
@@ -11420,7 +11471,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.270-dev';
+  const _APP_VERSION = 'v1.3.271-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21692,9 +21743,17 @@ const tpv = (() => {
 
     // Feedback visual inmediato — 3 capas simultáneas
     _tapFeedback(id, triggerEl, p.nombre);
-    _updateDock();
+    _updateDock(id);   // v1.3.271: pasar id para flash+scroll
     _updateTabletTicket();
     _saveCurrentToTicket();
+    // v1.3.271: auto-expandir dock al añadir primer producto
+    if (!_dockExpanded && cartItems().length >= 1) {
+      _dockExpanded = true;
+      const dock = document.getElementById('tpv-ticket-dock');
+      const actions = document.getElementById('tpv-dock-actions');
+      if (dock) dock.classList.add('expanded');
+      if (actions) actions.style.display = 'flex';
+    }
   }
 
   function _tapFeedback(id, el, nombre) {
@@ -21810,13 +21869,21 @@ const tpv = (() => {
   }
 
   // ── LIVE TICKET DOCK (móvil) ──────────────────────────────────
-  function _updateDock() {
+  function _updateDock(flashId) {
     const tot  = cartTotal();
     const items = cartItems();
 
-    // Total
+    // Total + v1.3.271: micro animación al cambiar
     const totEl = document.getElementById('tpv-cobrar-total');
-    if (totEl) totEl.textContent = feur(tot);
+    if (totEl) {
+      totEl.textContent = feur(tot);
+      if (flashId) {
+        totEl.classList.remove('tpv-total-pop');
+        void totEl.offsetWidth; // reflow para reiniciar
+        totEl.classList.add('tpv-total-pop');
+        totEl.addEventListener('animationend', () => totEl.classList.remove('tpv-total-pop'), { once: true });
+      }
+    }
 
     // Nombre ticket activo
     const nameEl = document.getElementById('tpv-dock-ticket-name');
@@ -21838,11 +21905,11 @@ const tpv = (() => {
     }
 
     // Render items expandidos
-    _renderDockItems();
+    _renderDockItems(flashId);
     _renderTicketBadge();
   }
 
-  function _renderDockItems() {
+  function _renderDockItems(flashId) {
     const list = document.getElementById('tpv-dock-items');
     if (!list) return;
     const items = cartItems();
@@ -21851,7 +21918,7 @@ const tpv = (() => {
       return;
     }
     list.innerHTML = items.map(i => `
-      <div class="tpv-dock-item-row">
+      <div class="tpv-dock-item-row" data-id="${i.p.id}">
         <span class="tpv-dock-item-e">${i.p.e||'🛍️'}</span>
         <span class="tpv-dock-item-name">${esc(i.p.nombre)}</span>
         <div class="tpv-dock-item-qty">
@@ -21861,6 +21928,53 @@ const tpv = (() => {
         </div>
         <span class="tpv-dock-item-price">${feur(i.p.pvp*i.q)}</span>
       </div>`).join('');
+
+    // v1.3.271: swipe-to-delete en cada fila
+    list.querySelectorAll('.tpv-dock-item-row').forEach(row => {
+      _attachSwipeDelete(row);
+    });
+
+    // v1.3.271: auto-scroll + flash al item recién añadido
+    if (flashId) {
+      requestAnimationFrame(() => {
+        const el = list.querySelector('[data-id="' + flashId + '"]');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          el.classList.add('tpv-item-flash');
+          el.addEventListener('animationend', () => el.classList.remove('tpv-item-flash'), { once: true });
+        }
+      });
+    }
+  }
+
+  // v1.3.271: swipe-to-delete individual row
+  function _attachSwipeDelete(row) {
+    let x0 = 0, dx = 0, swiping = false;
+    row.addEventListener('touchstart', e => {
+      x0 = e.touches[0].clientX; dx = 0; swiping = true;
+      row.style.transition = 'none';
+    }, { passive: true });
+    row.addEventListener('touchmove', e => {
+      if (!swiping) return;
+      dx = e.touches[0].clientX - x0;
+      if (dx < 0) row.style.transform = 'translateX(' + dx + 'px)';
+    }, { passive: true });
+    row.addEventListener('touchend', () => {
+      swiping = false;
+      row.style.transition = '';
+      if (dx < -80) {
+        // Eliminar item
+        const id = row.dataset.id;
+        row.classList.add('swipe-deleting');
+        row.addEventListener('transitionend', () => {
+          if (_cart[id]) { _undoStack = { id, q: _cart[id].q, p: _cart[id].p }; }
+          chgQ(id, -999);
+          _showUndoToast(_undoStack && _undoStack.p ? _undoStack.p.nombre : '');
+        }, { once: true });
+      } else {
+        row.style.transform = '';
+      }
+    }, { passive: true });
   }
 
   function toggleDock() {
@@ -22324,8 +22438,41 @@ const tpv = (() => {
     });
   }
 
-  return {
+  // ── v1.3.271: Undo ─────────────────────────────────────────────────
+  let _undoStack = null;
+  let _undoTimer = null;
+
+  function _showUndoToast(nombre) {
+    const t   = document.getElementById('tpv-undo-toast');
+    const msg = document.getElementById('tpv-undo-msg');
+    if (!t) return;
+    if (msg) msg.textContent = (nombre ? esc(nombre) : 'Producto') + ' eliminado';
+    t.classList.add('show');
+    clearTimeout(_undoTimer);
+    _undoTimer = setTimeout(() => {
+      t.classList.remove('show');
+      _undoStack = null;
+    }, 3500);
+  }
+
+  function _undoLast() {
+    const t = document.getElementById('tpv-undo-toast');
+    if (t) t.classList.remove('show');
+    clearTimeout(_undoTimer);
+    if (!_undoStack) return;
+    const { id, q, p } = _undoStack;
+    _undoStack = null;
+    _cart[id] = { p, q };
+    _prodsHash = ''; _hotGridHash = '';
+    _updateDock(id);
+    _updateTabletTicket();
+    _saveCurrentToTicket();
+    Utils.triggerHaptic('light');
+  }
+
+    return {
     render, addCart, chgQ, setcat, catsScroll, onSearch, clearSearch, toggleDock,
+    _undoLast,
     openCobro, closeCobro, procesarPago,
     openTickets, closeTickets, nuevoTicket, activarTicket, borrarTicket,
     openManualSale, confirmManualSale,
