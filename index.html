@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.283-dev</title>
+<title>Dashwey v1.3.284-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3475,6 +3475,27 @@ body.tpv-tablet-pos {
   z-index: 9100;
 }
 #tpv-undo-toast.show { opacity: 1; pointer-events: auto; }
+/* v1.3.284: DASH-11 — undo toast para removeCard */
+#dash-undo-toast {
+  position: fixed;
+  bottom: calc(var(--tab-real) + 12px);
+  left: 50%; transform: translateX(-50%);
+  background: rgba(26,28,36,0.92); color: #fff;
+  padding: 9px 18px; border-radius: 24px;
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px;
+  pointer-events: none; opacity: 0;
+  transition: opacity 0.18s; white-space: nowrap;
+  z-index: 9100;
+}
+#dash-undo-toast.show { opacity: 1; pointer-events: auto; }
+#dash-undo-btn {
+  background: var(--red); border: none; color: #fff;
+  border-radius: 12px; padding: 3px 10px;
+  font-size: 12px; font-weight: 700; font-family: var(--font);
+  cursor: pointer; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 #tpv-undo-btn {
   background: var(--red); border: none; color: #fff;
   border-radius: 12px; padding: 3px 10px;
@@ -8098,6 +8119,11 @@ function _authTabSafe(tab) {
           <span id="tpv-undo-msg">Añadido</span>
           <button id="tpv-undo-btn" onclick="App.tpv._undoLast()">Deshacer</button>
         </div>
+        <!-- v1.3.284: DASH-11 — undo toast para removeCard Dashboard -->
+        <div id="dash-undo-toast">
+          <span id="dash-undo-msg">Tarjeta ocultada</span>
+          <button id="dash-undo-btn" onclick="App.dash._undoRemoveCard()">Deshacer</button>
+        </div>
 
       </div>
 
@@ -11489,7 +11515,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.283-dev';
+  const _APP_VERSION = 'v1.3.284-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13499,8 +13525,8 @@ const dash = (() => {
     try { renderRendimiento(period); } catch(e) {}
     try { renderFlujoCaja(); } catch(e) {}
     try { renderAgenda(); } catch(e) {}  // v1.3.281: DASH-03 — agenda en render() principal
-    // legacy — mantener llamadas para evitar romper listeners externos
-    try { renderVentas(period); } catch(e) {}
+    // legacy — renderTopArticulos mantenido para listeners externos
+    // v1.3.284: DASH-08 — renderVentas eliminado (ya cubierto por renderRendimiento)
     try { renderTopArticulos(period); } catch(e) {}
 
     // ── Beneficio Neto (bn-card) — siempre actualizado ───────────
@@ -14332,9 +14358,22 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (cont && banner) cont.appendChild(banner);
   }
   function removeCard(id) {
-    const h = _getHidden(); if (!h.includes(id)) h.push(id);
-    _setHidden(h); _applyHidden();
-    showToast('Tarjeta ocultada — pulsa "Personalizar" para restaurar');
+    const hidden = _getHidden();
+    if (!hidden.includes(id)) hidden.push(id);
+    _setHidden(hidden); _applyHidden();
+    // v1.3.284: DASH-11 — undo toast en lugar de toast estático
+    _dashUndoCardId = id;
+    const toast = document.getElementById('dash-undo-toast');
+    const msg   = document.getElementById('dash-undo-msg');
+    if (msg) msg.textContent = 'Tarjeta ocultada';
+    if (toast) {
+      toast.classList.add('show');
+      clearTimeout(_dashUndoTimer);
+      _dashUndoTimer = setTimeout(() => {
+        toast.classList.remove('show');
+        _dashUndoCardId = null;
+      }, 3500);
+    }
   }
   function openCardManager() {
     const h = _getHidden();
@@ -18191,6 +18230,12 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // ── Typewriter con cifras resaltadas en rojo (tipo E) ────────────────────
   function _snapTypewriter(el, text, onDone) {
     if (!el) return;
+    // v1.3.284: DASH-10 — skip si el texto es idéntico al último renderizado
+    if (el.dataset.lastNarrative === text && el.textContent.length > 0) {
+      if (onDone) onDone();
+      return;
+    }
+    el.dataset.lastNarrative = text;
     // Cancelar typewriter anterior si existe
     if (el._snapTypewriterCancel) { el._snapTypewriterCancel(); el._snapTypewriterCancel = null; }
     el.innerHTML = '';
@@ -19908,16 +19953,34 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
           }).length
         : historial.length;
 
-      // Margen medio = avg (pvp - precioCompra) / pvp en productos con ambos valores (v1.3.107)
+      // v1.3.284: DASH-09 — margenMedio filtrado por productos vendidos en el periodo
       var prods = State.get.productos ? (State.get.productos() || []) : [];
-      var prodsConMargen = prods.filter(function(p) {
-        return p.pvp > 0 && (p.precioCompra || 0) > 0;
-      });
       var margenMedio = 0;
-      if (prodsConMargen.length > 0) {
-        margenMedio = prodsConMargen.reduce(function(s, p) {
-          return s + (p.pvp - (p.precioCompra || 0)) / p.pvp * 100;
-        }, 0) / prodsConMargen.length;
+      try {
+        var ventasPeriodo = KPI.ventasEnPeriodo ? KPI.ventasEnPeriodo(period) : [];
+        // IDs de productos vendidos en el período
+        var prodIdsVendidos = {};
+        ventasPeriodo.forEach(function(v) {
+          (v.items || []).forEach(function(it) { prodIdsVendidos[it.prodId] = true; });
+        });
+        var prodsConMargen = Object.keys(prodIdsVendidos).length > 0
+          // Periodo con ventas: filtrar solo productos vendidos con coste conocido
+          ? prods.filter(function(p) {
+              return prodIdsVendidos[p.id] && p.pvp > 0 && (p.precioCompra || 0) > 0;
+            })
+          // Sin ventas en periodo: fallback a todos los productos con coste
+          : prods.filter(function(p) { return p.pvp > 0 && (p.precioCompra || 0) > 0; });
+        if (prodsConMargen.length > 0) {
+          margenMedio = prodsConMargen.reduce(function(s, p) {
+            return s + (p.pvp - (p.precioCompra || 0)) / p.pvp * 100;
+          }, 0) / prodsConMargen.length;
+        }
+      } catch(_) {
+        // Fallback: todos los productos con coste
+        var _fb = prods.filter(function(p){ return p.pvp > 0 && (p.precioCompra||0) > 0; });
+        if (_fb.length) margenMedio = _fb.reduce(function(s,p){
+          return s + (p.pvp-(p.precioCompra||0))/p.pvp*100;
+        }, 0) / _fb.length;
       }
 
       // Variación costes = comparar compras periodo actual vs anterior (v1.3.107)
@@ -20461,7 +20524,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     });
   })();
 
-  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatSend, _updateChatBadge, openChatUsersMgr, _chatAddUser, _chatRemoveUser, _chatOpenConvoAnimated}; // v1.2.91
+  return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _confirmarIngreso, _confirmarNuevoIngreso, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, openBellCenter, _bellReadAll, _bellReadNotif, _updateBellBadge, openChatCenter, _chatOpenConvo, _chatBack, _chatSend, _updateChatBadge, openChatUsersMgr, _chatAddUser, _chatRemoveUser, _chatOpenConvoAnimated}; // v1.2.91
 })();
 
 // ══════════════════════════════════════════
@@ -22619,7 +22682,23 @@ const tpv = (() => {
     Utils.triggerHaptic('light');
   }
 
-    return {
+    // v1.3.284: DASH-11 — undo state para removeCard
+  let _dashUndoCardId = null;
+  let _dashUndoTimer  = null;
+
+  function _undoRemoveCard() {
+    const toast = document.getElementById('dash-undo-toast');
+    if (toast) toast.classList.remove('show');
+    clearTimeout(_dashUndoTimer);
+    if (!_dashUndoCardId) return;
+    const id = _dashUndoCardId;
+    _dashUndoCardId = null;
+    const hidden = _getHidden().filter(h => h !== id);
+    _setHidden(hidden); _applyHidden();
+    Utils.triggerHaptic && Utils.triggerHaptic('light');
+  }
+
+  return {
     render, addCart, chgQ, setcat, catsScroll, onSearch, clearSearch, toggleDock,
     _undoLast,
     openCobro, closeCobro, procesarPago,
