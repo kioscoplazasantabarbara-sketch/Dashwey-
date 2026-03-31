@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.298-dev</title>
+<title>Dashwey v1.3.299-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3228,8 +3228,35 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-.tpv-hot-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
-@media(min-width:480px){ .tpv-hot-grid { grid-template-columns: repeat(5,1fr); } }
+/* v1.3.299: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+.tpv-hot-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--hg-cols,4), 1fr);
+  gap: 6px;
+}
+@media(min-width:480px){
+  .tpv-hot-grid { --hg-cols: 5; }
+}
+/* Celda seleccionada como origen de swap (v1.3.299) */
+.tpv-hot-btn.hg-selected {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+  background: var(--red-s);
+  transform: scale(0.96);
+  animation: hgSelectedPulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes hgSelectedPulse {
+  from { outline-color: var(--red); }
+  to   { outline-color: rgba(139,26,47,0.35); }
+}
+/* Pin badge — indicador de que la celda está fijada manualmente */
+.tpv-hot-btn .hg-pin-dot {
+  position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--red); opacity: 0.55;
+  display: none;
+}
+.tpv-hot-btn.hg-pinned .hg-pin-dot { display: block; }
 .tpv-hot-btn {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 14px; box-shadow: var(--shadow-sm);
@@ -11522,7 +11549,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.298-dev';
+  const _APP_VERSION = 'v1.3.299-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13412,6 +13439,8 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
+    // v1.3.299: cancelar swap de hot grid al cambiar de tab
+    try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
     //           añadir haptic aquí dispararía en swipe también (UX incorrecta).
@@ -21722,6 +21751,31 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
+  // ── v1.3.299: Hot Grid Pins ─────────────────────────────────────────
+  // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
+  // Persistido en localStorage['tpv_hot_pins_v1']
+  // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
+  const _HOT_PINS_KEY = 'tpv_hot_pins_v1';
+  let _hotPins = [];          // [null | { id }] — longitud == _hotGridMax
+  let _hgSwapSrc = null;      // índice de celda seleccionada como origen de swap
+
+  function _loadHotPins() {
+    try {
+      const raw = localStorage.getItem(_HOT_PINS_KEY);
+      if (raw) _hotPins = JSON.parse(raw);
+    } catch(_) { _hotPins = []; }
+    _normalizeHotPins();
+  }
+  function _saveHotPins() {
+    try { localStorage.setItem(_HOT_PINS_KEY, JSON.stringify(_hotPins)); } catch(_) {}
+    console.log('[HotGrid] pins saved:', _hotPins.map((p,i) => p ? i+':'+p.id : null).filter(Boolean));
+  }
+  function _normalizeHotPins() {
+    // Asegurar que _hotPins tiene exactamente _hotGridMax posiciones
+    while (_hotPins.length < _hotGridMax) _hotPins.push(null);
+    if (_hotPins.length > _hotGridMax) _hotPins = _hotPins.slice(0, _hotGridMax);
+  }
+
   // ── Helpers ──────────────────────────────────────────────────
   function cartTotal() {
     return Object.values(_cart).filter(i=>i.q>0).reduce((s,i)=>s+i.p.pvp*i.q,0);
@@ -21769,38 +21823,90 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // Top 6-9 productos por ventas con stock disponible
+  // v1.3.299: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
-    const prods = State.get.productos()
+
+    // ── Construir lista de slots ─────────────────────────────────
+    _normalizeHotPins();
+    const allProds   = State.get.productos();
+    const topByVentas = allProds
       .filter(p => p.stockActual > 0 && p.pvp > 0)
-      .sort((a,b) => (b.ventas||0) - (a.ventas||0))
-      .slice(0, _hotGridMax); // v1.3.279: M-05 configurable
-    // v1.2.25: dirty-check — skip si los productos y cantidades en carrito no cambiaron
-    const newHash = prods.map(p => `${p.id}:${p.nombre}:${p.pvp}:${p.e}:${_cart[p.id]?.q||0}`).join('|');
-    if (newHash === _hotGridHash) return;
-    _hotGridHash = newHash;
-    if (!prods.length) {
+      .sort((a,b) => (b.ventas||0) - (a.ventas||0));
+
+    // Ids ya usados por pins (no repetir en relleno automático)
+    const pinnedIds = new Set(_hotPins.filter(Boolean).map(p => p.id));
+
+    // Productos disponibles para relleno (no están ya fijados)
+    const autoFill = topByVentas.filter(p => !pinnedIds.has(p.id));
+
+    // Construir array de N slots: pin[i] ?? siguiente auto
+    let autoIdx = 0;
+    const slots = _hotPins.map(pin => {
+      if (pin) {
+        // Buscar producto actual (puede haber cambiado nombre/precio)
+        const p = allProds.find(x => x.id === pin.id);
+        return p || null; // null si el producto fue eliminado
+      }
+      // Auto-relleno: siguiente top-venta con stock
+      while (autoIdx < autoFill.length && autoFill[autoIdx].stockActual <= 0) autoIdx++;
+      return autoFill[autoIdx++] || null;
+    }).filter(Boolean); // quitar nulls (productos eliminados)
+
+    if (!slots.length) {
       grid.parentElement.style.display = 'none';
       return;
     }
     grid.parentElement.style.display = '';
-    grid.innerHTML = prods.map(p => {
-      const q = _cart[p.id]?.q || 0;
-      return `<button class="tpv-hot-btn" onclick="App.tpv.addCart('${p.id}',this)" id="tpv-hot-${p.id}" data-id="${p.id}">
+
+    // ── Dirty-check ─────────────────────────────────────────────
+    const newHash = slots.map(p => `${p.id}:${p.pvp}:${_cart[p.id]?.q||0}:${_hgSwapSrc}`).join('|');
+    if (newHash === _hotGridHash) return;
+    _hotGridHash = newHash;
+
+    // ── Columnas adaptivas (más productos → más columnas) ────────
+    const n = slots.length;
+    const cols = n <= 6 ? 3 : n <= 10 ? 4 : 5;
+    grid.style.setProperty('--hg-cols', cols);
+
+    // ── Render ───────────────────────────────────────────────────
+    grid.innerHTML = slots.map((p, slotIdx) => {
+      const q       = _cart[p.id]?.q || 0;
+      const isPinned = _hotPins[slotIdx] !== null;
+      const isSwapSrc = _hgSwapSrc === slotIdx;
+      return `<button
+        class="tpv-hot-btn${isPinned?' hg-pinned':''}${isSwapSrc?' hg-selected':''}"
+        onclick="App.tpv.addCart('${p.id}',this)"
+        id="tpv-hot-${p.id}"
+        data-id="${p.id}"
+        data-slot="${slotIdx}">
         <span class="hot-e">${p.e||'🛍️'}</span>
         <span class="hot-name">${esc(p.nombre)}</span>
         <span class="hot-price">${feur(p.pvp)}</span>
         <span class="tpv-hot-qty${q>0?' show':''}" id="tpv-hq-${p.id}">${q}</span>
+        <span class="hg-pin-dot"></span>
       </button>`;
     }).join('');
 
-    // v1.3.296: event delegation — 1 listener en grid en lugar de 3×N en botones
-    // Elimina acumulación de listeners en cada re-render del hot grid
+    // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
+    // v1.3.299: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
+
+      // Interceptar CLICK para modo swap (antes de addCart via onclick)
+      grid.addEventListener('click', e => {
+        if (_hgSwapSrc === null) return; // sin swap activo — onclick inline maneja addCart
+        e.stopPropagation();
+        e.preventDefault();
+        const btn = e.target.closest('.tpv-hot-btn');
+        if (!btn) { _hgCancelSwap(); return; }
+        const destSlot = parseInt(btn.dataset.slot);
+        if (isNaN(destSlot)) { _hgCancelSwap(); return; }
+        _hgDoSwap(_hgSwapSrc, destSlot);
+      }, true); // capture:true para interceptar antes del onclick inline
+
       grid.addEventListener('touchstart', e => {
         const btn = e.target.closest('.tpv-hot-btn');
         if (!btn) return;
@@ -22626,10 +22732,79 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
+  // v1.3.299: cargar hot pins desde localStorage en init
+  _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
+  // ── v1.3.299: Hot Grid Pin helpers ─────────────────────────────────────
+  function _hgPinProd(slotIdx, prodId) {
+    _normalizeHotPins();
+    _hotPins[slotIdx] = { id: prodId };
+    _saveHotPins();
+    _hotGridHash = ''; // invalidar dirty-check
+    _renderHotGrid();
+    showToast('📌 Fijado en la cuadrícula');
+  }
+
+  function _hgUnpin(slotIdx) {
+    _normalizeHotPins();
+    _hotPins[slotIdx] = null;
+    _saveHotPins();
+    _hotGridHash = '';
+    _renderHotGrid();
+    showToast('Pin eliminado');
+  }
+
+  function _hgStartSwap(slotIdx) {
+    _hgSwapSrc = slotIdx;
+    _hotGridHash = ''; // forzar re-render para mostrar celda seleccionada
+    _renderHotGrid();
+    try { Utils.triggerHaptic('selection'); } catch(_) {}
+    showToast('Toca otra celda para intercambiar posición');
+    console.log('[HotGrid] swap iniciado desde slot', slotIdx);
+  }
+
+  function _hgDoSwap(srcIdx, destIdx) {
+    if (srcIdx === destIdx) { _hgCancelSwap(); return; }
+    _normalizeHotPins();
+    // Obtener los productos de origen y destino desde los slots renderizados
+    const grid = document.getElementById('tpv-hot-grid');
+    const allProds = State.get.productos();
+    const srcBtn  = grid?.querySelector(`[data-slot="${srcIdx}"]`);
+    const destBtn = grid?.querySelector(`[data-slot="${destIdx}"]`);
+    const srcId   = srcBtn?.dataset.id;
+    const destId  = destBtn?.dataset.id;
+    if (!srcId) { _hgCancelSwap(); return; }
+
+    // Asegurar que ambas posiciones quedan como pins después del swap
+    _hotPins[srcIdx]  = destId ? { id: destId } : null;
+    _hotPins[destIdx] = { id: srcId };
+    _saveHotPins();
+    console.log('[HotGrid] swap slot', srcIdx, '↔', destIdx, '|', srcId, '↔', destId || 'vacío');
+    _hgSwapSrc = null;
+    _hotGridHash = '';
+    _renderHotGrid();
+    try { Utils.triggerHaptic('confirm'); } catch(_) {}
+  }
+
+  function _hgCancelSwap() {
+    if (_hgSwapSrc === null) return;
+    _hgSwapSrc = null;
+    _hotGridHash = '';
+    _renderHotGrid();
+  }
+
+  function _hgResetAll() {
+    _hotPins = new Array(_hotGridMax).fill(null);
+    _saveHotPins();
+    _hotGridHash = '';
+    _renderHotGrid();
+    showToast('Cuadrícula restablecida');
+    console.log('[HotGrid] todos los pins eliminados');
+  }
+
   function _openTpvProdCtxMenu(prodId, sourceEl) {
     const p = State.get.prod(prodId); if (!p) return;
     const prev = document.getElementById('cat-ctx-menu'); if (prev) prev.remove();
@@ -22638,6 +22813,10 @@ const tpv = (() => {
     menu.id = 'cat-ctx-menu';
     menu.className = 'cat-float-menu';
     menu.style.cssText = 'display:flex;flex-direction:row;gap:4px;padding:6px 8px;border-radius:16px;';
+    // Obtener slot actual desde el botón source para acciones de pin
+    const slotIdx = sourceEl ? parseInt(sourceEl.dataset.slot) : NaN;
+    const isPinned = !isNaN(slotIdx) && _hotPins[slotIdx] !== null;
+
     const actions = [
       {
         icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
@@ -22664,6 +22843,28 @@ const tpv = (() => {
           }
         }
       },
+      // ── v1.3.299: acciones de pin en hot grid ──────────────────
+      ...(!isNaN(slotIdx) ? [
+        isPinned ? {
+          // Quitar pin — vuelve a posición automática
+          icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+          label: 'Quitar
+pin',
+          fn: () => { menu.remove(); _hgUnpin(slotIdx); }
+        } : {
+          // Fijar en esta posición
+          icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+          label: 'Fijar
+aquí',
+          fn: () => { menu.remove(); _hgPinProd(slotIdx, prodId); }
+        },
+        {
+          // Mover — inicia modo swap
+          icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>',
+          label: 'Mover',
+          fn: () => { menu.remove(); _hgStartSwap(slotIdx); }
+        },
+      ] : []),
     ];
     actions.forEach(function(a) {
       const btn = document.createElement('button');
@@ -22674,7 +22875,8 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    const estW = 140, estH = 80, tabH = 60;
+    // v1.3.299: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - estW - 8));
@@ -22732,7 +22934,10 @@ const tpv = (() => {
     openTickets, closeTickets, nuevoTicket, activarTicket, borrarTicket,
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
-    setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _hotGridHash = ''; _renderHotGrid(); },
+    setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
+    // v1.3.299: hot grid pins API
+    hgResetPins: _hgResetAll,
+    hgCancelSwap: _hgCancelSwap,
   };
 })();
 
