@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.286-dev</title>
+<title>Dashwey v1.3.287-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11515,7 +11515,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.286-dev';
+  const _APP_VERSION = 'v1.3.287-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23509,18 +23509,41 @@ function _parseIva(iva) {
   // Persiste _ordenCarrito en localStorage para sobrevivir cambios de proveedor
   var _CARRITO_KEY = 'dashwey_carrito_v1';
   function _saveCarritoLocal() {
-    try { localStorage.setItem(_CARRITO_KEY, JSON.stringify(_ordenCarrito)); } catch(e) {}
+    try {
+      // v1.3.287: ALM-03 — guardar también el provId para validación al restaurar
+      const payload = {
+        prov: State.get.selectedProv() || null,
+        cart: _ordenCarrito,
+      };
+      localStorage.setItem(_CARRITO_KEY, JSON.stringify(payload));
+    } catch(e) {}
   }
   function _loadCarritoLocal() {
     try {
       var raw = localStorage.getItem(_CARRITO_KEY);
-      if (raw) {
-        var parsed = JSON.parse(raw);
-        // Solo restaurar items cuyo prodId sigue existiendo
-        Object.keys(parsed).forEach(function(id) {
-          if (State.get.prod(id)) _ordenCarrito[id] = parsed[id];
-        });
+      if (!raw) return;
+      var payload = JSON.parse(raw);
+      // v1.3.287: ALM-03 — soportar formato nuevo {prov, cart} y legado {prodId: qty}
+      var savedProv, cartData;
+      if (payload && typeof payload.cart === 'object' && 'prov' in payload) {
+        // Formato nuevo
+        savedProv = payload.prov;
+        cartData  = payload.cart;
+      } else {
+        // Formato legado (objeto plano {prodId: qty}) — aceptar sin validación de prov
+        savedProv = null;
+        cartData  = payload;
       }
+      // Si hay proveedor guardado y no coincide con el actual → descartar
+      var currentProv = State.get.selectedProv();
+      if (savedProv && currentProv && savedProv !== currentProv) {
+        localStorage.removeItem(_CARRITO_KEY);
+        return;
+      }
+      // Solo restaurar items cuyo prodId sigue existiendo
+      Object.keys(cartData || {}).forEach(function(id) {
+        if (State.get.prod(id)) _ordenCarrito[id] = cartData[id];
+      });
     } catch(e) {}
   }
 
@@ -24464,10 +24487,8 @@ function _parseIva(iva) {
       }
     }
 
-    // info-bar siempre visible
-    if (dockDiaEl)   dockDiaEl.textContent  = diaLabel;
-    if (dockArtEl)   dockArtEl.textContent  = allProvItems.length;
-    if (dockPriceEl) dockPriceEl.textContent = feur(totalOrden);
+    // info-bar: día siempre visible (dockArtEl/dockPriceEl se asignan más abajo desde _ordenCarrito)
+    if (dockDiaEl)   dockDiaEl.textContent  = diaLabel;  // v1.3.287: ALM-04
 
     // Badge en Próxima Entrega: mostrar si hay artículos en la orden
     const orderBadge = document.getElementById('alm-order-badge');
@@ -24553,7 +24574,7 @@ function _parseIva(iva) {
 
     // ── Summary KPIs arriba del Almacén ─────────────────────────
     const prods     = State.get.productos();
-    const stockBajo = prods.filter(p => p.stockActual > 0 && p.stockActual <= (p.stockMin || 3));
+    const stockBajo = prods.filter(p => p.stockActual > 0 && p.stockActual <= (p.stockMinimo || p.stockMin || 3));  // v1.3.287: ALM-05
     const valorInv  = prods.reduce((s,p) => s + (p.stockActual||0) * (p.pmc||p.precioCompra||0), 0);
     const totalEl   = document.getElementById('alm-total-prods');
     const valorEl   = document.getElementById('alm-valor-inv');
