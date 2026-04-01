@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.300-dev</title>
+<title>Dashwey v1.3.301-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3228,7 +3228,7 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-/* v1.3.300: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+/* v1.3.301: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
 .tpv-hot-grid {
   display: grid;
   grid-template-columns: repeat(var(--hg-cols,4), 1fr);
@@ -3237,7 +3237,7 @@ body.tpv-tablet-pos {
 @media(min-width:480px){
   .tpv-hot-grid { --hg-cols: 5; }
 }
-/* Celda seleccionada como origen de swap (v1.3.300) */
+/* Celda seleccionada como origen de swap (v1.3.301) */
 .tpv-hot-btn.hg-selected {
   outline: 2px solid var(--red);
   outline-offset: 2px;
@@ -11549,7 +11549,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.300-dev';
+  const _APP_VERSION = 'v1.3.301-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13439,7 +13439,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.300: cancelar swap de hot grid al cambiar de tab
+    // v1.3.301: cancelar swap de hot grid al cambiar de tab
     try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
@@ -16641,39 +16641,49 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _bellAttachSwipe(container) {
     if (!container) return;
-    container.querySelectorAll('[data-notif-id]').forEach(function(row) {
-      var x0 = 0, y0 = 0, dx = 0, _vetoed = false;  // v1.3.88: y0 capturado; veto vertical
-      row.addEventListener('touchstart', function(e){
-        x0 = e.touches[0].clientX;
-        y0 = e.touches[0].clientY;  // v1.3.88: fix dy=0 — capturar Y inicial
-        dx = 0;
-        _vetoed = false;
-      }, {passive:true});
-      row.addEventListener('touchmove',  function(e){
-        if (_vetoed) return;
-        dx = e.touches[0].clientX - x0;
-        var dy = Math.abs(e.touches[0].clientY - y0);  // v1.3.88: dy real
-        if (dy > Math.abs(dx) * 1.5) { _vetoed = true; row.style.transform = ''; row.style.opacity = ''; return; }
-        if (Math.abs(dx) > 8) {
-          row.style.transform = 'translateX('+dx+'px)';
-          row.style.opacity = String(Math.max(0.3, 1 - Math.abs(dx)/140));
-        }
-      }, {passive:true});
-      row.addEventListener('touchend', function(){
-        if (!_vetoed && Math.abs(dx) > 80) {
-          row.style.transform = 'translateX('+(dx>0?'130%':'-130%')+')';
-          row.style.opacity = '0';
-          var nid = row.dataset.notifId;
-          setTimeout(function(){
-            try { State.set.markNotifRead(nid); _updateBellBadge(); } catch(_) {}
-            if (row.parentNode) row.style.display = 'none';
-          }, 200);
-        } else {
-          row.style.transform = '';
-          row.style.opacity = '';
-        }
-        dx = 0; _vetoed = false;
-      });
+    // v1.3.301: delegación en contenedor padre — elimina listener leak por fila
+    // Los listeners viven en container y se destruyen solos con ov.remove()
+    container.addEventListener('touchstart', function(e) {
+      var row = e.target.closest('[data-notif-id]');
+      if (!row) return;
+      row._bx0 = e.touches[0].clientX;
+      row._by0 = e.touches[0].clientY;
+      row._bdx = 0;
+      row._bvetoed = false;
+    }, {passive: true});
+    container.addEventListener('touchmove', function(e) {
+      var row = e.target.closest('[data-notif-id]');
+      if (!row || row._bvetoed) return;
+      row._bdx = e.touches[0].clientX - row._bx0;
+      var dy = Math.abs(e.touches[0].clientY - row._by0);
+      if (dy > Math.abs(row._bdx) * 1.5) {
+        row._bvetoed = true;
+        row.style.transform = '';
+        row.style.opacity = '';
+        return;
+      }
+      if (Math.abs(row._bdx) > 8) {
+        row.style.transform = 'translateX(' + row._bdx + 'px)';
+        row.style.opacity = String(Math.max(0.3, 1 - Math.abs(row._bdx) / 140));
+      }
+    }, {passive: true});
+    container.addEventListener('touchend', function(e) {
+      var row = e.target.closest('[data-notif-id]');
+      if (!row) return;
+      if (!row._bvetoed && Math.abs(row._bdx) > 80) {
+        row.style.transform = 'translateX(' + (row._bdx > 0 ? '130%' : '-130%') + ')';
+        row.style.opacity = '0';
+        var nid = row.dataset.notifId;
+        setTimeout(function() {
+          try { State.set.markNotifRead(nid); _updateBellBadge(); } catch(_) {}
+          if (row.parentNode) row.style.display = 'none';
+        }, 200);
+      } else {
+        row.style.transform = '';
+        row.style.opacity = '';
+      }
+      row._bdx = 0;
+      row._bvetoed = false;
     });
   }
 
@@ -21751,7 +21761,7 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
-  // ── v1.3.300: Hot Grid Pins ─────────────────────────────────────────
+  // ── v1.3.301: Hot Grid Pins ─────────────────────────────────────────
   // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
   // Persistido en localStorage['tpv_hot_pins_v1']
   // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
@@ -21823,7 +21833,7 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // v1.3.300: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
+  // v1.3.301: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
@@ -21890,7 +21900,7 @@ const tpv = (() => {
     }).join('');
 
     // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
-    // v1.3.300: tap interceptado para modo swap si _hgSwapSrc != null
+    // v1.3.301: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
@@ -22733,13 +22743,13 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
-  // v1.3.300: cargar hot pins desde localStorage en init
+  // v1.3.301: cargar hot pins desde localStorage en init
   _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
-  // ── v1.3.300: Hot Grid Pin helpers ─────────────────────────────────────
+  // ── v1.3.301: Hot Grid Pin helpers ─────────────────────────────────────
   function _hgPinProd(slotIdx, prodId) {
     _normalizeHotPins();
     _hotPins[slotIdx] = { id: prodId };
@@ -22844,7 +22854,7 @@ const tpv = (() => {
           }
         }
       },
-      // ── v1.3.300: acciones de pin en hot grid ──────────────────
+      // ── v1.3.301: acciones de pin en hot grid ──────────────────
       ...(!isNaN(slotIdx) ? [
         isPinned ? {
           // Quitar pin — vuelve a posición automática
@@ -22874,7 +22884,7 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    // v1.3.300: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    // v1.3.301: estW ampliado para hasta 5 botones (pin/mover añadidos)
     const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -22934,7 +22944,7 @@ const tpv = (() => {
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
     setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
-    // v1.3.300: hot grid pins API
+    // v1.3.301: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
   };
