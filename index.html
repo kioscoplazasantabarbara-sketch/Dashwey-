@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.323-dev</title>
+<title>Dashwey v1.3.324-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1105,17 +1105,8 @@ body[data-dash-snap="1"] #dash-cards-container .card {
 
 /* Fade superior — eliminado (fondo sólido) */
 
-/* ── Smartphone portrait — tarjetas con altura natural (no fija) ──────
-   En portrait mobile el snap ocupa pantalla completa por defecto.
-   Esta regla permite que KPIs + insight sean visibles sin scroll interno.
-   Solo afecta smartphones (< 768px) en portrait. ────────────────────── */
-@media (max-width: 767px) and (orientation: portrait) {
-  body[data-dash-snap="1"] #dash-cards-container .card {
-    height: auto !important;
-    min-height: 380px;
-    margin-bottom: 12px;
-  }
-}
+/* Smartphone portrait: snap mode ocupa pantalla completa.
+   height: auto fue eliminado — rompía el scroll snap en Android. */
 body[data-dash-snap="1"] #dash-cards-container .card::before {
   content: none;
 }
@@ -3396,7 +3387,7 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-/* v1.3.323: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+/* v1.3.324: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
 .tpv-hot-grid {
   display: grid;
   grid-template-columns: repeat(var(--hg-cols,4), 1fr);
@@ -3405,7 +3396,7 @@ body.tpv-tablet-pos {
 @media(min-width:480px){
   .tpv-hot-grid { --hg-cols: 5; }
 }
-/* Celda seleccionada como origen de swap (v1.3.323) */
+/* Celda seleccionada como origen de swap (v1.3.324) */
 .tpv-hot-btn.hg-selected {
   outline: 2px solid var(--red);
   outline-offset: 2px;
@@ -9910,7 +9901,7 @@ const State = (() => {
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
       _isSaving = true;
-      // v1.3.323: estampar timestamp ANTES de _writeLocal — una sola escritura local
+      // v1.3.324: estampar timestamp ANTES de _writeLocal — una sola escritura local
       const _ts  = Date.now();
       const _did = window._DashweyDeviceId || 'unknown';
       if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
@@ -11735,7 +11726,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.323-dev';
+  const _APP_VERSION = 'v1.3.324-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13625,7 +13616,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.323: cancelar swap de hot grid al cambiar de tab
+    // v1.3.324: cancelar swap de hot grid al cambiar de tab
     try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
@@ -16828,7 +16819,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _bellAttachSwipe(container) {
     if (!container) return;
-    // v1.3.323: delegación en contenedor padre — elimina listener leak por fila
+    // v1.3.324: delegación en contenedor padre — elimina listener leak por fila
     // Los listeners viven en container y se destruyen solos con ov.remove()
     container.addEventListener('touchstart', function(e) {
       var row = e.target.closest('[data-notif-id]');
@@ -20987,12 +20978,33 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     _feedRafId = null;
     _feedLastTs = 0;
 
+    var feed = document.querySelector('.dash-landscape-feed');
+    if (!feed) return;
+
+    // Loop infinito visual — duplicar tarjetas al final del feed
+    // Al llegar al final de los originales, empieza a ver las copias.
+    // Cuando scrollTop >= altura de originales → reset invisible a 0
+    // porque la posición visual es idéntica al inicio.
+    if (!feed._loopCloned) {
+      var origItems = Array.from(feed.children);
+      if (origItems.length > 0) {
+        var clone = document.createElement('div');
+        clone.className = 'feed-loop-clone';
+        origItems.forEach(function(item) {
+          clone.appendChild(item.cloneNode(true));
+        });
+        feed.appendChild(clone);
+        feed._loopCloned = true;
+        feed._origHeight = feed.scrollHeight / 2; // mitad = originales
+      }
+    }
+
     function step(ts) {
       var feed = document.querySelector('.dash-landscape-feed');
       if (!feed || !_feedRafId) { _feedRafId = null; return; }
+      var origHeight = feed._origHeight || 0;
       var max = feed.scrollHeight - feed.clientHeight;
-      if (max <= 0) {
-        // Feed sin overflow — reintentar en 500ms por si el DOM aún no tiene dimensiones
+      if (max <= 0 || origHeight <= 0) {
         _feedRafId = null;
         _feedPauseTimer = setTimeout(_startFeedScroll, 500);
         return;
@@ -21000,7 +21012,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       if (_feedLastTs > 0) {
         var delta = (ts - _feedLastTs) / 1000 * _getFeedScrollSpeed();
         var newTop = feed.scrollTop + delta;
-        feed.scrollTop = newTop >= max ? 0 : newTop;
+        // Reset invisible cuando llegamos al inicio del clon
+        if (newTop >= origHeight) newTop = newTop - origHeight;
+        feed.scrollTop = newTop;
       }
       _feedLastTs = ts;
       _feedRafId = requestAnimationFrame(step);
@@ -21108,8 +21122,15 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   // Destruir landscape — restaura DOM original en orden correcto
   function _destroyLandscape() {
-    // Fase 5.5: detener auto-scroll antes de destruir
+    // Fase 5.5: detener auto-scroll y limpiar clon de loop
     _stopFeedScroll();
+    var feed = document.querySelector('.dash-landscape-feed');
+    if (feed) {
+      var clone = feed.querySelector('.feed-loop-clone');
+      if (clone) clone.remove();
+      feed._loopCloned = false;
+      feed._origHeight = 0;
+    }
     var cont = document.getElementById('dash-cards-container');
     if (!cont) return;
     var mainEl = cont.querySelector('.dash-landscape-main');
@@ -22329,7 +22350,7 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
-  // ── v1.3.323: Hot Grid Pins ─────────────────────────────────────────
+  // ── v1.3.324: Hot Grid Pins ─────────────────────────────────────────
   // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
   // Persistido en localStorage['tpv_hot_pins_v1']
   // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
@@ -22401,7 +22422,7 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // v1.3.323: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
+  // v1.3.324: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
@@ -22468,7 +22489,7 @@ const tpv = (() => {
     }).join('');
 
     // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
-    // v1.3.323: tap interceptado para modo swap si _hgSwapSrc != null
+    // v1.3.324: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
@@ -23311,13 +23332,13 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
-  // v1.3.323: cargar hot pins desde localStorage en init
+  // v1.3.324: cargar hot pins desde localStorage en init
   _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
-  // ── v1.3.323: Hot Grid Pin helpers ─────────────────────────────────────
+  // ── v1.3.324: Hot Grid Pin helpers ─────────────────────────────────────
   function _hgPinProd(slotIdx, prodId) {
     _normalizeHotPins();
     _hotPins[slotIdx] = { id: prodId };
@@ -23422,7 +23443,7 @@ const tpv = (() => {
           }
         }
       },
-      // ── v1.3.323: acciones de pin en hot grid ──────────────────
+      // ── v1.3.324: acciones de pin en hot grid ──────────────────
       ...(!isNaN(slotIdx) ? [
         isPinned ? {
           // Quitar pin — vuelve a posición automática
@@ -23452,7 +23473,7 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    // v1.3.323: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    // v1.3.324: estW ampliado para hasta 5 botones (pin/mover añadidos)
     const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -23512,7 +23533,7 @@ const tpv = (() => {
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
     setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
-    // v1.3.323: hot grid pins API
+    // v1.3.324: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
   };
@@ -27038,7 +27059,7 @@ function _parseIva(iva) {
     _catInlineQ = val;
     clearTimeout(_catRenderTimer);
     _catRenderTimer = setTimeout(() => {
-      // v1.3.323: requestIdleCallback — render fuera del hilo principal en Android
+      // v1.3.324: requestIdleCallback — render fuera del hilo principal en Android
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => renderCatInline(), { timeout: 150 });
       } else {
