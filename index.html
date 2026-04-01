@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.324-dev</title>
+<title>Dashwey v1.3.325-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3387,7 +3387,7 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-/* v1.3.324: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+/* v1.3.325: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
 .tpv-hot-grid {
   display: grid;
   grid-template-columns: repeat(var(--hg-cols,4), 1fr);
@@ -3396,7 +3396,7 @@ body.tpv-tablet-pos {
 @media(min-width:480px){
   .tpv-hot-grid { --hg-cols: 5; }
 }
-/* Celda seleccionada como origen de swap (v1.3.324) */
+/* Celda seleccionada como origen de swap (v1.3.325) */
 .tpv-hot-btn.hg-selected {
   outline: 2px solid var(--red);
   outline-offset: 2px;
@@ -9901,7 +9901,7 @@ const State = (() => {
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
       _isSaving = true;
-      // v1.3.324: estampar timestamp ANTES de _writeLocal — una sola escritura local
+      // v1.3.325: estampar timestamp ANTES de _writeLocal — una sola escritura local
       const _ts  = Date.now();
       const _did = window._DashweyDeviceId || 'unknown';
       if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
@@ -11726,7 +11726,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.324-dev';
+  const _APP_VERSION = 'v1.3.325-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13616,7 +13616,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.324: cancelar swap de hot grid al cambiar de tab
+    // v1.3.325: cancelar swap de hot grid al cambiar de tab
     try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
@@ -16819,7 +16819,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _bellAttachSwipe(container) {
     if (!container) return;
-    // v1.3.324: delegación en contenedor padre — elimina listener leak por fila
+    // v1.3.325: delegación en contenedor padre — elimina listener leak por fila
     // Los listeners viven en container y se destruyen solos con ov.remove()
     container.addEventListener('touchstart', function(e) {
       var row = e.target.closest('[data-notif-id]');
@@ -20965,6 +20965,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   var _feedRafId      = null;
   var _feedLastTs     = 0;
   var _feedPauseTimer = null;
+  var _feedScrolling  = false;
+  var _feedDragLastY  = 0;
 
   function _getFeedScrollSpeed() {
     var feed = document.querySelector('.dash-landscape-feed');
@@ -21044,6 +21046,109 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // duration === Infinity → pausa indefinida hasta llamada explícita
   }
 
+  // ── Fase 5.6: Swipe/Tap interacción del feed ───────────────────
+  function _attachFeedBehavior(feed) {
+    if (!feed || feed._behaviorAttached) return;
+    feed._behaviorAttached = true;
+
+    feed.addEventListener('touchstart', function(e) {
+      feed._touchStartX = e.touches[0].clientX;
+      feed._touchStartY = e.touches[0].clientY;
+      _feedDragLastY = e.touches[0].clientY;
+      _feedScrolling = false;
+    }, { passive: true });
+
+    feed.addEventListener('touchmove', function(e) {
+      var dy = Math.abs(e.touches[0].clientY - feed._touchStartY);
+      var dx = Math.abs(e.touches[0].clientX - feed._touchStartX);
+      if (!_feedScrolling && (dy > 10 || dx > 10)) {
+        _feedScrolling = true;
+        _pauseFeedScroll(Infinity);
+      }
+      if (_feedScrolling) {
+        var deltaY = _feedDragLastY - e.touches[0].clientY;
+        _feedDragLastY = e.touches[0].clientY;
+        feed.scrollTop += deltaY;
+      }
+    }, { passive: true });
+
+    feed.addEventListener('touchend', function(e) {
+      if (_feedScrolling) {
+        _feedScrolling = false;
+        _pauseFeedScroll(0);
+        return;
+      }
+      var dx = Math.abs(e.changedTouches[0].clientX - feed._touchStartX);
+      var dy = Math.abs(e.changedTouches[0].clientY - feed._touchStartY);
+      if (dx < 10 && dy < 10) {
+        var target = e.target.closest('.feed-card');
+        if (target && target.dataset.cardId) _swapMainCard(target.dataset.cardId);
+      }
+    });
+
+    feed.addEventListener('touchcancel', function() {
+      _feedScrolling = false;
+      _pauseFeedScroll(0);
+    }, { passive: true });
+
+    feed.addEventListener('mouseenter', function() { _pauseFeedScroll(Infinity); });
+    feed.addEventListener('mouseleave', function() { _pauseFeedScroll(0); });
+    feed.addEventListener('wheel', function() { _pauseFeedScroll(3000); }, { passive: true });
+    feed.addEventListener('click', function(e) {
+      var target = e.target.closest('.feed-card');
+      if (target && target.dataset.cardId) _swapMainCard(target.dataset.cardId);
+    });
+  }
+
+  // ── Fase 5.7: Intercambio de tarjeta principal con slide ─────────
+  function _swapMainCard(newMainId) {
+    if (!newMainId || newMainId === _activeCardId) return;
+    // No intercambiar placeholders
+    var meta = _CARD_META_LANDSCAPE[newMainId];
+    if (meta && meta.placeholder) return;
+
+    _pauseFeedScroll(Infinity);
+
+    var mainCard = document.querySelector('.dash-landscape-main .card');
+    if (!mainCard) return;
+
+    // SALIDA — slide izquierda + fade out
+    mainCard.style.willChange = 'transform, opacity';
+    mainCard.style.transition = 'transform 200ms ease-out, opacity 200ms ease-out';
+
+    requestAnimationFrame(function() {
+      mainCard.style.transform = 'translateX(-100%)';
+      mainCard.style.opacity = '0';
+
+      setTimeout(function() {
+        _activeCardId = newMainId;
+        _renderLandscape(); // reconstruye main + feed + clon + comportamiento
+
+        // ENTRADA — nueva tarjeta entra desde derecha
+        // Doble rAF obligatorio — sin él estado inicial y transición
+        // se colapsan en un frame y la animación no se ve
+        requestAnimationFrame(function() {
+          var newCard = document.querySelector('.dash-landscape-main .card');
+          if (!newCard) return;
+          newCard.style.willChange = 'transform, opacity';
+          newCard.style.transform = 'translateX(100%)';
+          newCard.style.opacity = '0';
+          newCard.style.transition = 'none';
+
+          requestAnimationFrame(function() {
+            newCard.style.transition = 'transform 200ms ease-out, opacity 200ms ease-out';
+            newCard.style.transform = '';
+            newCard.style.opacity = '';
+            setTimeout(function() {
+              newCard.style.willChange = '';
+              _pauseFeedScroll(0); // reanudar auto-scroll
+            }, 200);
+          });
+        });
+      }, 200);
+    });
+  }
+
   function _renderLandscape() {
     var cont = document.getElementById('dash-cards-container');
     if (!cont) return;
@@ -21098,6 +21203,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
     cont.appendChild(mainEl);
     cont.appendChild(feedEl);
+
+    // Fase 5.6: adjuntar comportamiento swipe/tap al feed
+    _attachFeedBehavior(feedEl);
 
     // Hidratar tarjeta principal — datos + gráficas
     // Doble rAF: primer frame hidrata datos, segundo frame dibuja gráficas
@@ -22350,7 +22458,7 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
-  // ── v1.3.324: Hot Grid Pins ─────────────────────────────────────────
+  // ── v1.3.325: Hot Grid Pins ─────────────────────────────────────────
   // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
   // Persistido en localStorage['tpv_hot_pins_v1']
   // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
@@ -22422,7 +22530,7 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // v1.3.324: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
+  // v1.3.325: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
@@ -22489,7 +22597,7 @@ const tpv = (() => {
     }).join('');
 
     // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
-    // v1.3.324: tap interceptado para modo swap si _hgSwapSrc != null
+    // v1.3.325: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
@@ -23332,13 +23440,13 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
-  // v1.3.324: cargar hot pins desde localStorage en init
+  // v1.3.325: cargar hot pins desde localStorage en init
   _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
-  // ── v1.3.324: Hot Grid Pin helpers ─────────────────────────────────────
+  // ── v1.3.325: Hot Grid Pin helpers ─────────────────────────────────────
   function _hgPinProd(slotIdx, prodId) {
     _normalizeHotPins();
     _hotPins[slotIdx] = { id: prodId };
@@ -23443,7 +23551,7 @@ const tpv = (() => {
           }
         }
       },
-      // ── v1.3.324: acciones de pin en hot grid ──────────────────
+      // ── v1.3.325: acciones de pin en hot grid ──────────────────
       ...(!isNaN(slotIdx) ? [
         isPinned ? {
           // Quitar pin — vuelve a posición automática
@@ -23473,7 +23581,7 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    // v1.3.324: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    // v1.3.325: estW ampliado para hasta 5 botones (pin/mover añadidos)
     const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -23533,7 +23641,7 @@ const tpv = (() => {
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
     setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
-    // v1.3.324: hot grid pins API
+    // v1.3.325: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
   };
@@ -27059,7 +27167,7 @@ function _parseIva(iva) {
     _catInlineQ = val;
     clearTimeout(_catRenderTimer);
     _catRenderTimer = setTimeout(() => {
-      // v1.3.324: requestIdleCallback — render fuera del hilo principal en Android
+      // v1.3.325: requestIdleCallback — render fuera del hilo principal en Android
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => renderCatInline(), { timeout: 150 });
       } else {
