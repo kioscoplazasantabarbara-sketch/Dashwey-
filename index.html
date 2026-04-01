@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.370-dev</title>
+<title>Dashwey v1.3.371-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -346,9 +346,13 @@
   --text3:    var(--ink-soft);
   --slate:    #98989F;
 
-  /* M3 dark: crimson desaturado — legible sin deslumbrar en OLED */
-  --red:      #C2607A;
-  --red-d:    #A84D65;
+  /* M3 dark: crimson saturación reducida — fatiga visual mínima en OLED */
+  --red:      #B84C5C;
+  --red-d:    #9A3A48;
+  --red-g:    rgba(184,76,92,0.22);
+  --green:    #4CAF7A;
+  --blue:     #5C8BC9;
+  --orange:   #E5954C;
 
   --red-s:    rgba(194,96,122,0.18);
   --red-g:    rgba(194,96,122,0.28);
@@ -500,7 +504,7 @@ html.theme-switching *::after {
   transition: filter 0.3s ease;
 }
 
-/* ══ RIPPLE — v1.3.370 ══════════════════════════════════════════════════════
+/* ══ RIPPLE — v1.3.371 ══════════════════════════════════════════════════════
    Implementación limpia: transition en lugar de @keyframes.
    Sin global listener — cada elemento tiene su propio listener.
    Solo para elementos con .ripple-surface.
@@ -2568,7 +2572,7 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
 }
 /* v1.3.108: .card-shimmer legacy eliminado — reemplazado por .is-shimmering (v9.5.73) */
 
-/* ══ SKELETON SCREENS M3 — v1.3.370 ════════════════════════════════════════
+/* ══ SKELETON SCREENS M3 — v1.3.371 ════════════════════════════════════════
    Shimmer deslizante + pulse — imita estructura real del contenido
    ═══════════════════════════════════════════════════════════════════════════ */
 @keyframes skeletonShimmer {
@@ -3756,7 +3760,7 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-/* v1.3.370: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+/* v1.3.371: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
 .tpv-hot-grid {
   display: grid;
   grid-template-columns: repeat(var(--hg-cols,4), 1fr);
@@ -3765,7 +3769,7 @@ body.tpv-tablet-pos {
 @media(min-width:480px){
   .tpv-hot-grid { --hg-cols: 5; }
 }
-/* Celda seleccionada como origen de swap (v1.3.370) */
+/* Celda seleccionada como origen de swap (v1.3.371) */
 .tpv-hot-btn.hg-selected {
   outline: 2px solid var(--red);
   outline-offset: 2px;
@@ -10244,8 +10248,11 @@ const State = (() => {
 
   // Escuchar reconexión y desconexión
   window.addEventListener('online', function() {
+    if (typeof Utils !== 'undefined') {
+      Utils.updateSyncBadge('syncing');
+      Utils.showToast('✅ Conectado — sincronizando datos');
+    }
     _flushQueue();
-    if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing');
   });
   window.addEventListener('offline', function() {
     if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
@@ -10305,7 +10312,7 @@ const State = (() => {
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
       _isSaving = true;
-      // v1.3.370: estampar timestamp ANTES de _writeLocal — una sola escritura local
+      // v1.3.371: estampar timestamp ANTES de _writeLocal — una sola escritura local
       const _ts  = Date.now();
       const _did = window._DashweyDeviceId || 'unknown';
       if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
@@ -11484,17 +11491,29 @@ const Utils = (() => {
   function updateSyncBadge(mode) {
     const dot   = document.getElementById('sync-dot');
     const label = document.getElementById('sync-label');
+    const badge = document.getElementById('sync-badge');
     if (!dot || !label) return;
     const MAP = {
-      local:   { cls: 'local',   txt: 'Local'  },
-      syncing: { cls: 'syncing', txt: 'Sync…'  },
-      synced:  { cls: 'synced',  txt: '☁︎'     },
-      error:   { cls: 'error',   txt: 'Error'  },
-      offline: { cls: 'offline', txt: 'Sin red' },
+      local:   { cls: 'local',   txt: ''               },
+      syncing: { cls: 'syncing', txt: 'Sincronizando…'  },
+      synced:  { cls: 'synced',  txt: 'En línea'        },
+      error:   { cls: 'error',   txt: '⚠️ Sync error'   },
+      offline: { cls: 'offline', txt: '📡 Sin conexión' },
     };
     const m = MAP[mode] || MAP.local;
-    dot.className   = m.cls;
+    dot.className     = m.cls;
     label.textContent = m.txt;
+    // Guardar timestamp última sync exitosa
+    if (mode === 'synced') {
+      try { localStorage.setItem('dashwey_last_sync', Date.now()); } catch(_) {}
+      // Ocultar badge "En línea" tras 3s
+      if (badge) badge.style.opacity = '1';
+      clearTimeout(updateSyncBadge._hideTimer);
+      updateSyncBadge._hideTimer = setTimeout(function() {
+        dot.className = 'local';
+        label.textContent = '';
+      }, 3000);
+    }
   }
 
   // ══ HAPTIC ENGINE v1.3.101 ══════════════════════════════════════
@@ -12206,7 +12225,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.370-dev';
+  const _APP_VERSION = 'v1.3.371-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13300,7 +13319,7 @@ const ui = (() => {
 
   // ── What's New Sheet ─────────────────────────────────────────
   const _WN_CHANGELOG = {
-    'v1.3.370-dev': {
+    'v1.3.371-dev': {
       sections: [
         {
           title: 'Diseño M3 & Experiencia Nativa',
@@ -14129,7 +14148,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.370: cancelar swap de hot grid al cambiar de tab
+    // v1.3.371: cancelar swap de hot grid al cambiar de tab
     try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
@@ -14256,7 +14275,8 @@ const nav = (() => {
 const dash = (() => {
   let _ventasMode  = 'ingresos'; // 'ingresos' | 'unidades'
   let _isRendering = false;      // v1.2.22: guard de re-entrada — evita renders apilados
-  let _activeCardId = null;      // Fase 5.3: tarjeta activa para landscape mode
+  let _activeCardId     = null; // Fase 5.3: tarjeta activa para landscape mode
+  let _landscapeHistory = [];   // Historial de tarjetas visitadas para back navigation
 
   function render() {
     // v1.2.22: si ya hay un render en curso, descartar silenciosamente.
@@ -17345,7 +17365,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _bellAttachSwipe(container) {
     if (!container) return;
-    // v1.3.370: delegación en contenedor padre — elimina listener leak por fila
+    // v1.3.371: delegación en contenedor padre — elimina listener leak por fila
     // Los listeners viven en container y se destruyen solos con ov.remove()
     container.addEventListener('touchstart', function(e) {
       var row = e.target.closest('[data-notif-id]');
@@ -21690,6 +21710,12 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var meta = _CARD_META_LANDSCAPE[newMainId];
     if (meta && meta.placeholder) return;
     try { Utils.triggerHaptic('click'); } catch(_) {}
+    // Guardar en historial (máx 10 entradas)
+    if (_activeCardId) {
+      _landscapeHistory.push(_activeCardId);
+      if (_landscapeHistory.length > 10) _landscapeHistory.shift();
+    }
+    _updateLandscapeBackBtn();
 
     // No pausar el auto-scroll — el feed sigue corriendo durante el slide (200ms)
     // El movimiento continuo hace la transición más fluida y natural
@@ -21779,6 +21805,16 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Crear contenedor principal — mueve tarjeta activa dentro
     var mainEl = document.createElement('div');
     mainEl.className = 'dash-landscape-main';
+    // Botón back para historial de tarjetas
+    var backBtn = document.createElement('button');
+    backBtn.id = '_landscape-back-btn';
+    backBtn.style.cssText = 'display:none;position:absolute;top:12px;left:12px;z-index:10;' +
+      'width:32px;height:32px;border-radius:50%;border:none;background:var(--bg-mid);' +
+      'color:var(--ink);font-size:18px;cursor:pointer;align-items:center;justify-content:center;' +
+      'touch-action:manipulation;-webkit-tap-highlight-color:transparent;';
+    backBtn.innerHTML = '‹';
+    backBtn.onclick = function() { try { _landscapeBack(); } catch(_) {} };
+    mainEl.appendChild(backBtn);
     var activeCard = cont.querySelector('.card[data-card-id="' + activeId + '"]');
     if (activeCard) {
       activeCard.style.display = '';
@@ -21826,7 +21862,21 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
   // Destruir landscape — restaura DOM original en orden correcto
+  function _updateLandscapeBackBtn() {
+    var btn = document.getElementById('_landscape-back-btn');
+    if (!btn) return;
+    btn.style.display = _landscapeHistory.length > 0 ? 'flex' : 'none';
+  }
+
+  function _landscapeBack() {
+    var prev = _landscapeHistory.pop();
+    if (!prev) return;
+    _updateLandscapeBackBtn();
+    _swapMainCard(prev);
+  }
+
   function _destroyLandscape() {
+    _landscapeHistory = [];
     // 1. Detener auto-scroll
     _stopFeedScroll();
 
@@ -23092,7 +23142,7 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
-  // ── v1.3.370: Hot Grid Pins ─────────────────────────────────────────
+  // ── v1.3.371: Hot Grid Pins ─────────────────────────────────────────
   // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
   // Persistido en localStorage['tpv_hot_pins_v1']
   // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
@@ -23164,7 +23214,7 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // v1.3.370: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
+  // v1.3.371: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
@@ -23231,7 +23281,7 @@ const tpv = (() => {
     }).join('');
 
     // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
-    // v1.3.370: tap interceptado para modo swap si _hgSwapSrc != null
+    // v1.3.371: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
@@ -24075,13 +24125,13 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
-  // v1.3.370: cargar hot pins desde localStorage en init
+  // v1.3.371: cargar hot pins desde localStorage en init
   _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
-  // ── v1.3.370: Hot Grid Pin helpers ─────────────────────────────────────
+  // ── v1.3.371: Hot Grid Pin helpers ─────────────────────────────────────
   function _hgPinProd(slotIdx, prodId) {
     _normalizeHotPins();
     _hotPins[slotIdx] = { id: prodId };
@@ -24186,7 +24236,7 @@ const tpv = (() => {
           }
         }
       },
-      // ── v1.3.370: acciones de pin en hot grid ──────────────────
+      // ── v1.3.371: acciones de pin en hot grid ──────────────────
       ...(!isNaN(slotIdx) ? [
         isPinned ? {
           // Quitar pin — vuelve a posición automática
@@ -24216,7 +24266,7 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    // v1.3.370: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    // v1.3.371: estW ampliado para hasta 5 botones (pin/mover añadidos)
     const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -24276,7 +24326,7 @@ const tpv = (() => {
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
     setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
-    // v1.3.370: hot grid pins API
+    // v1.3.371: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
   };
@@ -27915,7 +27965,7 @@ function _parseIva(iva) {
     _catInlineQ = val;
     clearTimeout(_catRenderTimer);
     _catRenderTimer = setTimeout(() => {
-      // v1.3.370: requestIdleCallback — render fuera del hilo principal en Android
+      // v1.3.371: requestIdleCallback — render fuera del hilo principal en Android
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => renderCatInline(), { timeout: 150 });
       } else {
@@ -33535,7 +33585,7 @@ window._almCarritoOptions = function() {
 </script>
 
 <script>
-/* ── RIPPLE ENGINE — v1.3.370 ────────────────────────────────────────────
+/* ── RIPPLE ENGINE — v1.3.371 ────────────────────────────────────────────
    Basado en transition (no @keyframes) — sin flickering.
    Listener por elemento (currentTarget exacto) — sin contaminación.
    MutationObserver para elementos dinámicos (modales, sheets).
@@ -33608,7 +33658,7 @@ window._almCarritoOptions = function() {
 </script>
 
 <script>
-/* ── DESTRUCTIVE CONFIRM — v1.3.370 ──────────────────────────────────────
+/* ── DESTRUCTIVE CONFIRM — v1.3.371 ──────────────────────────────────────
    Reemplaza confirm() nativo con modal M3 accesible.
    _showDestructiveConfirm({ title, message, confirmText, destructive, onConfirm })
    ─────────────────────────────────────────────────────────────────────── */
@@ -33685,7 +33735,7 @@ window._showDestructiveConfirm = function(opts) {
 </script>
 
 <script>
-/* ── FIELD VALIDATION — v1.3.370 ──────────────────────────────────────────
+/* ── FIELD VALIDATION — v1.3.371 ──────────────────────────────────────────
    _validateField(input, rules) → boolean
    rules: { required, min, max, email, minLen }
    ─────────────────────────────────────────────────────────────────────── */
@@ -33723,7 +33773,7 @@ window._validateField = function(input, rules) {
 </script>
 
 <script>
-/* ── HAS-SCROLL DETECTOR — v1.3.370 ──────────────────────────────────────
+/* ── HAS-SCROLL DETECTOR — v1.3.371 ──────────────────────────────────────
    Añade clase .scrollable a .has-scroll cuando hay contenido scrolleable.
    ─────────────────────────────────────────────────────────────────────── */
 (function() {
@@ -33752,7 +33802,192 @@ window._validateField = function(input, rules) {
 </script>
 
 <script>
-/* ── INPUT MODE DETECTION — v1.3.370 ──────────────────────────────────────
+/* ── KEYBOARD SHORTCUTS — v1.3.371 ───────────────────────────────────────
+   Atajos de teclado para PC/tablet.
+   No se activan cuando un input/textarea está enfocado (salvo Ctrl+S, Esc).
+   ─────────────────────────────────────────────────────────────────────── */
+(function() {
+  'use strict';
+  document.addEventListener('keydown', function(e) {
+    var tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+    var inInput = (tag === 'input' || tag === 'textarea' || tag === 'select');
+
+    // Esc — cierra modal/sheet activo (siempre)
+    if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey) {
+      try { App.ui.closeFs(); }    catch(_) {}
+      try { App.ui.closeModal(); } catch(_) {}
+      return;
+    }
+
+    // Ctrl+S — guardar formulario (funciona en input también)
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      var btnOk = document.querySelector('#fs-content .btn-ok, #fs-content .btn-primary');
+      if (btnOk && !btnOk.disabled) btnOk.click();
+      return;
+    }
+
+    // A partir de aquí solo cuando NO hay input enfocado
+    if (inInput) return;
+
+    // Ctrl+K o / — abrir Spotlight
+    if (((e.ctrlKey || e.metaKey) && e.key === 'k') || e.key === '/') {
+      e.preventDefault();
+      try { window._spotlightOpen(); } catch(_) {}
+      return;
+    }
+
+    // Alt+1/2/3 — cambiar tab
+    if (e.altKey && (e.key === '1' || e.key === '2' || e.key === '3')) {
+      e.preventDefault();
+      try { App.nav.goTab(parseInt(e.key) - 1); } catch(_) {}
+      return;
+    }
+
+    // Ctrl+Enter — confirmar acción
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      var btnPrimary = document.querySelector('.tpv-right-cobrar, #alm-accept-btn, #fs-content .btn-ok');
+      if (btnPrimary && !btnPrimary.disabled) btnPrimary.click();
+      return;
+    }
+  }, { passive: false });
+})();
+</script>
+
+<script>
+/* ── LAZY LOADING — v1.3.371 ──────────────────────────────────────────────
+   Carga imágenes de productos solo cuando entran al viewport.
+   Usar data-lazy-src en lugar de src en imágenes de catálogo.
+   ─────────────────────────────────────────────────────────────────────── */
+(function() {
+  'use strict';
+  if (!window.IntersectionObserver) return; // fallback: sin lazy loading
+
+  var _io = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (!entry.isIntersecting) return;
+      var img = entry.target;
+      var src = img.dataset.lazySrc;
+      if (src) {
+        img.src = src;
+        img.removeAttribute('data-lazy-src');
+        img.style.background = '';
+      }
+      _io.unobserve(img);
+    });
+  }, { threshold: 0.1, rootMargin: '50px' });
+
+  window._initLazyLoading = function(container) {
+    var root = container || document;
+    root.querySelectorAll('img[data-lazy-src]').forEach(function(img) {
+      img.style.background = 'var(--bg-mid)'; // placeholder
+      _io.observe(img);
+    });
+  };
+
+  // Inicializar en arranque
+  window._initLazyLoading();
+
+  // Observer para nuevos elementos inyectados dinámicamente
+  var domObs = new MutationObserver(function(muts) {
+    muts.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'IMG' && node.dataset.lazySrc) _io.observe(node);
+        node.querySelectorAll && node.querySelectorAll('img[data-lazy-src]').forEach(function(img) {
+          img.style.background = 'var(--bg-mid)';
+          _io.observe(img);
+        });
+      });
+    });
+  });
+  domObs.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+<script>
+/* ── FORM DIRTY TRACKING & AUTO-SAVE — v1.3.371 ──────────────────────────
+   _trackFormChanges(formEl, key) — marca formulario como dirty al editar.
+   Auto-save borrador cada 30s en localStorage.
+   ─────────────────────────────────────────────────────────────────────── */
+(function() {
+  'use strict';
+
+  window._trackFormChanges = function(formEl, draftKey) {
+    if (!formEl) return;
+    formEl._dirty   = false;
+    formEl._draftKey = draftKey;
+
+    var _saveTimer = null;
+
+    function _markDirty() {
+      formEl._dirty = true;
+      clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(function() { _autoSave(formEl); }, 30000);
+    }
+
+    formEl.addEventListener('input',  _markDirty, { passive: true });
+    formEl.addEventListener('change', _markDirty, { passive: true });
+
+    // Mostrar banner si hay borrador guardado
+    if (draftKey) {
+      try {
+        var draft = JSON.parse(localStorage.getItem('dashwey_draft_' + draftKey) || 'null');
+        if (draft && draft.ts) {
+          var ago = Math.round((Date.now() - draft.ts) / 60000);
+          var banner = document.createElement('div');
+          banner.style.cssText = 'background:var(--indigo);color:#fff;padding:8px 14px;' +
+            'border-radius:10px;margin:0 0 10px;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;';
+          banner.innerHTML = '<span>💾 Borrador de hace ' + ago + 'm</span>' +
+            '<button onclick="window._restoreDraft('' + draftKey + '')" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Restaurar</button>' +
+            '<button onclick="window._discardDraft('' + draftKey + '');this.parentNode.remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:18px;padding:0 4px;">×</button>';
+          var firstChild = formEl.firstElementChild;
+          if (firstChild) formEl.insertBefore(banner, firstChild);
+          else formEl.appendChild(banner);
+        }
+      } catch(_) {}
+    }
+  };
+
+  function _autoSave(formEl) {
+    if (!formEl._dirty || !formEl._draftKey) return;
+    try {
+      var data = {};
+      formEl.querySelectorAll('input,select,textarea').forEach(function(el) {
+        if (el.id) data[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+      });
+      localStorage.setItem('dashwey_draft_' + formEl._draftKey, JSON.stringify({ ts: Date.now(), data: data }));
+    } catch(_) {}
+  }
+
+  window._restoreDraft = function(key) {
+    try {
+      var draft = JSON.parse(localStorage.getItem('dashwey_draft_' + key) || 'null');
+      if (!draft) return;
+      Object.keys(draft.data).forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        if (el.type === 'checkbox') el.checked = draft.data[id];
+        else el.value = draft.data[id];
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    } catch(_) {}
+  };
+
+  window._discardDraft = function(key) {
+    try { localStorage.removeItem('dashwey_draft_' + key); } catch(_) {}
+  };
+
+  window._clearFormDirty = function(formEl, draftKey) {
+    if (formEl) formEl._dirty = false;
+    if (draftKey) window._discardDraft(draftKey);
+  };
+})();
+</script>
+
+<script>
+/* ── INPUT MODE DETECTION — v1.3.371 ──────────────────────────────────────
    Detecta touch vs mouse y ajusta componentes via data-input-mode en body.
    ───────────────────────────────────────────────────────────────────────── */
 (function() {
@@ -33770,7 +34005,7 @@ window._validateField = function(input, rules) {
 </script>
 
 <script>
-/* ── EDGE GESTURES — v1.3.370 ──────────────────────────────────────────────
+/* ── EDGE GESTURES — v1.3.371 ──────────────────────────────────────────────
    Swipe desde borde derecho → abre ajustes.
    Doble tap en borde superior → scroll al inicio.
    ─────────────────────────────────────────────────────────────────────────── */
@@ -33825,7 +34060,7 @@ window._validateField = function(input, rules) {
 </script>
 
 <script>
-/* ── ENERGY SAVER — v1.3.370 ──────────────────────────────────────────────
+/* ── ENERGY SAVER — v1.3.371 ──────────────────────────────────────────────
    Detecta modo ahorro de batería y reduce animaciones/glassmorphism.
    ─────────────────────────────────────────────────────────────────────────── */
 (function() {
