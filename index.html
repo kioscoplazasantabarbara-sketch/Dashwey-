@@ -134,7 +134,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
-<title>Dashwey v1.3.309-dev</title>
+<title>Dashwey v1.3.310-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3320,7 +3320,7 @@ body.tpv-tablet-pos {
 /* Hot grid */
 .tpv-hot-section { padding: 6px 10px 4px; flex-shrink: 0; }
 .tpv-hot-label { display: none; }
-/* v1.3.309: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
+/* v1.3.310: hot grid columns — controlado por JS via --hg-cols (4 mobile, 5 wide) */
 .tpv-hot-grid {
   display: grid;
   grid-template-columns: repeat(var(--hg-cols,4), 1fr);
@@ -3329,7 +3329,7 @@ body.tpv-tablet-pos {
 @media(min-width:480px){
   .tpv-hot-grid { --hg-cols: 5; }
 }
-/* Celda seleccionada como origen de swap (v1.3.309) */
+/* Celda seleccionada como origen de swap (v1.3.310) */
 .tpv-hot-btn.hg-selected {
   outline: 2px solid var(--red);
   outline-offset: 2px;
@@ -9834,7 +9834,7 @@ const State = (() => {
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
       _isSaving = true;
-      // v1.3.309: estampar timestamp ANTES de _writeLocal — una sola escritura local
+      // v1.3.310: estampar timestamp ANTES de _writeLocal — una sola escritura local
       const _ts  = Date.now();
       const _did = window._DashweyDeviceId || 'unknown';
       if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
@@ -11659,7 +11659,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.309-dev';
+  const _APP_VERSION = 'v1.3.310-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13549,7 +13549,7 @@ const nav = (() => {
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
     }
-    // v1.3.309: cancelar swap de hot grid al cambiar de tab
+    // v1.3.310: cancelar swap de hot grid al cambiar de tab
     try { if (typeof App !== 'undefined' && App.tpv?.hgCancelSwap) App.tpv.hgCancelSwap(); } catch(_) {}
     // v1.3.101: haptic eliminado de goTab — zona prohibida (swipe/tab change)
     // v1.3.293: CONFIRMADO sin haptic — goTab es llamado por swipe Y por tap navbar;
@@ -13669,6 +13669,7 @@ const nav = (() => {
 const dash = (() => {
   let _ventasMode  = 'ingresos'; // 'ingresos' | 'unidades'
   let _isRendering = false;      // v1.2.22: guard de re-entrada — evita renders apilados
+  let _activeCardId = null;      // Fase 5.3: tarjeta activa para landscape mode
 
   function render() {
     // v1.2.22: si ya hay un render en curso, descartar silenciosamente.
@@ -16751,7 +16752,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _bellAttachSwipe(container) {
     if (!container) return;
-    // v1.3.309: delegación en contenedor padre — elimina listener leak por fila
+    // v1.3.310: delegación en contenedor padre — elimina listener leak por fila
     // Los listeners viven en container y se destruyen solos con ov.remove()
     container.addEventListener('touchstart', function(e) {
       var row = e.target.closest('[data-notif-id]');
@@ -20466,7 +20467,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     var activeCard = cards[activeIdx];
     var activeId   = activeCard ? activeCard.dataset.cardId : null;
 
-    
+    // Fase 5.3: persistir tarjeta activa para landscape mode
+    if (activeId) _activeCardId = activeId;
 
     cards.forEach(function(card) {
       var cid = card.dataset.cardId;
@@ -20730,10 +20732,9 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     try { Utils.triggerHaptic('light'); } catch(_) {}
   }
 
-  // ── Fase 5.1: Landscape detection ─────────────────────────────
+  // ── Fase 5.1 + 5.3: Landscape detection + render ──────────────
+
   function _isLandscape() {
-    // matchMedia primero — más preciso en tablet con teclado físico
-    // Fallback a innerWidth para Android WebView (matchMedia poco fiable en WebView)
     if (window.matchMedia) {
       return window.matchMedia('(orientation: landscape)').matches
              && window.innerWidth >= 768;
@@ -20741,9 +20742,155 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     return window.innerWidth >= 768 && window.innerWidth > window.innerHeight;
   }
 
+  // Metadatos de tarjetas para feed compacto
+  const _CARD_META_LANDSCAPE = {
+    'rendimiento': { icon: '📈', title: 'Rendimiento' },
+    'compras':     { icon: '🛒', title: 'Abastecimiento' },
+    'flujo-caja':  { icon: '💸', title: 'Flujo de Caja' },
+    'agenda':      { icon: '📅', title: 'Agenda' },
+    'caducidades': { icon: '⚠️', title: 'Alertas' },
+  };
+
+  // Obtener KPI principal de cada tarjeta para el feed compacto
+  function _getLandscapeCardKPI(cardId) {
+    try {
+      var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+      var snap = FinEngine.snapshot(period);
+      if (!snap) return { value: '—', delta: '', deltaClass: 'neutral' };
+      switch(cardId) {
+        case 'rendimiento':
+          return {
+            value: feur(snap.ingresos || 0),
+            delta: (snap.deltaRevenue >= 0 ? '+' : '') + (snap.deltaRevenue || 0).toFixed(1) + '%',
+            deltaClass: (snap.deltaRevenue || 0) >= 0 ? 'positive' : 'negative'
+          };
+        case 'compras':
+          return {
+            value: feur(snap.compras || 0),
+            delta: '',
+            deltaClass: 'neutral'
+          };
+        case 'flujo-caja':
+          return {
+            value: feur(snap.beneficioNeto || 0),
+            delta: (snap.beneficioNeto || 0) >= 0 ? 'Positivo' : 'Negativo',
+            deltaClass: (snap.beneficioNeto || 0) >= 0 ? 'positive' : 'negative'
+          };
+        case 'agenda':
+          var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : []).length;
+          return {
+            value: pedidos + ' pedido' + (pedidos !== 1 ? 's' : ''),
+            delta: '',
+            deltaClass: 'neutral'
+          };
+        case 'caducidades':
+          var prods = State.get.productos ? State.get.productos() : [];
+          var alertas = prods.filter(function(p) {
+            if (!p.caducidad) return false;
+            var diff = (new Date(p.caducidad) - new Date()) / 86400000;
+            return diff >= 0 && diff <= 30;
+          }).length;
+          return {
+            value: alertas + ' alerta' + (alertas !== 1 ? 's' : ''),
+            delta: alertas > 0 ? 'Próximas a caducar' : 'Todo OK',
+            deltaClass: alertas > 0 ? 'negative' : 'positive'
+          };
+        default:
+          return { value: '—', delta: '', deltaClass: 'neutral' };
+      }
+    } catch(_) {
+      return { value: '—', delta: '', deltaClass: 'neutral' };
+    }
+  }
+
+  // Render tarjeta compacta para el feed lateral
+  function _renderFeedCard(cardId) {
+    var meta = _CARD_META_LANDSCAPE[cardId] || { icon: '📊', title: cardId };
+    var kpi  = _getLandscapeCardKPI(cardId);
+    return '<div class="feed-card" data-card-id="' + cardId + '">' +
+      '<div class="feed-card-icon">' + meta.icon + '</div>' +
+      '<div class="feed-card-content">' +
+        '<div class="feed-card-title">' + esc(meta.title) + '</div>' +
+        '<div class="feed-card-value">' + esc(kpi.value) + '</div>' +
+        (kpi.delta ? '<div class="feed-card-delta ' + kpi.deltaClass + '">' + esc(kpi.delta) + '</div>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Render landscape — reorganiza DOM existente
+  function _renderLandscape() {
+    var cont = document.getElementById('dash-cards-container');
+    if (!cont) return;
+
+    // Limpiar contenedores landscape previos
+    var existingMain = cont.querySelector('.dash-landscape-main');
+    var existingFeed = cont.querySelector('.dash-landscape-feed');
+    if (existingMain) existingMain.remove();
+    if (existingFeed) existingFeed.remove();
+
+    // Determinar tarjeta activa
+    var activeId = _activeCardId;
+    if (!activeId) {
+      var firstCard = cont.querySelector('.card[data-card-id]');
+      activeId = firstCard ? firstCard.dataset.cardId : null;
+    }
+    if (!activeId) return;
+
+    // Crear contenedor principal
+    var mainEl = document.createElement('div');
+    mainEl.className = 'dash-landscape-main';
+
+    // Mover tarjeta activa al contenedor principal
+    var activeCard = cont.querySelector('.card[data-card-id="' + activeId + '"]');
+    if (activeCard) mainEl.appendChild(activeCard);
+
+    // Crear feed lateral con tarjetas compactas
+    var feedEl = document.createElement('div');
+    feedEl.className = 'dash-landscape-feed';
+
+    // Obtener todas las tarjetas visibles excepto la activa
+    var allIds = Object.keys(_CARD_META_LANDSCAPE);
+    var hidden = [];
+    try { hidden = _getHidden ? _getHidden() : []; } catch(_) {}
+    allIds.forEach(function(cid) {
+      if (cid === activeId) return;
+      if (hidden.indexOf(cid) !== -1) return;
+      feedEl.innerHTML += _renderFeedCard(cid);
+    });
+
+    cont.appendChild(mainEl);
+    cont.appendChild(feedEl);
+  }
+
+  // Destruir landscape — restaura DOM original
+  function _destroyLandscape() {
+    var cont = document.getElementById('dash-cards-container');
+    if (!cont) return;
+    var mainEl = cont.querySelector('.dash-landscape-main');
+    var feedEl = cont.querySelector('.dash-landscape-feed');
+    if (!mainEl && !feedEl) return;
+
+    // Restaurar tarjeta principal al contenedor
+    if (mainEl) {
+      var card = mainEl.querySelector('.card[data-card-id]');
+      if (card) cont.insertBefore(card, mainEl);
+      mainEl.remove();
+    }
+    if (feedEl) feedEl.remove();
+  }
+
   function _applyDashLandscape() {
-    const isLand = _isLandscape();
+    var isLand = _isLandscape();
+    var wasLand = document.body.getAttribute('data-dash-landscape') === '1';
     document.body.setAttribute('data-dash-landscape', isLand ? '1' : '0');
+
+    if (isLand && !wasLand) {
+      // Entrando en landscape
+      _renderLandscape();
+    } else if (!isLand && wasLand) {
+      // Saliendo de landscape — restaurar portrait
+      _destroyLandscape();
+    }
   }
 
   // Aplicar en resize y rotación
@@ -21892,7 +22039,7 @@ const tpv = (() => {
   let _hotGridHash  = '';     // v1.2.25: dirty-check para _renderHotGrid
   let _hotGridMax   = 9;      // v1.3.279: M-05 — máx productos hot grid (configurable)
 
-  // ── v1.3.309: Hot Grid Pins ─────────────────────────────────────────
+  // ── v1.3.310: Hot Grid Pins ─────────────────────────────────────────
   // _hotPins: array de longitud _hotGridMax. Cada posición es null (auto) o { id }
   // Persistido en localStorage['tpv_hot_pins_v1']
   // Sólo afecta al hot grid de móvil — no toca catálogo ni carrito.
@@ -21964,7 +22111,7 @@ const tpv = (() => {
   }
 
   // ── HOT PRODUCTS GRID ─────────────────────────────────────────
-  // v1.3.309: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
+  // v1.3.310: combina _hotPins (posiciones fijas) con top-ventas para rellenar huecos
   function _renderHotGrid() {
     const grid = document.getElementById('tpv-hot-grid');
     if (!grid) return;
@@ -22031,7 +22178,7 @@ const tpv = (() => {
     }).join('');
 
     // v1.3.296: event delegation — 1 listener en grid (guard _lpDelegated)
-    // v1.3.309: tap interceptado para modo swap si _hgSwapSrc != null
+    // v1.3.310: tap interceptado para modo swap si _hgSwapSrc != null
     if (!grid._lpDelegated) {
       grid._lpDelegated = true;
       let _lpt = null, _sx = 0, _sy = 0, _lpBtn = null;
@@ -22874,13 +23021,13 @@ const tpv = (() => {
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
   _applyTabletClass();
-  // v1.3.309: cargar hot pins desde localStorage en init
+  // v1.3.310: cargar hot pins desde localStorage en init
   _loadHotPins();
   // v1.3.234: init quick grid
   setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
 
   // v1.3.235: menú contextual long press en lista de productos TPV
-  // ── v1.3.309: Hot Grid Pin helpers ─────────────────────────────────────
+  // ── v1.3.310: Hot Grid Pin helpers ─────────────────────────────────────
   function _hgPinProd(slotIdx, prodId) {
     _normalizeHotPins();
     _hotPins[slotIdx] = { id: prodId };
@@ -22985,7 +23132,7 @@ const tpv = (() => {
           }
         }
       },
-      // ── v1.3.309: acciones de pin en hot grid ──────────────────
+      // ── v1.3.310: acciones de pin en hot grid ──────────────────
       ...(!isNaN(slotIdx) ? [
         isPinned ? {
           // Quitar pin — vuelve a posición automática
@@ -23015,7 +23162,7 @@ const tpv = (() => {
       btn.addEventListener('click', function(e) { if (e.pointerType !== 'touch') a.fn(); });
       menu.appendChild(btn);
     });
-    // v1.3.309: estW ampliado para hasta 5 botones (pin/mover añadidos)
+    // v1.3.310: estW ampliado para hasta 5 botones (pin/mover añadidos)
     const estW = 230, estH = 80, tabH = 60;
     const safeBottom = window.innerHeight - tabH - 8;
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -23075,7 +23222,7 @@ const tpv = (() => {
     openManualSale, confirmManualSale,
     _invalidateCatsHash: () => { _catsHash = ''; },
     setHotGridMax: (n) => { _hotGridMax = Math.max(4, Math.min(16, n)); _normalizeHotPins(); _hotGridHash = ''; _renderHotGrid(); },
-    // v1.3.309: hot grid pins API
+    // v1.3.310: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
   };
@@ -26601,7 +26748,7 @@ function _parseIva(iva) {
     _catInlineQ = val;
     clearTimeout(_catRenderTimer);
     _catRenderTimer = setTimeout(() => {
-      // v1.3.309: requestIdleCallback — render fuera del hilo principal en Android
+      // v1.3.310: requestIdleCallback — render fuera del hilo principal en Android
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => renderCatInline(), { timeout: 150 });
       } else {
