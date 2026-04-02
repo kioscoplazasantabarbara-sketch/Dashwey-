@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.423-dev</title>
+<title>Dashwey v1.3.424-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12427,6 +12427,17 @@ const ui = (() => {
 
     if (!overlay || !overlay.classList.contains('open')) return; // ya cerrado
 
+    // v1.3.424: liberar guard de formulario nuevo artículo al cerrar
+    // — cubre swipe down, overlay tap, back Android, closeFs() externo
+    try {
+      if (typeof App !== 'undefined' && App.alm && App.alm._onNuevoArtFsClose) {
+        var _fsC = document.getElementById('fs-content');
+        if (_fsC && _fsC.querySelector('#fn')) { // #fn = input nombre del formulario
+          App.alm._onNuevoArtFsClose();
+        }
+      }
+    } catch(_) {}
+
     // GUARD: quitar .open primero — la transición CSS corre libre sin bloqueo JS
     overlay.classList.remove('open');
     if (backdrop) backdrop.classList.remove('open');
@@ -12700,7 +12711,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.423-dev';
+  const _APP_VERSION = 'v1.3.424-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29368,9 +29379,16 @@ function _parseIva(iva) {
           <div class="fl">PVP (€) <span style="color:var(--ink-soft);font-weight:400;text-transform:none;font-size:10px">— opcional, editable después</span></div>
           <input class="fi" id="qa-pvp" type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal">
         </div>
+        <div>
+          <div class="fl">Categoría</div>
+          <input class="fi" type="text" id="qa-cat"
+            value="${esc(State.get.productos().find(p => p.prov === provId)?.cat || (KPI.ALL_CATS[0]||'General'))}"
+            placeholder="Bebidas…" autocomplete="off" list="qa-cat-list">
+          <datalist id="qa-cat-list">${KPI.ALL_CATS.map(c=>'<option value="'+c+'">').join('')}</datalist>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
           <button class="btn-sec" onclick="App.ui.closeFs();setTimeout(()=>App.alm.openNuevoArtFs('${esc(nombre)}'),180)">Más detalles</button>
-          <button class="btn-ok" id="qa-save-btn" onclick="App.alm._quickAddArt()">Añadir</button>
+          <button class="btn-ok" id="qa-save-btn" onclick="App.alm._quickAddArt()">Crear y añadir</button>
         </div>
         <div id="qa-status" style="font-size:12px;color:var(--ink-soft);text-align:center;min-height:16px"></div>
       </div>
@@ -29400,18 +29418,23 @@ function _parseIva(iva) {
     }
 
     const provId = State.get.selectedProv();
-    const cat    = State.get.productos().find(p => p.prov === provId)?.cat
-                   || (typeof KPI !== 'undefined' ? KPI.ALL_CATS[0] : 'General');
+    // v1.3.424: usar categoría del input qa-cat si existe, sino primera del proveedor
+    const catInput = document.getElementById('qa-cat');
+    const cat = (catInput && catInput.value.trim())
+      ? catInput.value.trim()
+      : (State.get.productos().find(p => p.prov === provId)?.cat
+         || (typeof KPI !== 'undefined' ? KPI.ALL_CATS[0] : 'General'));
     const ahora  = new Date().toISOString();
 
-    // Pasar por _createArticle: normalización + persistencia + evento item:created
+    const newId = 'p' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+
     _createArticle({
-      id:               'p' + Date.now() + '_' + Math.floor(Math.random()*9999),
+      id:               newId,
       nombre,
-      pr:               0,          // precioCompra
+      pr:               0,
       pvp,
-      nc:               5,          // stockMinimo
-      uc:               1,          // udscaja
+      nc:               5,
+      uc:               1,
       cat,
       provId,
       iva:              0,
@@ -29423,8 +29446,14 @@ function _parseIva(iva) {
     });
 
     Utils.triggerHaptic('save');
+    // v1.3.424: añadir al carrito de pedido activo tras crear
+    _ordenCarrito[newId] = 1;
+    _saveCarritoLocal();
+    _updateAcceptBtn();
+    updateBadge();
+
     ui.closeFs();
-    showToast('✅ ' + nombre + ' añadido al catálogo');
+    showToast('✅ ' + nombre + ' creado y añadido al pedido');
   }
   function clearMainSearch() { _permSearchClear(); }
   function _permSearchClear() {
