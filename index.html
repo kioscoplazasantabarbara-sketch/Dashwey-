@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.421-dev</title>
+<title>Dashwey v1.3.422-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12700,7 +12700,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.421-dev';
+  const _APP_VERSION = 'v1.3.422-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26360,6 +26360,8 @@ function _parseIva(iva) {
   // ReferenceError si el HTML las invocaba antes de que el formulario abriera.
   // Ahora son funciones estables del módulo. _editPhoto es módulo-level.
 
+  function _editPhotoClean() { _editPhoto = null; } // v1.3.422: limpiar foto temporal al cancelar
+
   function _eaIvaChange() {
     const sel  = document.getElementById('ea-iva')?.value;
     const wrap = document.getElementById('ea-iva-custom-wrap');
@@ -26435,6 +26437,8 @@ function _parseIva(iva) {
         agente: '', repartidor: '', telReparto: '' });
     }
     const fotoOrig = State.get.prod(id)?.foto || null;
+    // v1.3.422: leer ea-stock — campo editable que antes era ignorado
+    const stockNuevo = document.getElementById('ea-stock');
     const updates = {
       nombre,
       precioCompra:     prNuevo,
@@ -26447,6 +26451,7 @@ function _parseIva(iva) {
       udscaja:          parseInt(document.getElementById('ea-uc')?.value)  || prod.udscaja     || 12,
       caducidad:        document.getElementById('ea-cad')?.value || null,
       historialPrecios: histNew,
+      ...(stockNuevo !== null ? { stockActual: Math.max(0, parseInt(stockNuevo.value) || 0) } : {}),
     };
     if (_editPhoto !== fotoOrig) updates.foto = _editPhoto;
     State.set.updateProd(id, updates);
@@ -26475,23 +26480,14 @@ function _parseIva(iva) {
 
   function _eaConfirmDelete(id) {
     const prod = State.get.prod(id); if (!prod) return;
-    ui.openModal(
-      '<div class="alm-confirm-body">' +
-      '<div class="alm-confirm-title">Borrar artículo</div>' +
-      '<div class="alm-confirm-text">¿Seguro que quieres borrar <strong>' +
-        esc(prod.nombre) + '</strong>?</div>' +
-      '<div class="alm-confirm-btns">' +
-      '<button class="btn-sec" onclick="App.ui.closeModal()">Cancelar</button>' +
-      '<button class="btn-ok alm-btn-delete" id="alm-ea-del-btn">Borrar</button>' +
-      '</div></div>'
-    );
-    // v1.3.240: addEventListener — sin escape de comillas en WebView
-    requestAnimationFrame(function() {
-      var btn = document.getElementById('alm-ea-del-btn');
-      if (btn) btn.addEventListener('click', function() { App.alm._eaDelete(id); }, { once: true });
+    // v1.3.422: usar _showDestructiveConfirm — más robusto que modal inline con rAF
+    window._showDestructiveConfirm({
+      title: 'Borrar artículo',
+      message: '¿Seguro que quieres borrar "' + prod.nombre + '"? Esta acción no se puede deshacer.',
+      confirmText: 'Borrar',
+      onConfirm: function() { App.alm._eaDelete(id); }
     });
   }
-
   function _eaDelete(id) {
     var _prod = State.get.prod(id);
     var _nombre = _prod ? (_prod.nombre || 'este artículo') : 'este artículo';
@@ -27912,6 +27908,8 @@ function _parseIva(iva) {
   function openNuevoArtFs(nombreInicial) {
     if (_nuevoArtFsOpen) return; // evitar doble apertura y acumulación de listeners
     _nuevoArtFsOpen = true;
+    // v1.3.422: _nuevoArtFsOpen se libera en _onNuevoArtFsClose o en el finally de error
+    try {
     const sel = State.get.selectedProv();
     // FIX v8.9.3: forzar prov = sel siempre — no usar lastVals.prov
     // para evitar que productos se guarden con proveedor incorrecto
@@ -28097,6 +28095,11 @@ function _parseIva(iva) {
         window._trackFormChanges(formEl, 'nuevo_art');
       }
     }));
+    } catch(e) {
+      // v1.3.422: liberar guard si algo falla — evita bloqueo permanente
+      _nuevoArtFsOpen = false;
+      console.error('[ALM] openNuevoArtFs error:', e);
+    }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -28487,12 +28490,13 @@ function _parseIva(iva) {
   // Devuelve null si el nombre está vacío (validación mínima).
   // saveArt y saveArtAndAddCart llaman a esta función — sin duplicación.
   function _collectArticleFormData() {
+    // v1.3.422: validar nombre ANTES de crear proveedor — evita proveedor huérfano
     const nombre = document.getElementById('fn')?.value?.trim();
     if (!nombre) return null;
 
     // Resolver proveedor: texto → id existente → fallback seleccionado
     const provTxt = document.getElementById('fpv-txt')?.value?.trim();
-    let provId = State.get.proveedores().find(p => p.nombre === provTxt)?.id
+    let provId = State.get.proveedores().find(function(p){ return p.nombre === provTxt; })?.id
                || State.get.selectedProv();
     if (provTxt && !State.get.prov(provId)) {
       provId = 'prov_' + Date.now();
@@ -28525,8 +28529,11 @@ function _parseIva(iva) {
     const ucFinal = lv_fmt === 's' ? 1 : uc;
 
     const ahora = new Date().toISOString();
+    // v1.3.422: restaurar todos los campos que faltaban en el return
     return {
-      id: 'p' + Date.now() + '_' + Math.floor(Math.random()*9999),  // v1.3.245: timestamp+random evita colisión nombre, provId, cat, iva, pr, pvp, nc, uc: ucFinal,
+      id:     'p' + Date.now() + '_' + Math.floor(Math.random()*9999),
+      nombre, provId, cat, iva,
+      pr, pvp, nc, uc: ucFinal,
       fmt: lv_fmt,
       cad, descuento, descRaw,
       foto: _prodPhotoData || null,
@@ -28672,7 +28679,7 @@ function _parseIva(iva) {
       <div class="modal-header-dark">
         <div class="mhd-row">
           <div><div class="mhd-title">Editar artículo</div></div>
-          <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
+          <button class="mhd-close" onclick="App.alm._editPhotoClean();App.ui.closeFs()">×</button>
         </div>
       </div>
       <div class="alm-form-body">
@@ -28919,6 +28926,7 @@ function _parseIva(iva) {
     openNuevoArtFs, openEditArt, setFmt, loadProdPhoto, calcIAAnalysis, saveArt, saveArtAndAddCart, _applyRecomPvp, _applyRecomPvpVal, _naIvaChange,
     // v1.2.20: funciones permanentes — ya no closures dentro de open*
     _collectArticleFormData, _createArticle,
+    _editPhotoClean,
     _eaIvaChange, _eaLoadPhoto, _eaRecalc, _eaSave, _eaConfirmDelete, _eaDelete,
     // Smart Autocomplete
     _sacOpen, _sacCloseAll, _sacFilter, _sacClear, _sacPickArt, _sacAddArt, _sacPickProv, _sacAddProv, _sacPickCat, _sacAddCat,
@@ -35036,11 +35044,13 @@ window._almCarritoOptions = function() {
     window._spotlightSelecting = true;
     window._spotlightClose();
     window._spotlightSelecting = false;
+    // v1.3.422: 300ms — suficiente para que _nuevoArtFsOpen se resetee en WebView lento
+    // y para que la animación de cierre del Spotlight termine antes de abrir el FS
     setTimeout(function() {
       try {
         if (window.App && App.alm && App.alm.openNuevoArtFs) App.alm.openNuevoArtFs(q);
       } catch(e) { console.warn('[Spotlight] create:', e); }
-    }, 50);
+    }, 300);
   };
 
 })();
