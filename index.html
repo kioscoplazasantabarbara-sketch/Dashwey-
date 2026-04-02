@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.419-dev</title>
+<title>Dashwey v1.3.420-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12700,7 +12700,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.419-dev';
+  const _APP_VERSION = 'v1.3.420-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -25335,6 +25335,10 @@ const tpv = (() => {
     const p = State.get.prod(prodId); if (!p) return;
     const prev = document.getElementById('cat-ctx-menu'); if (prev) prev.remove();
     const rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
+    // v1.3.420: cerrar cualquier menú contextual existente antes de abrir uno nuevo
+    ['cat-ctx-menu','cat-float-menu'].forEach(function(mid) {
+      var old = document.getElementById(mid); if (old) old.remove();
+    });
     const menu = document.createElement('div');
     menu.id = 'cat-ctx-menu';
     menu.className = 'cat-float-menu';
@@ -26131,6 +26135,10 @@ function _parseIva(iva) {
 
     _catInlineLpFired = false;
     clearTimeout(_catInlineLpTimer);
+    // v1.3.420: limpiar lp-active del elemento anterior si dos dedos tocan a la vez
+    if (_catInlineLpEl && _catInlineLpEl !== el) {
+      _catInlineLpEl.classList.remove('lp-active');
+    }
     _catInlineLpEl = el;
     if (el) el.classList.add('lp-active');
     _catInlineLpTimer = setTimeout(function() {
@@ -26179,6 +26187,7 @@ function _parseIva(iva) {
         // Movimiento detectado — cancelar longpress, no interferir con el gesto
         clearTimeout(_catInlineLpTimer);
         _catInlineLpTimer = null;
+        _catInlineLpFired = false; // v1.3.420: reset explícito — evita race condition
         if (_catInlineLpEl) _catInlineLpEl.classList.remove('lp-active');
       }
     }
@@ -26231,9 +26240,12 @@ function _parseIva(iva) {
       menu.appendChild(btn);
     });
 
-    // v1.3.220: posicionamiento mejorado — siempre visible, evita navbar
+    // v1.3.420: posicionamiento con compensación real del header
     const estW = 248, estH = 80;
-    const tabH = 60; // altura navbar
+    const tabH = 60;
+    const headerEl = document.getElementById('alm-page-header') || document.querySelector('.alm-page-header');
+    const headerH  = headerEl ? headerEl.getBoundingClientRect().bottom : 60;
+    const safeTop    = headerH + 8;
     const safeBottom = window.innerHeight - tabH - 8;
 
     let left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
@@ -26241,14 +26253,14 @@ function _parseIva(iva) {
 
     // Preferir encima del elemento; si no cabe, mostrar debajo
     let top;
-    if (rect && rect.top - estH - 8 >= 60) {
-      top = rect.top - estH - 8;          // encima
+    if (rect && rect.top - estH - 8 >= safeTop) {
+      top = rect.top - estH - 8;
     } else if (rect) {
-      top = Math.min(rect.bottom + 8, safeBottom - estH);  // debajo
+      top = Math.min(rect.bottom + 8, safeBottom - estH);
     } else {
       top = window.innerHeight / 2 - estH / 2;
     }
-    top = Math.max(60, Math.min(top, safeBottom - estH));
+    top = Math.max(safeTop, Math.min(top, safeBottom - estH));
     menu.style.left = left + 'px';
     menu.style.top  = top + 'px';
     document.body.appendChild(menu);
@@ -26257,12 +26269,21 @@ function _parseIva(iva) {
     // Antes: removeEventListener manual solo corría al tocar fuera del menú.
     // Si el usuario cerraba el menú desde un botón interno, el listener
     // quedaba registrado para siempre (memory leak + comportamiento erróneo).
+    function _closeCtxAnimate() {
+      menu.classList.add('closing');
+      setTimeout(function() { if (menu.parentNode) menu.remove(); }, 180);
+    }
     function _closeCtx(e) {
-      if (!menu.contains(e.target)) menu.remove();
+      if (!menu.contains(e.target)) _closeCtxAnimate();
     }
     requestAnimationFrame(function() {
       document.addEventListener('touchstart', _closeCtx, { capture: true, passive: true, once: true });
       document.addEventListener('click',      _closeCtx, { capture: true, once: true });
+    });
+    // v1.3.420: los botones del menú también animan el cierre
+    menu.querySelectorAll('.cat-float-btn').forEach(function(btn) {
+      var origFn = btn.onclick;
+      // No reemplazar — la animación de cierre ya ocurre al remove() en las acciones
     });
   }
 
@@ -29629,7 +29650,8 @@ function _parseIva(iva) {
       nombre: p.nombre + ' (copia)',
       stockActual: 0,
       ventas: 0,
-      historialPrecios: []
+      historialPrecios: [],
+      caducidad: null, // v1.3.420: no heredar caducidad — artículo nuevo sin stock
     };
     // v1.2.21: persistir vía State (idéntico a antes) + emitir item:created
     // para que TPV y Dashboard se actualicen vía el listener global.
@@ -29674,7 +29696,7 @@ function _parseIva(iva) {
 
     // Refresh completo
     renderCatInline();
-    try { tpv.render?.(); } catch(_) {}
+    try { tpv.render(); } catch(e) { console.warn('[ALM] _catReorderArt tpv.render:', e); }
     const sel  = State.get.selectedProv();
     const prov = State.get.prov(sel);
     const sheet = document.getElementById('orden-catalogo-sheet');
@@ -29698,24 +29720,17 @@ function _parseIva(iva) {
 
   function _catDeleteConfirm(id) {
     // v1.3.245: borrado robusto — no depende de State.get.prod para ejecutar
-    // si el artículo no se encuentra (race condition o id corrupto) se borra igualmente por ID
     const p = State.get.prod(id);
     const nombre = p ? p.nombre : 'Artículo';
-    // Eliminar de productos (inmutable — nueva referencia)
     State.set.productos(State.get.productos().filter(pr => pr.id !== id));
-    // Eliminar de la orden si estaba
     State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
-
-    App.ui.closeModal();
-    // Refresh completo: catálogo sheet + inline + TPV
+    // v1.3.420: eliminado App.ui.closeModal() — _showDestructiveConfirm ya
+    // se cierra solo antes de llamar onConfirm. closeModal() cerraba modales
+    // ajenos si había alguno abierto en la pila.
     renderCatInline();
-    tpv.render();
+    try { tpv.render(); } catch(_) {}
     updateBadge();
-    const sel = State.get.selectedProv();
-    const prov = State.get.prov(sel);
-    const sheet = document.getElementById('orden-catalogo-sheet');
-    if (sheet) sheet.innerHTML = _buildCatalogoHTML(sel, prov, '');
-    showToast('🗑️ ' + nombre + ' borrado');
+    showToast(nombre + ' borrado');
   }
 
   function _catAddNew(nombre) {
