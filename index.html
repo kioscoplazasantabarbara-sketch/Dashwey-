@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.392-dev</title>
+<title>Dashwey v1.3.393-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2711,6 +2711,37 @@ body.keyboard-open #bottom-tabs {
   to   { opacity: 1; transform: translateY(0); }
 }
 .spot-item-emoji { font-size: 22px; width: 32px; text-align: center; flex-shrink: 0; }
+
+/* ── STAGGER SYSTEM v1.3.393 ─────────────────────────────────────
+   Elementos de lista aparecen en cascada al cargar/filtrar.
+   JS inyecta --item-index en cada elemento al renderizar.
+   Cap: índice máximo 8 → delay máx 240ms (no hacer esperar al último)
+   Respeta prefers-reduced-motion — ya cubierto por el reset global.
+   ────────────────────────────────────────────────────────────────── */
+@keyframes staggerFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* TPV — botones del hot grid */
+.tpv-hot-btn {
+  animation: staggerFadeIn 180ms var(--ease-decelerate) both;
+  animation-delay: calc(var(--item-index, 0) * 25ms);
+}
+
+/* Almacén — artículos del catálogo */
+.alm-cat-item {
+  animation: staggerFadeIn 200ms var(--ease-decelerate) both;
+  animation-delay: calc(var(--item-index, 0) * 30ms);
+}
+
+/* Dashboard — tarjetas KPI
+   Solo anima en la carga inicial — la clase .card-appear
+   sobreescribe en re-renders parciales por diseño */
+.dash-cards-container .card {
+  animation: staggerFadeIn 220ms var(--ease-decelerate) both;
+  animation-delay: calc(var(--item-index, 0) * 40ms);
+}
 .spot-item-info { flex: 1; min-width: 0; }
 .spot-item-name { font-size: 14px; font-weight: 600; color: var(--ink); }
 .spot-item-name b { color: var(--red); font-weight: 700; }
@@ -12607,7 +12638,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.392-dev';
+  const _APP_VERSION = 'v1.3.393-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16115,6 +16146,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         const card = cont.querySelector(`[data-card-id="${id}"]`);
         if (!card) return;
         card.style.setProperty('--shimmer-delay', `${i * 40}ms`);
+        card.style.setProperty('--item-index', Math.min(i, 8)); // v1.3.393: stagger
         card.classList.add('is-shimmering');
       });
       // Un único cleanup al final del stagger más largo
@@ -23755,8 +23787,11 @@ const tpv = (() => {
       const q       = _cart[p.id]?.q || 0;
       const isPinned = _hotPins[slotIdx] !== null;
       const isSwapSrc = _hgSwapSrc === slotIdx;
+      // v1.3.393: stagger — cap en 8 para no retrasar demasiado los últimos
+      const staggerIdx = Math.min(slotIdx, 8);
       return `<button
         class="tpv-hot-btn${isPinned?' hg-pinned':''}${isSwapSrc?' hg-selected':''}"
+        style="--item-index:${staggerIdx}"
         onclick="App.tpv.addCart('${p.id}',this)"
         id="tpv-hot-${p.id}"
         data-id="${p.id}"
@@ -25287,11 +25322,12 @@ const alm = (() => {
     // Agrupar por categoría
     const cats = [...new Set(prods.map(p => p.cat || 'Sin categoría'))];
     let html = '';
+    let _staggerIdx = 0; // v1.3.393: índice global para stagger
     cats.forEach(cat => {
       const items = prods.filter(p => (p.cat || 'Sin categoría') === cat);
       if (items.length === 0) return;
       html += '<div class="alm-cat-section-lbl">' + esc(cat) + '</div>';
-      items.forEach(p => { html += _buildCatInlineItem(p); });
+      items.forEach(p => { html += _buildCatInlineItem(p, Math.min(_staggerIdx++, 8)); });
     });
     // v1.3.70: botón "Añadir artículo" eliminado del catálogo inline — reemplazado por FAB
     wrap.innerHTML = html;
@@ -25305,7 +25341,7 @@ function _parseIva(iva) {
   return isNaN(n) ? 10 : n;
 }
 
-  function _buildCatInlineItem(p) {
+  function _buildCatInlineItem(p, staggerIdx) {
     const nc = _ordenCarrito[p.id] || 0;
     const precioBase = p.precioCompra || 0;
     const ivaPct = _parseIva(p.iva);
@@ -25356,7 +25392,7 @@ function _parseIva(iva) {
     // onclick queda como fallback para raton (pointerType!='touch').
     // ontouchstart con preventDefault bloquea el click sintetico en Android --
     // por eso el tap se captura en ontouchend, no en onclick.
-    return '<div class="alm-cat-item' + (nc > 0 ? ' in-cart' : '') + '" id="aci-' + p.id + '" data-pid="' + p.id + '"' +
+    return '<div class="alm-cat-item' + (nc > 0 ? ' in-cart' : '') + '" id="aci-' + p.id + '" data-pid="' + p.id + '" style="--item-index:' + (staggerIdx||0) + '"' +
       ' ontouchstart="App.alm._catInlineLpStart(event.currentTarget.dataset.pid,event.currentTarget,event)"' +
       ' ontouchmove="App.alm._catInlineLpMove(event)"' +
       ' ontouchend="App.alm._catInlineLpEnd(event.currentTarget.dataset.pid,event)"' +
