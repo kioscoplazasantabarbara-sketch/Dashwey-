@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.404-dev</title>
+<title>Dashwey v1.3.405-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2034,19 +2034,30 @@ body[data-dash-snap="1"] .snap-chart-wrap,
 body[data-dash-snap="1"] .snap-fc-dist,
 .dash-landscape-main .snap-fc-dist {
   display: flex;
-  flex-direction: row;
-  gap: 16px;
+  flex-direction: column;
+  gap: 0;
   width: 100%;
-  flex: 1;
-  min-height: 0;
   margin-top: 20px;
-  align-items: flex-start;
 }
-.snap-fc-lists {
+/* Bloque = fila con lista izquierda + donut derecha */
+.snap-fc-block {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 0;
+}
+.snap-fc-block-left {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+}
+/* Separador horizontal entre bloques */
+.snap-fc-divider-h {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.6;
 }
 .snap-fc-section-lbl {
   font-family: 'Inter', var(--font), sans-serif;
@@ -9296,22 +9307,37 @@ function _authTabSafe(tab) {
                   <div class="snap-kpi-mini-val" id="snap-rw-flujo-caja">—</div>
                 </div>
               </div>
-              <!-- DISTRIBUCIÓN DE CUENTAS + PIE CHART -->
+              <!-- DISTRIBUCIÓN DE CUENTAS + PIE CHARTS — v1.3.405 -->
               <div class="snap-fc-dist" id="snap-fc-dist">
-                <!-- Columna izquierda: cuentas + movimientos -->
-                <div class="snap-fc-lists">
-                  <div class="snap-fc-section-lbl">Distribución</div>
-                  <div id="snap-fc-cuentas"></div>
-                  <div class="snap-fc-section-lbl" style="margin-top:10px">Últimos movimientos</div>
-                  <div id="snap-fc-movs"></div>
+                <!-- Bloque cuentas: lista izquierda + donut derecha -->
+                <div class="snap-fc-block">
+                  <div class="snap-fc-block-left">
+                    <div class="snap-fc-section-lbl">Distribución</div>
+                    <div id="snap-fc-cuentas"></div>
+                  </div>
+                  <div class="snap-fc-pie-wrap">
+                    <svg id="snap-fc-pie-svg" viewBox="0 0 100 100"
+                         xmlns="http://www.w3.org/2000/svg"
+                         style="overflow:visible">
+                    </svg>
+                    <div class="snap-fc-pie-total" id="snap-fc-pie-total"></div>
+                  </div>
                 </div>
-                <!-- Columna derecha: pie chart -->
-                <div class="snap-fc-pie-wrap">
-                  <svg id="snap-fc-pie-svg" viewBox="0 0 100 100"
-                       xmlns="http://www.w3.org/2000/svg"
-                       style="overflow:visible">
-                  </svg>
-                  <div class="snap-fc-pie-total" id="snap-fc-pie-total"></div>
+                <!-- Separador -->
+                <div class="snap-fc-divider-h"></div>
+                <!-- Bloque movimientos: lista izquierda + donut gastos derecha -->
+                <div class="snap-fc-block">
+                  <div class="snap-fc-block-left">
+                    <div class="snap-fc-section-lbl">Últimos movimientos</div>
+                    <div id="snap-fc-movs"></div>
+                  </div>
+                  <div class="snap-fc-pie-wrap">
+                    <svg id="snap-fc-gastos-svg" viewBox="0 0 100 100"
+                         xmlns="http://www.w3.org/2000/svg"
+                         style="overflow:visible">
+                    </svg>
+                    <div class="snap-fc-pie-total" id="snap-fc-gastos-total"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -12752,7 +12778,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.404-dev';
+  const _APP_VERSION = 'v1.3.405-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21613,7 +21639,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Touch highlight: tap segment → show name briefly
     pieEl.querySelectorAll('circle[data-idx]').forEach(function(seg) {
       seg.addEventListener('touchstart', function(e) {
-        // v1.3.105: stopPropagation eliminado — permite scroll snap desde zona de gráfico
         var idx = parseInt(seg.dataset.idx);
         var s   = segments[idx];
         if (s && totalEl) {
@@ -21622,6 +21647,86 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         }
       }, {passive:true});
     });
+
+    // ── Segundo donut: distribución de gastos por categoría — v1.3.405 ──
+    var gastosEl2  = document.getElementById('snap-fc-gastos-svg');
+    var gastosTotEl= document.getElementById('snap-fc-gastos-total');
+    if (gastosEl2) {
+      // Agrupar gastos por nombre/categoría
+      var gastosMap = {};
+      gastos.forEach(function(g) {
+        var key = g.nombre || g.concepto || 'Gasto';
+        gastosMap[key] = (gastosMap[key] || 0) + Math.abs(g.importe || 0);
+      });
+      var gastosArr = Object.keys(gastosMap).map(function(k) {
+        return { nombre: k, importe: gastosMap[k] };
+      }).sort(function(a,b){ return b.importe - a.importe; });
+
+      var gastoTop5 = gastosArr.slice(0, 5);
+      var gastosOtros = gastosArr.slice(5).reduce(function(s,g){ return s+g.importe; }, 0);
+      var gastosSegs = gastoTop5.map(function(g, i) {
+        return { nombre: g.nombre, saldo: g.importe, color: PIE_COLORS[i] };
+      });
+      if (gastosOtros > 0) gastosSegs.push({ nombre: 'Otros', saldo: gastosOtros, color: NEUTRO });
+
+      var totalGastos = gastosSegs.reduce(function(s,g){ return s+g.saldo; }, 0) || 1;
+      var gSvgParts = [];
+
+      gSvgParts.push(
+        '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" '+
+        'stroke="rgba(0,0,0,0.05)" stroke-width="'+SW+'"/>'
+      );
+
+      if (gastosSegs.length === 0) {
+        // Sin gastos — círculo neutro
+        gSvgParts.push(
+          '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" '+
+          'stroke="'+NEUTRO+'" stroke-width="'+SW+'"/>'
+        );
+      } else {
+        var gCumulative = 0;
+        gastosSegs.forEach(function(seg, idx) {
+          var pct  = seg.saldo / totalGastos;
+          var dash = pct * PERIM;
+          var gap  = PERIM - dash;
+          var startOffset = PERIM * 0.25 - gCumulative * PERIM;
+          var delay = (idx * 80 + 120) + 'ms'; // delay escalonado tras el primer donut
+          gSvgParts.push(
+            '<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" '+
+            'stroke="'+seg.color+'" stroke-width="'+SW+'" '+
+            'stroke-dasharray="'+dash.toFixed(1)+' '+gap.toFixed(1)+'" '+
+            'stroke-linecap="butt" '+
+            'style="'+
+              'stroke-dashoffset:'+startOffset.toFixed(1)+';'+
+              'transform-origin:'+CX+'px '+CY+'px;'+
+              '--pie-end-offset:'+startOffset.toFixed(1)+';'+
+              'animation:snapPieDraw 0.55s cubic-bezier(0.25,0.46,0.45,0.94) '+delay+' both'+
+            '" data-gidx="'+idx+'" data-gname="'+esc2(seg.nombre)+'"/>'
+          );
+          gCumulative += pct;
+        });
+      }
+
+      // Centro limpio
+      gSvgParts.push(
+        '<circle cx="'+CX+'" cy="'+CY+'" r="'+(R-SW/2)+'" fill="var(--surface)"/>'
+      );
+
+      gastosEl2.innerHTML = gSvgParts.join('');
+      if (gastosTotEl) gastosTotEl.textContent = feur(totalGastos === 1 && gastosSegs.length === 0 ? 0 : totalGastos);
+
+      // Touch highlight gastos
+      gastosEl2.querySelectorAll('circle[data-gidx]').forEach(function(seg) {
+        seg.addEventListener('touchstart', function(e) {
+          var idx = parseInt(seg.dataset.gidx);
+          var s   = gastosSegs[idx];
+          if (s && gastosTotEl) {
+            gastosTotEl.textContent = esc2(s.nombre);
+            setTimeout(function(){ gastosTotEl.textContent = feur(totalGastos); }, 1800);
+          }
+        }, {passive:true});
+      });
+    }
 
       }
 
