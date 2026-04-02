@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.396-dev</title>
+<title>Dashwey v1.3.397-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2542,6 +2542,91 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
   animation: snapCursorBlink 0.8s step-end infinite;
 }
 @keyframes snapCursorBlink { 0%,100% { opacity:1; } 50% { opacity:0; } }
+
+/* ── INSIGHT CAROUSEL v1.3.397 ────────────────────────────────────
+   Auto-rotación de insights en snap-narrative-zone.
+   slide-in: entra desde la derecha
+   slide-out: sale hacia la izquierda
+   Sin swipe manual — solo automático para no interferir con tabs.
+   ─────────────────────────────────────────────────────────────── */
+.insight-carousel {
+  overflow: hidden;
+  position: relative;
+  min-height: 48px;
+}
+.insight-carousel-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  position: absolute;
+  width: 100%;
+  top: 0; left: 0;
+  opacity: 0;
+  transform: translateX(100%);
+  transition: none;
+}
+.insight-carousel-item.ic-active {
+  opacity: 1;
+  transform: translateX(0);
+  position: relative;
+  transition: transform 0.38s cubic-bezier(0.22,1,0.36,1),
+              opacity 0.38s ease;
+}
+.insight-carousel-item.ic-exit {
+  opacity: 0;
+  transform: translateX(-100%);
+  transition: transform 0.32s cubic-bezier(0.4,0,1,1),
+              opacity 0.32s ease;
+}
+.insight-carousel-item.ic-enter {
+  opacity: 0;
+  transform: translateX(100%);
+  transition: none;
+}
+.ic-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.ic-body {
+  flex: 1;
+  min-width: 0;
+}
+.ic-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.ic-val {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--red);
+  margin-top: 1px;
+}
+.ic-desc {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-top: 1px;
+  line-height: 1.4;
+}
+/* Indicadores de posición */
+.ic-dots {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.ic-dot {
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s, width 0.2s;
+}
+.ic-dot.active {
+  background: var(--red);
+  width: 12px;
+  border-radius: 2px;
+}
 
 /* ── Animations ────────────────────────────────────────────────────────── */
 @keyframes snapCounterPop {
@@ -12632,7 +12717,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.396-dev';
+  const _APP_VERSION = 'v1.3.397-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19808,6 +19893,100 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   }
 
   // ── Typewriter con cifras resaltadas en rojo (tipo E) ────────────────────
+  // ── INSIGHT CAROUSEL v1.3.397 ────────────────────────────────────────
+  // Rota los insights de una tarjeta en el snap-narrative-zone.
+  // Sustituye el typewriter único por un carrusel automático de 5 items.
+  // El intervalo se limpia cuando el snap cambia de tarjeta.
+  var _carouselTimers = {}; // cardId → intervalId
+
+  function _startInsightCarousel(cardId, items, containerEl) {
+    // Limpiar timer anterior si existe
+    if (_carouselTimers[cardId]) {
+      clearInterval(_carouselTimers[cardId]);
+      delete _carouselTimers[cardId];
+    }
+    if (!containerEl || !items || !items.length) return;
+
+    // Construir HTML del carrusel
+    var html = '<div class="insight-carousel" id="ic-' + cardId + '">';
+    items.forEach(function(it, i) {
+      html += '<div class="insight-carousel-item' + (i === 0 ? ' ic-active' : '') + '" data-ic-idx="' + i + '">' +
+        '<div class="ic-icon">' + it.icon + '</div>' +
+        '<div class="ic-body">' +
+          '<div class="ic-title">' + it.title + '</div>' +
+          '<div class="ic-val">' + it.val + '</div>' +
+          '<div class="ic-desc">' + it.desc + '</div>' +
+        '</div>' +
+      '</div>';
+    });
+    // Dots indicadores
+    html += '<div class="ic-dots">';
+    items.forEach(function(_, i) {
+      html += '<div class="ic-dot' + (i === 0 ? ' active' : '') + '" data-ic-dot="' + i + '"></div>';
+    });
+    html += '</div></div>';
+
+    containerEl.innerHTML = html;
+
+    var current = 0;
+    var total   = items.length;
+
+    function _next() {
+      var carousel = document.getElementById('ic-' + cardId);
+      if (!carousel) {
+        clearInterval(_carouselTimers[cardId]);
+        delete _carouselTimers[cardId];
+        return;
+      }
+      var allItems = carousel.querySelectorAll('.insight-carousel-item');
+      var allDots  = carousel.querySelectorAll('.ic-dot');
+      if (!allItems.length) return;
+
+      var next = (current + 1) % total;
+
+      // Exit: el actual sale hacia la izquierda
+      allItems[current].classList.remove('ic-active');
+      allItems[current].classList.add('ic-exit');
+
+      // Enter: el siguiente entra desde la derecha
+      allItems[next].classList.remove('ic-exit');
+      allItems[next].classList.add('ic-enter');
+
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          allItems[next].classList.remove('ic-enter');
+          allItems[next].classList.add('ic-active');
+        });
+      });
+
+      // Limpiar exit después de la transición
+      (function(exitIdx) {
+        setTimeout(function() {
+          if (allItems[exitIdx]) {
+            allItems[exitIdx].classList.remove('ic-exit');
+          }
+        }, 400);
+      })(current);
+
+      // Dots
+      allDots.forEach(function(d, i) {
+        d.classList.toggle('active', i === next);
+      });
+
+      current = next;
+    }
+
+    // Rotar cada 4 segundos
+    _carouselTimers[cardId] = setInterval(_next, 4000);
+  }
+
+  function _stopInsightCarousel(cardId) {
+    if (_carouselTimers[cardId]) {
+      clearInterval(_carouselTimers[cardId]);
+      delete _carouselTimers[cardId];
+    }
+  }
+
   function _snapTypewriter(el, text, onDone) {
     if (!el) return;
     // v1.3.284: DASH-10 — skip si el texto es idéntico al último renderizado
@@ -21632,14 +21811,115 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }
     }
 
-    // Narrativa con typewriter
-    var narrative = _snapBuildNarrative(cardId, period);
-    var textEl    = document.getElementById('snap-text-' + cardId);
-    if (textEl && narrative) {
-      // v1.3.40: typewriter restaurado — se dispara en cada snap
-      requestAnimationFrame(function() {
-        _snapTypewriter(textEl, narrative);
-      });
+    // v1.3.397: Carousel de insights — sustituye al typewriter único
+    // Calcula los 5 insights reales de la tarjeta y los rota automáticamente
+    var textEl = document.getElementById('snap-text-' + cardId);
+    if (textEl) {
+      _stopInsightCarousel(cardId); // limpiar timer anterior
+      try {
+        var _p      = period;
+        var _feur   = Utils.feur;
+        var _bn     = KPI.getBeneficioNeto(_p);
+        var _vta    = _bn.vta    || 0;
+        var _inv    = _bn.inv    || 0;
+        var _ben    = _bn.beneficio || 0;
+        var _nTick  = _bn.nTickets  || 0;
+        var _valInv = _bn.valorInv  || 0;
+        var _roi    = _inv > 0 ? Math.round((_ben/_inv)*100) : 0;
+        var _margen = _vta > 0  ? Math.round((_ben/_vta)*100) : 0;
+        var _ticket = _nTick > 0 ? _vta/_nTick : 0;
+        var _durMs  = (function(){ try { var r=KPI.getRange(_p); return r.end-r.start; } catch(_){return 30*86400000;} })();
+        var _pAnt   = { type:'custom', start:new Date(Date.now()-_durMs*2), end:new Date(Date.now()-_durMs) };
+        var _bnAnt  = (function(){ try { return KPI.getBeneficioNeto(_pAnt); } catch(_){return {vta:0};} })();
+        var _delta  = _bnAnt.vta > 0 ? Math.round(((_vta-_bnAnt.vta)/_bnAnt.vta)*100) : null;
+        var _topV   = (function(){ try { return KPI.getTopVentas(_p); } catch(_){return [];} })();
+        var _topVnom= _topV[0]&&_topV[0].prod ? _topV[0].prod.nombre.slice(0,16) : '—';
+        var _topVuds= _topV[0] ? (_topV[0].uds||0) : 0;
+        var _chartV = (function(){ try { return KPI.getVentasChartData(_p,'ingresos'); } catch(_){return {labels:[],vals:[]};} })();
+        var _picoIdx= _chartV.vals.length ? _chartV.vals.indexOf(Math.max.apply(null,_chartV.vals)) : -1;
+        var _picoH  = _picoIdx>=0 ? (_chartV.labels[_picoIdx]||'—') : '—';
+        var _topC   = (function(){ try { return KPI.getTopCompras(_p); } catch(_){return [];} })();
+        var _topCnom= _topC[0]&&_topC[0].prod ? _topC[0].prod.nombre.slice(0,16) : '—';
+        var _topCcaj= _topC[0] ? (_topC[0].cajas||0) : 0;
+        var _gastPr = (function(){ try { return KPI.getGastoPorProv(_p); } catch(_){return [];} })();
+        var _prov1  = _gastPr[0] || null;
+        var _cosMedia=(function(){ try { return KPI.getKPIs(_p).cos||0; } catch(_){return 0;} })();
+        var _cad    = (function(){ try { return KPI.getCaducidadesAlerta(); } catch(_){return [];} })();
+        var _cad7   = _cad.filter(function(c){return c.diasRestantes<=7;});
+        var _cad1   = _cad[0]||null;
+        var _cadVal = _cad7.reduce(function(s,c){return s+(c.prod&&c.prod.stockActual||0)*(c.prod&&c.prod.precioCompra||0);},0);
+        var _gastos = State.get.gastosOperativos&&State.get.gastosOperativos()||[];
+        var _gasTotal=_gastos.reduce(function(s,g){return s+(g.importe||0);},0);
+        var _gasMax = _gastos.slice().sort(function(a,b){return (b.importe||0)-(a.importe||0);})[0]||null;
+        var _ingresos=State.get.ingresosFin&&State.get.ingresosFin()||[];
+        var _ingTotal=_ingresos.reduce(function(s,i){return s+(i.importe||0);},0);
+        var _flujNet=_ingTotal-_gasTotal;
+        var _pedidos=State.get.historialPedidos&&State.get.historialPedidos()||[];
+        var _pedProx=_pedidos.filter(function(p){return new Date(p.fecha)>=new Date(Date.now()-2*86400000);})
+                      .sort(function(a,b){return new Date(a.fecha)-new Date(b.fecha);})[0]||null;
+        var _visitas=State.get.visitasComerciales&&State.get.visitasComerciales()||[];
+        var _visPend=_visitas.filter(function(v){return v.estado==='pendiente';});
+        var _visProx=_visPend.slice().sort(function(a,b){return new Date(a.fecha)-new Date(b.fecha);})[0]||null;
+        var _pendOrd=State.get.pendingOrders&&State.get.pendingOrders()||[];
+        var _invCam =_pendOrd.reduce(function(s,o){return s+(o.items||[]).reduce(function(ss,i){return ss+(i.ncajas||0)*(i.precio||0)*1.10;},0);},0);
+        var _topRoi =(function(){ try { return KPI.getTopRoi(_p); } catch(_){return [];} })();
+
+        var _CARD_INSIGHTS = {
+          rendimiento: [
+            { icon:'📈', title:'Ventas del periodo' + (_delta!==null?(' · '+(_delta>=0?'▲+':'▼')+_delta+'%'):''), desc:_vta>0?'Has vendido '+_feur(_vta)+' en este periodo':'Sin ventas registradas aún', val:_delta!==null?(_delta>=0?'Mejor que antes':'Peor que antes'):'—' },
+            { icon:'🛒', title:'Ticket medio', desc:_nTick>0?_nTick+' transacciones en el periodo':'Sin transacciones aún', val:_nTick>0?_feur(_ticket):'—' },
+            { icon:'⏰', title:'Hora pico', desc:_picoH!=='—'?'Mayor concentración de ventas':'Necesitas más datos de ventas', val:_picoH },
+            { icon:'🏅', title:'Producto estrella', desc:_topVnom!=='—'?_topVuds+' uds vendidas este periodo':'Sin ventas registradas', val:_topVnom },
+            { icon:'💰', title:'Margen bruto', desc:'Beneficio sobre ingresos totales del periodo', val:_margen+'%' },
+          ],
+          compras: [
+            { icon:'📦', title:'Inversión total', desc:_inv>0?'En '+(function(){try{return KPI.getKPIs(_p).ped||0;}catch(_){return 0;}})()+' pedidos este periodo':'Sin pedidos en el periodo', val:_feur(_inv) },
+            { icon:'🏪', title:_prov1?_prov1.nombre.slice(0,16):'Proveedor top', desc:_prov1?_prov1.pct+'% del gasto · margen ~'+_prov1.margen+'%':'Sin pedidos aún', val:_prov1?_feur(_prov1.gasto):'—' },
+            { icon:'🔝', title:'Artículo más comprado', desc:_topCnom!=='—'?_topCcaj+' bultos pedidos en el periodo':'Sin datos de compras', val:_topCnom },
+            { icon:'📊', title:'Coste medio pedido', desc:'Inversión promedio por orden de compra', val:_cosMedia>0?_feur(_cosMedia):'—' },
+            { icon:'📈', title:'ROI sobre inversión', desc:'Rentabilidad estimada del stock comprado', val:_roi+'%' },
+          ],
+          'flujo-caja': [
+            { icon:_ben>=0?'✅':'⚠️', title:'Beneficio neto', desc:_ben>=0?'Ventas menos coste de lo vendido':'Estás perdiendo dinero — revisa márgenes', val:_feur(_ben) },
+            { icon:'🏦', title:'Flujo neto', desc:_flujNet>=0?'Ingresos superan gastos operativos':'Gastos superan ingresos registrados', val:(_flujNet>=0?'+':'')+_feur(_flujNet) },
+            { icon:'💸', title:'Gastos operativos', desc:_gasMax?'Mayor: '+(_gasMax.concepto||'').slice(0,16)+' · '+_feur(_gasMax.importe||0):'Sin gastos registrados', val:_feur(_gasTotal) },
+            { icon:'📦', title:'Stock inmovilizado', desc:'Valor del inventario actual en almacén', val:_feur(_valInv) },
+            { icon:'📊', title:'ROI del periodo', desc:'Rentabilidad sobre inversión total en compras', val:_roi+'%' },
+          ],
+          agenda: [
+            { icon:'📦', title:'Pedidos pendientes', desc:_pedProx?'Próximo: '+(State.get.prov&&State.get.prov(_pedProx.provId)&&State.get.prov(_pedProx.provId).nombre||'').slice(0,14):'Sin pedidos recientes', val:_pedidos.filter(function(p){var f=new Date(p.fecha);return f>=new Date(Date.now()-30*86400000);}).length+' pedidos' },
+            { icon:'💰', title:'Inversión en camino', desc:_pendOrd.length>0?_pendOrd.length+' órdenes pendientes de recibir':'Sin órdenes pendientes', val:_feur(_invCam) },
+            { icon:'🤝', title:'Visitas pendientes', desc:_visProx?'Próxima: '+new Date(_visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}):'Sin visitas pendientes', val:_visPend.length+' visitas' },
+            { icon:'✅', title:'Visitas cumplidas', desc:'Reuniones comerciales realizadas', val:_visitas.filter(function(v){return v.estado==='cumplida';}).length+' visitas' },
+            { icon:'📅', title:'Próxima entrega', desc:_pedProx?'Fecha estimada de recepción':'Sin entregas programadas', val:_pedProx?new Date(_pedProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}):'—' },
+          ],
+          caducidades: [
+            { icon:_cad7.length>0?'🚨':'✅', title:_cad7.length>0?_cad7.length+' productos urgentes':'Sin urgencias', desc:_cad7.length>0?'Caducan en 7 días o menos — actúa hoy':'Ningún producto caduca esta semana', val:_cad7.length>0?_feur(_cadVal)+' en riesgo':'Todo OK' },
+            { icon:'⚠️', title:'Más urgente', desc:_cad1?'Caduca en '+_cad1.diasRestantes+' días':'Sin caducidades próximas', val:_cad1?(_cad1.prod&&_cad1.prod.nombre||'—').slice(0,16):'—' },
+            { icon:'📅', title:'Caducan este mes', desc:'Productos en los próximos 30 días', val:_cad.length+' artículos' },
+            { icon:'💸', title:'Valor en riesgo', desc:'Stock valorado que puede perderse esta semana', val:_cadVal>0?_feur(_cadVal):'0,00 €' },
+            { icon:'🏆', title:'Top ROI', desc:_topRoi[0]&&_topRoi[0].prod?'Producto más rentable del periodo':'Sin datos de ROI', val:_topRoi[0]&&_topRoi[0].prod?_topRoi[0].prod.nombre.slice(0,16):'—' },
+          ],
+        };
+
+        var insightItems = _CARD_INSIGHTS[cardId];
+        if (insightItems) {
+          requestAnimationFrame(function() {
+            _startInsightCarousel(cardId, insightItems, textEl);
+          });
+        } else {
+          // Fallback: tarjetas sin carousel definido usan typewriter
+          var narrative = _snapBuildNarrative(cardId, period);
+          if (narrative) {
+            requestAnimationFrame(function() { _snapTypewriter(textEl, narrative); });
+          }
+        }
+      } catch(e) {
+        // Fallback seguro si algo falla
+        console.warn('[Dashwey] insight carousel error:', e);
+        var _narr = _snapBuildNarrative(cardId, period);
+        if (_narr) { requestAnimationFrame(function() { _snapTypewriter(textEl, _narr); }); }
+      }
     }
 
     // Gráfica de barras — rendimiento y compras
@@ -21867,6 +22147,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         textEl._snapTypewriterCancel = null;
         textEl.innerHTML = '';
       }
+      // v1.3.397: limpiar carousel al cambiar de tarjeta
+      _stopInsightCarousel(cid);
       _snapRenderCard(cid);
     });
 
