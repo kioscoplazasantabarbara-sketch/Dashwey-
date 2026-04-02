@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.420-dev</title>
+<title>Dashwey v1.3.421-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12700,7 +12700,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.420-dev';
+  const _APP_VERSION = 'v1.3.421-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -25466,6 +25466,15 @@ const tpv = (() => {
     // v1.3.377: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
+    // v1.3.421: eliminar producto del hot grid sin resetear todos los pins
+    hgRemoveProd: function(prodId) {
+      var changed = false;
+      _hotPins = _hotPins.map(function(pin) {
+        if (pin && pin.id === prodId) { changed = true; return null; }
+        return pin;
+      });
+      if (changed) { _saveHotPins(); _hotGridHash = ''; }
+    },
   };
 })();
 
@@ -29706,30 +29715,59 @@ function _parseIva(iva) {
 
   function _catDeleteArt(id) {
     if (!id) return;
-    try { Utils.triggerHaptic('medium'); } catch(_) {}
     var _prod = State.get.prod(id);
     var _nombre = _prod ? (_prod.nombre || 'este artículo') : 'este artículo';
     window._showDestructiveConfirm({
       title: 'Eliminar artículo',
       message: '¿Eliminar "' + _nombre + '"? Esta acción no se puede deshacer.',
       confirmText: 'Eliminar',
-      onConfirm: function() { App.alm._catDeleteConfirm(id); }
+      onConfirm: function() {
+        // v1.3.421: haptic en onConfirm — no antes de que el usuario confirme
+        try { Utils.triggerHaptic('medium'); } catch(_) {}
+        App.alm._catDeleteConfirm(id);
+      }
     });
   }
 
-
   function _catDeleteConfirm(id) {
-    // v1.3.245: borrado robusto — no depende de State.get.prod para ejecutar
+    // v1.3.421: borrado completo — limpia todas las referencias al artículo
     const p = State.get.prod(id);
     const nombre = p ? p.nombre : 'Artículo';
+
+    // 1. Eliminar del catálogo
     State.set.productos(State.get.productos().filter(pr => pr.id !== id));
-    State.set.ordenItems(State.get.ordenItems().filter(o => o.prodId !== id));
-    // v1.3.420: eliminado App.ui.closeModal() — _showDestructiveConfirm ya
-    // se cierra solo antes de llamar onConfirm. closeModal() cerraba modales
-    // ajenos si había alguno abierto en la pila.
+    // ordenItems eliminado del flujo en v8.8.x — filtro era código muerto
+
+    // 2. Limpiar del carrito activo si estaba
+    if (_ordenCarrito[id]) {
+      delete _ordenCarrito[id];
+      _saveCarritoLocal();
+    }
+
+    // 3. Limpiar lastVal del formulario de edición
+    try { State.set.lastVal('editar_art_' + id, null); } catch(_) {}
+
+    // 4. Limpiar del hot grid en memoria y localStorage inmediatamente
+    // v1.3.421: no esperar al próximo _saveHotPins — limpiar ahora
+    try {
+      if (typeof tpv !== 'undefined') {
+        tpv.hgRemoveProd && tpv.hgRemoveProd(id);
+        tpv._invalidateCatsHash && tpv._invalidateCatsHash();
+      }
+    } catch(_) {}
+
+    // 5. Actualizar UI
     renderCatInline();
     try { tpv.render(); } catch(_) {}
     updateBadge();
+
+    // 6. Emitir item:deleted — Dashboard y otros módulos reaccionan
+    try {
+      document.dispatchEvent(new CustomEvent('item:deleted', {
+        detail: { id, nombre }
+      }));
+    } catch(_) {}
+
     showToast(nombre + ' borrado');
   }
 
@@ -30307,16 +30345,26 @@ function _parseIva(iva) {
     });
 
     // ── Actualizar stock ────────────────────────────────────────
+    // v1.3.421: detectar productos borrados — no bloquear el pedido pero avisar
+    const _prodBorrados = [];
     items.forEach(o => {
       const p = State.get.prod(o.prodId);
       if (p) {
         const newStock = (p.stockActual || 0) + (o.ncajas || 1) * (o.udscaja || 1);
-
         State.set.updateProd(o.prodId, { stockActual: newStock });
       } else {
-        console.warn('[CONFIRM]  producto no encontrado:', o.prodId);
+        _prodBorrados.push(o.nombre || o.prodId);
+        console.warn('[CONFIRM] producto borrado en pedido pendiente:', o.prodId);
       }
     });
+    if (_prodBorrados.length) {
+      setTimeout(function() {
+        showToast('⚠️ ' + _prodBorrados.length + ' artículo' + (_prodBorrados.length !== 1 ? 's' : '') +
+          ' del pedido fue' + (_prodBorrados.length !== 1 ? 'ron' : '') +
+          ' borrado' + (_prodBorrados.length !== 1 ? 's' : '') + ' — stock no actualizado para: ' +
+          _prodBorrados.slice(0,2).join(', ') + (_prodBorrados.length > 2 ? '...' : ''));
+      }, 600);
+    }
 
     // ── Guardar pedido en historial ─────────────────────────────
     const pedido = {
@@ -31951,6 +31999,13 @@ function _parseIva(iva) {
   document.addEventListener('item:created', () => {
     try { dash.render(); }   catch(e) {}
     try { tpv.render();  }   catch(e) {}
+    _syncAppState();
+  });
+
+  // v1.3.421: item:deleted — simétrico a item:created
+  // Dashboard actualiza KPIs, TPV re-renderiza lista
+  document.addEventListener('item:deleted', () => {
+    try { dash.render(); } catch(e) {}
     _syncAppState();
   });
 
