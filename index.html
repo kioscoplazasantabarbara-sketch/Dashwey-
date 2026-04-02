@@ -98,6 +98,28 @@
     }
   })();
 
+  // ── DASHWEY APP MODE — v1.3.382 ──────────────────────────────────────
+  // Detecta ?mode= antes del primer render y escribe data-app-mode en body.
+  // Valores: hub (default) | pos | alm | cfo
+  // En Capacitor el server.url incluye el parámetro — no hay barra de direcciones.
+  // INMUTABLE en runtime: _DASHWEY_MODE es de solo lectura desde este punto.
+  (function() {
+    try {
+      var _mode = new URLSearchParams(window.location.search).get('mode') || 'hub';
+      var _validModes = ['hub','pos','alm','cfo'];
+      if (_validModes.indexOf(_mode) === -1) _mode = 'hub';
+      window._DASHWEY_MODE = _mode;
+      // Escribir en body — CSS scoped a body[data-app-mode="X"]
+      // body puede no existir aún si el script está en HEAD — usar documentElement como fallback
+      if (document.body) document.body.setAttribute('data-app-mode', _mode);
+      else document.addEventListener('DOMContentLoaded', function() {
+        document.body.setAttribute('data-app-mode', window._DASHWEY_MODE || 'hub');
+      });
+    } catch(e) {
+      window._DASHWEY_MODE = 'hub';
+    }
+  })();
+
   /* Stub vacío — splash eliminado del HEAD, función real definida en body */
   window._hideSplash = function() {};
 
@@ -143,7 +165,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.381-dev</title>
+<title>Dashwey v1.3.382-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -369,6 +391,61 @@ body[data-tab="2"] {
   :root { --tab-h: 44px; }
 }
 
+
+/* ══════════════════════════════════════════════════════════════════
+   DASHWEY APP MODES — v1.3.382
+   CSS scoped a body[data-app-mode="X"].
+   Cada modo oculta los módulos que no le corresponden y ajusta la navbar.
+   La lógica JS complementaria vive en nav (tab inicial) y goTab (bloqueo).
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── modo POS — solo TPV ──────────────────────────────────────── */
+body[data-app-mode="pos"] #bt-1,
+body[data-app-mode="pos"] #bt-2 {
+  display: none !important;
+}
+/* Centrar el único botón de navbar en modo POS */
+body[data-app-mode="pos"] #bottom-tabs {
+  justify-content: center;
+}
+/* Ocultar opciones de menú irrelevantes en POS */
+body[data-app-mode="pos"] .menu-item-dashboard,
+body[data-app-mode="pos"] .menu-item-alm,
+body[data-app-mode="pos"] .sd-team-row,
+body[data-app-mode="pos"] .sd-export-row,
+body[data-app-mode="pos"] .sd-reset-row {
+  display: none !important;
+}
+
+/* ── modo ALM — solo Almacén ──────────────────────────────────── */
+body[data-app-mode="alm"] #bt-0,
+body[data-app-mode="alm"] #bt-1 {
+  display: none !important;
+}
+body[data-app-mode="alm"] #bottom-tabs {
+  justify-content: center;
+}
+body[data-app-mode="alm"] .menu-item-dashboard,
+body[data-app-mode="alm"] .menu-item-tpv,
+body[data-app-mode="alm"] .sd-export-row,
+body[data-app-mode="alm"] .sd-reset-row {
+  display: none !important;
+}
+
+/* ── modo CFO — solo Dashboard ────────────────────────────────── */
+body[data-app-mode="cfo"] #bt-0,
+body[data-app-mode="cfo"] #bt-2 {
+  display: none !important;
+}
+body[data-app-mode="cfo"] #bottom-tabs {
+  justify-content: center;
+}
+body[data-app-mode="cfo"] .menu-item-tpv,
+body[data-app-mode="cfo"] .menu-item-alm,
+body[data-app-mode="cfo"] .sd-team-row,
+body[data-app-mode="cfo"] .sd-reset-row {
+  display: none !important;
+}
 
 /* ── § DARK MODE — variables de tema oscuro ── */
 [data-theme="dark"] {
@@ -12495,7 +12572,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.381-dev';
+  const _APP_VERSION = 'v1.3.382-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14257,7 +14334,12 @@ const ui = (() => {
 // • will-change ya definido en CSS del track.
 // • requestAnimationFrame en touchmove para evitar jank en 60fps.
 const nav = (() => {
-  let _cTab = 1;
+  // v1.3.382: tab inicial según modo de app
+  var _modeTabMap = { pos: 0, alm: 2, cfo: 1, hub: 1 };
+  var _startTab = _modeTabMap[window._DASHWEY_MODE || 'hub'] !== undefined
+    ? _modeTabMap[window._DASHWEY_MODE]
+    : 1;
+  let _cTab = _startTab;
   const track = document.getElementById('swipe-track');
   const TITLES = ['TPV','DASHBOARD','ALMACÉN'];
 
@@ -14439,6 +14521,10 @@ const nav = (() => {
 
   function goTab(i) {
     try { // v1.2.29: error boundary — navegación nunca puede romper la app
+    // v1.3.382: bloquear navegación a tabs fuera del modo activo
+    var _modeAllowed = { pos: [0], alm: [2], cfo: [1], hub: [0,1,2] };
+    var _allowed = _modeAllowed[window._DASHWEY_MODE || 'hub'] || [0,1,2];
+    if (_allowed.indexOf(i) === -1) return;
     // Guard: no re-render completo si ya estamos en esta tab
     if (_cTab === i) {
       _syncNavActive(i);
@@ -14550,12 +14636,34 @@ const nav = (() => {
   return { goTab, goTabFS, goTo: goTab, get _cTab() { return _cTab; } };
 })();
 
-// v1.2.24: inicializar navState con la tab de arranque (Dashboard = 1)
-// _syncNavState vive dentro del IIFE de nav — llamar goTab no es posible aquí.
-// Inicialización directa segura porque _cTab arranca en 1.
+// v1.3.382: navState inicial dinámico según modo de app
+// _DASHWEY_MODE ya está definido por el script del HEAD.
 (function() {
   try {
-    window.navState = { current: 'dashboard', tabIndex: 1 };
+    var _tabNames = ['tpv','dashboard','almacen'];
+    var _modeTabInit = { pos: 0, alm: 2, cfo: 1, hub: 1 };
+    var _ti = _modeTabInit[window._DASHWEY_MODE || 'hub'] !== undefined
+      ? _modeTabInit[window._DASHWEY_MODE]
+      : 1;
+    window.navState = { current: _tabNames[_ti], tabIndex: _ti };
+    // Posicionar el track en el tab correcto sin animación
+    var _track = document.getElementById('swipe-track');
+    if (_track && _ti !== 1) {
+      _track.style.transition = 'none';
+      _track.style.transform = 'translateX(' + (-_ti * window.innerWidth) + 'px)';
+      // Restaurar transition después de un frame
+      requestAnimationFrame(function() {
+        if (_track) _track.style.transition = '';
+      });
+    }
+    // Marcar tab activo en navbar
+    var _bt = document.getElementById('bt-' + _ti);
+    if (_bt) {
+      document.querySelectorAll('.bt').forEach(function(b) { b.classList.remove('active'); });
+      _bt.classList.add('active');
+    }
+    // data-tab en body para CSS
+    if (document.body) document.body.setAttribute('data-tab', String(_ti));
   } catch(_) {}
 })();
 
