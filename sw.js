@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.382-dev
-   Cache: dashwey-v1-3-382-dev
+   Dashwey Service Worker v1.3.383-dev
+   Cache: dashwey-v1-3-383-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
