@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.418-dev</title>
+<title>Dashwey v1.3.419-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -4272,6 +4272,7 @@ body.tpv-tablet-pos {
 .tpv-prod-badge { font-size: 10px; font-weight: 700; border-radius: 8px; padding: 3px 8px; }
 .tpv-prod-badge.best { background: #FEF9C3; color: #854D0E; }
 .tpv-prod-badge.slow { background: #F1F5F9; color: #64748B; }
+.tpv-prod-badge.agot { background: rgba(0,0,0,0.05); color: var(--ink-soft); font-style: italic; }
 .tpv-qty-indicator {
   display: none; position: absolute; top: 8px; right: 10px;
   background: var(--red); color: #fff; border-radius: 50%;
@@ -12699,7 +12700,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.418-dev';
+  const _APP_VERSION = 'v1.3.419-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24209,8 +24210,12 @@ const tpv = (() => {
     _normalizeHotPins();
   }
   function _saveHotPins() {
+    // v1.3.419: limpiar IDs de productos que ya no existen antes de persistir
+    _hotPins = _hotPins.map(function(pin) {
+      if (!pin) return null;
+      return State.get.prod(pin.id) ? pin : null;
+    });
     try { localStorage.setItem(_HOT_PINS_KEY, JSON.stringify(_hotPins)); } catch(_) {}
-    console.log('[HotGrid] pins saved:', _hotPins.map((p,i) => p ? i+':'+p.id : null).filter(Boolean));
   }
   function _normalizeHotPins() {
     // Asegurar que _hotPins tiene exactamente _hotGridMax posiciones
@@ -24453,10 +24458,16 @@ const tpv = (() => {
       }, { passive: true });
     }
     const q = _searchQ.toLowerCase().trim();
-    let prods = State.get.productos().filter(p=>p.stockActual>0);
+    // v1.3.419: incluir productos con stock 0 pero marcarlos como agotados
+    // — el cajero ve el catálogo completo, no productos que "desaparecen"
+    let prods = State.get.productos().filter(p=>p.pvp>0);
     if (_catActiva !== 'Todos') prods = prods.filter(p=>p.cat===_catActiva);
     if (q) prods = prods.filter(p=>p.nombre.toLowerCase().includes(q)||(p.cat||'').toLowerCase().includes(q));
-    prods.sort((a,b)=>(b.ventas||0)-(a.ventas||0));
+    // Primero los que tienen stock, luego los agotados
+    prods.sort((a,b)=>{
+      if ((a.stockActual>0) !== (b.stockActual>0)) return (b.stockActual>0) ? 1 : -1;
+      return (b.ventas||0)-(a.ventas||0);
+    });
     // v1.2.25: dirty-check — skip DOM rebuild si lista + carrito no cambiaron
     const newHash = prods.map(p=>`${p.id}:${p.nombre}:${p.pvp}:${p.stockActual}:${p.cat}:${p.e}:${_cart[p.id]?.q||0}`).join('|')+'|q:'+q+'|cat:'+_catActiva;
     if (newHash === _prodsHash) return;
@@ -24479,10 +24490,12 @@ const tpv = (() => {
 
     const frag = document.createDocumentFragment();
     prods.forEach(p => {
-      const isBest = maxV>0 && p.ventas===maxV;
-      const isLow  = prods.length>1 && p.ventas===minV && minV<maxV;
-      const badge  = isBest ? '<span class="tpv-prod-badge best">⭐ Top</span>'
-                   : isLow  ? '<span class="tpv-prod-badge slow">↓ Lento</span>' : '';
+      const isBest   = maxV>0 && p.ventas===maxV && (p.stockActual||0)>0;
+      const isLow    = prods.length>1 && p.ventas===minV && minV<maxV && (p.stockActual||0)>0;
+      const isAgot   = (p.stockActual||0) <= 0;
+      const badge    = isAgot  ? '<span class="tpv-prod-badge agot">Agotado</span>'
+                     : isBest  ? '<span class="tpv-prod-badge best">⭐ Top</span>'
+                     : isLow   ? '<span class="tpv-prod-badge slow">↓ Lento</span>' : '';
       const thumb  = p.foto ? `<img src="${p.foto}" style="width:100%;height:100%;object-fit:cover">`
                              : `<span style="font-size:24px">${p.e||'🛍️'}</span>`;
       const qInCart = _cart[p.id]?.q||0;
@@ -24511,7 +24524,15 @@ const tpv = (() => {
   function addCart(id, triggerEl) {
     const p = State.get.prod(id);
     if (!p) return;
-    _cart[id] = _cart[id] || { p, q: 0 };
+    // v1.3.419: snapshot del producto en el momento de añadir — precio no cambia
+    // si el producto se edita mientras el carrito está abierto
+    if (!_cart[id]) {
+      _cart[id] = {
+        p: { id: p.id, nombre: p.nombre, pvp: p.pvp, precioCompra: p.precioCompra,
+             e: p.e, foto: p.foto, cat: p.cat, stockActual: p.stockActual },
+        q: 0
+      };
+    }
     _cart[id].q++;
     // v1.3.278: ventas se incrementa en procesarPago, no aquí (BUG-10)
     // v1.2.25: invalidar dirty-checks — carrito mutado
@@ -25006,7 +25027,14 @@ const tpv = (() => {
 
   function nuevoTicket() {
     _saveCurrentToTicket();
-    const num = State.get.ticketsAbiertos().length + 1;
+    // v1.3.419: contador basado en timestamp para evitar colisión de nombres
+    // al borrar y crear tickets en la misma sesión
+    const existentes = State.get.ticketsAbiertos().map(t => {
+      const m = t.nombre && t.nombre.match(/Mesa (\d+)/);
+      return m ? parseInt(m[1]) : 0;
+    });
+    const maxNum = existentes.length ? Math.max(...existentes) : 0;
+    const num = maxNum + 1;
     const t = { id:_genTicketId(), nombre:'Mesa '+num, items:[], creadoEn:new Date().toISOString() };
     State.set.saveTicket(t);
     _ticketActivo = t.id;
@@ -25031,17 +25059,30 @@ const tpv = (() => {
   function borrarTicket(id) {
     const t = State.get.ticketsAbiertos().find(x=>x.id===id);
     if (!t) return;
-    State.set.deleteTicket(id);
-    if (_ticketActivo === id) {
-      _ticketActivo = null;
-      _cart = {}; _prodsHash = ''; _hotGridHash = ''; // v1.2.25
-      _updateDock();
-      _updateTabletTicket();
-      _renderProds();
+    // v1.3.419: confirmar si el ticket tiene items para evitar borrado accidental
+    const _doDelete = function() {
+      State.set.deleteTicket(id);
+      if (_ticketActivo === id) {
+        _ticketActivo = null;
+        _cart = {}; _prodsHash = ''; _hotGridHash = '';
+        _updateDock();
+        _updateTabletTicket();
+        _renderProds();
+      }
+      _renderTicketsList();
+      _renderTicketBadge();
+      showToast('Ticket eliminado');
+    };
+    if (t.items && t.items.length > 0) {
+      window._showDestructiveConfirm({
+        title: 'Eliminar ' + (t.nombre || 'ticket'),
+        message: 'Tiene ' + t.items.length + ' producto' + (t.items.length !== 1 ? 's' : '') + '. ¿Seguro que quieres eliminarlo?',
+        confirmText: 'Eliminar',
+        onConfirm: _doDelete
+      });
+    } else {
+      _doDelete();
     }
-    _renderTicketsList();
-    _renderTicketBadge();
-    showToast('🗑️ Ticket eliminado');
   }
 
   // ── PROCESAR PAGO ─────────────────────────────────────────────
@@ -25175,12 +25216,44 @@ const tpv = (() => {
     const ticket  = tickets.find(t => t.id === _ticketActivo);
     if (!ticket) { showToast('⚠️ Crea un ticket primero'); return; }
     if (!ticket.items) ticket.items = [];
-    ticket.items.push({ id: 'manual_' + Date.now(), nombre, pvp: importe, q: 1, manual: true });
+    const itemId = 'manual_' + Date.now();
+    ticket.items.push({ id: itemId, nombre, pvp: importe, q: 1, manual: true });
     State.set.saveTicket(ticket);
+
+    // v1.3.419: registrar venta manual en State + Firebase para que
+    // aparezca en Dashboard KPIs y en el historial de ventas
+    const ventaId = 'v_manual_' + Date.now();
+    const negocioId = State.get.settings().negocioId || 'local';
+    const ventaPayload = {
+      id: ventaId, negocioId,
+      ticketId: _ticketActivo,
+      fecha: new Date().toISOString(),
+      metodo: 'manual',
+      total: importe,
+      items: [{ prodId: itemId, nombre, qty: 1, pvp: importe, coste: 0, margen: 0, manual: true }]
+    };
+    try {
+      State.set.addVenta({ ...ventaPayload });
+      // Sync Firebase asíncrono — no bloquea UI
+      (async () => {
+        try {
+          const FB = window._DashweyFirebase;
+          if (!FB || !FB.enabled || !FB.ready) return;
+          const cur = await FB.read('ventas') || { lista: [] };
+          const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
+          await FB.write('ventas', { lista });
+        } catch(e) { console.warn('[TPV] manual sale FB sync error:', e); }
+      })();
+      DashweyBus.emit('venta', { total: importe, metodo: 'manual' });
+      window.dispatchEvent(new CustomEvent('dashwey:venta-registrada'));
+    } catch(e) {
+      console.error('[TPV] confirmManualSale addVenta ERROR:', e);
+    }
+
     ui.closeFs();
     render();
-    showToast(`✅ ${nombre} — ${feur(importe)}`);
-    Utils.triggerHaptic('medium'); // venta completada
+    showToast('✅ ' + nombre + ' — ' + feur(importe));
+    Utils.triggerHaptic('medium');
   }
 
   // v1.3.234: aplicar clase tablet en arranque del módulo
