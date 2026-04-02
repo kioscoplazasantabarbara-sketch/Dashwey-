@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.395-dev</title>
+<title>Dashwey v1.3.396-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12632,7 +12632,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.395-dev';
+  const _APP_VERSION = 'v1.3.396-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19355,67 +19355,296 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     // Cerrar cualquier menú abierto
     _closeCardInsights();
 
-    /* Calcular insights según la tarjeta */
+    /* Calcular insights según la tarjeta — v1.3.396: top 5 reales por tarjeta */
     const p      = State.get.period();
-    const kpis   = KPI.getKPIs(p);
     const feur   = Utils.feur;
-    const ventas = kpis.ventasTotales || 0;
-    const inv    = kpis.inversionTotal || 0;
-    const ben    = ventas - inv;
-    const roi    = inv > 0 ? Math.round((ben/inv)*100) : 0;
+
+    // ── Datos base compartidos ───────────────────────────────────
+    const _bn      = KPI.getBeneficioNeto(p);
+    const _vta     = _bn.vta    || 0;
+    const _inv     = _bn.inv    || 0;
+    const _ben     = _bn.beneficio || 0;
+    const _nTick   = _bn.nTickets  || 0;
+    const _valInv  = _bn.valorInv  || 0;
+    const _roi     = _inv > 0 ? Math.round((_ben / _inv) * 100) : 0;
+    const _margen  = _vta > 0  ? Math.round((_ben / _vta) * 100) : 0;
+    const _ticket  = _nTick > 0 ? _vta / _nTick : 0;
+
+    // Periodo anterior para delta
+    const _durMs   = (() => { try { const r = KPI.getRange(p); return r.end - r.start; } catch(_) { return 30*86400000; } })();
+    const _pAnt    = { type:'custom', start: new Date(Date.now() - _durMs*2), end: new Date(Date.now() - _durMs) };
+    const _bnAnt   = (() => { try { return KPI.getBeneficioNeto(_pAnt); } catch(_) { return { vta:0 }; } })();
+    const _delta   = _bnAnt.vta > 0 ? Math.round(((_vta - _bnAnt.vta) / _bnAnt.vta) * 100) : null;
+    const _deltaStr = _delta !== null ? (_delta >= 0 ? '+' + _delta + '%' : _delta + '%') : '—';
+
+    // Top ventas y hora pico
+    const _topV    = (() => { try { return KPI.getTopVentas(p); } catch(_) { return []; } })();
+    const _topVnom = _topV[0]?.prod?.nombre?.slice(0,16) || '—';
+    const _topVuds = _topV[0]?.uds || 0;
+    const _chartV  = (() => { try { return KPI.getVentasChartData(p,'ingresos'); } catch(_) { return {labels:[],vals:[]}; } })();
+    const _picoIdx = _chartV.vals.indexOf(Math.max(...(_chartV.vals.length ? _chartV.vals : [0])));
+    const _picoH   = _chartV.labels[_picoIdx] || '—';
+
+    // Top compras y proveedor
+    const _topC    = (() => { try { return KPI.getTopCompras(p); } catch(_) { return []; } })();
+    const _topCnom = _topC[0]?.prod?.nombre?.slice(0,16) || '—';
+    const _topCcaj = _topC[0]?.cajas || 0;
+    const _gastProv= (() => { try { return KPI.getGastoPorProv(p); } catch(_) { return []; } })();
+    const _prov1   = _gastProv[0] || null;
+    const _cosMedia= (() => { try { return KPI.getKPIs(p).cos || 0; } catch(_) { return 0; } })();
+
+    // Caducidades
+    const _cad7    = (() => { try { return KPI.getCaducidadesAlerta(); } catch(_) { return []; } })()
+                       .filter(c => c.diasRestantes <= 7);
+    const _cad30   = (() => { try { return KPI.getCaducidadesAlerta(); } catch(_) { return []; } })();
+    const _cad1    = _cad30[0] || null;
+    const _cadVal  = _cad7.reduce((s,c) => s + (c.prod?.stockActual||0)*(c.prod?.precioCompra||0), 0);
+    const _cadProx = _cad30.find(c => c.diasRestantes > 7) || null;
+
+    // Gastos e ingresos
+    const _gastos  = State.get.gastosOperativos?.() || [];
+    const _gasTotal= _gastos.reduce((s,g) => s + (g.importe||0), 0);
+    const _gasMax  = [..._gastos].sort((a,b)=>(b.importe||0)-(a.importe||0))[0] || null;
+    const _ingresos= State.get.ingresosFin?.() || [];
+    const _ingTotal= _ingresos.reduce((s,i) => s + (i.importe||0), 0);
+    const _flujNet = _ingTotal - _gasTotal;
+
+    // Agenda
+    const _pedidos = State.get.historialPedidos?.() || [];
+    const _pedProx = [..._pedidos].filter(p => new Date(p.fecha) >= new Date(Date.now()-2*86400000))
+                      .sort((a,b)=>new Date(a.fecha)-new Date(b.fecha))[0] || null;
+    const _visitas = State.get.visitasComerciales?.() || [];
+    const _visPend = _visitas.filter(v=>v.estado==='pendiente');
+    const _visProx = [..._visPend].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha))[0] || null;
+    const _pendOrd = State.get.pendingOrders?.() || [];
+    const _invCamino = _pendOrd.reduce((s,o)=>{
+      return s + (o.items||[]).reduce((ss,i)=>ss+(i.ncajas||0)*(i.precio||0)*1.10,0);
+    },0);
+
+    // Top ROI
+    const _topRoi  = (() => { try { return KPI.getTopRoi(p); } catch(_) { return []; } })();
 
     const INSIGHTS = {
-      kpis: [
-        { icon:'💰', title:'Beneficio neto', desc:'Ventas menos inversión en el periodo', val: feur(ben) },
-        { icon:'📊', title:'ROI medio', desc:'Rentabilidad sobre la inversión total', val: roi+'%' },
-        { icon:'🏆', title:'Margen de ventas', desc:'Beneficio como % de las ventas', val: ventas>0?Math.round((ben/ventas)*100)+'%':'—' },
+
+      // ── Rendimiento de Ventas ────────────────────────────────
+      rendimiento: [
+        {
+          icon: '📈',
+          title: 'Ventas ' + (_delta !== null ? (_delta >= 0 ? '▲ ' + _delta + '%' : '▼ ' + Math.abs(_delta) + '%') : ''),
+          desc: _vta > 0 ? 'Has vendido ' + feur(_vta) + ' en este periodo' : 'Sin ventas registradas aún',
+          val: _deltaStr !== '—' ? (_delta >= 0 ? 'Mejor que antes' : 'Peor que antes') : '—'
+        },
+        {
+          icon: '🛒',
+          title: 'Ticket medio',
+          desc: _nTick > 0 ? _nTick + ' transacciones en el periodo' : 'Sin transacciones aún',
+          val: _nTick > 0 ? feur(_ticket) : '—'
+        },
+        {
+          icon: '⏰',
+          title: 'Hora pico',
+          desc: _picoH !== '—' ? 'Mayor concentración de ventas' : 'Necesitas más datos',
+          val: _picoH !== '—' ? _picoH : '—'
+        },
+        {
+          icon: '🏅',
+          title: 'Producto estrella',
+          desc: _topVnom !== '—' ? _topVuds + ' uds vendidas este periodo' : 'Sin ventas registradas',
+          val: _topVnom
+        },
+        {
+          icon: '💰',
+          title: 'Margen bruto',
+          desc: 'Beneficio sobre ingresos totales',
+          val: _margen + '%'
+        },
       ],
-      ventas: [
-        { icon:'📈', title:'Ventas del periodo', desc:'Ingresos totales por ventas TPV', val: feur(ventas) },
-        { icon:'🛒', title:'Ticket medio', desc:'Promedio por transacción', val: feur(kpis.ticketMedio||0) },
-        { icon:'📅', title:'Días con ventas', desc:'Jornadas activas en el periodo', val: (kpis.diasConVentas||0)+' días' },
+
+      // ── Abastecimiento (Compras) ─────────────────────────────
+      compras: [
+        {
+          icon: '📦',
+          title: 'Inversión total',
+          desc: _inv > 0 ? 'En ' + ((() => { try { return KPI.getKPIs(p).ped; } catch(_){return 0;} })()) + ' pedidos este periodo' : 'Sin pedidos en el periodo',
+          val: feur(_inv)
+        },
+        {
+          icon: '🏪',
+          title: _prov1 ? _prov1.nombre.slice(0,16) : 'Proveedor top',
+          desc: _prov1 ? _prov1.pct + '% del gasto total · margen ~' + _prov1.margen + '%' : 'Sin pedidos aún',
+          val: _prov1 ? feur(_prov1.gasto) : '—'
+        },
+        {
+          icon: '🔝',
+          title: 'Artículo más comprado',
+          desc: _topCnom !== '—' ? _topCcaj + ' bultos pedidos en el periodo' : 'Sin datos de compras',
+          val: _topCnom
+        },
+        {
+          icon: '📊',
+          title: 'Coste medio pedido',
+          desc: 'Inversión promedio por orden de compra',
+          val: _cosMedia > 0 ? feur(_cosMedia) : '—'
+        },
+        {
+          icon: '📈',
+          title: 'ROI sobre inversión',
+          desc: 'Rentabilidad estimada del stock comprado',
+          val: _roi + '%'
+        },
       ],
+
+      // ── Flujo de Caja ────────────────────────────────────────
+      'flujo-caja': [
+        {
+          icon: _ben >= 0 ? '✅' : '⚠️',
+          title: 'Beneficio neto',
+          desc: _ben >= 0 ? 'Ventas menos coste de lo vendido' : 'Estás perdiendo dinero — revisa márgenes',
+          val: feur(_ben)
+        },
+        {
+          icon: '🏦',
+          title: 'Flujo neto',
+          desc: _flujNet >= 0 ? 'Ingresos superan gastos operativos' : 'Gastos superan ingresos registrados',
+          val: (_flujNet >= 0 ? '+' : '') + feur(_flujNet)
+        },
+        {
+          icon: '💸',
+          title: 'Gastos operativos',
+          desc: _gasMax ? 'Mayor: ' + (_gasMax.concepto||'').slice(0,16) + ' · ' + feur(_gasMax.importe||0) : 'Sin gastos registrados',
+          val: feur(_gasTotal)
+        },
+        {
+          icon: '📦',
+          title: 'Stock inmovilizado',
+          desc: 'Valor del inventario actual en almacén',
+          val: feur(_valInv)
+        },
+        {
+          icon: '📊',
+          title: 'ROI del periodo',
+          desc: 'Rentabilidad sobre inversión total en compras',
+          val: _roi + '%'
+        },
+      ],
+
+      // ── Agenda ───────────────────────────────────────────────
+      agenda: [
+        {
+          icon: '📦',
+          title: 'Pedidos pendientes',
+          desc: _pedProx ? 'Próximo: ' + (State.get.prov?.(_pedProx.provId)?.nombre||'').slice(0,14) : 'Sin pedidos recientes',
+          val: _pedidos.filter(p=>{ const f=new Date(p.fecha); return f>=new Date(Date.now()-30*86400000); }).length + ' pedidos'
+        },
+        {
+          icon: '💰',
+          title: 'Inversión en camino',
+          desc: _pendOrd.length > 0 ? _pendOrd.length + ' órdenes de compra pendientes de recibir' : 'Sin órdenes pendientes',
+          val: feur(_invCamino)
+        },
+        {
+          icon: '🤝',
+          title: 'Visitas pendientes',
+          desc: _visProx ? 'Próxima: ' + new Date(_visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) : 'Sin visitas pendientes',
+          val: _visPend.length + ' visitas'
+        },
+        {
+          icon: '✅',
+          title: 'Visitas cumplidas',
+          desc: 'Reuniones comerciales realizadas',
+          val: _visitas.filter(v=>v.estado==='cumplida').length + ' visitas'
+        },
+        {
+          icon: '📅',
+          title: 'Próxima entrega',
+          desc: _pedProx ? 'Fecha estimada de recepción' : 'Sin entregas programadas',
+          val: _pedProx ? new Date(_pedProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) : '—'
+        },
+      ],
+
+      // ── Caducidades ──────────────────────────────────────────
       caducidades: [
-        { icon:'⚠️', title:'Productos en riesgo', desc:'Caducan en los próximos 7 días', val: (KPI.getCaducidadesAlerta(7)||[]).length+' artículos' },
-        { icon:'🗓️', title:'Próxima caducidad', desc:'El artículo más urgente', val: (() => { const c=KPI.getCaducidadesAlerta(30)||[]; return c[0]?.nombre?.slice(0,14)||'—'; })() },
-        { icon:'💸', title:'Valor en riesgo', desc:'Stock valorado que puede perderse', val: feur((() => { return (KPI.getCaducidadesAlerta(7)||[]).reduce((s,c)=>s+(c.stock||0)*(c.precio||0),0); })()) },
+        {
+          icon: _cad7.length > 0 ? '🚨' : '✅',
+          title: _cad7.length > 0 ? _cad7.length + ' productos urgentes' : 'Sin urgencias',
+          desc: _cad7.length > 0 ? 'Caducan en 7 días o menos — actúa hoy' : 'Ningún producto caduca esta semana',
+          val: _cad7.length > 0 ? feur(_cadVal) + ' en riesgo' : 'Todo OK'
+        },
+        {
+          icon: '⚠️',
+          title: 'Más urgente',
+          desc: _cad1 ? 'Caduca en ' + _cad1.diasRestantes + ' días' : 'Sin caducidades próximas',
+          val: _cad1 ? _cad1.prod?.nombre?.slice(0,16)||'—' : '—'
+        },
+        {
+          icon: '📅',
+          title: 'Caducan este mes',
+          desc: 'Productos en los próximos 30 días',
+          val: _cad30.length + ' artículos'
+        },
+        {
+          icon: '💸',
+          title: 'Valor en riesgo',
+          desc: 'Stock valorado que puede perderse esta semana',
+          val: _cadVal > 0 ? feur(_cadVal) : '0,00 €'
+        },
+        {
+          icon: '📦',
+          title: 'Próxima caducidad segura',
+          desc: _cadProx ? 'El siguiente artículo tras los urgentes' : 'Sin más caducidades',
+          val: _cadProx ? _cadProx.prod?.nombre?.slice(0,16)||'—' : '—'
+        },
+      ],
+
+      // Mantener compatibilidad con claves legacy
+      kpis: [
+        { icon:'💰', title:'Beneficio neto', desc:'Ventas menos inversión en el periodo', val: feur(_ben) },
+        { icon:'📊', title:'ROI del periodo', desc:'Rentabilidad sobre la inversión total', val: _roi+'%' },
+        { icon:'🏆', title:'Margen de ventas', desc:'Beneficio como % de las ventas', val: _margen+'%' },
+        { icon:'🛒', title:'Ticket medio', desc:'Promedio por transacción', val: _nTick>0?feur(_ticket):'—' },
+        { icon:'📦', title:'Stock inmovilizado', desc:'Valor del inventario actual', val: feur(_valInv) },
       ],
       cuentas: [
         { icon:'🏦', title:'Saldo total', desc:'Suma de todas las cuentas', val: feur((State.get.cuentasBancarias()||[]).reduce((s,c)=>s+(c.saldo||0),0)) },
         { icon:'📊', title:'Cuentas activas', desc:'Número de cuentas configuradas', val: (State.get.cuentasBancarias()||[]).length+' cuentas' },
-        { icon:'💳', title:'Mayor cuenta', desc:'Cuenta con más saldo', val: (() => { const cs=State.get.cuentasBancarias()||[]; const m=cs.sort((a,b)=>(b.saldo||0)-(a.saldo||0))[0]; return m?m.nombre?.slice(0,14)||'—':'—'; })() },
+        { icon:'💳', title:'Mayor cuenta', desc:'Cuenta con más saldo', val: (() => { const cs=State.get.cuentasBancarias()||[]; const m=[...cs].sort((a,b)=>(b.saldo||0)-(a.saldo||0))[0]; return m?m.nombre?.slice(0,14)||'—':'—'; })() },
+        { icon:'💸', title:'Gastos operativos', desc:'Total gastos del periodo', val: feur(_gasTotal) },
+        { icon:'📈', title:'Ingresos financieros', desc:'Entradas registradas', val: feur(_ingTotal) },
       ],
       gastos: [
-        { icon:'💸', title:'Gastos del periodo', desc:'Total gastos operativos registrados', val: feur((State.get.gastosOperativos()||[]).reduce((s,g)=>s+(g.importe||0),0)) },
-        { icon:'📋', title:'Número de gastos', desc:'Gastos registrados en el periodo', val: (State.get.gastosOperativos()||[]).length+' gastos' },
-        { icon:'🔝', title:'Mayor gasto', desc:'Categoría con más gasto', val: (() => { const gs=State.get.gastosOperativos()||[]; const m=gs.sort((a,b)=>(b.importe||0)-(a.importe||0))[0]; return m?m.concepto?.slice(0,14)||'—':'—'; })() },
+        { icon:'💸', title:'Total gastos', desc:'Gastos operativos del periodo', val: feur(_gasTotal) },
+        { icon:'🔝', title:'Mayor gasto', desc:'Concepto que más consume', val: _gasMax?(_gasMax.concepto||'').slice(0,16):'—' },
+        { icon:'📋', title:'Número de gastos', desc:'Entradas registradas', val: _gastos.length+' gastos' },
+        { icon:'📊', title:'Flujo neto', desc:'Ingresos menos gastos', val: (_flujNet>=0?'+':'')+feur(_flujNet) },
+        { icon:'💰', title:'Beneficio neto', desc:'Ventas menos coste de ventas', val: feur(_ben) },
       ],
       ingresos: [
-        { icon:'📈', title:'Ingresos totales', desc:'Suma de ingresos financieros', val: feur((State.get.ingresosFin()||[]).reduce((s,i)=>s+(i.importe||0),0)) },
-        { icon:'📊', title:'Número de ingresos', desc:'Entradas registradas', val: (State.get.ingresosFin()||[]).length+' entradas' },
-        { icon:'💡', title:'Fuente principal', desc:'Concepto con más ingresos', val: (() => { const ig=State.get.ingresosFin()||[]; const m=ig.sort((a,b)=>(b.importe||0)-(a.importe||0))[0]; return m?m.concepto?.slice(0,14)||'—':'—'; })() },
+        { icon:'📈', title:'Ingresos totales', desc:'Suma de ingresos financieros', val: feur(_ingTotal) },
+        { icon:'📊', title:'Número de entradas', desc:'Ingresos registrados', val: _ingresos.length+' entradas' },
+        { icon:'💡', title:'Mayor ingreso', desc:'Concepto con más aportación', val: (() => { const m=[..._ingresos].sort((a,b)=>(b.importe||0)-(a.importe||0))[0]; return m?m.concepto?.slice(0,14)||'—':'—'; })() },
+        { icon:'💸', title:'Gastos operativos', desc:'Para comparar con ingresos', val: feur(_gasTotal) },
+        { icon:'✅', title:'Flujo neto', desc:'Diferencia ingresos menos gastos', val: (_flujNet>=0?'+':'')+feur(_flujNet) },
       ],
       pedidos: [
-        { icon:'📦', title:'Pedidos activos', desc:'Con entrega pendiente o hoy', val: (State.get.historialPedidos()||[]).filter(p=>{ const fe=new Date(p.fecha); return fe>=new Date(Date.now()-30*86400000); }).length+' pedidos' },
-        { icon:'🚚', title:'Entrega más próxima', desc:'Proveedor con entrega antes', val: (() => { const ps=State.get.proveedores()||[]; return ps[0]?.nombre?.slice(0,14)||'—'; })() },
-        { icon:'💰', title:'Inversión en camino', desc:'Valor de pedidos pendientes de recibir', val: feur(inv) },
+        { icon:'📦', title:'Pedidos recientes', desc:'Últimos 30 días', val: _pedidos.filter(p=>{const f=new Date(p.fecha);return f>=new Date(Date.now()-30*86400000);}).length+' pedidos' },
+        { icon:'💰', title:'Inversión en camino', desc:'Órdenes pendientes de recibir', val: feur(_invCamino) },
+        { icon:'🚚', title:'Próxima entrega', desc:'Pedido más cercano', val: _pedProx?new Date(_pedProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}):'—' },
+        { icon:'📊', title:'Inversión total periodo', desc:'En pedidos confirmados', val: feur(_inv) },
+        { icon:'🏪', title:'Proveedor principal', desc:'Mayor volumen de compra', val: _prov1?_prov1.nombre.slice(0,16):'—' },
       ],
       visitas: [
-        { icon:'🤝', title:'Visitas programadas', desc:'En el periodo seleccionado', val: (State.get.visitasComerciales()||[]).filter(v=>v.estado==='pendiente').length+' visitas' },
-        { icon:'✅', title:'Cumplidas', desc:'Visitas marcadas como realizadas', val: (State.get.visitasComerciales()||[]).filter(v=>v.estado==='cumplida').length+' visitas' },
-        { icon:'📅', title:'Próxima visita', desc:'La más cercana pendiente', val: (() => { const vs=(State.get.visitasComerciales()||[]).filter(v=>v.estado==='pendiente').sort((a,b)=>new Date(a.fecha)-new Date(b.fecha)); return vs[0]?new Date(vs[0].fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}):'—'; })() },
+        { icon:'🤝', title:'Pendientes', desc:'Sin cumplir aún', val: _visPend.length+' visitas' },
+        { icon:'✅', title:'Cumplidas', desc:'Realizadas en el periodo', val: _visitas.filter(v=>v.estado==='cumplida').length+' visitas' },
+        { icon:'📅', title:'Próxima visita', desc:'La más cercana pendiente', val: _visProx?new Date(_visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}):'—' },
+        { icon:'📊', title:'Total visitas', desc:'Registradas en la app', val: _visitas.length+' visitas' },
+        { icon:'🏪', title:'Siguiente proveedor', desc:'A visitar próximamente', val: _visProx?(State.get.prov?.(_visProx.provId)?.nombre||'').slice(0,14)||'—':'—' },
       ],
       roi: [
-        { icon:'🏆', title:'Top ROI', desc:'Producto con mayor rentabilidad', val: (() => { const t=KPI.getTopRoi?.(p); return t?.[0]?.nombre?.slice(0,14)||'—'; })() },
-        { icon:'📊', title:'ROI medio cartera', desc:'Rentabilidad media de todos los productos', val: roi+'%' },
-        { icon:'💡', title:'Margen total', desc:'Beneficio acumulado del periodo', val: feur(ben) },
-      ],
-      // v9.5.73: Agenda = pedidos + visitas fusionados
-      agenda: [
-        { icon:'📦', title:'Pedidos próximos', desc:'Con entrega pendiente (30 días)', val: (State.get.historialPedidos()||[]).filter(p=>{ const f=new Date(p.fecha); return f>=new Date(Date.now()-2*86400000) && f<=new Date(Date.now()+30*86400000); }).length+' pedidos' },
-        { icon:'🗓️', title:'Visitas pendientes', desc:'Sin cumplir aún', val: (State.get.visitasComerciales()||[]).filter(v=>v.estado==='pendiente').length+' visitas' },
-        { icon:'✅', title:'Visitas cumplidas', desc:'Marcadas como realizadas', val: (State.get.visitasComerciales()||[]).filter(v=>v.estado==='cumplida').length+' visitas' },
-        { icon:'💰', title:'Inversión en camino', desc:'Valor de pedidos pendientes', val: feur(inv) },
+        { icon:'🏆', title:'Top ROI', desc:'Producto más rentable del periodo', val: _topRoi[0]?.prod?.nombre?.slice(0,16)||'—' },
+        { icon:'📊', title:'ROI del periodo', desc:'Rentabilidad sobre inversión total', val: _roi+'%' },
+        { icon:'💡', title:'Segundo mejor ROI', desc:'Producto con segunda mayor rentabilidad', val: _topRoi[1]?.prod?.nombre?.slice(0,16)||'—' },
+        { icon:'💰', title:'Beneficio acumulado', desc:'Margen bruto del periodo', val: feur(_ben) },
+        { icon:'📈', title:'Margen medio', desc:'Beneficio sobre ventas totales', val: _margen+'%' },
       ],
     };
 
