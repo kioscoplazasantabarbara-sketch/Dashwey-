@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.415-dev</title>
+<title>Dashwey v1.3.416-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12699,7 +12699,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.415-dev';
+  const _APP_VERSION = 'v1.3.416-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20038,19 +20038,20 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   function _startInsightRotation(cardId, phrases, textEl) {
     if (_carouselTimers[cardId]) {
       clearInterval(_carouselTimers[cardId]);
+      _carouselTimers[cardId + '_cancelled'] = true; // flag para pending timeouts
       delete _carouselTimers[cardId];
     }
     if (!phrases || !phrases.length || !textEl) return;
-    // v1.3.403: carousel rotante en portrait y landscape
 
     var current = 0;
     var total   = phrases.length;
 
-    // Mostrar primer insight con typewriter
+    _carouselTimers[cardId + '_cancelled'] = false;
     _snapTypewriter(textEl, phrases[0]);
 
-    // Rotar cada 5s — tiempo suficiente para leer + typewriter
+    // v1.3.416: flag de cancelación para evitar race condition con setTimeout interno
     _carouselTimers[cardId] = setInterval(function() {
+      if (_carouselTimers[cardId + '_cancelled']) return;
       var el = document.getElementById('snap-text-' + cardId);
       if (!el) {
         clearInterval(_carouselTimers[cardId]);
@@ -20058,35 +20059,35 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
         return;
       }
       current = (current + 1) % total;
-      // Slide out hacia la izquierda
       el.style.transition = 'transform 0.28s cubic-bezier(0.4,0,1,1), opacity 0.28s ease';
       el.style.transform   = 'translateX(-32px)';
       el.style.opacity     = '0';
+      var _snapId = cardId;
       setTimeout(function() {
-        // Cancelar typewriter en curso
+        // Abortar si el carousel fue cancelado durante el timeout
+        if (_carouselTimers[_snapId + '_cancelled']) return;
         if (el._snapTypewriterCancel) { el._snapTypewriterCancel(); el._snapTypewriterCancel = null; }
         el.innerHTML = '';
-        // Posicionar a la derecha sin transición
         el.style.transition = 'none';
         el.style.transform   = 'translateX(32px)';
         el.style.opacity     = '0';
         requestAnimationFrame(function() {
           requestAnimationFrame(function() {
-            // Slide in desde la derecha
+            if (_carouselTimers[_snapId + '_cancelled']) return;
             el.style.transition = 'transform 0.32s cubic-bezier(0.22,1,0.36,1), opacity 0.32s ease';
             el.style.transform   = 'translateX(0)';
             el.style.opacity     = '1';
-            // Typewriter sobre el texto ya en posición
             _snapTypewriter(el, phrases[current]);
           });
         });
       }, 300);
-    }, 8000); /* v1.3.400: 8s entre insights */
+    }, 8000);
   }
 
   function _stopInsightCarousel(cardId) {
     if (_carouselTimers[cardId]) {
       clearInterval(_carouselTimers[cardId]);
+      _carouselTimers[cardId + '_cancelled'] = true;
       delete _carouselTimers[cardId];
     }
   }
@@ -21623,7 +21624,17 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       var ticketEl = document.getElementById('snap-ticket-rendimiento');
       if (ticketEl) _snapCounterUp(ticketEl, ticket, 'eur', 400);
       var margenEl = document.getElementById('snap-margen-rendimiento');
-      if (margenEl) _snapCounterUp(margenEl, mg, 'pct', 450);
+      if (margenEl) {
+        // v1.3.416: margen negativo = productos con coste > PVP
+        // Mostrar el dato real con color de alerta, no clampear
+        _snapCounterUp(margenEl, mg, 'pct', 450);
+        // Color de estado según margen
+        setTimeout(function() {
+          if (mg < 0) margenEl.style.color = 'var(--red)';
+          else if (mg < 20) margenEl.style.color = '#F97316';
+          else margenEl.style.color = '';
+        }, 500);
+      }
       var horaEl   = document.getElementById('snap-hora-rendimiento');
       if (horaEl)  horaEl.textContent = hora || '—';
     }
@@ -21651,9 +21662,29 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     if (cardId === 'flujo-caja') {
       var saldo = snap.saldo || 0;
       // Usar siempre datos del mes actual para ingresos/gastos (más relevante)
-      var ing2  = 0; var gst = 0;
-      try { ing2 = FinEngine.revenueMesActual() || 0; } catch(_) {}
-      try { gst  = FinEngine.gastoMensualTotal() || 0; } catch(_) {}
+      // v1.3.416: usar datos del periodo seleccionado — no siempre mes actual
+      var ing2 = 0; var gst = 0;
+      try {
+        var _fcRange = KPI.getRange ? KPI.getRange(period) : null;
+        if (_fcRange) {
+          ing2 = FinEngine.revenue ? (FinEngine.revenue(_fcRange) || 0) : 0;
+        } else {
+          ing2 = FinEngine.revenueMesActual() || 0;
+        }
+      } catch(_) { try { ing2 = FinEngine.revenueMesActual() || 0; } catch(__) {} }
+      try {
+        // Gastos operativos del periodo — suma de gastosOp filtrados por fecha
+        var _gastos = State.get.gastosOp ? (State.get.gastosOp() || []) : [];
+        var _fcRange2 = KPI.getRange ? KPI.getRange(period) : null;
+        if (_fcRange2) {
+          gst = _gastos.filter(function(g) {
+            var d = new Date(g.fecha||g.date||0);
+            return d >= _fcRange2.start && d < _fcRange2.end;
+          }).reduce(function(s,g){ return s+Math.abs(g.importe||0); }, 0);
+        } else {
+          gst = FinEngine.gastoMensualTotal() || 0;
+        }
+      } catch(_) { try { gst = FinEngine.gastoMensualTotal() || 0; } catch(__) {} }
       var rw    = snap.runway || 0;
       var bal   = ing2 - gst;
 
@@ -22329,6 +22360,13 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       }
       // Wire settings buttons
       setTimeout(_snapAttachSettingsButtons, 100);
+      // v1.3.416: notificar FAB con delay para garantizar que _init ya ocurrió
+      setTimeout(function() {
+        var first2 = document.querySelector('#dash-cards-container [data-card-id]');
+        if (first2 && typeof window._snapCardChanged === 'function') {
+          window._snapCardChanged(first2.dataset.cardId);
+        }
+      }, 300);
       if (svg) svg.setAttribute('stroke', 'var(--red)');
       // toast snap eliminado
       
@@ -32091,7 +32129,26 @@ function _parseIva(iva) {
       _tabObs.observe(document.body, { attributes: true, attributeFilter: ['data-tab'] });
     } catch(e) {}
 
+    // _snapCardChanged: actualiza la tarjeta activa y dispara _update
+    window._snapCardChanged = function(cardId) {
+      _curCard = cardId;
+      // Leer tab actual por si no se recibió el evento
+      var t = document.body.getAttribute('data-tab');
+      if (t !== null) _curTab = parseInt(t);
+      _update();
+    };
+
     _update();
+
+    // Retry a 500ms — por si el snap arrancó antes que el FAB
+    setTimeout(function() {
+      var t = document.body.getAttribute('data-tab');
+      if (t !== null) _curTab = parseInt(t);
+      if (_curTab === 1 && !_curCard && typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
+        _curCard = App.dash._getActiveCardId() || null;
+      }
+      if (_curCard !== null) _update();
+    }, 500);
   }
 
   function _update() {
