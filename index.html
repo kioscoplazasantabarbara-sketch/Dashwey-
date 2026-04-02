@@ -30691,23 +30691,33 @@ function _parseIva(iva) {
   // snav-label-hero eliminado en v9.5.51 — referencia limpiada en v9.5.73
 
   // Posiciona el swipe-track sin animación inicial (evita flash)
+  // v1.3.385: respetar el modo de app — no hardcodear tab 1 (Dashboard)
   (function _initTrack() {
     const vw = window.innerWidth || document.documentElement.clientWidth || 390;
     if (vw < 100) { requestAnimationFrame(_initTrack); return; }
     if (_DOM.track) {
+      var _modeTabIdx = { pos: 0, alm: 2, cfo: 1, hub: 1 };
+      var _startIdx = (_modeTabIdx[window._DASHWEY_MODE || 'hub'] !== undefined)
+        ? _modeTabIdx[window._DASHWEY_MODE] : 1;
       _DOM.track.style.transition = 'none';
-      _DOM.track.style.transform = 'translateX(' + (-vw) + 'px)';
+      _DOM.track.style.transform = 'translateX(' + (-_startIdx * vw) + 'px)';
       requestAnimationFrame(() => {
         if (_DOM.track) _DOM.track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
       });
     }
   })();
 
-  // Sincronizar estado visual de la navbar al arranque (bt-1 activo = Dashboard)
-  document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === 1));
-  requestAnimationFrame(() => {
-    document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === 1));
-  });
+  // Sincronizar estado visual de la navbar al arranque
+  // v1.3.385: respetar el tab inicial del modo activo
+  (function _initNavActive() {
+    var _modeTabIdx = { pos: 0, alm: 2, cfo: 1, hub: 1 };
+    var _activeIdx = (_modeTabIdx[window._DASHWEY_MODE || 'hub'] !== undefined)
+      ? _modeTabIdx[window._DASHWEY_MODE] : 1;
+    document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === _activeIdx));
+    requestAnimationFrame(() => {
+      document.querySelectorAll('.bt').forEach((t, idx) => t.classList.toggle('active', idx === _activeIdx));
+    });
+  })();
 
   // v9.5.25: sincronizar label de periodo en el título al arrancar
   try {
@@ -30715,8 +30725,28 @@ function _parseIva(iva) {
     const _initLbl    = document.getElementById('dash-title-period-lbl');
     if (_initLbl) _initLbl.textContent = _initPeriod.label || 'Este mes';
   } catch(_) {}
+  // v1.3.385: título y render inicial según modo activo
   const _titleEl = document.getElementById('header-title');
-  if (_titleEl) _titleEl.textContent = 'DASHBOARD';
+  var _modeTitles = { pos: 'TPV', alm: 'ALMACÉN', cfo: 'DASHBOARD', hub: 'DASHBOARD' };
+  if (_titleEl) _titleEl.textContent = _modeTitles[window._DASHWEY_MODE || 'hub'] || 'DASHBOARD';
+
+  // En modo ALM: forzar render de Almacén al arranque
+  // (goTab no lo dispara porque _cTab ya es 2 desde el inicio — guard lo bloquea)
+  if (window._DASHWEY_MODE === 'alm') {
+    requestAnimationFrame(() => {
+      try {
+        var ssOvl = document.getElementById('ss-overlay');
+        if (ssOvl) { ssOvl.classList.remove('ss-active'); ssOvl.style.display = 'none'; }
+        App.alm.renderOrden();
+        App.alm.updateBadge();
+        App.alm.updateProvBar();
+        App.alm._almLoadInitialState();
+        App.alm.renderCatInline();
+        var fabSys = document.getElementById('alm-fab-system');
+        if (fabSys) fabSys.style.display = 'block';
+      } catch(e) { console.warn('[Dashwey] alm init render:', e); }
+    });
+  }
 
   // Renders iniciales via _renderAll (unica fuente de verdad)
   try { dash._applyHidden?.(); } catch(e) {}
