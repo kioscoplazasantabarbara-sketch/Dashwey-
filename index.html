@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.411-dev</title>
+<title>Dashwey v1.3.412-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9819,6 +9819,27 @@ function _authTabSafe(tab) {
   </button>
 </div>
 
+<!-- ── FAB DINÁMICO v1.3.412 ── -->
+<div id="dyn-fab-backdrop" style="display:none;position:fixed;inset:0;z-index:9003;background:rgba(0,0,0,0.18);" ontouchend="event.preventDefault();window._dynFabClose();" onclick="window._dynFabClose()"></div>
+<div id="dyn-fab-wrap" style="display:none;position:fixed;bottom:calc(var(--tab-real,56px)+16px);right:20px;z-index:9010;flex-direction:column-reverse;align-items:flex-end;gap:10px;">
+  <div id="dyn-fab-actions" style="display:flex;flex-direction:column-reverse;align-items:flex-end;gap:8px;"></div>
+  <button id="dyn-fab"
+    ontouchend="event.preventDefault();window._dynFabLastTouch=Date.now();window._dynFabTap();"
+    onclick="if(Date.now()-(window._dynFabLastTouch||0)>350)window._dynFabTap()"
+    aria-label="Acción rápida"
+    style="width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;
+           background:var(--red);color:#fff;
+           display:flex;align-items:center;justify-content:center;
+           box-shadow:0 4px 16px rgba(139,26,47,0.32),0 2px 6px rgba(0,0,0,0.12);
+           touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+           transition:transform 200ms var(--spring),opacity 180ms ease;
+           opacity:0;transform:scale(0.7);pointer-events:none;">
+    <svg id="dyn-fab-icon" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="pointer-events:none">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  </button>
+</div>
+
 <div id="alm-fab-system" style="display:none;">
   <button id="alm-fab"
     ontouchend="event.preventDefault();window._almLastTouch=Date.now();window._spotlightOpen();"
@@ -12886,7 +12907,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.411-dev';
+  const _APP_VERSION = 'v1.3.412-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22381,8 +22402,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
   function _snapUpdateTitle(cardId) {
     // v1.3.189: título siempre "Dashwey" — no cambia en snap
-    // El subtítulo muestra el selector global de fechas (ya existente)
-    // No hacemos nada aquí — el header es estático
+    // v1.3.412: notificar al FAB dinámico qué tarjeta está activa
+    if (typeof window._snapCardChanged === 'function') {
+      window._snapCardChanged(cardId);
+    }
     return;
   }
 
@@ -32228,6 +32251,194 @@ function _parseIva(iva) {
   // Exponer para uso externo (buscador almacén)
   window._navHide = hide;
   window._navShow = show;
+
+// ── FAB DINÁMICO v1.3.412 ────────────────────────────────────────────────
+(function() {
+  var _fab     = null;
+  var _wrap    = null;
+  var _actions = null;
+  var _back    = null;
+  var _isOpen  = false;
+  var _curTab  = -1;
+  var _curCard = null;
+
+  // Config por tarjeta snap
+  var _CARD_CONFIG = {
+    'rendimiento': {
+      icon: 'plus',
+      single: function() { try { App.tpv.openManualSale(); } catch(e){} }
+    },
+    'compras': {
+      icon: 'plus',
+      single: function() { try { App.alm.openProvPicker(); } catch(e){} }
+    },
+    'flujo-caja': {
+      icon: 'plus',
+      dial: [
+        { label: 'Ingreso', fn: function() { try { App.dash._openIngresoSheet(); } catch(e){} } },
+        { label: 'Gasto',   fn: function() { try { App.dash._addGasto(); } catch(e){} } },
+      ]
+    },
+    'agenda': {
+      icon: 'plus',
+      dial: [
+        { label: 'Pedido', fn: function() { try { App.alm.openProvPicker(); } catch(e){} } },
+        { label: 'Visita', fn: function() { try { App.dash.openAddVisita(); } catch(e){} } },
+      ]
+    },
+    'caducidades': {
+      icon: 'search',
+      single: function() { try { window._spotlightOpen(); } catch(e){} }
+    },
+  };
+
+  function _init() {
+    _fab     = document.getElementById('dyn-fab');
+    _wrap    = document.getElementById('dyn-fab-wrap');
+    _actions = document.getElementById('dyn-fab-actions');
+    _back    = document.getElementById('dyn-fab-backdrop');
+    if (!_fab || !_wrap) return;
+
+    // Escuchar cambio de tab
+    window.addEventListener('dashwey:tab-changed', function(e) {
+      _curTab = e.detail ? e.detail.tab : -1;
+      _update();
+    });
+
+    // Escuchar cambio de tarjeta snap activa
+    window.addEventListener('dashwey:snap-card-changed', function(e) {
+      _curCard = e.detail ? e.detail.cardId : null;
+      _update();
+    });
+  }
+
+  function _update() {
+    _close();
+    // Solo en Dashboard (tab 1)
+    if (_curTab !== 1) { _hide(); return; }
+
+    var cfg = _curCard ? _CARD_CONFIG[_curCard] : null;
+    if (!cfg) { _hide(); return; }
+
+    // Actualizar icono
+    var iconEl = document.getElementById('dyn-fab-icon');
+    if (iconEl) {
+      if (cfg.icon === 'search') {
+        iconEl.innerHTML = '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
+        iconEl.setAttribute('stroke-width','2.2');
+      } else {
+        iconEl.innerHTML = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>';
+        iconEl.setAttribute('stroke-width','2.5');
+      }
+    }
+
+    _show();
+  }
+
+  function _show() {
+    if (!_fab || !_wrap) return;
+    _wrap.style.display = 'flex';
+    requestAnimationFrame(function() {
+      _fab.style.opacity     = '1';
+      _fab.style.transform   = 'scale(1)';
+      _fab.style.pointerEvents = 'auto';
+    });
+  }
+
+  function _hide() {
+    if (!_fab || !_wrap) return;
+    _fab.style.opacity     = '0';
+    _fab.style.transform   = 'scale(0.7)';
+    _fab.style.pointerEvents = 'none';
+    setTimeout(function() {
+      if (_fab.style.opacity === '0') _wrap.style.display = 'none';
+    }, 200);
+  }
+
+  window._dynFabTap = function() {
+    var cfg = _curCard ? _CARD_CONFIG[_curCard] : null;
+    if (!cfg) return;
+    try { Utils.triggerHaptic('light'); } catch(e) {}
+
+    if (cfg.single) {
+      cfg.single();
+      return;
+    }
+    if (cfg.dial) {
+      if (_isOpen) { _close(); return; }
+      _openDial(cfg.dial);
+    }
+  };
+
+  function _openDial(items) {
+    if (!_actions || !_back) return;
+    _isOpen = true;
+    _back.style.display = 'block';
+    _fab.style.transform = 'rotate(45deg) scale(1)';
+
+    _actions.innerHTML = '';
+    items.forEach(function(item, i) {
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;opacity:0;transform:translateY(8px);transition:opacity 180ms ease,transform 180ms var(--spring);transition-delay:' + (i * 40) + 'ms';
+
+      var lbl = document.createElement('div');
+      lbl.textContent = item.label;
+      lbl.style.cssText = 'background:var(--surface);color:var(--ink);font-size:13px;font-weight:600;padding:6px 14px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.12);white-space:nowrap;font-family:var(--font)';
+
+      var btn = document.createElement('button');
+      btn.style.cssText = 'width:42px;height:42px;border-radius:50%;border:none;background:var(--surface);color:var(--red);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.14);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;flex-shrink:0';
+      btn.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" style="pointer-events:none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+      (function(fn) {
+        btn.ontouchend = function(e) { e.preventDefault(); _close(); fn(); };
+        btn.onclick    = function() { _close(); fn(); };
+        lbl.ontouchend = function(e) { e.preventDefault(); _close(); fn(); };
+        lbl.onclick    = function() { _close(); fn(); };
+      })(item.fn);
+
+      row.appendChild(lbl);
+      row.appendChild(btn);
+      _actions.appendChild(row);
+
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          row.style.opacity   = '1';
+          row.style.transform = 'translateY(0)';
+        });
+      });
+    });
+  }
+
+  function _close() {
+    if (!_isOpen) return;
+    _isOpen = false;
+    if (_back) _back.style.display = 'none';
+    if (_fab)  _fab.style.transform = 'scale(1)';
+    if (_actions) {
+      Array.from(_actions.children).forEach(function(row) {
+        row.style.opacity   = '0';
+        row.style.transform = 'translateY(8px)';
+      });
+      setTimeout(function() { if (_actions) _actions.innerHTML = ''; }, 220);
+    }
+  }
+  window._dynFabClose = _close;
+
+  // Disparar _update cuando cambia la tarjeta snap activa
+  // Parchear _snapUpdateTitle para emitir el evento
+  var _origSnapUpdate = window._snapUpdateTitleHook;
+  window._snapCardChanged = function(cardId) {
+    _curCard = cardId;
+    _update();
+  };
+
+  // Arrancar cuando el DOM esté listo
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _init);
+  } else {
+    setTimeout(_init, 0);
+  }
+})();
 
   // MutationObserver for fs-box, modal-sheet, cobro, tickets, settings-drawer
   [
