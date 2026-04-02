@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.417-dev</title>
+<title>Dashwey v1.3.418-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12699,7 +12699,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.417-dev';
+  const _APP_VERSION = 'v1.3.418-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -25790,11 +25790,14 @@ const alm = (() => {
   // Timer de debounce para busqueda inline — declarado aqui para evitar TDZ
   let _almSearchTimer     = null;
   let _catRenderTimer     = null; // v9.5.96: debounce del innerHTML de renderCatInline
+  let _mermaMotivoCurrent = 'rotura'; // v1.3.418: estado del dropdown de merma
   let _catInlineHash      = '';   // v1.2.25: hash de contenido para skip de render sin cambios
   // Carrito persistente: se restaura al iniciar el módulo
+  var _CARRITO_KEY = 'dashwey_carrito_v1'; // v1.3.418: movida antes de _restoreCarrito
+
   (function _restoreCarrito() {
     try {
-      var raw = localStorage.getItem('dashwey_carrito_v1');
+      var raw = localStorage.getItem(_CARRITO_KEY);
       if (raw) {
         var parsed = JSON.parse(raw);
         // Se validan los prodIds después de que State esté listo
@@ -25840,7 +25843,8 @@ const alm = (() => {
     // v1.2.25: hash guard — skip full DOM rebuild if content hasn't changed
     // Hash: selectedProv + query + prodIds + carritoKeys + nc values
     const carritoStr = prods.map(p => `${p.id}:${_ordenCarrito[p.id]||0}`).join(',');
-    const newHash = `${sel}|${q}|${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto?'f':'')).join(',')}|${carritoStr}`;
+    // v1.3.418: incluir sel explícitamente para invalidar hash al cambiar proveedor
+    const newHash = `${sel}||${q}||${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto?'f':'')).join(',')}||${carritoStr}`;
     if (newHash === _catInlineHash) return; // nada cambió → skip
     _catInlineHash = newHash;
 
@@ -26191,7 +26195,6 @@ function _parseIva(iva) {
 
   // ── CARRITO PERSISTENTE ───────────────────────────────────────
   // Persiste _ordenCarrito en localStorage para sobrevivir cambios de proveedor
-  var _CARRITO_KEY = 'dashwey_carrito_v1';
   function _saveCarritoLocal() {
     try {
       // v1.3.287: ALM-03 — guardar también el provId para validación al restaurar
@@ -26225,9 +26228,16 @@ function _parseIva(iva) {
         return;
       }
       // Solo restaurar items cuyo prodId sigue existiendo
+      var hasOrphans = false;
       Object.keys(cartData || {}).forEach(function(id) {
-        if (State.get.prod(id)) _ordenCarrito[id] = cartData[id];
+        if (State.get.prod(id)) {
+          _ordenCarrito[id] = cartData[id];
+        } else {
+          hasOrphans = true; // producto eliminado — ID huérfano
+        }
       });
+      // v1.3.418: si había IDs huérfanos, re-persistir el carrito limpio
+      if (hasOrphans) { try { _saveCarritoLocal(); } catch(_) {} }
     } catch(e) {}
   }
 
@@ -26343,8 +26353,19 @@ function _parseIva(iva) {
     ui.closeFs();
     requestAnimationFrame(() => {
       renderOrden(); renderCatInline(); updateBadge();
-      try { tpv.render();  } catch(_) {}
-      try { dash.render(); } catch(_) {}
+      // v1.3.418: solo re-renderizar TPV/Dashboard si cambió nombre, precio o PVP
+      // — evita reflow innecesario al cambiar caducidad, foto o categoría
+      const prodAfter = State.get.prod(id);
+      const needsFullRender = prodAfter && (
+        prodAfter.nombre !== (prod && prod.nombre) ||
+        prodAfter.precioCompra !== (prod && prod.precioCompra) ||
+        prodAfter.pvp !== (prod && prod.pvp) ||
+        prodAfter.stockMinimo !== (prod && prod.stockMinimo)
+      );
+      if (needsFullRender) {
+        try { tpv.render();  } catch(_) {}
+        try { dash.render(); } catch(_) {}
+      }
     });
     showToast('\u2705 Art\u00edculo actualizado');
   }
@@ -26461,7 +26482,7 @@ function _parseIva(iva) {
       _pedidoPendiente = null;  // snapshot invalidado al cambiar proveedor
       _ordenCarrito    = {};
       _ordenEstado     = 0;
-      try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
+      try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
     }
     // Cerrar popup de confirmar si estuviera abierto
     document.getElementById('aceptar-popup-overlay')?.remove();
@@ -26718,7 +26739,7 @@ function _parseIva(iva) {
       _pedidoPendiente = null;  // snapshot invalidado al cambiar proveedor
       _ordenCarrito    = {};
       _ordenEstado     = 0;
-      try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
+      try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
     }
     // Cerrar popup de aceptar si estaba abierto
     document.getElementById('aceptar-popup-overlay')?.remove();
@@ -27758,8 +27779,10 @@ function _parseIva(iva) {
         <div><div class="fl">Cantidad</div><input class="fi" type="number" placeholder="0" id="mq" min="1"></div>
         <button class="btn-ok" onclick="App.alm.saveMerma('${p.id}')">REGISTRAR</button>
       </div>`);
-    alm._mermaCb = (v) => { _motivo = v; };
-    alm._mermaMotivo = () => _motivo;
+    // v1.3.418: usar variable de módulo en lugar de escribir en el objeto exportado
+    _mermaMotivoCurrent = 'rotura';
+    alm._mermaCb = (v) => { _mermaMotivoCurrent = v; };
+    alm._mermaMotivo = () => _mermaMotivoCurrent;
   }
 
   function saveMerma(prodId) {
@@ -27767,10 +27790,17 @@ function _parseIva(iva) {
     const m = alm._mermaMotivo ? alm._mermaMotivo() : 'rotura';
     const q = parseInt(document.getElementById('mq')?.value) || 0;
     if(q <= 0) { showToast('⚠️ Indica una cantidad'); return; }
-    State.set.addMerma({ id:'m'+Date.now(), fecha:new Date().toISOString(), prodId, qty:q, motivo:m, coste:+(q*p.precioCompra).toFixed(2) });
-    State.set.updateProd(prodId, { stockActual: Math.max(0, p.stockActual - q) });
+    // v1.3.418: avisar si merma supera el stock disponible
+    const stockActual = p.stockActual || 0;
+    if (q > stockActual) {
+      showToast('⚠️ Solo hay ' + stockActual + ' uds en stock — registrando ' + stockActual + ' uds');
+    }
+    const qReal = Math.min(q, stockActual);
+    if (qReal <= 0) { showToast('⚠️ Sin stock disponible para registrar merma'); ui.closeModal(); return; }
+    State.set.addMerma({ id:'m'+Date.now(), fecha:new Date().toISOString(), prodId, qty:qReal, motivo:m, coste:+(qReal*p.precioCompra).toFixed(2) });
+    State.set.updateProd(prodId, { stockActual: stockActual - qReal });
     ui.closeModal(); dash.render();
-    showToast(`✅ Merma de ${q} uds registrada`);
+    showToast('✅ Merma de ' + qReal + ' uds registrada');
   }
 
   // ── Nuevo Artículo ──
@@ -28503,9 +28533,12 @@ function _parseIva(iva) {
     Utils.triggerHaptic('save');
 
     // Añadir al carrito con los bultos del formulario
+    // v1.3.418: el artículo arranca con stockActual:0 — el stock se actualizará
+    // cuando se confirme la recepción del pedido
     _ordenCarrito[data.id] = data.nc;
     _updateMainBtn();
-    showToast('✅ ' + data.nombre + ' añadido al pedido (' + data.nc + ' bultos)');
+    _saveCarritoLocal();
+    showToast('✅ ' + data.nombre + ' añadido al pedido (' + data.nc + ' bultos) · Stock se actualizará al confirmar recepción');
   }
 
   // ── NS Overlay: legacy eliminado (ns-overlay removido del DOM) ──
@@ -29366,7 +29399,7 @@ function _parseIva(iva) {
     // Limpiar carrito — pedido ya guardado como pendiente
     _ordenCarrito = {};
     _ordenEstado  = 0;
-    try { localStorage.removeItem('dashwey_carrito_v1'); } catch(_) {}
+    try { localStorage.removeItem(_CARRITO_KEY); } catch(_) {}
 
     // v1.2.48: capturar rect del botón ANTES de ocultarlo (display:none → rect = {0,0,0,0})
     const acceptBtn = document.getElementById('alm-accept-fixed');
@@ -30120,7 +30153,7 @@ function _parseIva(iva) {
     _pedidoPendiente = null;
     _ordenCarrito    = {};
     _ordenEstado     = 0;
-    try { localStorage.removeItem('dashwey_carrito_v1'); } catch(e) {}
+    try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
     // Liberar guard de doble-tap del botón aceptar
     const btn = document.getElementById('alm-accept-fixed');
     if (btn) btn.dataset.processing = '0';
@@ -30218,7 +30251,7 @@ function _parseIva(iva) {
     // ── Limpiar estado ──────────────────────────────────────────
     _pedidoPendiente = null;   // consumido — limpiar el snapshot
     _ordenCarrito    = {};
-    try { localStorage.removeItem('dashwey_carrito_v1'); } catch (e) {}
+    try { localStorage.removeItem(_CARRITO_KEY); } catch (e) {}
     _ordenEstado     = 0;
 
 
@@ -30287,7 +30320,7 @@ function _parseIva(iva) {
       onConfirm: function() {
         _ordenCarrito = {};
         _ordenEstado  = 0;
-        try { localStorage.removeItem('dashwey_carrito_v1'); } catch(_) {}
+        try { localStorage.removeItem(_CARRITO_KEY); } catch(_) {}
         updateBadge();
       }
     });
@@ -31015,7 +31048,7 @@ function _parseIva(iva) {
   }
 
   // _cerrarComprobacion: stub de compatibilidad (v8.8.1)
-  function _cerrarComprobacion() { _ordenEstado = 0; _ordenCarrito = {}; try{localStorage.removeItem('dashwey_carrito_v1');}catch(e){} _updateMainBtn(); _renderOrdenNueva(); }
+  function _cerrarComprobacion() { _ordenEstado = 0; _ordenCarrito = {}; try{localStorage.removeItem(_CARRITO_KEY);}catch(e){} _updateMainBtn(); _renderOrdenNueva(); }
 
   // ══ ESTADO 3: MODAL CONFIRMACIÓN CON BLUR ════════════════════
 
