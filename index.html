@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.426-dev</title>
+<title>Dashwey v1.3.427-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12716,7 +12716,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.426-dev';
+  const _APP_VERSION = 'v1.3.427-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26636,6 +26636,7 @@ function _parseIva(iva) {
   // v1.3.208: slide view system ──────────────────────────────────────────
   var _ALM_LAST_PROV_KEY = 'dashwey_last_prov_v1';
   var _almAnimLock = false;
+  var _provNuevoPendiente = null; // v1.3.427: proveedor nuevo pendiente de confirmacion
 
   function _almSaveLastProv(id) {
     try { localStorage.setItem(_ALM_LAST_PROV_KEY, id); } catch(e) {}
@@ -26853,9 +26854,9 @@ function _parseIva(iva) {
   }
 
   function _editProvFromPicker(id) {
+    // v1.3.427: sin delay -- el boton editar esta en el selector inline, no en un FS
     try { if (window.SideSheet) window.SideSheet.closeAll(); } catch(e) {}
-    try { ui.closeFs(); } catch(e) {}
-    setTimeout(() => openEditProv(id), 260);
+    openEditProv(id);
   }
 
   function selProv(id) {
@@ -26880,18 +26881,21 @@ function _parseIva(iva) {
   }
 
   function addNuevoProv() {
-    const id = 'pv' + Date.now();
-    const prov = {id, nombre:'Nuevo proveedor', icon:'🏪', direccion:'', telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:''};
-    State.set.addProv(prov);
-
+    // v1.3.427: NO crear en State hasta que el usuario pulse Guardar
+    // openEditProv con id null abre el formulario en modo creacion
+    var newId = 'pv' + Date.now();
+    _provNuevoPendiente = { id: newId, nombre: '', icon: '🏪',
+      direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
+      agente: '', repartidor: '', telReparto: '' };
     try { if (window.SideSheet) window.SideSheet.closeAll(); } catch(e) {}
     try { ui.closeFs(); } catch(e) {}
-    setTimeout(() => openEditProv(id), Utils.ANIM_DELAY);
+    setTimeout(function() { openEditProv(newId); }, Utils.ANIM_DELAY);
   }
 
   function openEditProv(id) {
     const pid = id || State.get.selectedProv();
-    const p = State.get.prov(pid);
+    // v1.3.427: soportar proveedor nuevo pendiente (no persistido aun)
+    const p = State.get.prov(pid) || (_provNuevoPendiente && _provNuevoPendiente.id === pid ? _provNuevoPendiente : null);
     if (!p) return;
     const DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
     const dp = p.diasPedido  || [];
@@ -26918,7 +26922,7 @@ function _parseIva(iva) {
               <div class="mhd-sub">Editar proveedor</div>
             </div>
           </div>
-          <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
+          <button class="mhd-close" onclick="App.alm._cancelEditProv();App.ui.closeFs()">×</button>
         </div>
       </div>
       ${p.banner ? `
@@ -26938,6 +26942,7 @@ function _parseIva(iva) {
           <div class="prov-edit-card">
             <div><div class="fl">Nombre</div><input class="fi" id="pe-n" value="${esc(p.nombre||'')}" placeholder="Nombre del proveedor"></div>
             <div><div class="fl">Teléfono</div><input class="fi" type="tel" id="pe-t" value="${esc(p.telefono||'')}" placeholder="000 000 000"></div>
+            <div><div class="fl">Dirección <span style="color:var(--ink-soft);font-weight:400;font-size:10px">(opcional)</span></div><input class="fi" id="pe-dir" value="${esc(p.direccion||'')}" placeholder="Calle, ciudad…" autocomplete="off"></div>
           </div>
         </div>
 
@@ -27004,14 +27009,22 @@ function _parseIva(iva) {
     ui.openFs();
   }
 
+  var _dayChipSaveTimer = null; // v1.3.427: debounce Firebase writes para day chips
+
   function _toggleDayOrder(pid, idx) {
     const p = State.get.prov(pid); if (!p) return;
     const arr = [...(p.diasPedido || [])];
     const i = arr.indexOf(idx);
     if (i >= 0) arr.splice(i, 1); else arr.push(idx);
+    // Actualizar State inmediatamente (sin debounce)
     State.set.updateProv(pid, { diasPedido: arr });
     const btn = document.getElementById(`dco-${pid}-${idx}`);
     if (btn) btn.className = 'day-chip' + (arr.includes(idx) ? ' on-order' : '');
+    // Feedback visual de guardado debounceado
+    clearTimeout(_dayChipSaveTimer);
+    _dayChipSaveTimer = setTimeout(function() {
+      try { Utils.triggerHaptic('light'); } catch(_) {}
+    }, 400);
   }
 
   function _toggleDayDeliv(pid, idx) {
@@ -27022,6 +27035,10 @@ function _parseIva(iva) {
     State.set.updateProv(pid, { diasEntrega: arr });
     const btn = document.getElementById(`dcd-${pid}-${idx}`);
     if (btn) btn.className = 'day-chip' + (arr.includes(idx) ? ' on-deliv' : '');
+    clearTimeout(_dayChipSaveTimer);
+    _dayChipSaveTimer = setTimeout(function() {
+      try { Utils.triggerHaptic('light'); } catch(_) {}
+    }, 400);
   }
 
   /* v9.5.48: _onBannerUpload eliminado */
@@ -27105,29 +27122,41 @@ function _parseIva(iva) {
   function saveProvEdit(id) {
     const n    = document.getElementById('pe-n')?.value?.trim();
     const tel  = document.getElementById('pe-t')?.value?.trim();
+    const dir  = document.getElementById('pe-dir')?.value?.trim();
     const ag   = document.getElementById('pe-ag')?.value?.trim();
     const rep  = document.getElementById('pe-rep')?.value?.trim();
     const trel = document.getElementById('pe-trel')?.value?.trim();
     if (!n) { showToast('⚠️ Escribe el nombre'); try { const _f = document.getElementById('fs-content'); if (_f && window._focusFirstError) _focusFirstError(_f); } catch(_) {} return; }
 
-    // v9.5.104: periodicidad se guarda en tiempo real vía _refreshProvPeriodBtn
-    // saveProvEdit solo persiste lo ya guardado en State — sin leer campos DOM inexistentes
     const p = State.get.prov(id);
-    const periodoBase = p?.periodicidad || { tipo: 'semanal' };
+    const periodoBase = (p && p.periodicidad) || { tipo: 'semanal' };
 
-    State.set.updateProv(id, {
-      nombre: n, telefono: tel, agente: ag, repartidor: rep, telReparto: trel,
-      periodicidad: periodoBase,
-    });
+    // v1.3.427: si es proveedor nuevo pendiente, crear en State ahora
+    if (_provNuevoPendiente && _provNuevoPendiente.id === id) {
+      const newProv = Object.assign({}, _provNuevoPendiente, {
+        nombre: n, telefono: tel || '', direccion: dir || '',
+        agente: ag || '', repartidor: rep || '', telReparto: trel || '',
+        periodicidad: periodoBase,
+      });
+      State.set.addProv(newProv);
+      _provNuevoPendiente = null;
+    } else {
+      State.set.updateProv(id, {
+        nombre: n, telefono: tel, direccion: dir,
+        agente: ag, repartidor: rep, telReparto: trel,
+        periodicidad: periodoBase,
+      });
+    }
+
     if (State.get.selectedProv() === id) {
       const snavEl = document.getElementById('snav-label');
       if (snavEl) snavEl.textContent = n;
     }
     renderOrden();
-    // Limpiar borrador al guardar exitosamente
     try { const f = document.getElementById('fs-content'); window._clearFormDirty(f, 'editar_prov_' + id); } catch(_) {}
     ui.closeFs();
-    setTimeout(() => openProvPicker(), 230);
+    // v1.3.427: volver al selector de proveedores
+    setTimeout(function() { openProvPicker(); }, 230);
     showToast('Proveedor guardado');
   }
 
@@ -27135,6 +27164,11 @@ function _parseIva(iva) {
   function _loadProvBanner(provId, input) {
     const file = input.files[0];
     if (!file) return;
+    // v1.3.427: validar tamano maximo 2MB
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('⚠️ Imagen demasiado grande (max 2MB)');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = function(e) {
       State.set.updateProv(provId, { banner: e.target.result });
@@ -27148,6 +27182,11 @@ function _parseIva(iva) {
     reader.readAsDataURL(file);
   }
 
+  // v1.3.427: limpiar proveedor pendiente si el usuario cancela sin guardar
+  function _cancelEditProv() {
+    _provNuevoPendiente = null;
+  }
+
   function _clearProvBanner(provId) {
     State.set.updateProv(provId, { banner: null });
     const preview = document.getElementById('pe-banner-preview');
@@ -27159,33 +27198,20 @@ function _parseIva(iva) {
 
   function confirmarBorrarProv(id) {
     const p = State.get.prov(id); if (!p) return;
-    ui.closeFs();
-    setTimeout(() => {
-      ui.setFs(
-        '<div class="modal-header-dark"><div class="mhd-row"><div><div class="mhd-title">Borrar proveedor</div></div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
-        '<div style="padding:32px 24px;text-align:center;display:flex;flex-direction:column;gap:16px">' +
-        '<div style="font-size:15px;font-weight:800;color:var(--ink)">' + esc(p.nombre) + '</div>' +
-        '<div style="font-size:13px;color:var(--ink-mid);line-height:1.55">Esta acción eliminará el proveedor y todos sus pedidos asociados. No se puede deshacer.</div>' +
-        '<div class="alm-form-footer">' +
-        '<button class="btn-sec" onclick="App.ui.closeFs()">Cancelar</button>' +
-        '<button class="btn-ok" id="alm-del-prov-btn" style="background:var(--red)">Borrar</button>' +
-        '</div></div>'
-      );
-      ui.openFs();
-      // v1.3.240: addEventListener directo — sin escape de comillas en onclick WebView
-      requestAnimationFrame(function() {
-        var btn = document.getElementById('alm-del-prov-btn');
-        if (btn) btn.addEventListener('click', function() { App.alm.borrarProv(id); }, { once: true });
-      });
-    }, 280);
+    // v1.3.427: _showDestructiveConfirm en lugar de FS inline fragil
+    window._showDestructiveConfirm({
+      title: 'Borrar proveedor',
+      message: '¿Eliminar "' + p.nombre + '"? Se eliminarán todos sus pedidos asociados. Esta acción no se puede deshacer.',
+      confirmText: 'Borrar',
+      onConfirm: function() { App.alm.borrarProv(id); }
+    });
   }
 
   function borrarProv(id) {
     // v9.5.73: cascade delete — clean all references before removing provider
     // 1. Remove from provider list
     State.set.proveedores(State.get.proveedores().filter(p => p.id !== id));
-    // 2. Remove orphan orden items for this provider
-    State.set.ordenItems(State.get.ordenItems().filter(o => o.provId !== id));
+    // 2. ordenItems vacio desde v8.9.0 -- filtro eliminado v1.3.427
     // 3. Mark associated products as no provider (don't delete — preserve history)
     State.get.productos()
       .filter(p => p.prov === id)
@@ -29062,6 +29088,7 @@ function _parseIva(iva) {
     _catFilterInline, _catFilterInlineFocus, _catFilterInlineBlur, _catFilterInlineClear, _catInlineAddNew,
     _abrirCheckModalPendiente, _vaciarCesta,
     selProvInline, openProvPicker, _almShowProvList, _almHideProvList, _almLoadInitialState, _loadCarritoLocal,
+    _cancelEditProv,
     _onNuevoArtFsClose,
   };
 
