@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.432-dev</title>
+<title>Dashwey v1.3.433-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12720,7 +12720,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.432-dev';
+  const _APP_VERSION = 'v1.3.433-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -32060,6 +32060,77 @@ function _parseIva(iva) {
 
   // ── v9.5.73: Inicializar modo Dashboard al arrancar ──────────────────
   try { App.dash._applyDashMode(); } catch(e) {}
+
+  // v1.3.433: listener de resume robusto
+  // Cubre: volver de recientes, salir de reposo, multitarea Android
+  (function _initResumeListener() {
+    var _hiddenAt = 0;
+    var _RESUME_THRESHOLD = 30000; // 30s: re-render completo
+    var _LIGHT_THRESHOLD  = 3000;  // 3s: re-render solo tab activo
+
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'hidden') {
+        _hiddenAt = Date.now();
+        return;
+      }
+      var elapsed = _hiddenAt > 0 ? (Date.now() - _hiddenAt) : 0;
+
+      // 1. Restaurar overflow -- puede quedar bloqueado por un modal abierto al ir a recientes
+      try { if (document.body.style.overflow === 'hidden') document.body.style.overflow = ''; } catch(_) {}
+
+      // 2. Recalcular posicion del swipe-track
+      // La orientacion puede haber cambiado en reposo -- _getTabWidth() devuelve valor obsoleto
+      try {
+        var _rTrack = document.getElementById('swipe-track');
+        var _rTab   = (App && App.nav && typeof App.nav._cTab === 'number') ? App.nav._cTab : 0;
+        var _rVw    = window.innerWidth;
+        if (_rTrack && _rVw > 100) {
+          _rTrack.style.transition = 'none';
+          _rTrack.style.transform  = 'translateX(' + (-_rTab * _rVw) + 'px)';
+          requestAnimationFrame(function() {
+            if (_rTrack) _rTrack.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
+          });
+        }
+      } catch(_) {}
+
+      // 3. Render segun tiempo fuera de foco
+      if (elapsed < _LIGHT_THRESHOLD) return; // menos de 3s: sin re-render
+
+      requestAnimationFrame(function() {
+        try {
+          if (elapsed >= _RESUME_THRESHOLD) {
+            // 30s o mas: re-render completo + re-sync Firebase
+            _renderAll();
+            try {
+              if (navigator.onLine && window._DashweyInitialSync) window._DashweyInitialSync();
+            } catch(_) {}
+          } else {
+            // Entre 3s y 30s: solo el tab activo
+            var _cT = (App && App.nav && typeof App.nav._cTab === 'number') ? App.nav._cTab : 1;
+            if (_cT === 0) { try { App.tpv.render(); } catch(_) {} }
+            else if (_cT === 1) { try { App.dash.render(); } catch(_) {} }
+            else if (_cT === 2) {
+              try { App.alm.updateBadge(); App.alm.renderCatInline(); App.alm.updateProvBar(); } catch(_) {}
+            }
+          }
+        } catch(_) {}
+      });
+    });
+
+    // Capacitor appStateChange -- complementa visibilitychange en Android WebView
+    try {
+      var _CapApp = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
+      if (_CapApp && _CapApp.addListener) {
+        _CapApp.addListener('appStateChange', function(state) {
+          if (!state.isActive) { _hiddenAt = Date.now(); return; }
+          // Al volver activa: disparar visibilitychange si el browser no lo hizo
+          if (document.visibilityState !== 'visible') {
+            document.dispatchEvent(new Event('visibilitychange'));
+          }
+        });
+      }
+    } catch(_) {}
+  })();
 
   // ── v9.5.73: DashweyBus — SSOT event handlers ─────────────────
   // Each event triggers ONLY the renders needed for that data change.
