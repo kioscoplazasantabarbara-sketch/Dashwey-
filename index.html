@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.440-dev</title>
+<title>Dashwey v1.3.441-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12737,7 +12737,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.440-dev';
+  const _APP_VERSION = 'v1.3.441-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24647,13 +24647,14 @@ const tpv = (() => {
       const pill = document.createElement('div');
       if (foto) {
         pill.innerHTML = '<img src="' + foto + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px;">';
+        // v1.3.441: left:0/top:0 + translate(ox,oy) -- sin reflow por left/top animados
         pill.style.cssText = [
           'position:fixed', 'z-index:9999', 'pointer-events:none',
           'width:40px', 'height:40px', 'border-radius:10px',
           'overflow:hidden', 'background:var(--surface)',
           'box-shadow:0 4px 16px rgba(0,0,0,0.20)',
-          'left:' + ox + 'px', 'top:' + oy + 'px',
-          'transform:translate(-50%,-50%)'
+          'left:0', 'top:0',
+          'transform:translate(' + (ox - 20) + 'px,' + (oy - 20) + 'px)'
         ].join(';');
       } else {
         // Fallback: pill "+1"
@@ -24672,10 +24673,11 @@ const tpv = (() => {
       const arcH = Math.max(40, Math.abs(dy) * 0.30);
 
       // Web Animations API
+      // v1.3.441: animacion desde posicion base (ya posicionada via transform inicial)
       const anim = pill.animate([
-        { transform: 'translate(-50%,-50%) translate(0,0) scale(1)',         opacity: 1 },
-        { transform: `translate(-50%,-50%) translate(${dx*0.5}px,${dy*0.3-arcH}px) scale(0.85)`, opacity: 1, offset: 0.45 },
-        { transform: `translate(-50%,-50%) translate(${dx}px,${dy}px) scale(0.3)`,  opacity: 0 }
+        { transform: 'translate(' + (ox-20) + 'px,' + (oy-20) + 'px) scale(1)', opacity: 1 },
+        { transform: 'translate(' + (ox-20+dx*0.5) + 'px,' + (oy-20+dy*0.3-arcH) + 'px) scale(0.85)', opacity: 1, offset: 0.45 },
+        { transform: 'translate(' + (ox-20+dx) + 'px,' + (oy-20+dy) + 'px) scale(0.3)', opacity: 0 }
       ], { duration: dur, easing: 'cubic-bezier(0.25,0.46,0.45,0.94)', fill: 'forwards' });
 
       anim.onfinish = () => {
@@ -24939,8 +24941,8 @@ const tpv = (() => {
     if (!_cart[id].q) delete _cart[id];
     // v1.2.25: invalidar dirty-checks
     _prodsHash = ''; _hotGridHash = '';
-    // v1.3.293: haptic en cada ajuste de cantidad — ligero para no saturar
-    Utils.triggerHaptic('light');
+    // v1.3.441: try/catch -- triggerHaptic sin proteccion puede bloquear el carrito
+    try { Utils.triggerHaptic('light'); } catch(_) {}
     _updateQtyIndicator(id);
     _updateDock();
     _updateTabletTicket();
@@ -25014,7 +25016,8 @@ const tpv = (() => {
   }
 
   function openTickets() {
-    _saveCurrentToTicket();
+    // v1.3.441: guardar solo si hay ticket activo -- sin ticket, _cart se preserva
+    if (_ticketActivo) _saveCurrentToTicket();
     _renderTicketsList();
     // v1.2.5: doble rAF — garantiza animación spring sin flickering (mismo sistema que openFs)
     const sh = document.getElementById('tickets-sheet');
@@ -25122,6 +25125,8 @@ const tpv = (() => {
       _renderTicketsList();
       _renderTicketBadge();
       showToast('Ticket eliminado');
+      // v1.3.441: cerrar sheet si ya no quedan tickets
+      if (!State.get.ticketsAbiertos().length) closeTickets();
     };
     if (t.items && t.items.length > 0) {
       window._showDestructiveConfirm({
@@ -25140,6 +25145,9 @@ const tpv = (() => {
   function procesarPago(metodo) {
     if (_procesandoPago) return;
     _procesandoPago = true;
+    // v1.3.441: bloquear boton Cobrar visualmente durante el proceso
+    var _cobrarBtn = document.getElementById('tpv-cobrar-btn');
+    if (_cobrarBtn) _cobrarBtn.style.pointerEvents = 'none';
     const items = cartItems();
     if (!items.length) { _procesandoPago = false; showToast('El carrito está vacío'); return; }
     const tot   = cartTotal();
@@ -25190,29 +25198,9 @@ const tpv = (() => {
         });
       });
 
-      // 5. Persistir en Firebase de forma asíncrona (no bloquea UI)
-      (async () => {
-        // v1.3.279: M-06 — retry Firebase (máx 3 intentos, backoff 1s/2s)
-        const _fbWrite = async (attempt) => {
-          try {
-            const FB = window._DashweyFirebase;
-            if (!FB || !FB.enabled || !FB.ready) return;
-            const cur = await FB.read('ventas') || { lista: [] };
-            const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
-            await FB.write('ventas', { lista });
-            await FB.write('productos', { lista: State.get.productos() });
-          } catch(e) {
-            console.warn('[Dashwey/TPV] FB error intento ' + attempt + ':', e);
-            if (attempt < 3) {
-              await new Promise(r => setTimeout(r, attempt * 1000));
-              return _fbWrite(attempt + 1);
-            }
-            console.error('[Dashwey/TPV] FB: 3 intentos fallidos');
-            showToast('⚠️ Venta guardada localmente. Sin conexión con la nube.');
-          }
-        };
-        _fbWrite(1);
-      })();
+      // 5. v1.3.441: sync via State principal -- State.set.addVenta ya llama save()
+      // save() -> _writeFirebase(_state) que incluye ventas y productos
+      // No escribir a colecciones separadas (ventas/productos) -- inconsistente con _doInitialSync
 
       // 6. Cerrar ticket y limpiar
       if (_ticketActivo) { State.set.deleteTicket(_ticketActivo); _ticketActivo = null; }
@@ -25229,8 +25217,10 @@ const tpv = (() => {
       console.error('[TPV] procesarPago ERROR:', err);
       showToast('⚠️ Error al registrar la venta. Inténtalo de nuevo.');
     } finally {
-      // Siempre liberar el guard — el TPV nunca queda bloqueado
+      // Siempre liberar el guard -- el TPV nunca queda bloqueado
       _procesandoPago = false;
+      var _cb = document.getElementById('tpv-cobrar-btn');
+      if (_cb) _cb.style.pointerEvents = '';
     }
   }
 
@@ -25264,7 +25254,7 @@ const tpv = (() => {
     if (!importe || importe <= 0) { showToast('⚠️ Importe inválido'); return; }
     const tickets = State.get.ticketsAbiertos();
     const ticket  = tickets.find(t => t.id === _ticketActivo);
-    if (!ticket) { showToast('⚠️ Crea un ticket primero'); return; }
+    if (!ticket) { showToast('⚠️ Crea un ticket primero'); try { ui.closeFs(); } catch(_) {} return; }
     if (!ticket.items) ticket.items = [];
     const itemId = 'manual_' + Date.now();
     ticket.items.push({ id: itemId, nombre, pvp: importe, q: 1, manual: true });
@@ -25284,16 +25274,7 @@ const tpv = (() => {
     };
     try {
       State.set.addVenta({ ...ventaPayload });
-      // Sync Firebase asíncrono — no bloquea UI
-      (async () => {
-        try {
-          const FB = window._DashweyFirebase;
-          if (!FB || !FB.enabled || !FB.ready) return;
-          const cur = await FB.read('ventas') || { lista: [] };
-          const lista = (cur.lista || []).concat([ventaPayload]).slice(-500);
-          await FB.write('ventas', { lista });
-        } catch(e) { console.warn('[TPV] manual sale FB sync error:', e); }
-      })();
+      // v1.3.441: sync via State.set.addVenta -> save() -> _writeFirebase(_state)
       DashweyBus.emit('venta', { total: importe, metodo: 'manual' });
       window.dispatchEvent(new CustomEvent('dashwey:venta-registrada'));
     } catch(e) {
@@ -25339,7 +25320,6 @@ const tpv = (() => {
     _renderHotGrid();
     try { Utils.triggerHaptic('selection'); } catch(_) {}
     showToast('Toca otra celda para intercambiar posición');
-    console.log('[HotGrid] swap iniciado desde slot', slotIdx);
   }
 
   function _hgDoSwap(srcIdx, destIdx) {
@@ -25358,7 +25338,6 @@ const tpv = (() => {
     _hotPins[srcIdx]  = destId ? { id: destId } : null;
     _hotPins[destIdx] = { id: srcId };
     _saveHotPins();
-    console.log('[HotGrid] swap slot', srcIdx, '↔', destIdx, '|', srcId, '↔', destId || 'vacío');
     _hgSwapSrc = null;
     _hotGridHash = '';
     _renderHotGrid();
@@ -25385,10 +25364,8 @@ const tpv = (() => {
     const p = State.get.prod(prodId); if (!p) return;
     const prev = document.getElementById('cat-ctx-menu'); if (prev) prev.remove();
     const rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
-    // v1.3.420: cerrar cualquier menú contextual existente antes de abrir uno nuevo
-    ['cat-ctx-menu','cat-float-menu'].forEach(function(mid) {
-      var old = document.getElementById(mid); if (old) old.remove();
-    });
+    // v1.3.441: solo limpiar por ID -- cat-float-menu es clase, no ID
+    var _prev2 = document.getElementById('cat-ctx-menu'); if (_prev2) _prev2.remove();
     const menu = document.createElement('div');
     menu.id = 'cat-ctx-menu';
     menu.className = 'cat-float-menu';
@@ -25516,6 +25493,8 @@ const tpv = (() => {
     // v1.3.377: hot grid pins API
     hgResetPins: _hgResetAll,
     hgCancelSwap: _hgCancelSwap,
+    // v1.3.441: limpiar undo stack al cambiar de tab
+    clearUndo: function() { _undoStack = null; var t = document.getElementById('tpv-undo-toast'); if (t) t.classList.remove('show'); },
     // v1.3.421: eliminar producto del hot grid sin resetear todos los pins
     hgRemoveProd: function(prodId) {
       var changed = false;
@@ -32523,6 +32502,7 @@ function _parseIva(iva) {
   window._navResetScroll = function() { _lastY = 0; };
   window.addEventListener('dashwey:tab-changed', function() {
     _lastY = 0; // reset posicion de referencia
+    try { if (App && App.tpv && App.tpv.clearUndo) App.tpv.clearUndo(); } catch(_) {}
     attachListeners();
   });
 
