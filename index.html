@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.441-dev</title>
+<title>Dashwey v1.3.442-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11801,9 +11801,9 @@ const FinEngine = (() => {
     if (!period) return mesActualRange();
     const now = new Date();
     try {
-      // KPI.periodRange ya existe — reutilizarlo
-      if (typeof KPI !== 'undefined' && KPI.pedidosEnPeriodo) {
-        const { start, end } = KPI.getRange ? KPI.getRange(period) : mesActualRange();
+      // v1.3.442: condicion consistente -- verificar getRange, no pedidosEnPeriodo
+      if (typeof KPI !== 'undefined' && typeof KPI.getRange === 'function') {
+        const { start, end } = KPI.getRange(period);
         return { start, end };
       }
     } catch(e) {}
@@ -12737,7 +12737,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.441-dev';
+  const _APP_VERSION = 'v1.3.442-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16771,10 +16771,20 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // FLUJO DE CAJA v1.2.38
   // Total global + Lista cuentas + Últimos movimientos
   // ══════════════════════════════════════════════════════════════
+  // v1.3.442: hash guard para evitar rebuild DOM en cada llamada
+  let _fcHash = '';
   function renderFlujoCaja() {
     const cuentas  = State.get.cuentas() || [];
     const gastos   = State.get.gastosOp() || [];
     const ingresos = State.get.ingresosFin() || [];
+    // Dirty-check -- skip si datos no cambiaron
+    const _newFcHash = JSON.stringify([
+      cuentas.map(c => c.saldo + c.nombre),
+      gastos.map(g => g.importe + g.fecha),
+      ingresos.map(i => i.importe + i.fecha)
+    ]);
+    if (_newFcHash === _fcHash) return;
+    _fcHash = _newFcHash;
 
     // A. Total global
     const saldoTotal = cuentas.reduce((s, c) => s + (c.saldo || 0), 0);
@@ -20535,7 +20545,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
       var de   = (prov && prov.diasEntrega) || [];
       if (!de.length) { var d=new Date(fechaISO); d.setDate(d.getDate()+2); return d; }
       var base = new Date(fechaISO);
-      for (var i=1; i<=14; i++) {
+      for (var i=1; i<=14; i++) { // 14 dias: margen maximo para encontrar dia de entrega
         var d2=new Date(base); d2.setDate(base.getDate()+i);
         var dow=d2.getDay()===0?6:d2.getDay()-1;
         if (de.indexOf(dow)>=0) return d2;
@@ -27853,56 +27863,45 @@ function _parseIva(iva) {
       items: items.map(o => ({prodId:o.prodId, ncajas:o.ncajas, udscaja:o.udscaja, precio:o.precio, pvp:o.pvp}))
     };
 
-    // Guardar en historial local
-    State.set.addPedido(pedido);
+    // v1.3.442: try/finally garantiza que _confirmandoPedido se libera siempre
+    try {
+      // Guardar en historial local
+      State.set.addPedido(pedido);
 
-    // Subir stock de cada producto recibido
-    items.forEach(o => {
-      const p = State.get.prod(o.prodId);
-      if (p) {
-        const nuevoStock = (p.stockActual || 0) + (o.ncajas * o.udscaja);
-        State.set.updateProd(o.prodId, { stockActual: nuevoStock });
-      }
-    });
-
-    // v1.3.286: ALM-01 — limpiar carrito tras confirmar pedido
-    _ordenCarrito = {};
-    _saveCarritoLocal();
-
-    // haptic de confirmación — pedido procesado
-    Utils.triggerHaptic('success');
-
-    // v9.5.76: emit único con rAF batching
-    DashweyBus.emit('pedido_stock', { pedido });
-
-    // Actualizar badge y banner inmediatamente (carrito ya limpio)
-    updateBadge();
-
-    // v1.3.286: ALM-02 — Firebase retry (3 intentos, backoff 1s/2s)
-    (async () => {
-      const _fbWriteAlm = async (attempt) => {
-        try {
-          const FB = window._DashweyFirebase;
-          if (!FB || !FB.enabled || !FB.ready) return;
-          const cur = await FB.read('historialPedidos') || { lista: [] };
-          const lista = (cur.lista || []).concat([pedido]);
-          await FB.write('historialPedidos', { lista });
-          await FB.write('productos', { lista: State.get.productos() });
-        } catch(e) {
-          console.warn('[Dashwey/Alm] FB pedido intento ' + attempt + ':', e);
-          if (attempt < 3) {
-            await new Promise(r => setTimeout(r, attempt * 1000));
-            return _fbWriteAlm(attempt + 1);
-          }
-          console.error('[Dashwey/Alm] FB: 3 intentos fallidos para pedido ' + pedidoId);
-          showToast('⚠️ Pedido guardado localmente. Sin conexión con la nube.');
+      // Subir stock de cada producto recibido
+      items.forEach(o => {
+        const p = State.get.prod(o.prodId);
+        if (p) {
+          const nuevoStock = (p.stockActual || 0) + (o.ncajas * o.udscaja);
+          State.set.updateProd(o.prodId, { stockActual: nuevoStock });
         }
-      };
-      _fbWriteAlm(1);
-    })();
+      });
 
-    _confirmandoPedido = false;  // v1.3.288: ALM-10
-    showToast('📦 Stock actualizado — ' + items.length + ' producto' + (items.length !== 1 ? 's' : '') + ' recibido' + (items.length !== 1 ? 's' : ''));
+      // v1.3.286: ALM-01 — limpiar carrito tras confirmar pedido
+      _ordenCarrito = {};
+      _saveCarritoLocal();
+
+      // v1.3.442: try/catch -- triggerHaptic no debe bloquear el flujo
+      try { Utils.triggerHaptic('success'); } catch(_) {}
+
+      // v9.5.76: emit único con rAF batching
+      DashweyBus.emit('pedido_stock', { pedido });
+
+      // Actualizar badge y banner inmediatamente (carrito ya limpio)
+      updateBadge();
+
+      // v1.3.442: sync via State principal -- State.set.addPedido -> save() -> _writeFirebase(_state)
+      // historialPedidos y productos ya incluidos en _buildLocalSnapshot
+      // No escribir a colecciones separadas -- inconsistente con _doInitialSync
+
+      showToast('📦 Stock actualizado — ' + items.length + ' producto' + (items.length !== 1 ? 's' : '') + ' recibido' + (items.length !== 1 ? 's' : ''));
+
+    } catch(err) {
+      console.error('[ALM] confirmarPedido ERROR:', err);
+      showToast('⚠️ Error al confirmar el pedido. Inténtalo de nuevo.');
+    } finally {
+      _confirmandoPedido = false;  // v1.3.442: siempre liberar
+    }
   }
 
   function descargarFactura(pedidoId) {
@@ -31080,7 +31079,9 @@ function _parseIva(iva) {
 
     if (!itemsCarrito.length) { showToast('🛒 El pedido está vacío'); return; }
 
-    const totalInv = itemsCarrito.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*1.10,0);
+    // v1.3.442: IVA desde producto real (4/10/21%) -- no hardcodeado
+    const _getIva = (o) => { try { var iv = parseFloat((o.p && o.p.iva) || o.iva || 10); return isNaN(iv) ? 0.10 : iv/100; } catch(_) { return 0.10; } };
+    const totalInv = itemsCarrito.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*(1+_getIva(o)),0);
     const totalVta = itemsCarrito.reduce((s,o)=>s+(o.ncajas||1)*(o.udscaja||1)*(o.pvp||0),0);
     const ganancia = totalVta - totalInv;
     const margen   = totalVta>0?Math.round(ganancia/totalVta*100):0;
@@ -31089,7 +31090,8 @@ function _parseIva(iva) {
 
     // v1.2.40: formato idéntico al catálogo — nombre / detalle compacto / total
     const renderCarritoItem = (o) => {
-      const precioIva = (o.precio||0)*1.10;
+      const _ivaFactor = (function(o){ try { var iv=parseFloat((o.p&&o.p.iva)||o.iva||10); return isNaN(iv)?1.10:1+iv/100; } catch(_){return 1.10;} })(o);
+      const precioIva = (o.precio||0)*_ivaFactor;
       const total = (o.ncajas||1)*precioIva;
       const mg = o.pvp>0?Math.round(((o.pvp-precioIva)/o.pvp)*100):null;
       const mgCol = mg===null?'var(--ink-soft)':mg>=30?'#16A34A':mg>=15?'#F97316':'#E53935';
