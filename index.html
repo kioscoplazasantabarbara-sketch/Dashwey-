@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.437-dev</title>
+<title>Dashwey v1.3.438-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12652,7 +12652,7 @@ const ui = (() => {
       </div>
 
       <div class="menu-footer" style="margin-top:16px">
-        <button class="btn-logout" style="background:#FEF2F2;color:var(--red-danger);border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(()=>App.limpiarBD(),Utils.ANIM_DELAY)">Limpiar base de datos</button>
+        <button class="btn-logout" style="background:#FEF2F2;color:var(--red-danger);border:1.5px solid #FECACA;margin-bottom:8px" onclick="App.ui.closeFs();setTimeout(function(){try{App.ui.confirmReset();}catch(e){}},Utils.ANIM_DELAY)">Limpiar base de datos</button>
         <button class="btn-logout" onclick="App.ui.closeFs();setTimeout(App.ui.authLogout,Utils.ANIM_DELAY)">Cerrar sesión</button>
         <div class="menu-ver">Dashwey ' + (window._DashweyProductVersion || _getAppVersion()) + '</div>
       </div>
@@ -12718,7 +12718,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.437-dev';
+  const _APP_VERSION = 'v1.3.438-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13285,9 +13285,9 @@ const ui = (() => {
     if (dot) dot.classList.toggle('online', isOnline);
     // settings toggles
     const s = State.get.settings();
-    if (el('sd-notif-toggle')) el('sd-notif-toggle').classList.toggle('on', !!s.notifOn);
-    if (el('sd-ia-toggle'))    el('sd-ia-toggle').classList.toggle('on', !!s.iaOn);
-    if (el('sd-cierre-sub'))   el('sd-cierre-sub').textContent = s.cierreHora || '21:00';
+    // v1.3.438: sd-notif-toggle y sd-ia-toggle eliminados del drawer nuevo
+    // sd-cierre-sub existe como compat en Almacen header -- actualizar si existe
+    if (el('sd-cierre-sub')) el('sd-cierre-sub').textContent = s.cierreHora || '21:00';
     // v1.2.75: equipo — actualizar sub-label
     try {
       const teamCount = (State.get.teamMembers ? State.get.teamMembers() : []).length;
@@ -24029,8 +24029,15 @@ window._sdCuentaSetMoneda = function(moneda, chipGroup) {
 };
 
 window._sdCuentaGuardarPerfil = function() {
-  var nombre = (document.getElementById('sd-pf2-nombre')||{}).value || '';
+  var nombre = ((document.getElementById('sd-pf2-nombre')||{}).value || '').trim();
   var zona   = (document.getElementById('sd-pf2-zona')||{}).value   || 'Europe/Madrid';
+  // v1.3.438: validar nombre no vacio
+  if (!nombre) {
+    showToast('⚠️ El nombre del negocio es obligatorio');
+    var inp = document.getElementById('sd-pf2-nombre');
+    if (inp) { inp.style.borderColor = 'var(--red)'; setTimeout(function(){ inp.style.borderColor=''; }, 2000); }
+    return;
+  }
   try {
     // v1.3.290: SET-05 — incluir moneda del chip activo en el guardado
     var activeChip = document.querySelector('.sd-chip-group .sd-chip-active[data-moneda]');
@@ -24050,14 +24057,27 @@ window._sdCuentaGuardarPerfil = function() {
 };
 
 window._sdCuentaCerrarSesiones = function() {
-  try {
-    var fb = window._DashweyFirebase;
-    if (fb && fb.signOut) {
-      fb.signOut();
-      showToast('\uD83D\uDEAA Sesión cerrada en todos los dispositivos');
-    } else {
-      showToast('Sin sesión activa en la nube');
+  // v1.3.438: confirmacion antes de cerrar sesiones en todos los dispositivos
+  window._showDestructiveConfirm({
+    title: 'Cerrar sesiones',
+    message: 'Se cerrará la sesión en todos los dispositivos. Tendrás que volver a iniciar sesión.',
+    confirmText: 'Cerrar sesiones',
+    onConfirm: function() {
+      try {
+        var fb = window._DashweyFirebase;
+        if (fb && fb.signOut) {
+          fb.signOut();
+          showToast('\uD83D\uDEAA Sesión cerrada en todos los dispositivos');
+        } else {
+          showToast('Sin sesión activa en la nube');
+        }
+      } catch(e) { showToast('\u26a0\ufe0f Error al cerrar sesión'); }
     }
+  });
+  return;
+  // legacy -- nunca llega aqui
+  try {
+    var _fb2 = null;
   } catch(e) {
     showToast('\u26a0\ufe0f No se pudo cerrar la sesión');
   }
@@ -24145,6 +24165,25 @@ window._sdCuentaImportar = function() {
   inp.click();
 };
 
+
+// v1.3.438: openEquipoSideSheet -- faltaba, boton Equipo lanzaba ReferenceError
+window.openEquipoSideSheet = function() {
+  _sdNav('Equipo', function() {
+    var members = [];
+    try { members = State.get.teamMembers ? State.get.teamMembers() : []; } catch(_) {}
+    var rows = members.length > 0
+      ? members.map(function(m) {
+          return '<div class="sd-row"><div class="sd-icon" style="background:#EFF6FF">👤</div>'
+            + '<div class="sd-info"><div class="sd-title">' + (m.nombre||m.email||'\u2014') + '</div>'
+            + '<div class="sd-sub">' + (m.role||'Miembro') + '</div></div></div>';
+        }).join('')
+      : '<div style="padding:24px 16px;text-align:center;color:var(--ink-soft);font-size:13px">Sin miembros añadidos</div>';
+    return '<div class="ss-section-lbl">Miembros</div>'
+      + '<div class="sd-group">' + rows + '</div>'
+      + '<div style="padding:0 14px 14px"><button class="btn-ok" style="width:100%"'
+      + ' onclick="try{App.ui.openTeamMgr();}catch(e){}">Gestionar equipo</button></div>';
+  });
+};
 
 window.openSegSideSheet = function() {
   _sdNav('Seguridad', function() {
