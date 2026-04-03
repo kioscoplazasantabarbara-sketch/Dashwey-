@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.430-dev</title>
+<title>Dashwey v1.3.431-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10696,10 +10696,14 @@ const State = (() => {
       if (_isSaving) return;
       // Guard de duplicados: no escribir si el estado no ha cambiado
       // v1.3.294: FIX — pendingOrders e ingresosFin incluidos para evitar sync silenciosa fallida
+      // v1.3.431: hash ampliado -- incluye settings, historialPedidos, mermas, tickets, visitas
       const _hashable = JSON.stringify({
         p: _state.productos, v: _state.proveedores, vt: _state.ventas,
         c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre,
-        po: _state.pendingOrders, ig: _state.ingresosFin
+        po: _state.pendingOrders, ig: _state.ingresosFin,
+        st: _state.settings, hp: (_state.historialPedidos||[]).length,
+        mr: (_state.mermas||[]).length, vc: (_state.visitasComerciales||[]).length,
+        tk: (_state.ticketsAbiertos||[]).length
       });
       if (_hashable === _lastSavedHash) return;
       _lastSavedHash = _hashable;
@@ -10812,7 +10816,7 @@ const State = (() => {
     },  // no save: solo en memoria
     lastVal: (id, vals)    => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
     addCuenta:  (c)        => { _state.cuentas.push(c); save(); },
-    gastosCustomPeriod:    (v) => { _state.gastosCustomPeriod = v; },
+    gastosCustomPeriod:    (v) => { _state.gastosCustomPeriod = v; save(); }, // v1.3.431: save() anadido
     addChatMessage:        (m) => { if (!_state.chatMessages) _state.chatMessages = []; _state.chatMessages.push(m); save(); },
     chatUsers:             (v) => { _state.chatUsers = v; save(); },
     teamMembers:           (v) => { _state.teamMembers = v; save(); },
@@ -12716,7 +12720,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.430-dev';
+  const _APP_VERSION = 'v1.3.431-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31836,9 +31840,16 @@ function _parseIva(iva) {
       historialPedidos: State.get.historialPedidos(),
       mermas:           State.get.mermas(),
       ventas:           State.get.ventas(),
-      // ordenItems: legacy — excluido del sync (no se usa en UI desde v8.9.0)
-      pendingOrders:    State.get.pendingOrders(),   // v1.3.15: incluido en sync para persistencia cross-device
-      visitasComerciales: State.get.visitasComerciales(), // v1.3.15
+      // ordenItems: legacy -- excluido del sync (no se usa en UI desde v8.9.0)
+      pendingOrders:    State.get.pendingOrders(),
+      visitasComerciales: State.get.visitasComerciales(),
+      // v1.3.431: datos financieros y tickets -- ausentes causaban perdida de datos en otro dispositivo
+      cuentas:          State.get.cuentas(),
+      gastosOp:         State.get.gastosOp(),
+      ingresosFin:      State.get.ingresosFin(),
+      ticketsAbiertos:  State.get.ticketsAbiertos(),
+      chatMessages:     State.get.chatMessages(),
+      teamMembers:      State.get.teamMembers(),
       selectedProv:     State.get.selectedProv(),
       period:           State.get.period(),
       settings:         State.get.settings(),
@@ -31895,10 +31906,19 @@ function _parseIva(iva) {
 
 
     if (remoteTs > localTs) {
-      // Remoto más reciente: aplicar datos de la nube
+      // Remoto mas reciente: aplicar datos de la nube
+      // v1.3.431: merge inteligente -- settings remoto como base, solo prefs UI locales prevalecen
+      const _localSettings = State.get.settings();
+      const _remoteSettings = remote.settings || {};
+      const _mergedSettings = Object.assign({}, _remoteSettings, {
+        // Prefs de UI que son por dispositivo -- no sobrescribir con el remoto
+        tpvVibracion: _localSettings.tpvVibracion,
+        theme:        _localSettings.theme,
+        language:     _localSettings.language,
+      });
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remote)),
-        { settings: State.get.settings() }
+        { settings: _mergedSettings }
       );
       // Bloquear writes durante merge para no re-subir lo que bajamos
       window._DashweySavingCtrl.isSaving = true;
@@ -31911,7 +31931,7 @@ function _parseIva(iva) {
       }
       _renderAll();
       showToast('☁️ Datos sincronizados');
-      // NO subir de vuelta — ya tenemos los datos remotos
+      // NO subir de vuelta -- ya tenemos los datos remotos
     } else if (localTs > 0) {
       // Local más reciente → subir a Firebase (solo si hay datos reales)
       await fb.write('state', _buildLocalSnapshot());
@@ -31962,9 +31982,17 @@ function _parseIva(iva) {
       }
 
 
+      // v1.3.431: merge inteligente de settings en onSnapshot tambien
+      const _lsSnap = State.get.settings();
+      const _rsSnap = remoteData.settings || {};
+      const _msSnap = Object.assign({}, _rsSnap, {
+        tpvVibracion: _lsSnap.tpvVibracion,
+        theme:        _lsSnap.theme,
+        language:     _lsSnap.language,
+      });
       const merged = Object.assign(
         JSON.parse(JSON.stringify(remoteData)),
-        { settings: State.get.settings() }
+        { settings: _msSnap }
       );
       // FIX: bloquear save()->Firebase durante el merge para no re-subir
       // lo que acabamos de bajar. Los setters escriben solo en localStorage.
