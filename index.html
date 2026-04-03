@@ -166,7 +166,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.428-dev</title>
+<title>Dashwey v1.3.430-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
    DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1564,7 +1564,7 @@ input, textarea, [contenteditable] {
 
 /* ── § 5. SWIPE / TABS ── */
 /* v1.3.158: clip solo en X para permitir que Almacén llegue hasta el borde inferior */
-#swipe-wrap { flex: 1; overflow-x: hidden; overflow-y: visible; position: relative; min-height: 0; touch-action: pan-y; background: var(--bg); /* v1.3.387: evita destello blanco en transición de tabs */ }
+#swipe-wrap { flex: 1; overflow: hidden; position: relative; min-height: 0; touch-action: pan-y; background: var(--bg); /* v1.3.430: overflow:hidden en ambos ejes -- overflow-y:visible anulaba overflow-x:hidden en Android WebView */ }
 #swipe-track { display: flex; width: 300%; height: 100%; transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94); /* v1.2.27: 0.30s→0.22s estándar del sistema */ }
 .tab-page { overscroll-behavior: contain; }
 .tab-page {
@@ -12716,7 +12716,7 @@ const ui = (() => {
   }
 
   /* ── Actualizaciones PWA ── */
-  const _APP_VERSION = 'v1.3.428-dev';
+  const _APP_VERSION = 'v1.3.430-dev';
   function _getAppVersion() { return _APP_VERSION; }
 
   // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14565,9 +14565,10 @@ const nav = (() => {
 
     if (_rafId) cancelAnimationFrame(_rafId);
     _rafId = requestAnimationFrame(() => {
-      // v1.3.92: resistencia inicial — primeros 40px viajan al 65% del dedo
-      const RESIST_ZONE = 40;
-      const RESIST_RATIO = 0.65;
+      // v1.3.430: resistencia aumentada -- menos contenido adyacente visible
+      // RESIST_ZONE 40->60px, RESIST_RATIO 0.65->0.35 (30% del movimiento real)
+      const RESIST_ZONE = 60;
+      const RESIST_RATIO = 0.35;
       let effectiveDx;
       if (Math.abs(dx) <= RESIST_ZONE) {
         effectiveDx = dx * RESIST_RATIO;
@@ -15439,6 +15440,7 @@ const dash = (() => {
     else { newP.label = newOff===0?'Hoy':newOff===-1?'Ayer':`Hace ${Math.abs(newOff)} días`; }
     State.set.period(newP);
     _updateSnavLabel(newP.label);
+    _updateGlobalPeriodLabel(newP.label); // v1.3.429: sincronizar #dash-title-period-lbl
     // Sincronizar appState.dateRange — v1.2.32
     try {
       const range = KPI.getRange(newP);
@@ -15482,11 +15484,11 @@ const dash = (() => {
     const L = {today:'Hoy',week:'Esta semana',month:'Este mes',year:'Este año',custom:'Personalizado'};
     State.set.period({ type:t, label:L[t], offset:0 });
     _updateSnavLabel(L[t]);
+    _updateGlobalPeriodLabel(L[t]); // v1.3.429: sincronizar #dash-title-period-lbl
     document.querySelectorAll('.period-opt').forEach(el => el.classList.toggle('sel', el.id===`po-${t}`));
     if(t === 'custom') document.getElementById('cf').classList.add('show');
     else {
       ui.closeFs();
-      // v1.3.109: 320→240ms — alineado con --sheet-duration:0.22s (+20ms buffer)
       setTimeout(() => render(), 240);
     }
   }
@@ -15494,13 +15496,19 @@ const dash = (() => {
   function applyCustom() {
     const f = document.getElementById('df').value, t2 = document.getElementById('dt').value;
     if(!f || !t2) { showToast('⚠️ Selecciona ambas fechas'); return; }
-    const label = `${f.slice(0,10)} → ${t2.slice(0,10)}`;
+    // v1.3.429: formato legible igual que el picker moderno
+    const _fmtD = iso => {
+      const d = new Date(iso);
+      const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      const pad = n => String(n).padStart(2,'0');
+      return pad(d.getDate())+' '+M[d.getMonth()]+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+    };
+    const label = _fmtD(f) + ' → ' + _fmtD(t2);
     State.set.period({ type:'custom', label, offset:0, customStart: f, customEnd: t2 });
     _updateSnavLabel(label);
+    _updateGlobalPeriodLabel(label);
     ui.closeFs();
-    // v1.3.109: 320→240ms — alineado con --sheet-duration:0.22s (+20ms buffer)
     setTimeout(() => render(), 240);
-
   }
 
   // Informe Financiero del mes
@@ -19039,15 +19047,23 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
   // Abrir el picker en bottom-sheet
   // v9.5.91: openGlobalPeriodPicker delega en Utils.openPeriodSheet
   function openGlobalPeriodPicker() {
-    const current = State.get.period().type || 'month';
+    const currentPeriod = State.get.period();
+    const current = currentPeriod.type || 'month';
     const now = new Date();
     const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+    // v1.3.429: restaurar rango personalizado si el periodo actual era custom
+    const _customDesde = (current === 'custom' && currentPeriod.customStart)
+      ? currentPeriod.customStart.slice(0,10)
+      : toLocal(new Date(now.getFullYear(), now.getMonth(), 1));
+    const _customHasta = (current === 'custom' && currentPeriod.customEnd)
+      ? currentPeriod.customEnd.slice(0,10)
+      : toLocal(now);
     Utils.openPeriodSheet({
       title: 'Periodo del dashboard',
       opts: _DPS_OPTS,
       current,
-      customDesde: toLocal(new Date(now.getFullYear(), now.getMonth(), 1)),
-      customHasta: toLocal(now),
+      customDesde: _customDesde,
+      customHasta: _customHasta,
       onSelect: t => { selGlobalPeriod(t); },
       onCustom: (desde, hasta) => {
         const fmtDate = iso => {
@@ -19178,7 +19194,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
     sheet._periodConfig = null;
     document.getElementById('dash-title-period-chevron')
       ?.style.setProperty?.('transform', '');
-    // v1.2.48: restaurar scroll del body
+    // v1.3.429: restaurar overflow siempre (antes faltaba en algunos paths)
     document.body.style.overflow = '';
   }
 
@@ -31662,11 +31678,14 @@ function _parseIva(iva) {
     });
   })();
 
-  // v9.5.25: sincronizar label de periodo en el título al arrancar
+  // v1.3.429: restaurar label del periodo al arrancar -- independiente del tab activo
   try {
     const _initPeriod = State.get.period();
     const _initLbl    = document.getElementById('dash-title-period-lbl');
     if (_initLbl) _initLbl.textContent = _initPeriod.label || 'Este mes';
+    // Tambien restaurar snav-label si existe
+    const _initSnav = document.getElementById('snav-label');
+    if (_initSnav && _initPeriod.label) _initSnav.textContent = _initPeriod.label;
   } catch(_) {}
   // v1.3.385: título y render inicial según modo activo
   const _titleEl = document.getElementById('header-title');
