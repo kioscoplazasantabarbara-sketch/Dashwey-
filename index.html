@@ -148,7 +148,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-479-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-470-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -167,7 +167,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.479-dev</title>
+<title>Dashwey v1.3.470-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6193,7 +6193,7 @@ body:not([data-tab="2"]) .alm-banner-dots {
  font-size: 22px; font-weight: 700;
  display: flex; align-items: center; justify-content: center;
  cursor: pointer; overflow: hidden; flex-shrink: 0;
- transition: opacity 0.15s; position: relative;
+ transition: opacity 0.15s;
 }
 
 .sd-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -12458,7 +12458,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.479-dev';
+ const _APP_VERSION = 'v1.3.470-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12545,8 +12545,6 @@ const ui = (() => {
  // v1.3.386: limpiar pendiente ANTES de recargar — evita que el aviso
  // reaparezca si GitHub Pages tarda en propagar la nueva versión
  try { sessionStorage.removeItem('dashwey_pending_ver'); } catch(_) {}
- // Marcar update — forzar What's New en el próximo arranque
- try { localStorage.setItem('dashwey_just_updated', '1'); } catch(_) {}
 
  // Limpiar TODA la caché y recargar
  const _doReload = () => {
@@ -12771,20 +12769,17 @@ const ui = (() => {
  if (res.ok) {
  // Limpiar flag de logout intencional
  try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
- // CRÍTICO: resetear estado local antes de cargar datos del nuevo usuario
- // Bloquear Firebase write durante el reset — evita sobreescribir datos del nuevo usuario
- try { window._DashweySavingCtrl && (window._DashweySavingCtrl.isSaving = true); } catch(_) {}
- try { App.State.set.resetStorage(); } catch(_) {}
- try { window._DashweySavingCtrl && (window._DashweySavingCtrl.isSaving = false); } catch(_) {}
- // Establecer UID y email del nuevo usuario sobre el estado limpio
- try { App.State.set.user({ email: res.user.email, uid: res.user.uid }); } catch(_) {}
+ // FIX: mutar _state directamente para no disparar save() doble
+ // (InitialSync ya subirá el estado completo a Firebase)
+ try {
+ const _su = State.get.user();
+ if (_su) { _su.email = res.user.email; _su.uid = res.user.uid; }
+ } catch(_) { State.set.user({ email: res.user.email, uid: res.user.uid }); }
  hideAuthScreen();
  showToast('👋 Bienvenido');
  if (typeof window._DashweyInitialSync === 'function') {
  try { window._DashweyInitialSync(); } catch(e) { console.warn('[Dashwey] sync error:', e); }
  }
- // Mostrar What's New post-login si hay novedades
- setTimeout(() => { try { App.ui.showWhatsNew(App.ui._getAppVersion()); } catch(_) {} }, 2500);
  } else {
  if (err) err.textContent = res.error || 'Error de autenticación';
  _restore();
@@ -13018,11 +13013,11 @@ const ui = (() => {
  if (!drawer || !overlay) { console.error('[Dashwey] openSettings: #settings-drawer no encontrado'); return; }
  // Populate account info
  const perfil = State.get.perfil();
- const email = window._DashweyFirebase?._auth?.currentUser?.email || perfil?.email || '—';
+ const email = perfil?.email || (window._DashweyFirebase?.currentUser?.email) || '—';
+ const initial = (email[0] || 'U').toUpperCase();
  const el = id => document.getElementById(id);
+ if (el('sd-avatar')) el('sd-avatar').textContent = initial;
  if (el('sd-email')) el('sd-email').textContent = email;
- // Avatar: delegar a _updateProfileAvatar — evita sobreescribir foto con inicial
- try { _updateProfileAvatar(); } catch(_) { if (el('sd-avatar')) el('sd-avatar').textContent = (email[0]||'U').toUpperCase(); }
  // online/offline
  const isOnline = navigator.onLine;
  if (el('sd-status-lbl')) el('sd-status-lbl').textContent = isOnline ? 'Online' : 'Offline';
@@ -13427,16 +13422,10 @@ const ui = (() => {
  const avatar = document.getElementById('sd-avatar');
  if (avatar) {
  if (foto) {
-  avatar.innerHTML = '<img loading="lazy" src="' + foto + '" alt="Foto de perfil">';
+ avatar.innerHTML = '<img loading="lazy" src="' + foto + '" alt="Foto de perfil">';
  } else {
-  // Initial + camera overlay — usar tabla de posición absoluta dentro del flex
- avatar.innerHTML = '<span>' + initial + '</span>' +
- '<div style="position:absolute;bottom:0;left:0;right:0;height:40%;' +
- 'background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;' +
- 'pointer-events:none">' +
- '<svg width="12" height="12" fill="none" stroke="#fff" stroke-width="2.2" viewBox="0 0 24 24">' +
- '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
- '<circle cx="12" cy="13" r="4"/></svg></div>';
+ avatar.innerHTML = '';
+ avatar.textContent = initial;
  }
  }
 
@@ -13484,15 +13473,13 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
- 'v1.3.479-dev': {
- id: 'wn-2026-04-session5',
+ 'v1.3.470-dev': {
+ id: 'wn-2026-04-session4',
  sections: [
  {
  title: '✨ Novedades',
  items: [
  { icon: '🎉', name: 'Novedades persistentes', desc: 'Este panel ahora muestra exactamente qué cambió en el último update y no vuelve a aparecer hasta que haya algo nuevo.' },
- { icon: '↔️', name: 'Swipe corregido', desc: 'Al deslizar levemente entre módulos y soltar, la pantalla vuelve siempre al módulo actual sin quedarse a medias.' },
- { icon: '🔐', name: 'Login más seguro', desc: 'Al entrar con una cuenta diferente, los datos se limpian antes de cargar los nuevos.' },
  ]
  }
  ]
@@ -14127,11 +14114,9 @@ const ui = (() => {
  // Usar el id de contenido si existe, sino la versión como fallback
  var contentId = data.id || resolvedVer;
 
- // Si hubo update reciente, forzar mostrar aunque ya se haya visto
- var _justUpdated = false;
- try { _justUpdated = localStorage.getItem('dashwey_just_updated') === '1'; if (_justUpdated) localStorage.removeItem('dashwey_just_updated'); } catch(_) {}
+ // Solo mostrar si el usuario no ha visto este contenido todavía
  var lastSeen = localStorage.getItem(_WN_SEEN_KEY);
- if (lastSeen === contentId && !_justUpdated) return;
+ if (lastSeen === contentId) return;
 
  const overlay = document.getElementById('whats-new-overlay');
  const titleEl = document.getElementById('wn-title');
@@ -14306,8 +14291,8 @@ const nav = (() => {
  // v1.3.432: snap SIEMPRE al tab actual -- incluso si fue vetado
  // El track puede haberse movido levemente durante el gesto; restaurar sin condiciones
  track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
- track.style.transform = `translateX(${-_cTab * _getTabWidth()}px)`;
- _syncNavActive(_cTab);
+ goTab(_cTab);
+ _vetoed = false;
  return;
  }
  _drag = false;
@@ -14332,9 +14317,8 @@ const nav = (() => {
  _drag = false;
  _vetoed = false;
  track.style.transition = 'transform .38s cubic-bezier(.4,0,.2,1)';
- track.style.transform = `translateX(${-_cTab * _getTabWidth()}px)`;
- _syncNavActive(_cTab);
- }, { passive: true }); // touchcancel — v9.5.83: passive
+ goTab(_cTab);
+ }, { passive: true }); // v9.5.83: passive
 
  // v1.3.97: transitionend es poco fiable en Android WebView cuando la transición
  // se interrumpe. Usar setTimeout con la duración exacta de la transición (.38s)
@@ -26866,7 +26850,7 @@ function _parseIva(iva) {
  <div class="alm-photo-row" style="gap:14px;align-items:center">
  <div style="flex-shrink:0">
  <div class="alm-photo-wrap" onclick="document.getElementById('prod-photo-inp').click()" style="width:64px;height:64px;border-radius:16px">
- <div id="prod-photo-prev" class="alm-photo-emoji"><svg width="28" height="28" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
+ <div id="prod-photo-prev" class="alm-photo-emoji">📦</div>
  <div class="alm-photo-badge" style="width:20px;height:20px;bottom:-4px;right:-4px;border-radius:50%;background:var(--red);border:2px solid var(--surface);display:flex;align-items:center;justify-content:center">
  <svg width="10" height="10" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
  </div>
@@ -30478,15 +30462,10 @@ function _parseIva(iva) {
  // ── Foto de perfil — inicializar avatar al arrancar ────────────
  try { App.ui._updateProfileAvatar?.(); } catch(_) {}
 
- // ── What's New — mostrar solo si el usuario está autenticado ──
+ // ── What's New — mostrar una vez por versión ─────────────────
  setTimeout(() => {
- try {
- // No mostrar si la pantalla de login está visible
- const authScreen = document.getElementById('auth-screen');
- if (authScreen && authScreen.style.display !== 'none' && !authScreen.classList.contains('hidden')) return;
- App.ui.showWhatsNew(App.ui._getAppVersion());
- } catch(_) {}
- }, 2000);
+ try { App.ui.showWhatsNew(App.ui._getAppVersion()); } catch(_) {}
+ }, 2000); // delay aumentado para no interferir con auth gate
 
  // ── Idioma — aplicar al arrancar ──────────────────────────────
  try {
