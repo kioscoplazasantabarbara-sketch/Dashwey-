@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.475-dev
-   Cache: dashwey-v1-3-475-dev
+   Dashwey Service Worker v1.3.476-dev
+   Cache: dashwey-v1-3-476-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,12 +12,12 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-475-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
+const CACHE_NAME  = 'dashwey-v1-3-476-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
 const PRECACHE_URLS = [
-  /* HTML nunca se cachea — ver fetch handler */
+  './index.html',   /* Pre-cachear HTML para modo offline */
   /* version.json se sirve siempre de red — no pre-cachear */
 ];
 
@@ -214,16 +214,25 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  /* HTML principal: NETWORK-ONLY — NUNCA se cachea.
-     Offline: página de error con botón Reintentar. */
+  /* HTML principal: NETWORK-FIRST con fallback a cache offline.
+     Con red → descarga fresco (siempre actualizado).
+     Sin red → sirve versión cacheada para modo offline. */
   if (url.pathname.endsWith(HTML_URL) ||
       url.pathname.endsWith('/') ||
       url.pathname === '/Dashwey-/' ||
       url.pathname === '/Dashwey-/index.html') {
     e.respondWith(
       fetch(e.request, { cache: 'no-store' })
+        .then(res => {
+          /* Con red: actualizar cache y devolver respuesta fresca */
+          if (res && res.status === 200) {
+            const cloned = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, cloned));
+          }
+          return res;
+        })
         .catch(() => {
-          /* Sin red: intentar cache como último recurso offline */
+          /* Sin red: servir desde cache */
           return caches.match(e.request).then(cached => {
             if (cached) return cached;
             /* Sin cache tampoco: página mínima de offline */
