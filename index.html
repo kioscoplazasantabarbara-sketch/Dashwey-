@@ -148,7 +148,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-478-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-479-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -167,7 +167,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.478-dev</title>
+<title>Dashwey v1.3.479-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -6572,7 +6572,7 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
 .es-sub { font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
 .es-cta { background: var(--red); color: #fff; border: none; border-radius: 14px; padding: 10px 22px; font-size: 14px; font-weight: 700; cursor: pointer; margin-top: 4px; }
 .es-cta.ghost { background: rgba(0,0,0,0.07); color: var(--ink-mid); }
-.alm-empty { display: none; justify-content:center; align-items:center; }
+.alm-empty { display: none; flex-direction:column; justify-content:center; align-items:center; }
 .alm-empty.show { display: flex; }
 
 /* ── § 22. AUTH SCREEN ── */
@@ -12442,7 +12442,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.478-dev';
+ const _APP_VERSION = 'v1.3.479-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24906,7 +24906,8 @@ const alm = (() => {
  wrap.innerHTML = q
  ? '<div class="alm-cat-empty">Sin resultados para "' + esc(q) + '"</div>'
  : '';
- if (empty) empty.style.display = !q && !State.get.productos().some(p => p.prov === sel) ? 'flex' : 'none';
+    const _hasProv = sel && State.get.prov(sel);
+    if (empty) empty.style.display = (!q && _hasProv) ? 'flex' : 'none';
  return;
  }
  if (empty) empty.style.display = 'none';
@@ -25971,12 +25972,13 @@ function _parseIva(iva) {
  var _dayChipSaveTimer = null; // v1.3.427: debounce Firebase writes para day chips
 
  function _toggleDayOrder(pid, idx) {
- const p = State.get.prov(pid); if (!p) return;
+ const p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
+ if (!p) return;
  const arr = [...(p.diasPedido || [])];
  const i = arr.indexOf(idx);
  if (i >= 0) arr.splice(i, 1); else arr.push(idx);
- // Actualizar State inmediatamente (sin debounce)
- State.set.updateProv(pid, { diasPedido: arr });
+ p.diasPedido = arr; // mutar directamente (pendiente o persistido)
+ if (State.get.prov(pid)) State.set.updateProv(pid, { diasPedido: arr });
  const btn = document.getElementById(`dco-${pid}-${idx}`);
  if (btn) btn.className = 'day-chip' + (arr.includes(idx) ? ' on-order' : '');
  // Feedback visual de guardado debounceado
@@ -25987,11 +25989,13 @@ function _parseIva(iva) {
  }
 
  function _toggleDayDeliv(pid, idx) {
- const p = State.get.prov(pid); if (!p) return;
+ const p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
+ if (!p) return;
  const arr = [...(p.diasEntrega || [])];
  const i = arr.indexOf(idx);
  if (i >= 0) arr.splice(i, 1); else arr.push(idx);
- State.set.updateProv(pid, { diasEntrega: arr });
+ p.diasEntrega = arr;
+ if (State.get.prov(pid)) State.set.updateProv(pid, { diasEntrega: arr });
  const btn = document.getElementById(`dcd-${pid}-${idx}`);
  if (btn) btn.className = 'day-chip' + (arr.includes(idx) ? ' on-deliv' : '');
  clearTimeout(_dayChipSaveTimer);
@@ -26008,7 +26012,8 @@ function _parseIva(iva) {
 
  // v9.5.91: _openProvPeriodSheet — abre el sheet global para el proveedor
  function _openProvPeriodSheet(pid) {
- const p = State.get.prov(pid); if (!p) return;
+ const p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
+ if (!p) return;
  const periodo = p.periodicidad || { tipo: 'semanal' };
  // v9.5.104: 'personalizado' eliminado — requería campos DOM (pe-cada-dias etc.)
  // que no existen en el sheet. Los 5 tipos restantes cubren todos los casos reales.
@@ -26029,17 +26034,19 @@ function _parseIva(iva) {
  customDesde: periodo.fechaInicio || toLocal(now),
  customHasta: periodo.fechaFin || toLocal(new Date(now.getTime() + 30*86400000)),
  customLabel: 'Aplicar rango',
- onSelect: t => {
- const newPeriodo = Object.assign({}, periodo, { tipo: t });
- State.set.updateProv(pid, { periodicidad: newPeriodo });
- _refreshProvPeriodBtn(pid, newPeriodo);
- },
- onCustom: (desde, hasta) => {
- const newPeriodo = { tipo: 'custom', fechaInicio: desde, fechaFin: hasta };
- State.set.updateProv(pid, { periodicidad: newPeriodo });
- _refreshProvPeriodBtn(pid, newPeriodo);
- },
- });
+    onSelect: t => {
+      const newPeriodo = Object.assign({}, periodo, { tipo: t });
+      p.periodicidad = newPeriodo;
+      if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
+      _refreshProvPeriodBtn(pid, newPeriodo);
+    },
+    onCustom: (desde, hasta) => {
+      const newPeriodo = { tipo: 'custom', fechaInicio: desde, fechaFin: hasta };
+      p.periodicidad = newPeriodo;
+      if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
+      _refreshProvPeriodBtn(pid, newPeriodo);
+    },
+  });
  }
 
  // Actualizar el botón del form tras seleccionar
