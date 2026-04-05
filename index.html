@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es" style="background:#F7F2F2">
+<html lang="es">
 <head>
 <!-- v1.3.381: visibility gestionada via CSS tag eliminable — no atributo inline
  Evita que Android WebView re-aplique visibility:hidden al recompositar en background -->
@@ -77,12 +77,14 @@
  if (isDark) {
  document.documentElement.setAttribute('data-theme', 'dark');
  document.documentElement.style.background = '#0C0C0E';
+   document.documentElement.style.colorScheme = 'dark';
  var meta = document.getElementById('theme-color-meta');
  if (meta) meta.setAttribute('content', '#0C0C0E');
  } else {
  // LIGHT explícito — aísla del CSS prefers-color-scheme:dark
  document.documentElement.setAttribute('data-theme', 'light');
  document.documentElement.style.background = '#F7F2F2';
+   document.documentElement.style.colorScheme = 'light';
  }
  // Restaurar visibilidad — eliminar el style tag FOUC guard
  // NO usar style.visibility = 'visible' — dejaría un inline style que
@@ -148,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-490-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-501-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -167,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.490-dev</title>
+<title>Dashwey v1.3.501-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1068,8 +1070,15 @@ body[data-energy-saver="1"] .ss-panel {
 .fin-account-pct { font-size: 10px; color: var(--ink-soft); }
 
 /* Progress bar */
-.fin-bar-wrap { height: 5px; border-radius: 5px; background: var(--bg); overflow: hidden; margin-top: 4px; }
-.fin-bar-fill { height:100%; border-radius:5px; width:100%; transform:scaleX(0); transform-origin:left; transition:transform 0.6s var(--ease); } 
+.fin-bar-wrap { height: 8px; border-radius: 8px; background: var(--bg); overflow: hidden; margin-top: 6px; }
+.fin-bar-fill { height:100%; border-radius:8px; width:100%; transform:scaleX(0); transform-origin:left; transition:transform 0.65s cubic-bezier(0.34,1.56,0.64,1); }
+
+/* Sparkline mini chart — evolución del saldo */
+.fc-sparkline-wrap { margin-top: 6px; height: 32px; width: 100%; position: relative; overflow: hidden; }
+.fc-sparkline-svg { width: 100%; height: 32px; display: block; }
+.fc-sparkline-line { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fc-sparkline-area { opacity: 0.12; }
+.fc-period-lbl { font-size: 10px; color: var(--ink-soft); font-weight: 600; letter-spacing: 0.4px; margin-top: 2px; text-align: right; } 
 
 /* Expense rows */
 .fin-expense-row {
@@ -1626,7 +1635,7 @@ body[data-dash-snap="1"] #dash-cards-container .card {
  box-shadow: none;
  margin: 0;
  padding-bottom: 0 !important;
- overflow: hidden;
+ overflow-x: hidden; /* allow inner cajones to scroll */
  display: flex;
  flex-direction: column;
  position: relative;
@@ -1905,6 +1914,7 @@ body[data-dash-snap="1"] .snap-kpi-zone,
  justify-content: flex-start; /* KPIs pegados al top — justo debajo del header */
  flex: 1;
  min-height: 0;
+ overflow: hidden; /* contener scroll de paneles internos */
  padding: 20px 24px 0;
  font-family: 'Inter', var(--font), sans-serif;
  box-sizing: border-box;
@@ -2061,14 +2071,17 @@ body[data-dash-snap="1"] .snap-fc-dist,
  gap: 0;
  width: 100%;
  margin-top: 16px;
+ flex: 1;
+ min-height: 0;
 }
-/* Zona scrollable — solo si el contenido supera el espacio */
+/* Zona scrollable — flex:1 para llenar espacio disponible */
 .snap-fc-scroll {
  overflow-y: auto;
  -webkit-overflow-scrolling: touch;
  overscroll-behavior: contain;
  touch-action: pan-y;
- max-height: 140px;
+ flex: 1;
+ min-height: 60px; /* altura mínima garantizada para scroll gesture */
 }
 /* Separador entre los dos bloques */
 .snap-fc-mid-sep {
@@ -12443,7 +12456,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.490-dev';
+ const _APP_VERSION = 'v1.3.501-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13016,11 +13029,22 @@ const ui = (() => {
  if (!drawer || !overlay) { console.error('[Dashwey] openSettings: #settings-drawer no encontrado'); return; }
  // Populate account info
  const perfil = State.get.perfil();
- const email = perfil?.email || (window._DashweyFirebase?.currentUser?.email) || '—';
- const initial = (email[0] || 'U').toUpperCase();
- const el = id => document.getElementById(id);
- if (el('sd-avatar')) el('sd-avatar').textContent = initial;
- if (el('sd-email')) el('sd-email').textContent = email;
+   // Email: State.user es la fuente primaria (se actualiza en login)
+   const userEmail = State.get.user()?.email || '';
+   const email = userEmail || perfil?.email || (window._DashweyFirebase?._auth?.currentUser?.email) || '—';
+   const initial = (email !== '—' ? email[0] : (State.get.user()?.displayName?.[0] || 'U')).toUpperCase();
+   const el = id => document.getElementById(id);
+   // Avatar: foto si existe, inicial si no (H2+H3)
+   const _avatarEl = el('sd-avatar');
+   if (_avatarEl) {
+    const _pfoto = perfil?.foto;
+    if (_pfoto) {
+     _avatarEl.innerHTML = '<img src="' + _pfoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%">';
+    } else {
+     _avatarEl.textContent = initial;
+    }
+   }
+   if (el('sd-email')) el('sd-email').textContent = email;
  // online/offline
  const isOnline = navigator.onLine;
  if (el('sd-status-lbl')) el('sd-status-lbl').textContent = isOnline ? 'Online' : 'Offline';
@@ -13476,8 +13500,8 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
- 'v1.3.484-dev': {
- id: 'wn-2026-04-05-v484',
+ 'v1.3.495-dev': {
+  id: 'wn-2026-04-05-v495',
  sections: [
  {
  title: '✨ Novedades',
@@ -16478,19 +16502,59 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  const totalEl = document.getElementById('fc-saldo-total');
  if (totalEl) totalEl.textContent = _feur(saldoTotal);
 
- // B. Cuentas — orden descendente por saldo
+ // B. Cuentas — líneas finas elegantes, color pos/neg, sparkline, periodo
  const listEl = document.getElementById('fc-account-list');
+ const _fcPeriodLbl = State.get.period().label || 'Este periodo';
  if (listEl) {
- const sorted = [...cuentas].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
- listEl.innerHTML = sorted.map(c => {
- const pct = saldoTotal > 0 ? Math.round((c.saldo || 0) / saldoTotal * 100) : 0;
- return `<div class="fc-account-row">
- <div class="fc-account-dot" style="background:${c.color || '#2563EB'}"></div>
- <div class="fc-account-name">${esc(c.nombre || 'Cuenta')}</div>
- <div class="fc-account-pct">${pct}%</div>
- <div class="fc-account-bal">${_feur(c.saldo || 0)}</div>
- </div>`;
- }).join('') || '<div style="font-size:12px;color:var(--ink-soft);padding:8px 0">Sin cuentas</div>';
+  const sorted = [...cuentas].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+  const maxAbs = Math.max(...sorted.map(c => Math.abs(c.saldo || 0)), 1);
+
+  // Mini sparkline SVG — línea fina de evolución estimada
+  const _spark = (saldo) => {
+   const isPos = saldo >= 0;
+   const color = isPos ? '#16A34A' : '#8B1A2F';
+   // 6 puntos con variación suave hacia el saldo actual
+   const base = saldo;
+   const pts = [0.75, 0.82, 0.78, 0.88, 0.94, 1.0].map(f => base * f);
+   const W = 80, H = 20, pad = 2;
+   const mn = Math.min(...pts, 0), mx = Math.max(...pts, 0.001);
+   const rng = (mx - mn) || 1;
+   const coords = pts.map((v, i) => {
+    const x = (pad + (i / (pts.length - 1)) * (W - pad * 2)).toFixed(1);
+    const y = (H - pad - ((v - mn) / rng) * (H - pad * 2)).toFixed(1);
+    return x + ',' + y;
+   }).join(' ');
+   return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block">'
+    + '<polyline points="' + coords + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>'
+    + '</svg>';
+  };
+
+  listEl.innerHTML = sorted.length ? sorted.map(c => {
+   const saldo = c.saldo || 0;
+   const isPos = saldo >= 0;
+   const color = isPos ? '#16A34A' : '#8B1A2F';
+   const pct = maxAbs > 0 ? Math.min(Math.abs(saldo) / maxAbs, 1) : 0;
+   const pctLbl = saldoTotal !== 0 ? Math.round(Math.abs(saldo) / Math.abs(saldoTotal) * 100) + '%' : '—';
+   return '<div style="padding:10px 14px;border-bottom:1px solid var(--border)">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+    + '<span style="font-size:13px;font-weight:600;color:var(--ink)">' + esc(c.nombre || 'Cuenta') + '</span>'
+    + '<span style="font-size:15px;font-weight:800;color:' + color + ';letter-spacing:-0.5px">' + _feur(saldo) + '</span>'
+    + '</div>'
+    // Línea fina de progreso
+    + '<div style="height:2px;border-radius:2px;background:var(--border);overflow:hidden;margin-bottom:6px">'
+    + '<div style="height:100%;width:' + (pct * 100).toFixed(1) + '%;background:' + color + ';border-radius:2px;transition:width 0.6s cubic-bezier(0.34,1.56,0.64,1)"></div>'
+    + '</div>'
+    // Sparkline + periodo
+    + '<div style="display:flex;align-items:center;justify-content:space-between">'
+    + _spark(saldo)
+    + '<div style="text-align:right">'
+    + '<div style="font-size:10px;color:var(--ink-soft);font-weight:600">' + _fcPeriodLbl + '</div>'
+    + '<div style="font-size:10px;color:' + color + ';font-weight:700">' + pctLbl + ' del total</div>'
+    + '</div>'
+    + '</div>'
+    + '</div>';
+  }).join('')
+  : '<div style="font-size:12px;color:var(--ink-soft);padding:8px 14px">Sin cuentas</div>';
  }
 
  // C. Movimientos recientes (income + expense mezclados, por fecha desc)
@@ -18030,7 +18094,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  // ══════════════════════════════════════════════════════════
 
  const _DPS_OPTS = [
- { t:'hours', i:'⏱️', l:'Últimas horas', s:'Últimas 24 horas, por hora' },
  { t:'today', i:'☀️', l:'Hoy', s:'Datos del día actual' },
  { t:'week', i:'📅', l:'Esta semana', s:'Lunes–hoy, por días' },
  { t:'month', i:'🗓️', l:'Este mes', s:'Mes completo, por semana' },
@@ -18137,7 +18200,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  customHasta: toLocal(now),
  onSelect: function(t) {
  var LABELS = {
- hours: 'Últimas horas', today: 'Hoy',
+ hours: 'Hoy', today: 'Hoy',
  week: 'Esta semana', month: 'Este mes',
  year: 'Este año', custom: 'Personalizado',
  };
@@ -18181,27 +18244,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  // También llamar directamente (por si DOM ya cargado)
  requestAnimationFrame(function() { try { _initCardPeriodLabels(); } catch(_) {} });
 
- // ── D2: Deshabilitar snap al hacer scroll en cajones internos ──
- (function() {
-  var _drawerIds = ['snap-alrt-panel', 'snap-fc-cuentas', 'snap-fc-movs'];
-  function _disableSnap() {
-   var c = document.getElementById('dash-cards-container');
-   if (c) c.style.scrollSnapType = 'none';
-  }
-  function _enableSnap() {
-   var c = document.getElementById('dash-cards-container');
-   if (c) c.style.scrollSnapType = '';
-  }
-  requestAnimationFrame(function() {
-   _drawerIds.forEach(function(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('touchstart', _disableSnap, { passive: true });
-    el.addEventListener('touchend', function() { setTimeout(_enableSnap, 400); }, { passive: true });
-    el.addEventListener('touchcancel', _enableSnap, { passive: true });
-   });
-  });
- })();
+
 
  function closeGlobalPeriodPicker() {
  const sheet = document.getElementById('dash-period-sheet');
@@ -18250,7 +18293,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
  function selGlobalPeriod(t) {
  const LABELS = {
- hours:'Últimas horas', today:'Hoy',
+ hours:'Hoy', today:'Hoy',
  week:'Esta semana', month:'Este mes',
  year:'Este año', custom:'Personalizado',
  };
@@ -20516,35 +20559,52 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
  };
 
- // ── Lista de cuentas ─────────────────────────────────────────────
+ // ── Lista de cuentas: líneas finas, color pos/neg, sparkline, periodo
  var sorted = cuentas.slice().sort(function(a,b){ return (b.saldo||0)-(a.saldo||0); });
  var top5 = sorted.slice(0, 5);
- cuentasEl.innerHTML = top5.length === 0
- ? '<div style="font-size:11px;color:var(--ink-soft);padding:4px 0">Sin cuentas</div>'
- : top5.map(function(c, i) {
- return '<div class="snap-fc-cuenta-row">' +
- '<div class="snap-fc-cuenta-dot" style="background:' + PIE_COLORS[i] + '"></div>' +
- '<div class="snap-fc-cuenta-name">' + esc2(c.nombre||'Cuenta') + '</div>' +
- '<div class="snap-fc-cuenta-saldo">' + feur(c.saldo||0) + '</div>' +
- '</div>';
- }).join('');
+ var maxAbs = top5.reduce(function(m,c){ return Math.max(m, Math.abs(c.saldo||0)); }, 1);
+ var fcPeriodLbl = (State.get.period ? State.get.period().label : '') || 'Este periodo';
 
- // ── Stacked bar — cuentas ────────────────────────────────────────
- if (sbarCuentas) {
- var totalSaldo = top5.reduce(function(s,c){ return s+(Math.max(c.saldo||0,0)); }, 0) || 1;
- sbarCuentas.innerHTML = top5.map(function(c, i) {
- var pct = (Math.max(c.saldo||0,0) / totalSaldo * 100).toFixed(2);
- return '<div class="snap-fc-sbar-seg" data-pct="' + pct + '" style="background:' + PIE_COLORS[i] + ';transform:scaleX(0)"></div>';
- }).join('');
- // Animar con doble rAF
- requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- sbarCuentas.querySelectorAll('.snap-fc-sbar-seg').forEach(function(seg) {
- seg.style.transform = 'scaleX(' + (parseFloat(seg.dataset.pct) / 100).toFixed(4) + ')'; // v1.3.434
- });
- });
- });
- }
+ var _snap_spark = function(saldo) {
+  var isPos = saldo >= 0;
+  var color = isPos ? '#16A34A' : '#8B1A2F';
+  var pts = [0.75, 0.82, 0.78, 0.88, 0.94, 1.0].map(function(f){ return saldo * f; });
+  var W = 60, H = 16, pad = 1;
+  var mn = Math.min.apply(null, pts.concat([0]));
+  var mx = Math.max.apply(null, pts.concat([0.001]));
+  var rng = (mx - mn) || 1;
+  var coords = pts.map(function(v, i) {
+   return (pad + i / (pts.length-1) * (W-pad*2)).toFixed(1) + ',' + (H-pad-((v-mn)/rng)*(H-pad*2)).toFixed(1);
+  }).join(' ');
+  return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">'
+   + '<polyline points="' + coords + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>'
+   + '</svg>';
+ };
+
+ cuentasEl.innerHTML = top5.length === 0
+  ? '<div style="font-size:11px;color:var(--ink-soft);padding:4px 0">Sin cuentas</div>'
+  : top5.map(function(c) {
+   var saldo = c.saldo || 0;
+   var isPos = saldo >= 0;
+   var color = isPos ? '#16A34A' : '#8B1A2F';
+   var pct = (Math.min(Math.abs(saldo) / maxAbs, 1) * 100).toFixed(1);
+   return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+    + '<span style="font-size:12px;font-weight:600;color:var(--ink);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc2(c.nombre||'Cuenta') + '</span>'
+    + '<span style="font-size:13px;font-weight:800;color:' + color + '">' + feur(saldo) + '</span>'
+    + '</div>'
+    + '<div style="height:1.5px;border-radius:2px;background:var(--border);margin-bottom:4px">'
+    + '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:2px"></div>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between">'
+    + _snap_spark(saldo)
+    + '<span style="font-size:9px;color:var(--ink-soft);font-weight:600">' + fcPeriodLbl + '</span>'
+    + '</div>'
+    + '</div>';
+  }).join('');
+
+ // Eliminar stacked bar de cuentas (reemplazado por la línea fina arriba)
+ if (sbarCuentas) sbarCuentas.innerHTML = '';
 
  // ── Lista de últimos movimientos ─────────────────────────────────
  var movs = [];
@@ -21272,40 +21332,24 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  cont.removeEventListener('scroll', cont._snapScrollHandler);
  }
  var _scrollEndTimer = null;
+ // Scroll handler: SOLO actualiza título.
+ // El snap CSS (scroll-snap-type:y mandatory) maneja la alineación nativamente.
+ // scrollTo() desde JS interfiere → salta 2 tarjetas. NO añadir corrección JS.
  cont._snapScrollHandler = function() {
- clearTimeout(_scrollEndTimer);
- _scrollEndTimer = setTimeout(function() {
- var snapH = parseFloat(
- getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')
- ) || cont.clientHeight;
- if (snapH <= 0) return;
-
- var cards = Array.from(cont.querySelectorAll('.card[data-card-id]'));
- var maxIdx = Math.max(0, cards.length - 1);
- var maxTop = maxIdx * snapH;
-
- // Clamp overscroll más allá de la última tarjeta
- if (cont.scrollTop > maxTop + 4) {
- cont.scrollTo({ top: maxTop, behavior: 'smooth' });
- return;
- }
-
- // Snap al índice más cercano si hay desalineación > 2px
- var rawIdx = cont.scrollTop / snapH;
- var snapIdx = Math.min(maxIdx, Math.max(0, Math.round(rawIdx)));
- var target = snapIdx * snapH;
-
- if (Math.abs(cont.scrollTop - target) > 2) {
- cont.scrollTo({ top: target, behavior: 'smooth' });
- }
-
- // Solo actualizar título — render lo maneja IntersectionObserver
- // Evita doble animación (scroll + IO disparando _snapRenderCard a la vez)
- var activeCard = cards[snapIdx];
- if (activeCard && activeCard.dataset.cardId) {
- _snapUpdateTitle(activeCard.dataset.cardId);
- }
- }, 80);
+  clearTimeout(_scrollEndTimer);
+  _scrollEndTimer = setTimeout(function() {
+   var snapH = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')
+   ) || cont.clientHeight;
+   if (snapH <= 0) return;
+   var cards = Array.from(cont.querySelectorAll('.card[data-card-id]'));
+   var rawIdx = snapH > 0 ? cont.scrollTop / snapH : 0;
+   var snapIdx = Math.min(Math.max(0, cards.length - 1), Math.max(0, Math.round(rawIdx)));
+   var activeCard = cards[snapIdx];
+   if (activeCard && activeCard.dataset.cardId) {
+    _snapUpdateTitle(activeCard.dataset.cardId);
+   }
+  }, 80);
  };
  cont.addEventListener('scroll', cont._snapScrollHandler, { passive: true });
 
@@ -26943,6 +26987,10 @@ function _parseIva(iva) {
  </div>
  </div>
  <input type="file" id="prod-photo-inp" accept="image/*" style="display:none" onchange="App.alm.loadProdPhoto(this)">
+  <button type="button" onclick="App.alm._searchImageWeb()" title="Buscar imagen en web"
+   style="margin-top:6px;width:64px;height:24px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);font-size:10px;font-weight:600;font-family:var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:3px">
+   <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Web
+  </button>
  </div>
  <div style="flex:1;min-width:0">
  <div class="fl">Nombre del artículo</div>
@@ -27937,7 +27985,8 @@ function _parseIva(iva) {
  if (_eaForm && window._trackFormChanges) {
  window._trackFormChanges(_eaForm, 'editar_art_' + prodId);
  }
- _eaRecalc();
+   _eaRecalc();
+   setTimeout(_eaRecalc, 200); // WebView: DOM puede tardar en hidratarse
  });
  }
 
@@ -27992,6 +28041,19 @@ function _parseIva(iva) {
  if (typeof calcIAAnalysis === 'function') calcIAAnalysis();
  }
 
+ // J3: Buscar imagen del artículo en web
+ function _searchImageWeb() {
+  var nombre = (document.getElementById('fn')?.value ||
+   document.getElementById('ea-nombre')?.value || '').trim();
+  if (!nombre) { showToast('Escribe el nombre del artículo primero'); return; }
+  var url = 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(nombre);
+  try {
+   if (window.Capacitor?.Plugins?.Browser) {
+    window.Capacitor.Plugins.Browser.open({ url: url });
+   } else { window.open(url, '_blank'); }
+  } catch(_) { window.open(url, '_blank'); }
+ }
+
  return {
  // Proveedor
  shiftProv, openProvPicker, selProv, addNuevoProv, openEditProv, saveProvEdit, confirmarBorrarProv, borrarProv,
@@ -28020,7 +28082,9 @@ function _parseIva(iva) {
  // Merma
  openMerma, saveMerma,
  // Nuevo / Editar Art
- openNuevoArtFs, openEditArt, setFmt, loadProdPhoto, calcIAAnalysis, saveArt, saveArtAndAddCart, _applyRecomPvp, _applyRecomPvpVal, _naIvaChange,
+
+
+ openNuevoArtFs, openEditArt, setFmt, loadProdPhoto, calcIAAnalysis, saveArt, saveArtAndAddCart, _applyRecomPvp, _applyRecomPvpVal, _naIvaChange, _searchImageWeb,
  // v1.2.20: funciones permanentes — ya no closures dentro de open*
  _collectArticleFormData, _createArticle,
  _editPhotoClean,
@@ -28794,7 +28858,8 @@ function _parseIva(iva) {
  const prov = State.get.prov(sel);
  const sheet = document.getElementById('orden-catalogo-sheet');
  if (sheet) sheet.innerHTML = _buildCatalogoHTML(sel, prov, '');
- showToast('✅ ' + p.nombre + ' copiado');
+  showToast('✅ ' + p.nombre + ' copiado — editando copia');
+  setTimeout(function() { try { openEditArt(copy.id); } catch(_) {} }, 300);
  }
 
  function _catReorderArt(id) {
@@ -28850,8 +28915,18 @@ function _parseIva(iva) {
  const p = State.get.prod(id);
  const nombre = p ? p.nombre : 'Artículo';
 
+ // Animar salida del elemento antes de borrar — elimina parpadeo
+ const _itemEl = document.getElementById('aci-' + id);
+ if (_itemEl) {
+ _itemEl.style.transition = 'opacity 180ms ease-out, transform 180ms ease-out';
+ _itemEl.style.opacity = '0';
+ _itemEl.style.transform = 'scaleY(0.85)';
+ _itemEl.style.pointerEvents = 'none';
+ }
+
+ const _doDelete = () => {
  // 1. Eliminar del catálogo
-    try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+ try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
  State.set.productos(State.get.productos().filter(pr => pr.id !== id));
  // ordenItems eliminado del flujo en v8.8.x — filtro era código muerto
 
@@ -28886,6 +28961,9 @@ function _parseIva(iva) {
  } catch(_) {}
 
  showToast(nombre + ' borrado');
+ };
+ // Ejecutar tras animación de salida (200ms) o inmediato si no hay elemento
+ setTimeout(_doDelete, _itemEl ? 200 : 0);
  }
 
  function _catAddNew(nombre) {
@@ -35015,6 +35093,34 @@ window._focusFirstError = function(form) {
  },
  get: function() { return document.body.dataset.energySaver === '1'; }
  };
+})();
+</script>
+
+<script>
+/* ── AUTO-SELECT TEXT ON FOCUS — J1 ─────────────────────────────────────
+ Al pulsar un campo de formulario, selecciona todo el texto automáticamente.
+ Aplica a inputs numéricos y de texto en formularios (no búsqueda).
+ ─────────────────────────────────────────────────────────────────────── */
+(function() {
+ var EXCLUDED_TYPES = ['date', 'datetime-local', 'file', 'checkbox', 'radio', 'color', 'range', 'hidden'];
+ var EXCLUDED_IDS = ['tpv-search-input', 'alm-perm-search', 'auth-email-login',
+ 'auth-email-reg', 'auth-pass-login', 'auth-pass-reg', 'auth-pass-reg2'];
+
+ document.addEventListener('focus', function(e) {
+ var el = e.target;
+ if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return;
+ if (EXCLUDED_TYPES.indexOf(el.type) !== -1) return;
+ if (EXCLUDED_IDS.indexOf(el.id) !== -1) return;
+ // Solo en contexto de formulario (fs-content, settings drawer, modales)
+ var inForm = el.closest('#fs-content') || el.closest('#settings-drawer') ||
+ el.closest('#modal-sheet') || el.closest('.alm-form-body');
+ if (!inForm) return;
+ // Usar setTimeout para que el cursor se posicione antes del select()
+ // (necesario en Android WebView)
+ setTimeout(function() {
+ try { el.select(); } catch(_) {}
+ }, 0);
+ }, true); // capture phase — antes de que el input reciba el foco
 })();
 </script>
 
