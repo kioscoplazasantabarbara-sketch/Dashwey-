@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.561-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.562-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.561-dev</title>
+<title>Dashwey v1.3.562-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11733,7 +11733,11 @@ const FinEngine = (() => {
   // v1.3.551: fraccion directa en ms — consistente con beneficioNeto()
   const _snapFrac = Math.max(0, (range.end - range.start)) / (30 * 86400000);
   const benNeto = money(ing - cogs - money(gop * _snapFrac));
- const mgBruto = ing > 0 ? Math.round((ing - cogs) / ing * 100) : 0;
+ // v1.3.562: mgBruto usa solo ventas TPV (sin ingFin) — margen es KPI comercial puro
+ const _vtaTPV = (State.get.ventas() || [])
+   .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
+   .reduce((s, v) => s + ventaIngresos(v), 0);
+ const mgBruto = _vtaTPV > 0 ? Math.round((_vtaTPV - cogs) / _vtaTPV * 100) : 0;
  const saldo = saldoCuentas();
  const rw = runway();
  const ratio = ratioLiquidez();
@@ -12542,7 +12546,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.561-dev';
+ const _APP_VERSION = 'v1.3.562-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13599,7 +13603,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.561-dev': {
+  'v1.3.562-dev': {
    id: 'wn-2026-04-05-v547',
   sections: [
   {
@@ -20783,21 +20787,19 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  ventasPeriodo.forEach(function(v) {
  (v.items || []).forEach(function(it) { prodIdsVendidos[it.prodId] = true; });
  });
- var prodsConMargen = Object.keys(prodIdsVendidos).length > 0
- // Periodo con ventas: filtrar solo productos vendidos con coste conocido
- ? prods.filter(function(p) {
- return prodIdsVendidos[p.id] && p.pvp > 0 && (p.precioCompra || 0) > 0;
- })
- // Sin ventas en periodo: fallback a todos los productos con coste
- : prods.filter(function(p) { return p.pvp > 0 && (p.precioCompra || 0) > 0; });
+ // v1.3.562: _calcMargenProd prorratea precioCompra/udsCaja + IVA correctamente
+ var prodsBase = Object.keys(prodIdsVendidos).length > 0
+ ? prods.filter(function(p) { return prodIdsVendidos[p.id]; })
+ : prods;
+ var prodsConMargen = prodsBase.map(function(p) { return _calcMargenProd(p); })
+ .filter(function(r) { return r.valid; });
  if (prodsConMargen.length > 0) {
- margenMedio = prodsConMargen.reduce(function(s, p) {
- return s + (p.pvp - (p.precioCompra || 0)) / p.pvp * 100;
- }, 0) / prodsConMargen.length;
+ margenMedio = prodsConMargen.reduce(function(s, r) { return s + r.mg; }, 0) / prodsConMargen.length;
  }
  } catch(_) {
- // Fallback: todos los productos con coste
- var _fb = prods.filter(function(p){ return p.pvp > 0 && (p.precioCompra||0) > 0; });
+ // Fallback: todos los productos con margen calculable
+ var _fb = (prods || []).map(function(p){ return _calcMargenProd(p); })
+ .filter(function(r){ return r.valid; });
  if (_fb.length) margenMedio = _fb.reduce(function(s,p){
  return s + (p.pvp-(p.precioCompra||0))/p.pvp*100;
  }, 0) / _fb.length;
