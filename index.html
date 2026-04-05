@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-512-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-513-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.512-dev</title>
+<title>Dashwey v1.3.513-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10440,6 +10440,49 @@ const State = (() => {
  let _saveTimer = null; // debounce timer
 
  // ── 1. Siempre local (síncrono) ────────────────────────────────
+ // v1.3.512: _archivePayload — recorta arrays grandes SOLO en el payload
+ // de persistencia. _state en memoria queda INTACTO para que Dashboard
+ // y KPIs operen siempre sobre datos completos de la sesión actual.
+ //
+ // Reglas de archivo:
+ //   ventas       → conservar TODAS si < 3000; si >= 3000 conservar
+ //                  las del mes activo + las más recientes hasta 3000
+ //   mermas       → cap fijo 1000 (más recientes)
+ //   historialPedidos → cap fijo 1000 (más recientes)
+ function _archivePayload(state) {
+ var now = Date.now();
+ var MS_90 = 90 * 24 * 60 * 60 * 1000; // 90 días en ms
+ var CAP_MERMAS = 1000;
+ var CAP_PEDIDOS = 1000;
+ var CAP_VENTAS = 3000;
+ // Recortar ventas: si > CAP_VENTAS, conservar periodo activo + recientes
+ var ventas = state.ventas || [];
+ if (ventas.length > CAP_VENTAS) {
+ // Separar: ventas recientes (<90d) y antiguas (>=90d)
+ var cutoff = now - MS_90;
+ var recientes = ventas.filter(function(v) { return new Date(v.fecha).getTime() >= cutoff; });
+ var antiguas = ventas.filter(function(v) { return new Date(v.fecha).getTime() < cutoff; });
+ // Si recientes ya superan el cap, conservar solo las más recientes
+ if (recientes.length >= CAP_VENTAS) {
+ ventas = recientes.slice(-CAP_VENTAS);
+ } else {
+ // Completar hasta CAP_VENTAS con antiguas más recientes
+ var slots = CAP_VENTAS - recientes.length;
+ ventas = antiguas.slice(-slots).concat(recientes);
+ }
+ }
+ // Cap fijo mermas y historialPedidos
+ var mermas = (state.mermas || []).length > CAP_MERMAS
+ ? state.mermas.slice(-CAP_MERMAS) : state.mermas;
+ var historialPedidos = (state.historialPedidos || []).length > CAP_PEDIDOS
+ ? state.historialPedidos.slice(-CAP_PEDIDOS) : state.historialPedidos;
+ // Solo crear objeto nuevo si hay diferencia — evita clone innecesario
+ if (ventas === state.ventas && mermas === state.mermas && historialPedidos === state.historialPedidos) {
+ return state;
+ }
+ return Object.assign({}, state, { ventas: ventas, mermas: mermas, historialPedidos: historialPedidos });
+ }
+
  function _writeLocal(data) {
  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
  catch(e) { console.warn('[Dashwey/Local] Error al guardar:', e); }
@@ -10581,7 +10624,7 @@ const State = (() => {
  const _ts0 = Date.now();
  const _did0 = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
- _writeLocal(_state);
+ _writeLocal(_archivePayload(_state));
  return;
  }
  if (!navigator.onLine || !fb.ready) {
@@ -10589,8 +10632,8 @@ const State = (() => {
  const _ts0 = Date.now();
  const _did0 = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
- _writeLocal(_state);
- _pendingQueue = [JSON.parse(JSON.stringify(_state))];
+ _writeLocal(_archivePayload(_state));
+ _pendingQueue = [JSON.parse(JSON.stringify(_archivePayload(_state)))];
  State.set.syncStatus({ mode: 'local', pendingWrites: 1 });
  return;
  }
@@ -10614,7 +10657,7 @@ const State = (() => {
  const _ts = Date.now();
  const _did = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
- _writeLocal(_state);
+ _writeLocal(_archivePayload(_state));
  const _t1FB = Date.now();
  // v1.3.435: badge syncing solo si Firebase esta habilitado y registrado
  if (fb?.enabled && fb.isRegistered?.()) {
@@ -10622,7 +10665,7 @@ const State = (() => {
  if (_badge) _badge.style.opacity = '1';
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing');
  }
- _writeFirebase(_state)
+ _writeFirebase(_archivePayload(_state))
  .then(() => {
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
@@ -12460,7 +12503,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.512-dev';
+ const _APP_VERSION = 'v1.3.513-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
