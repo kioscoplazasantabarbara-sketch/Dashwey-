@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-552-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-553-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.553-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.552-dev</title>
+<title>Dashwey v1.3.553-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11131,7 +11131,8 @@ const KPI = (() => {
  const totales = {};
  pedidos.forEach(ped => {
  (ped.items || []).forEach(item => { // v1.3.526: guard ped.items undefined
- const coste = item.ncajas * item.precio * 1.10;
+   const _iva = item.iva !== undefined ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
+   const coste = item.ncajas * item.precio * _iva; // B-8: IVA real por item
  totales[item.prodId] = (totales[item.prodId] || 0) + coste;
  });
  });
@@ -12220,8 +12221,9 @@ const Utils = (() => {
  el.style.opacity = '0';
  el.style.transition = 'opacity 0.18s ease';
  requestAnimationFrame(() => {
- el.style.opacity = '';
- el.style.transition = '';
+   el.style.opacity = '';
+   el.style.transition = '';
+   el.innerHTML = ''; // B-1: limpiar skeleton del DOM tras fade
  });
  }
 
@@ -12539,7 +12541,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.552-dev';
+ const _APP_VERSION = 'v1.3.553-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13596,7 +13598,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.552-dev': {
+  'v1.3.553-dev': {
    id: 'wn-2026-04-05-v547',
   sections: [
   {
@@ -14366,7 +14368,7 @@ const nav = (() => {
  document.getElementById('dash-period-sheet')?.classList.contains('open') ||
  document.getElementById('whats-new-overlay')?.classList.contains('open') ||
  document.getElementById('modal-overlay')?.classList.contains('open') ||
- document.getElementById('ss-overlay')?.classList.contains('ss-active') // v1.3.535: SideSheet guard
+ document.getElementById('ss-overlay')?.classList.contains('ss-active') // v1.3.535: SideSheet guard // ss-overlay dinámico: ?. cubre null si nunca se abrió
  );
  }
 
@@ -15394,7 +15396,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  (function setupPullRefresh() {
  let ptStart = 0, ptActive = false, ptIndicator = null, _ptDashBusy = false;
  function getPTI() {
- if(!ptIndicator) {
+  if(!ptIndicator || !document.contains(ptIndicator)) {
+   ptIndicator = null; // B-2: reinjectar si huerfano tras re-render
  // v1.3.117: círculo eliminado — pill de texto "Sincronizando…"
  ptIndicator = document.createElement('div');
  ptIndicator.innerHTML = '<span style="font-size:11px;font-weight:600;color:var(--ink-soft);font-family:Inter,var(--font),sans-serif">Actualizando…</span>';
@@ -22258,7 +22261,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  function init() {
  // v1.3.437: usar selectores directos en lugar de indices de posicion
  var tpvPage = document.getElementById('tab-tpv');
- var dashPage = document.querySelector('.tab-page:nth-child(2)');
+  var dashPage = document.getElementById('tab-dash') ||
+   document.querySelectorAll('.tab-page')[1]; // B-4: fallback robusto
  var almPage = document.querySelector('#alm-scroll-el');
  attach(tpvPage, document.querySelector('.tpv-page-header'));
  attach(dashPage, document.querySelector('.dash-page-header'));
@@ -23794,13 +23798,14 @@ const tpv = (() => {
  } catch(e) {}
  }
 
- function _showMiniToast(msg) {
+  var _miniToastTimer = null; // B-5: timer en closure, no en nodo DOM
+  function _showMiniToast(msg) {
  const t = document.getElementById('tpv-mini-toast');
  if (!t) return;
  t.textContent = msg;
  t.className = 'show';
- clearTimeout(t._timer);
- t._timer = setTimeout(() => {
+   clearTimeout(_miniToastTimer);
+ _miniToastTimer = setTimeout(() => {
  t.className = 'hide';
  setTimeout(() => { t.className = ''; }, 200);
  }, 1200);
@@ -24667,8 +24672,8 @@ const tpvQG = (() => {
 
  // ── Persistencia ──────────────────────────────────────────────────────
  function _load() {
- try { const c = window.App && window.App.State ? window.App.State.get.qgCells() : []; if (c && c.length) _cells = c.slice(); } catch(_) {}
- try { const i = window.App && window.App.State ? window.App.State.get.qgSizeIdx() : DEFAULT_IDX; if (i >= 0 && i < SIZES.length) _sizeIdx = i; } catch(_) {}
+ try { const c = window.App && window.App.State ? window.App.State.get.qgCells() : []; if (c && c.length) _cells = c.slice(); } catch(e) { console.warn('[tpvQG] _load cells error:', e); } // B-9
+ try { const i = window.App && window.App.State ? window.App.State.get.qgSizeIdx() : DEFAULT_IDX; if (i >= 0 && i < SIZES.length) _sizeIdx = i; } catch(e) { console.warn('[tpvQG] _load size error:', e); } // B-9
  }
  function _save() { try { if (window.App && window.App.State) window.App.State.set.qgCells(_cells.slice()); } catch(_) {} }
  function _saveSize() { try { if (window.App && window.App.State) window.App.State.set.qgSizeIdx(_sizeIdx); } catch(_) {} }

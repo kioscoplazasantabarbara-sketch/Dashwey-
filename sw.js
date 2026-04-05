@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.552-dev
-   Cache: dashwey-v1-3-552-dev
+   Dashwey Service Worker v1.3.553-dev
+   Cache: dashwey-v1-3-553-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,12 +12,12 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-552-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
+const CACHE_NAME  = 'dashwey-v1-3-553-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
 const PRECACHE_URLS = [
-  './index.html',   /* Pre-cachear HTML para modo offline */
+  /* B-7: index.html no se pre-cachea — fetch handler lo sirve siempre de red */
   /* version.json se sirve siempre de red — no pre-cachear */
 ];
 
