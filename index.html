@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-523-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-503-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.523-dev</title>
+<title>Dashwey v1.3.503-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10440,56 +10440,9 @@ const State = (() => {
  let _saveTimer = null; // debounce timer
 
  // ── 1. Siempre local (síncrono) ────────────────────────────────
- // v1.3.512: _archivePayload — recorta arrays grandes SOLO en el payload
- // de persistencia. _state en memoria queda INTACTO para que Dashboard
- // y KPIs operen siempre sobre datos completos de la sesión actual.
- //
- // Reglas de archivo:
- //   ventas       → conservar TODAS si < 3000; si >= 3000 conservar
- //                  las del mes activo + las más recientes hasta 3000
- //   mermas       → cap fijo 1000 (más recientes)
- //   historialPedidos → cap fijo 1000 (más recientes)
- function _archivePayload(state) {
- var now = Date.now();
- var MS_90 = 90 * 24 * 60 * 60 * 1000; // 90 días en ms
- var CAP_MERMAS = 1000;
- var CAP_PEDIDOS = 1000;
- var CAP_VENTAS = 3000;
- // Recortar ventas: si > CAP_VENTAS, conservar periodo activo + recientes
- var ventas = state.ventas || [];
- if (ventas.length > CAP_VENTAS) {
- // Separar: ventas recientes (<90d) y antiguas (>=90d)
- var cutoff = now - MS_90;
- var recientes = ventas.filter(function(v) { return new Date(v.fecha).getTime() >= cutoff; });
- var antiguas = ventas.filter(function(v) { return new Date(v.fecha).getTime() < cutoff; });
- // Si recientes ya superan el cap, conservar solo las más recientes
- if (recientes.length >= CAP_VENTAS) {
- ventas = recientes.slice(-CAP_VENTAS);
- } else {
- // Completar hasta CAP_VENTAS con antiguas más recientes
- var slots = CAP_VENTAS - recientes.length;
- ventas = antiguas.slice(-slots).concat(recientes);
- }
- }
- // Cap fijo mermas y historialPedidos
- var mermas = (state.mermas || []).length > CAP_MERMAS
- ? state.mermas.slice(-CAP_MERMAS) : state.mermas;
- var historialPedidos = (state.historialPedidos || []).length > CAP_PEDIDOS
- ? state.historialPedidos.slice(-CAP_PEDIDOS) : state.historialPedidos;
- // Solo crear objeto nuevo si hay diferencia — evita clone innecesario
- if (ventas === state.ventas && mermas === state.mermas && historialPedidos === state.historialPedidos) {
- return state;
- }
- return Object.assign({}, state, { ventas: ventas, mermas: mermas, historialPedidos: historialPedidos });
- }
-
  function _writeLocal(data) {
  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
- catch(e) {
- console.warn('[Dashwey/Local] Error al guardar:', e);
- // v1.3.514: avisar al usuario si localStorage está lleno — error crítico silencioso
- try { (window.showToast || window.Utils?.showToast)('⚠️ Almacenamiento lleno. Algunos datos no se guardaron localmente.'); } catch(_) {}
- }
+ catch(e) { console.warn('[Dashwey/Local] Error al guardar:', e); }
  }
 
  // ── 2. Firebase en segundo plano (async, silencioso) ───────────
@@ -10628,7 +10581,7 @@ const State = (() => {
  const _ts0 = Date.now();
  const _did0 = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
- _writeLocal(_archivePayload(_state));
+ _writeLocal(_state);
  return;
  }
  if (!navigator.onLine || !fb.ready) {
@@ -10636,8 +10589,8 @@ const State = (() => {
  const _ts0 = Date.now();
  const _did0 = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
- _writeLocal(_archivePayload(_state));
- _pendingQueue = [JSON.parse(JSON.stringify(_archivePayload(_state)))];
+ _writeLocal(_state);
+ _pendingQueue = [JSON.parse(JSON.stringify(_state))];
  State.set.syncStatus({ mode: 'local', pendingWrites: 1 });
  return;
  }
@@ -10646,13 +10599,8 @@ const State = (() => {
  // Guard de duplicados: no escribir si el estado no ha cambiado
  // v1.3.294: FIX — pendingOrders e ingresosFin incluidos para evitar sync silenciosa fallida
  // v1.3.431: hash ampliado -- incluye settings, historialPedidos, mermas, tickets, visitas
- // v1.3.513: ventas usa fingerprint length|lastId en lugar del array completo
- // Ventas son append-only → length+lastId detecta todos los cambios posibles
- // Evita JSON.stringify de hasta 15MB en negocios con historial largo
- const _vt = _state.ventas || [];
- const _vtFP = _vt.length + '|' + (_vt[_vt.length - 1]?.id || '');
  const _hashable = JSON.stringify({
- p: _state.productos, v: _state.proveedores, vt: _vtFP,
+ p: _state.productos, v: _state.proveedores, vt: _state.ventas,
  c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre,
  po: _state.pendingOrders, ig: _state.ingresosFin,
  st: _state.settings, hp: _state.historialPedidos||[],
@@ -10666,7 +10614,7 @@ const State = (() => {
  const _ts = Date.now();
  const _did = window._DashweyDeviceId || 'unknown';
  if (_state.user) { _state.user.lastSyncAt = _ts; _state.user.lastDeviceId = _did; }
- _writeLocal(_archivePayload(_state));
+ _writeLocal(_state);
  const _t1FB = Date.now();
  // v1.3.435: badge syncing solo si Firebase esta habilitado y registrado
  if (fb?.enabled && fb.isRegistered?.()) {
@@ -10674,7 +10622,7 @@ const State = (() => {
  if (_badge) _badge.style.opacity = '1';
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing');
  }
- _writeFirebase(_archivePayload(_state))
+ _writeFirebase(_state)
  .then(() => {
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
@@ -12512,7 +12460,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.523-dev';
+ const _APP_VERSION = 'v1.3.503-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13360,8 +13308,7 @@ const ui = (() => {
  const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
  if (!email) { Utils.showToast('Email obligatorio'); return; }
 
- // v1.3.522: spread para no mutar _state directamente — consistente con _teamRemove/_teamTogglePerm
- const members = [...((State.get.teamMembers ? State.get.teamMembers() : null) || [])];
+ const members = (State.get.teamMembers ? State.get.teamMembers() : null) || [];
  if (members.find(m => m.email === email)) { Utils.showToast('Este miembro ya existe'); return; }
 
  // Leer permisos seleccionados
@@ -13384,8 +13331,7 @@ const ui = (() => {
 
  function _teamRemove(idx) {
  if (!canAccess('manage_users')) { showToast('🔒 Solo el propietario'); return; }
- // v1.3.520: spread para no mutar _state directamente antes del setter
- const members = [...((State.get.teamMembers ? State.get.teamMembers() : null) || [])];
+ const members = (State.get.teamMembers ? State.get.teamMembers() : null) || [];
  const removed = members.splice(idx, 1)[0];
  try { State.set.teamMembers(members); } catch(e) { showToast('⚠️ Error al eliminar el miembro'); return; }
  const subEl = document.getElementById('sd-team-sub');
@@ -13397,16 +13343,13 @@ const ui = (() => {
 
  function _teamTogglePerm(memberIdx, permId) {
  if (!canAccess('manage_users')) { showToast('🔒 Solo el propietario'); return; }
- // v1.3.521: copia inmutable — no mutar _state directamente
- const members = [...((State.get.teamMembers ? State.get.teamMembers() : null) || [])];
- const m = members[memberIdx] ? { ...members[memberIdx] } : null;
+ const members = (State.get.teamMembers ? State.get.teamMembers() : null) || [];
+ const m = members[memberIdx];
  if (!m) return;
- const perms = [...(m.perms || [])];
- const pos = perms.indexOf(permId);
- if (pos >= 0) perms.splice(pos, 1);
- else perms.push(permId);
- m.perms = perms;
- members[memberIdx] = m;
+ if (!m.perms) m.perms = [];
+ const pos = m.perms.indexOf(permId);
+ if (pos >= 0) m.perms.splice(pos, 1);
+ else m.perms.push(permId);
  try { State.set.teamMembers(members); } catch(e) { showToast('⚠️ Error al actualizar permisos'); return; }
  _renderTeamMgr();
 
@@ -14760,7 +14703,8 @@ const dash = (() => {
 
  // Aplicar modo dashboard al final del render (cache guard interno evita trabajo redundante)
  _applyDashMode();
- // v1.3.517: _updateAcceptBtn no está en scope de dash — se sincroniza via App.alm en goTab
+ // Sincronizar botón Aceptar rojo
+ if (typeof _updateAcceptBtn === 'function') _updateAcceptBtn();
  // v1.2.57: actualizar badge campana
  
  // v1.2.58: actualizar badge chat
@@ -14788,6 +14732,62 @@ const dash = (() => {
  // v1.3.118: toast eliminado — el shimmer es el único feedback visual de refresh
  }
 
+
+ // ══ openTopVentasModal v9.5.73 — full list bottom sheet ═══════
+ function openTopVentasModal() {
+ const period = State.get.period();
+ const ventas = KPI.ventasEnPeriodo(period);
+
+ // Aggregate all items across ventas in period
+ const map = {};
+ ventas.forEach(v => {
+ const items = v.items || [{ prodId: v.prodId, qty: v.qty||1, pvp: v.pvp||0 }];
+ items.forEach(it => {
+ if (!it.prodId) return;
+ if (!map[it.prodId]) map[it.prodId] = { total: 0, uds: 0 };
+ map[it.prodId].total += (it.pvp||0) * (it.qty||0);
+ map[it.prodId].uds += (it.qty||0);
+ });
+ });
+
+ const all = Object.entries(map)
+ .map(([id, d]) => ({ prod: State.get.prod(id), ...d }))
+ .filter(x => x.prod)
+ .sort((a, b) => b.total - a.total);
+
+ const periodLabel = State.get.period().label || 'Este periodo';
+
+ const html = all.length
+ ? all.map(({ prod, total, uds }) => {
+ const thumb = prod.foto
+ ? `<div class="ta-thumb"><img loading="lazy" src="${prod.foto}" alt=""></div>`
+ : `<div class="ta-thumb">${prod.e || '📦'}</div>`;
+ return `<div class="ta-item">
+ ${thumb}
+ <div class="ta-info"><div class="ta-name">${esc(prod.nombre)}</div></div>
+ <div class="ta-right">
+ <div class="ta-price">${feur(total)}</div>
+ <div class="ta-sold">x ${uds} vendidos</div>
+ </div>
+ </div>`;
+ }).join('')
+ : '<div class="modal-empty-state">Sin ventas en este período</div>';
+
+ App.ui.setFs(`
+ <div class="modal-header-dark">
+ <div class="mhd-row">
+ <div>
+ <div class="mhd-title">Artículos vendidos</div>
+ <div class="mhd-sub">${esc(periodLabel)}</div>
+ </div>
+ <button class="mhd-close" onclick="App.ui.closeFs()">×</button>
+ </div>
+ </div>
+ <div class="modal-list-body">
+ ${html}
+ </div>`);
+ App.ui.openFs();
+ }
 
  // ══ renderVentas v9.5.73 — SSOT fix: reads items[] correctly ══
  function renderVentas(period) {
@@ -15182,7 +15182,12 @@ const dash = (() => {
  State.set.period(newP);
  _updateSnavLabel(newP.label);
  _updateGlobalPeriodLabel(newP.label); // v1.3.429: sincronizar #dash-title-period-lbl
-
+ // Sincronizar appState.dateRange — v1.2.32
+ try {
+ const range = KPI.getRange(newP);
+ if (!window.appState) window.appState = {};
+ window.appState.dateRange = { from: range.start, to: range.end };
+ } catch(_) {}
  try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
  render();
  }
@@ -15713,8 +15718,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  if (iaBox && iaText) {
  const sugs = [];
  if (fijos/total > 0.8) sugs.push('⚠️ El '+Math.round(fijos/total*100)+'% son gastos fijos. Alta exposición al riesgo.');
- if (saldo > 0 && total > saldo*0.5) sugs.push('💡 Los gastos mensuales son el '+Math.round(total/saldo*100)+'% del saldo disponible.');
- const mayor = gastos.length ? gastos.reduce((a,b)=>(a.importe||0)>(b.importe||0)?a:b) : null;
+ if (total > saldo*0.5) sugs.push('💡 Los gastos mensuales son el '+Math.round(total/saldo*100)+'% del saldo disponible.');
+ const mayor = gastos.reduce((a,b)=>a.importe>b.importe?a:b, gastos[0]);
  if (mayor) sugs.push('📊 Mayor gasto: "'+mayor.nombre+'" ('+_feur(mayor.importe)+'/mes). Revisa si es optimizable.');
  if (sugs.length) { iaText.textContent = sugs[0]; iaBox.style.display = ''; }
  else iaBox.style.display = 'none';
@@ -16488,11 +16493,10 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  const gastos = State.get.gastosOp() || [];
  const ingresos = State.get.ingresosFin() || [];
  // Dirty-check -- skip si datos no cambiaron
- // v1.3.516: separador '|' evita colisiones por concatenación de strings
  const _newFcHash = JSON.stringify([
- cuentas.map(c => c.saldo + '|' + c.nombre),
- gastos.map(g => g.importe + '|' + g.fecha),
- ingresos.map(i => i.importe + '|' + i.fecha)
+ cuentas.map(c => c.saldo + c.nombre),
+ gastos.map(g => g.importe + g.fecha),
+ ingresos.map(i => i.importe + i.fecha)
  ]);
  if (_newFcHash === _fcHash) return;
  _fcHash = _newFcHash;
@@ -16617,7 +16621,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  try { renderGastos(); } catch(e) { console.warn('[Fin] gastos:', e); }
  try { renderIngresosFin(); } catch(e) { console.warn('[Fin] ingresos:', e); }
  try { renderPedidosCalendario(); } catch(e) { console.warn('[Fin] pedidos-cal:', e); }
- // v1.3.515: renderAgenda eliminado de renderFinanciero — ya se llama en render()
+ try { renderAgenda(); } catch(e) { console.warn('[Fin] agenda:', e); }
  try { _validarCoherenciaFinanciera(); } catch(e) {}
  }
 
@@ -17200,6 +17204,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  }
  }
 
+ DashweyBus.emit('gasto'); // v9.5.73 — before save for optimistic update
  State.set.addGasto({
  id: 'g' + Date.now(),
  nombre, categoria, importe, mensualEq,
@@ -17207,8 +17212,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  fechaPago, cuentaId,
  recurrente, frecuencia: periodo,
  });
- DashweyBus.emit('gasto'); // v1.3.515: emit DESPUÉS del save — datos siempre correctos
 
+ renderFinanciero();
  _calcReset();
  App.ui.closeFs();
  showToast('✅ ' + nombre + ' registrado');
@@ -18131,7 +18136,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  const label = fmtDate(desde) + ' → ' + fmtDate(hasta);
  State.set.period({ type:'custom', label, offset:0, customStart: desde, customEnd: hasta });
  _updateGlobalPeriodLabel(label);
-
+ // Sincronizar appState.dateRange — v1.2.32
+ try {
+ if (!window.appState) window.appState = {};
+ window.appState.dateRange = { from: new Date(desde), to: new Date(hasta) };
+ } catch(_) {}
  try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
  render();
  },
@@ -18309,7 +18318,12 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  const newPeriod = { type: t, label, offset: 0 };
  State.set.period(newPeriod);
 
-
+ // Sincronizar appState.dateRange con el nuevo rango calculado
+ try {
+ const range = KPI.getPresetRange(t);
+ if (!window.appState) window.appState = {};
+ window.appState.dateRange = { from: range.start, to: range.end };
+ } catch(_) {}
 
  // Actualizar label del botón inline en el título del Dashboard
  _updateGlobalPeriodLabel(label);
@@ -18390,7 +18404,11 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
  State.set.period({ type:'custom', label, offset:0, customStart: f, customEnd: t });
 
-
+ // Sincronizar appState.dateRange — v1.2.32
+ try {
+ if (!window.appState) window.appState = {};
+ window.appState.dateRange = { from: new Date(f), to: new Date(t) };
+ } catch(_) {}
 
  _updateGlobalPeriodLabel(label);
  closeGlobalPeriodPicker();
@@ -21362,7 +21380,7 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  // IntersectionObserver es unreliable en Android WebView con scroll-snap-type
  if (cont._snapFallbackHandler) {
  cont.removeEventListener('scrollend', cont._snapFallbackHandler);
- cont.removeEventListener('scroll', cont._snapFallbackHandler);
+ cont.removeEventListener('scroll', cont._snapFallbackTimer);
  }
  var _snapFbTimer = null;
  var _snapFbPoll = function() {
@@ -21407,11 +21425,6 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  if (cont && cont._snapScrollHandler) {
  cont.removeEventListener('scroll', cont._snapScrollHandler);
  cont._snapScrollHandler = null;
- }
- if (cont && cont._snapFallbackHandler) {
- cont.removeEventListener('scrollend', cont._snapFallbackHandler);
- cont.removeEventListener('scroll', cont._snapFallbackHandler);
- cont._snapFallbackHandler = null;
  }
  }
 
@@ -23985,7 +23998,6 @@ const tpv = (() => {
 
  // ── Panel cobro ───────────────────────────────────────────────
  function openCobro() {
- if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open')) return;
  const items = cartItems();
  if (!items.length) { showToast('Añade productos al ticket'); return; }
  _renderCobroItems();
@@ -24021,20 +24033,15 @@ const tpv = (() => {
  _prodsHash = ''; _hotGridHash = ''; // v1.2.25: invalidar dirty-checks
  (t.items||[]).forEach(i=>{
  const p = State.get.prod(i.prodId);
- // v1.3.506: si el producto fue eliminado del catálogo, reconstruir desde
- // los datos guardados en el ticket — evita pérdida silenciosa de items
- _cart[i.prodId] = {
-  p: p || { id: i.prodId, nombre: i.nombre || '?', pvp: i.pvp || 0,
-   e: i.e || '📦', precioCompra: 0, stockActual: 0, cat: '', foto: null },
-  q: i.q
- };
+ if (p) _cart[i.prodId] = { p, q:i.q };
  });
  }
  function _saveCurrentToTicket() {
  if (!_ticketActivo) return;
  const t = State.get.ticketsAbiertos().find(x=>x.id===_ticketActivo);
  if (!t) return;
- State.set.saveTicket({ ...t, items: _cartToItems() });
+ t.items = _cartToItems();
+ State.set.saveTicket(t);
  }
 
  function _renderTicketBadge() {
@@ -24124,9 +24131,8 @@ const tpv = (() => {
  const m = t.nombre && t.nombre.match(/Mesa (\d+)/);
  return m ? parseInt(m[1]) : 0;
  });
- // v1.3.511: primer hueco disponible — reutiliza números de mesas borradas
- let num = 1;
- while (existentes.indexOf(num) !== -1) num++;
+ const maxNum = existentes.length ? Math.max(...existentes) : 0;
+ const num = maxNum + 1;
  const t = { id:_genTicketId(), nombre:'Mesa '+num, items:[], creadoEn:new Date().toISOString() };
  State.set.saveTicket(t);
  _ticketActivo = t.id;
@@ -24149,9 +24155,6 @@ const tpv = (() => {
  }
 
  function borrarTicket(id) {
- // v1.3.510: sincronizar _cart a State antes de leer t.items
- // si el ticket a borrar es el activo, sus items pueden estar solo en _cart
- if (id === _ticketActivo) _saveCurrentToTicket();
  const t = State.get.ticketsAbiertos().find(x=>x.id===id);
  if (!t) return;
  // v1.3.419: confirmar si el ticket tiene items para evitar borrado accidental
@@ -24184,7 +24187,6 @@ const tpv = (() => {
 
  // ── PROCESAR PAGO ─────────────────────────────────────────────
  let _procesandoPago = false;
- let _procesandoManual = false; // v1.3.507: guard doble tap venta manual
  function procesarPago(metodo) {
  if (_procesandoPago) return;
  _procesandoPago = true;
@@ -24193,7 +24195,7 @@ const tpv = (() => {
  if (_cobrarBtn) _cobrarBtn.style.pointerEvents = 'none';
  const items = cartItems();
  if (!items.length) { _procesandoPago = false; showToast('El carrito está vacío'); return; }
- const tot = Math.round(cartTotal() * 100) / 100;
+ const tot = cartTotal();
  const fecha = new Date().toISOString();
  const negocioId = State.get.settings().negocioId || 'local';
 
@@ -24291,19 +24293,17 @@ const tpv = (() => {
  }
 
  function confirmManualSale() {
-  if (_procesandoManual) return;
-  _procesandoManual = true;
-  try {
  const nombre = document.getElementById('manual-nombre')?.value?.trim();
- const importe = Math.round(parseFloat(document.getElementById('manual-importe')?.value) * 100) / 100;
+ const importe = parseFloat(document.getElementById('manual-importe')?.value);
  if (!nombre) { showToast('⚠️ Escribe el nombre'); return; }
  if (!importe || importe <= 0) { showToast('⚠️ Importe inválido'); return; }
  const tickets = State.get.ticketsAbiertos();
  const ticket = tickets.find(t => t.id === _ticketActivo);
  if (!ticket) { showToast('⚠️ Crea un ticket primero'); try { ui.closeFs(); } catch(_) {} return; }
+ if (!ticket.items) ticket.items = [];
  const itemId = 'manual_' + Date.now();
- const newItem = { id: itemId, nombre, pvp: importe, q: 1, manual: true };
- State.set.saveTicket({ ...ticket, items: [...(ticket.items || []), newItem] });
+ ticket.items.push({ id: itemId, nombre, pvp: importe, q: 1, manual: true });
+ State.set.saveTicket(ticket);
 
  // v1.3.419: registrar venta manual en State + Firebase para que
  // aparezca en Dashboard KPIs y en el historial de ventas
@@ -24330,9 +24330,6 @@ const tpv = (() => {
  render();
  showToast('✅ ' + nombre + ' — ' + feur(importe));
  Utils.triggerHaptic('medium');
-  } finally {
-  _procesandoManual = false;
-  }
  }
 
  // v1.3.234: aplicar clase tablet en arranque del módulo
@@ -24959,18 +24956,14 @@ const alm = (() => {
  var _CARRITO_KEY = 'dashwey_carrito_v1'; // v1.3.418: movida antes de _restoreCarrito
 
  (function _restoreCarrito() {
- // v1.3.518: soporte formato nuevo {prov, cart} y legado {prodId: qty}
  try {
  var raw = localStorage.getItem(_CARRITO_KEY);
  if (raw) {
  var parsed = JSON.parse(raw);
- // Detectar formato nuevo vs legado
- var cartData = (parsed && typeof parsed.cart === 'object' && 'prov' in parsed)
- ? parsed.cart : parsed;
  // Se validan los prodIds después de que State esté listo
  setTimeout(function() {
- Object.keys(cartData || {}).forEach(function(id) {
- if (State.get.prod(id)) _ordenCarrito[id] = cartData[id];
+ Object.keys(parsed).forEach(function(id) {
+ if (State.get.prod(id)) _ordenCarrito[id] = parsed[id];
  });
  _updateAcceptBtn(); updateBadge(); renderCatInline();
  }, 100);
@@ -25400,11 +25393,7 @@ function _parseIva(iva) {
  cart: _ordenCarrito,
  };
  localStorage.setItem(_CARRITO_KEY, JSON.stringify(payload));
- } catch(e) {
- // v1.3.519: avisar al usuario si localStorage está lleno — consistente con _writeLocal
- console.warn('[Dashwey/Carrito] Error al guardar carrito:', e);
- try { showToast('⚠️ Almacenamiento lleno. El carrito no se guardó localmente.'); } catch(_) {}
- }
+ } catch(e) {}
  }
  function _loadCarritoLocal() {
  try {
@@ -25815,15 +25804,14 @@ function _parseIva(iva) {
  // Render lista
  var sel = State.get.selectedProv();
  var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sa','Do'];
- // v1.3.518: renombrada a _fmtDaysLocal para evitar hoisting con fmtDays de renderProvPicker
- function _fmtDaysLocal(arr) {
+ function fmtDays(arr) {
  if (!arr || !arr.length) return '';
  return arr.map(function(d){ return DNAMES[d]; }).join(', ');
  }
  var provs = State.get.proveedores() || [];
  var rows = provs.map(function(p, _pi) {
- var dp = _fmtDaysLocal(p.diasPedido || []);
- var de = _fmtDaysLocal(p.diasEntrega || []);
+ var dp = fmtDays(p.diasPedido || []);
+ var de = fmtDays(p.diasEntrega || []);
  var days = [dp ? 'Pedido: ' + dp : '', de ? 'Entrega: ' + de : ''].filter(Boolean).join(' · ');
  return '<div class="alm-prov-inline-row' + (sel === p.id ? ' sel' : '') + '" style="--item-index:' + Math.min(_pi, 8) + '" ' +
  'data-pid="' + p.id + '" onclick="var pid=this.dataset.pid;App.alm.selProvInline(pid)">' +
@@ -26746,11 +26734,8 @@ function _parseIva(iva) {
  function openCestaFs() {
  const sel = State.get.selectedProv();
  const prov = State.get.prov(sel) || State.get.proveedores()[0];
- // v1.3.518: ordenItems() siempre vacío desde v8.9.0 — usar _ordenCarrito
  const items = State.get.ordenItems().filter(o => o.provId === sel && o.checked);
- const _carritoKeys = Object.keys(_ordenCarrito);
- if(!items.length && !_carritoKeys.length) { showToast('📦 Añade artículos al pedido primero'); return; }
- if(!items.length && _carritoKeys.length) { _openAceptarPopupFromCarrito(sel); return; }
+ if(!items.length) { showToast('📦 Marca artículos como recibidos primero'); return; }
 
  // ── Fórmulas correctas (punto 5) ──────────────────────────────
  const invTotal = items.reduce((s,o) => s + o.ncajas * o.precio * 1.10, 0);
@@ -31279,6 +31264,20 @@ function _parseIva(iva) {
  }
  })();
 
+ // ── v1.2.32: inicializar appState.dateRange al arranque ───────────────────
+ // Carga el periodo persistido en State y lo refleja en appState.dateRange.
+ (function() {
+ try {
+ const p = State.get.period();
+ if (!window.appState) window.appState = {};
+ if (p.type === 'custom' && p.customStart && p.customEnd) {
+ window.appState.dateRange = { from: new Date(p.customStart), to: new Date(p.customEnd) };
+ } else {
+ const range = KPI.getRange(p);
+ window.appState.dateRange = { from: range.start, to: range.end };
+ }
+ } catch(_) {}
+ })();
 
 
  // Fuente de verdad externa para diagnóstico, integraciones y DevTools.
