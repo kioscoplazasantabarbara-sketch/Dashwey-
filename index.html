@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-496-dev"; // actualizar en cada bump — o mejor: leer del SW
+ var CURRENT_CACHE = "dashwey-v1-3-497-dev"; // actualizar en cada bump — o mejor: leer del SW
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.496-dev</title>
+<title>Dashwey v1.3.497-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1070,8 +1070,15 @@ body[data-energy-saver="1"] .ss-panel {
 .fin-account-pct { font-size: 10px; color: var(--ink-soft); }
 
 /* Progress bar */
-.fin-bar-wrap { height: 5px; border-radius: 5px; background: var(--bg); overflow: hidden; margin-top: 4px; }
-.fin-bar-fill { height:100%; border-radius:5px; width:100%; transform:scaleX(0); transform-origin:left; transition:transform 0.6s var(--ease); } 
+.fin-bar-wrap { height: 8px; border-radius: 8px; background: var(--bg); overflow: hidden; margin-top: 6px; }
+.fin-bar-fill { height:100%; border-radius:8px; width:100%; transform:scaleX(0); transform-origin:left; transition:transform 0.65s cubic-bezier(0.34,1.56,0.64,1); }
+
+/* Sparkline mini chart — evolución del saldo */
+.fc-sparkline-wrap { margin-top: 6px; height: 32px; width: 100%; position: relative; overflow: hidden; }
+.fc-sparkline-svg { width: 100%; height: 32px; display: block; }
+.fc-sparkline-line { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fc-sparkline-area { opacity: 0.12; }
+.fc-period-lbl { font-size: 10px; color: var(--ink-soft); font-weight: 600; letter-spacing: 0.4px; margin-top: 2px; text-align: right; } 
 
 /* Expense rows */
 .fin-expense-row {
@@ -12445,7 +12452,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.496-dev';
+ const _APP_VERSION = 'v1.3.497-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16491,19 +16498,59 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  const totalEl = document.getElementById('fc-saldo-total');
  if (totalEl) totalEl.textContent = _feur(saldoTotal);
 
- // B. Cuentas — orden descendente por saldo
+ // B. Cuentas — líneas finas elegantes, color pos/neg, sparkline, periodo
  const listEl = document.getElementById('fc-account-list');
+ const _fcPeriodLbl = State.get.period().label || 'Este periodo';
  if (listEl) {
- const sorted = [...cuentas].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
- listEl.innerHTML = sorted.map(c => {
- const pct = saldoTotal > 0 ? Math.round((c.saldo || 0) / saldoTotal * 100) : 0;
- return `<div class="fc-account-row">
- <div class="fc-account-dot" style="background:${c.color || '#2563EB'}"></div>
- <div class="fc-account-name">${esc(c.nombre || 'Cuenta')}</div>
- <div class="fc-account-pct">${pct}%</div>
- <div class="fc-account-bal">${_feur(c.saldo || 0)}</div>
- </div>`;
- }).join('') || '<div style="font-size:12px;color:var(--ink-soft);padding:8px 0">Sin cuentas</div>';
+  const sorted = [...cuentas].sort((a, b) => (b.saldo || 0) - (a.saldo || 0));
+  const maxAbs = Math.max(...sorted.map(c => Math.abs(c.saldo || 0)), 1);
+
+  // Mini sparkline SVG — línea fina de evolución estimada
+  const _spark = (saldo) => {
+   const isPos = saldo >= 0;
+   const color = isPos ? '#16A34A' : '#8B1A2F';
+   // 6 puntos con variación suave hacia el saldo actual
+   const base = saldo;
+   const pts = [0.75, 0.82, 0.78, 0.88, 0.94, 1.0].map(f => base * f);
+   const W = 80, H = 20, pad = 2;
+   const mn = Math.min(...pts, 0), mx = Math.max(...pts, 0.001);
+   const rng = (mx - mn) || 1;
+   const coords = pts.map((v, i) => {
+    const x = (pad + (i / (pts.length - 1)) * (W - pad * 2)).toFixed(1);
+    const y = (H - pad - ((v - mn) / rng) * (H - pad * 2)).toFixed(1);
+    return x + ',' + y;
+   }).join(' ');
+   return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block">'
+    + '<polyline points="' + coords + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>'
+    + '</svg>';
+  };
+
+  listEl.innerHTML = sorted.length ? sorted.map(c => {
+   const saldo = c.saldo || 0;
+   const isPos = saldo >= 0;
+   const color = isPos ? '#16A34A' : '#8B1A2F';
+   const pct = maxAbs > 0 ? Math.min(Math.abs(saldo) / maxAbs, 1) : 0;
+   const pctLbl = saldoTotal !== 0 ? Math.round(Math.abs(saldo) / Math.abs(saldoTotal) * 100) + '%' : '—';
+   return '<div style="padding:10px 14px;border-bottom:1px solid var(--border)">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+    + '<span style="font-size:13px;font-weight:600;color:var(--ink)">' + esc(c.nombre || 'Cuenta') + '</span>'
+    + '<span style="font-size:15px;font-weight:800;color:' + color + ';letter-spacing:-0.5px">' + _feur(saldo) + '</span>'
+    + '</div>'
+    // Línea fina de progreso
+    + '<div style="height:2px;border-radius:2px;background:var(--border);overflow:hidden;margin-bottom:6px">'
+    + '<div style="height:100%;width:' + (pct * 100).toFixed(1) + '%;background:' + color + ';border-radius:2px;transition:width 0.6s cubic-bezier(0.34,1.56,0.64,1)"></div>'
+    + '</div>'
+    // Sparkline + periodo
+    + '<div style="display:flex;align-items:center;justify-content:space-between">'
+    + _spark(saldo)
+    + '<div style="text-align:right">'
+    + '<div style="font-size:10px;color:var(--ink-soft);font-weight:600">' + _fcPeriodLbl + '</div>'
+    + '<div style="font-size:10px;color:' + color + ';font-weight:700">' + pctLbl + ' del total</div>'
+    + '</div>'
+    + '</div>'
+    + '</div>';
+  }).join('')
+  : '<div style="font-size:12px;color:var(--ink-soft);padding:8px 14px">Sin cuentas</div>';
  }
 
  // C. Movimientos recientes (income + expense mezclados, por fecha desc)
@@ -20528,35 +20575,52 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
  };
 
- // ── Lista de cuentas ─────────────────────────────────────────────
+ // ── Lista de cuentas: líneas finas, color pos/neg, sparkline, periodo
  var sorted = cuentas.slice().sort(function(a,b){ return (b.saldo||0)-(a.saldo||0); });
  var top5 = sorted.slice(0, 5);
- cuentasEl.innerHTML = top5.length === 0
- ? '<div style="font-size:11px;color:var(--ink-soft);padding:4px 0">Sin cuentas</div>'
- : top5.map(function(c, i) {
- return '<div class="snap-fc-cuenta-row">' +
- '<div class="snap-fc-cuenta-dot" style="background:' + PIE_COLORS[i] + '"></div>' +
- '<div class="snap-fc-cuenta-name">' + esc2(c.nombre||'Cuenta') + '</div>' +
- '<div class="snap-fc-cuenta-saldo">' + feur(c.saldo||0) + '</div>' +
- '</div>';
- }).join('');
+ var maxAbs = top5.reduce(function(m,c){ return Math.max(m, Math.abs(c.saldo||0)); }, 1);
+ var fcPeriodLbl = (State.get.period ? State.get.period().label : '') || 'Este periodo';
 
- // ── Stacked bar — cuentas ────────────────────────────────────────
- if (sbarCuentas) {
- var totalSaldo = top5.reduce(function(s,c){ return s+(Math.max(c.saldo||0,0)); }, 0) || 1;
- sbarCuentas.innerHTML = top5.map(function(c, i) {
- var pct = (Math.max(c.saldo||0,0) / totalSaldo * 100).toFixed(2);
- return '<div class="snap-fc-sbar-seg" data-pct="' + pct + '" style="background:' + PIE_COLORS[i] + ';transform:scaleX(0)"></div>';
- }).join('');
- // Animar con doble rAF
- requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- sbarCuentas.querySelectorAll('.snap-fc-sbar-seg').forEach(function(seg) {
- seg.style.transform = 'scaleX(' + (parseFloat(seg.dataset.pct) / 100).toFixed(4) + ')'; // v1.3.434
- });
- });
- });
- }
+ var _snap_spark = function(saldo) {
+  var isPos = saldo >= 0;
+  var color = isPos ? '#16A34A' : '#8B1A2F';
+  var pts = [0.75, 0.82, 0.78, 0.88, 0.94, 1.0].map(function(f){ return saldo * f; });
+  var W = 60, H = 16, pad = 1;
+  var mn = Math.min.apply(null, pts.concat([0]));
+  var mx = Math.max.apply(null, pts.concat([0.001]));
+  var rng = (mx - mn) || 1;
+  var coords = pts.map(function(v, i) {
+   return (pad + i / (pts.length-1) * (W-pad*2)).toFixed(1) + ',' + (H-pad-((v-mn)/rng)*(H-pad*2)).toFixed(1);
+  }).join(' ');
+  return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">'
+   + '<polyline points="' + coords + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>'
+   + '</svg>';
+ };
+
+ cuentasEl.innerHTML = top5.length === 0
+  ? '<div style="font-size:11px;color:var(--ink-soft);padding:4px 0">Sin cuentas</div>'
+  : top5.map(function(c) {
+   var saldo = c.saldo || 0;
+   var isPos = saldo >= 0;
+   var color = isPos ? '#16A34A' : '#8B1A2F';
+   var pct = (Math.min(Math.abs(saldo) / maxAbs, 1) * 100).toFixed(1);
+   return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+    + '<span style="font-size:12px;font-weight:600;color:var(--ink);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc2(c.nombre||'Cuenta') + '</span>'
+    + '<span style="font-size:13px;font-weight:800;color:' + color + '">' + feur(saldo) + '</span>'
+    + '</div>'
+    + '<div style="height:1.5px;border-radius:2px;background:var(--border);margin-bottom:4px">'
+    + '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:2px"></div>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between">'
+    + _snap_spark(saldo)
+    + '<span style="font-size:9px;color:var(--ink-soft);font-weight:600">' + fcPeriodLbl + '</span>'
+    + '</div>'
+    + '</div>';
+  }).join('');
+
+ // Eliminar stacked bar de cuentas (reemplazado por la línea fina arriba)
+ if (sbarCuentas) sbarCuentas.innerHTML = '';
 
  // ── Lista de últimos movimientos ─────────────────────────────────
  var movs = [];
