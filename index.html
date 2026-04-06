@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.592-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.593-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.592-dev</title>
+<title>Dashwey v1.3.593-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7689,49 +7689,21 @@ html { will-change: auto; }
 <script>
 /* ═══ AUTH SAFE WRAPPERS v8.4 — funcionan antes y después de que App esté listo ═══ */
 function _authLoginSafe() {
+ // v1.3.593: delegación pura — elimina lógica duplicada de authLogin
+ // App.ui siempre disponible cuando el splash desaparece y el botón es interactuable
  if (window.App && window.App.ui && window.App.ui.authLogin) { App.ui.authLogin(); return; }
- const s=document.getElementById('auth-screen'), fb=window._DashweyFirebase;
- const email=document.getElementById('auth-email-login')?.value?.trim();
- const pass=document.getElementById('auth-pass-login')?.value;
- const err=document.getElementById('auth-err-login'), btn=document.getElementById('auth-btn-login');
- if (!fb || !fb.enabled) { if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);} return; }
- if (!email||!pass) { if(err) err.textContent='Rellena email y contraseña'; return; }
- if(btn){btn.disabled=true;btn.textContent='Entrando…';}
- fb.login(email,pass).then(res=>{
- if(res.ok){
- if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}
- try{if(typeof window._DashweyInitialSync==='function')window._DashweyInitialSync();}catch(e){}
- } else {
- if(err)err.textContent=res.error||'Error de autenticación';
- if(btn){btn.disabled=false;btn.textContent='Entrar';}
- }
- }).catch(e=>{
- if(err)err.textContent='Error inesperado';
- if(btn){btn.disabled=false;btn.textContent='Entrar';}
- });
+ console.warn('[Auth] _authLoginSafe: App.ui no disponible aún');
 }
 function _authRegisterSafe() {
+ // v1.3.593: delegación pura — elimina lógica duplicada de authRegister
  if (window.App && window.App.ui && window.App.ui.authRegister) { App.ui.authRegister(); return; }
- const s=document.getElementById('auth-screen'), fb=window._DashweyFirebase;
- const email=document.getElementById('auth-email-reg')?.value?.trim();
- const pass=document.getElementById('auth-pass-reg')?.value;
- const pass2=document.getElementById('auth-pass-reg2')?.value;
- const err=document.getElementById('auth-err-reg'), btn=document.getElementById('auth-btn-reg');
- if (!fb||!fb.enabled){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}return;}
- if(!email||!pass){if(err)err.textContent='Rellena todos los campos';return;}
- if(pass!==pass2){if(err)err.textContent='Las contraseñas no coinciden';return;}
- if(pass.length<6){if(err)err.textContent='Mínimo 6 caracteres';return;}
- if(btn){btn.disabled=true;btn.textContent='Creando cuenta…';}
- fb.register(email,pass).then(res=>{
- if(res.ok){if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}}
- else{if(err)err.textContent=res.error;if(btn){btn.disabled=false;btn.textContent='Crear cuenta';}}
- })
- .catch(e => { if(err) err.textContent='Error de conexión'; if(btn){btn.disabled=false;btn.textContent='Crear cuenta';} });
+ console.warn('[Auth] _authRegisterSafe: App.ui no disponible aún');
 }
 function _authSkipSafe() {
  if (window.App && window.App.ui && window.App.ui.authSkip) { App.ui.authSkip(); return; }
- const s=document.getElementById('auth-screen');
- if(s){s.classList.add('hidden');setTimeout(()=>s.style.display='none',300);}
+ // Fallback mínimo: ocultar auth-screen directamente (único caso real donde App.ui falta)
+ const s = document.getElementById('auth-screen');
+ if (s) { s.classList.add('hidden'); setTimeout(() => s.style.display = 'none', 300); }
 }
 function _authTabSafe(tab) {
  if (window.App && window.App.ui && window.App.ui.authTab) { App.ui.authTab(tab); return; }
@@ -10287,7 +10259,8 @@ const KPI = (() => {
  const nTickets = new Set(ventas.map(v => v.ticketId || v.id)).size;
  const valorInv = typeof FinEngine !== 'undefined'
  ? FinEngine.valorStock()
- : State.get.productos().reduce((s,p) => s + (p.stockActual||0)*(p.precioCompra||0), 0);
+ // v1.3.593: coste unitario real
+ : State.get.productos().reduce((s,p) => { var uds=p.udscaja||1; return s+(p.stockActual||0)*((p.precioCompra||0)/uds); }, 0);
  return { beneficio: margenBruto, inv, vta, costeVentas, nTickets, valorInv };
  }
 
@@ -10568,8 +10541,21 @@ const FinEngine = (() => {
  }
 
  // ── 7. STOCK ─────────────────────────────────────────────────────
- // valorStock(): valor de inventario al coste de compra
+ // valorStock(): valor de inventario al COSTE UNITARIO REAL (precioCompra / udscaja)
+ // v1.3.593: precioCompra es precio de BULTO — dividir entre udscaja para obtener coste unitario
+ // Si udscaja no definido → usa precioCompra directamente como fallback
  function valorStock() {
+ return money((State.get.productos() || [])
+ .reduce((s, p) => {
+ const uds = p.udscaja || 1;
+ const cu = (p.precioCompra || 0) / uds;
+ return s + (p.stockActual || 0) * cu;
+ }, 0)
+ );
+ }
+
+ // valorStockBulto(): valor de referencia al precio de bulto (sin prorratear)
+ function valorStockBulto() {
  return money((State.get.productos() || [])
  .reduce((s, p) => s + (p.stockActual || 0) * (p.precioCompra || 0), 0)
  );
@@ -10680,6 +10666,8 @@ const FinEngine = (() => {
 
  // Stock
  valorStock: valStock,
+ // v1.3.593: referencia secundaria al precio de bulto sin prorratear
+ valorStockBulto: (function(){ try { return FinEngine.valorStockBulto ? FinEngine.valorStockBulto() : valStock; } catch(_) { return valStock; } })(),
  };
  }
 
@@ -10719,7 +10707,7 @@ const FinEngine = (() => {
  saldoCuentas, runway, ratioLiquidez,
 
  // Stock
- valorStock,
+ valorStock, valorStockBulto, // v1.3.593: bulto = referencia sin prorratear
 
  // Ticket
  ticketMedio, ticketMedioMesActual,
@@ -11453,7 +11441,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.592-dev';
+ const _APP_VERSION = 'v1.3.593-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17278,7 +17266,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  .filter(c => c.diasRestantes <= 7);
  const _cad30 = (() => { try { return KPI.getCaducidadesAlerta(); } catch(_) { return []; } })();
  const _cad1 = _cad30[0] || null;
- const _cadVal = _cad7.reduce((s,c) => s + (c.prod?.stockActual||0)*(c.prod?.precioCompra||0), 0);
+ // v1.3.593: coste unitario real para valor en riesgo por caducidad
+ const _cadVal = _cad7.reduce((s,c) => { const uds=c.prod?.udscaja||1; return s+(c.prod?.stockActual||0)*((c.prod?.precioCompra||0)/uds); }, 0);
  const _cadProx = _cad30.find(c => c.diasRestantes > 7) || null;
 
  // Gastos e ingresos
@@ -17739,7 +17728,8 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  var cad = (function(){ try { return KPI.getCaducidadesAlerta(); } catch(_){return [];} })();
  var cad7 = cad.filter(function(c){return c.diasRestantes<=7;});
  var cad1 = cad[0]||null;
- var cadVal = cad7.reduce(function(s,c){return s+(c.prod&&c.prod.stockActual||0)*(c.prod&&c.prod.precioCompra||0);},0);
+ // v1.3.593: coste unitario real
+ var cadVal = cad7.reduce(function(s,c){var uds=(c.prod&&c.prod.udscaja)||1;return s+(c.prod&&c.prod.stockActual||0)*((c.prod&&c.prod.precioCompra||0)/uds);},0);
 
  var gastos = State.get.gastosOperativos&&State.get.gastosOperativos()||[];
  var gasTotal= gastos.reduce(function(s,g){return s+(g.importe||0);},0);
@@ -28922,7 +28912,8 @@ function _parseIva(iva) {
  const bajoStock = prodsData.filter(x=>x.bajo && !x.sinStock);
  const sinStockList = prodsData.filter(x=>x.sinStock);
  const cats = [...new Set(allProds.map(p=>p.cat||'Sin categoría'))];
- const valorInv = allProds.reduce((s,p)=>s+(p.stockActual||0)*(p.precioCompra||0),0);
+ // v1.3.593: coste unitario real
+ const valorInv = allProds.reduce((s,p)=>{const uds=p.udscaja||1;return s+(p.stockActual||0)*((p.precioCompra||0)/uds);},0);
 
  // Alertas
  const alertas = [];
