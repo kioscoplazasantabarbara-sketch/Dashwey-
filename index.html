@@ -162,7 +162,7 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.572-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.573-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
@@ -22059,17 +22059,21 @@ const tpv = (() => {
  const autoFill = topByVentas.filter(p => !pinnedIds.has(p.id));
 
  // Construir array de N slots: pin[i] ?? siguiente auto
+ // v1.3.573: preservar índice original de _hotPins en cada slot — garantiza que
+ // data-slot siempre sea el índice real en _hotPins, incluso cuando productos
+ // pinados son eliminados del catálogo y filter(Boolean) reindexaría incorrectamente.
  let autoIdx = 0;
- const slots = _hotPins.map(pin => {
+ const slots = _hotPins.map((pin, originalIdx) => {
  if (pin) {
  // Buscar producto actual (puede haber cambiado nombre/precio)
  const p = allProds.find(x => x.id === pin.id);
- return p || null; // null si el producto fue eliminado
+ return p ? { p, originalIdx } : null; // null si el producto fue eliminado
  }
  // Auto-relleno: siguiente top-venta con stock
  while (autoIdx < autoFill.length && autoFill[autoIdx].stockActual <= 0) autoIdx++;
- return autoFill[autoIdx++] || null;
- }).filter(Boolean); // quitar nulls (productos eliminados)
+ const _pAuto = autoFill[autoIdx++] || null;
+ return _pAuto ? { p: _pAuto, originalIdx } : null;
+ }).filter(Boolean); // quitar nulls (productos eliminados o sin stock)
 
  if (!slots.length) {
  grid.parentElement.style.display = 'none';
@@ -22078,7 +22082,7 @@ const tpv = (() => {
  grid.parentElement.style.display = '';
 
  // ── Dirty-check ─────────────────────────────────────────────
- const newHash = slots.map(p => `${p.id}:${p.pvp}:${_cart[p.id]?.q||0}:${_hgSwapSrc}`).join('|');
+ const newHash = slots.map(({ p, originalIdx }) => `${p.id}:${p.pvp}:${_cart[p.id]?.q||0}:${_hgSwapSrc === originalIdx}`).join('|');
  if (newHash === _hotGridHash) return;
  _hotGridHash = newHash;
 
@@ -22088,19 +22092,19 @@ const tpv = (() => {
  grid.style.setProperty('--hg-cols', cols);
 
  // ── Render ───────────────────────────────────────────────────
- grid.innerHTML = slots.map((p, slotIdx) => {
+ grid.innerHTML = slots.map(({ p, originalIdx }, renderIdx) => {
  const q = _cart[p.id]?.q || 0;
- const isPinned = _hotPins[slotIdx] !== null;
- const isSwapSrc = _hgSwapSrc === slotIdx;
- // v1.3.393: stagger — cap en 8 para no retrasar demasiado los últimos
- const staggerIdx = Math.min(slotIdx, 8);
+ const isPinned = _hotPins[originalIdx] !== null;
+ const isSwapSrc = _hgSwapSrc === originalIdx;
+ // v1.3.393: stagger — cap en 8, basado en posición de render (no en originalIdx)
+ const staggerIdx = Math.min(renderIdx, 8);
  return `<button
  class="tpv-hot-btn${isPinned?' hg-pinned':''}${isSwapSrc?' hg-selected':''}"
  style="--item-index:${staggerIdx}"
  onclick="App.tpv.addCart('${p.id}',this)"
  id="tpv-hot-${p.id}"
  data-id="${p.id}"
- data-slot="${slotIdx}">
+ data-slot="${originalIdx}">
  <span class="hot-e">${p.e||'🛍️'}</span>
  <span class="hot-name">${esc(p.nombre)}</span>
  <span class="hot-price">${feur(p.pvp)}</span>
