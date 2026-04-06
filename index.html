@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.584-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.585-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.584-dev</title>
+<title>Dashwey v1.3.585-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9735,6 +9735,7 @@ const DashweyBus = (() => {
  const _handlers = {};
 
  function on(event, handler) {
+ if (typeof handler !== 'function') return; // v1.3.585: guard tipo
  if (!_handlers[event]) _handlers[event] = [];
  // Prevent duplicate registration
  if (!_handlers[event].includes(handler)) {
@@ -9965,6 +9966,10 @@ const KPI = (() => {
  } else if (period.type === 'custom' && period.customStart && period.customEnd) {
  start = new Date(period.customStart);
  end = new Date(period.customEnd);
+ // v1.3.585: normalizar horas para evitar pérdida de datos en UTC+ (España UTC+1)
+ // new Date('YYYY-MM-DD') crea UTC midnight → en UTC+1 = día anterior 23:00 local
+ start.setHours(0, 0, 0, 0);
+ end.setHours(23, 59, 59, 999);
  } else {
  // fallback: mes actual
  start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -10040,7 +10045,9 @@ const KPI = (() => {
  pedidos.forEach(ped => {
  let gastoPed = 0;
   (ped.items || []).forEach(item => { // v1.3.535: guard items undefined — consistente con getTopCompras
- const c = item.ncajas * item.precio * 1.10;
+ // v1.3.585: leer IVA real del item — misma lógica que getTopCompras (FE-C1 class fix)
+ const _ivaG = item.iva != null ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
+ const c = item.ncajas * item.precio * _ivaG;
  gastoPed += c;
  });
  totales[ped.provId] = (totales[ped.provId] || 0) + gastoPed;
@@ -10220,7 +10227,10 @@ const KPI = (() => {
  const map = {};
  pedidos.forEach(ped => {
  (ped.items || []).forEach(item => { // v1.3.525: guard ped.items undefined
- const inv = item.ncajas * item.precio * 1.10;
+ // v1.3.585: leer IVA real del item; guard udscaja=0 → excluir del cálculo de ROI
+ if (!item.udscaja) return; // udscaja=0 → vta=0 → ROI imposible de calcular
+ const _ivaR = item.iva != null ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
+ const inv = item.ncajas * item.precio * _ivaR;
  const vta = item.ncajas * item.udscaja * item.pvp;
  const gain = vta - inv;
  if(!map[item.prodId]) map[item.prodId] = { inv:0, gain:0 };
@@ -10243,9 +10253,12 @@ const KPI = (() => {
  function getCaducidadesAlerta() {
  const hoy = new Date(); hoy.setHours(0,0,0,0);
  const en14 = new Date(hoy.getTime() + 14 * MS_PER_DAY);
+ // v1.3.585: parsear caducidad como fecha LOCAL evitando el offset UTC+
+ // new Date('YYYY-MM-DD') crea UTC midnight → en UTC+1 = día anterior 23:00 → caducidad aparece un día antes
+ const _parseCad = (s) => { const [y,m,d] = s.split('-').map(Number); const dt = new Date(y, m-1, d); dt.setHours(0,0,0,0); return dt; };
  return State.get.productos()
  .filter(p => p.caducidad)
- .map(p => ({ prod:p, fecha:new Date(p.caducidad), diasRestantes: Math.ceil((new Date(p.caducidad) - hoy) / MS_PER_DAY) }))
+ .map(p => ({ prod:p, fecha:_parseCad(p.caducidad), diasRestantes: Math.ceil((_parseCad(p.caducidad) - hoy) / MS_PER_DAY) }))
  .filter(x => x.fecha <= en14)
  .sort((a,b) => a.diasRestantes - b.diasRestantes);
  }
@@ -11436,7 +11449,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.584-dev';
+ const _APP_VERSION = 'v1.3.585-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
