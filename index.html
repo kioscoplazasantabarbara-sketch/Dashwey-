@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.596-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.597-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.596-dev</title>
+<title>Dashwey v1.3.597-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9341,9 +9341,25 @@ const State = (() => {
  function _writeLocal(data) {
  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
  catch(e) {
+ // v1.3.597: retry con datos recortados agresivamente si localStorage está lleno
+ var retried = false;
+ if (e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014)) {
+ try {
+ // Recortar ventas a últimas 200, pedidos a últimos 200, mermas a últimas 200
+ var slim = JSON.parse(JSON.stringify(data));
+ if (slim.ventas && slim.ventas.length > 200) slim.ventas = slim.ventas.slice(-200);
+ if (slim.historialPedidos && slim.historialPedidos.length > 200) slim.historialPedidos = slim.historialPedidos.slice(-200);
+ if (slim.mermas && slim.mermas.length > 200) slim.mermas = slim.mermas.slice(-200);
+ localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+ retried = true;
+ console.warn('[Dashwey/Local] Guardado con datos recortados por cuota llena');
+ } catch(_) {}
+ }
+ if (!retried) {
  console.warn('[Dashwey/Local] Error al guardar:', e);
- // v1.3.514: avisar al usuario si localStorage está lleno — error crítico silencioso
+ // v1.3.514: avisar al usuario — error crítico
  try { (window.showToast || window.Utils?.showToast)('⚠️ Almacenamiento lleno. Algunos datos no se guardaron localmente.'); } catch(_) {}
+ }
  }
  }
 
@@ -11450,7 +11466,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.596-dev';
+ const _APP_VERSION = 'v1.3.597-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21075,6 +21091,8 @@ window.SideSheet = (function() {
  function back() {
  if (_stack.length < 2) { closeAll(); return; }
  var current = _stack.pop();
+ // v1.3.597: guardar formulario sucio antes de cerrar el panel
+ try { if (typeof window._autoSaveDirtyForms === 'function') window._autoSaveDirtyForms(current); } catch(_) {}
  current.classList.remove('ss-open');
  var _bt = setTimeout(function() { if (current.parentNode) current.remove(); }, 350);
  current.addEventListener('transitionend', function(e) {
@@ -21111,6 +21129,8 @@ window.SideSheet = (function() {
  } catch(e) {}
 
  var total = _stack.length;
+ // v1.3.597: guardar formularios sucios antes de destruir los paneles
+ try { if (typeof window._autoSaveDirtyForms === 'function') _stack.forEach(function(p) { window._autoSaveDirtyForms(p); }); } catch(_) {}
  _stack.slice().reverse().forEach(function(panel, i) {
  setTimeout(function() {
  panel.classList.remove('ss-open', 'ss-behind');
@@ -33480,7 +33500,7 @@ window._focusFirstError = function(form) {
  function _markDirty() {
  formEl._dirty = true;
  clearTimeout(_saveTimer);
- _saveTimer = setTimeout(function() { _autoSave(formEl); }, 30000);
+ _saveTimer = setTimeout(function() { _autoSave(formEl, true); }, 30000); // silent=true — guardado background
  }
 
  formEl.addEventListener('input', _markDirty, { passive: true });
@@ -33506,7 +33526,7 @@ window._focusFirstError = function(form) {
  }
  };
 
- function _autoSave(formEl) {
+ function _autoSave(formEl, silent) {
  if (!formEl._dirty || !formEl._draftKey) return;
  try {
  var data = {};
@@ -33514,6 +33534,8 @@ window._focusFirstError = function(form) {
  if (el.id) data[el.id] = el.type === 'checkbox' ? el.checked : el.value;
  });
  localStorage.setItem('dashwey_draft_' + formEl._draftKey, JSON.stringify({ ts: Date.now(), data: data }));
+ // v1.3.597: toast suave solo cuando el guardado es forzado (cierre de sheet)
+ if (!silent) try { (window.Utils?.showToast || window.showToast)('💾 Borrador guardado'); } catch(_) {}
  } catch(_) {}
  }
 
@@ -33538,6 +33560,31 @@ window._focusFirstError = function(form) {
  window._clearFormDirty = function(formEl, draftKey) {
  if (formEl) formEl._dirty = false;
  if (draftKey) window._discardDraft(draftKey);
+ };
+
+ // v1.3.597: guardar INMEDIATAMENTE todos los formularios sucios dentro de un contenedor
+ // Llamado desde SideSheet.closeAll() y SideSheet.back() antes de destruir el panel
+ window._autoSaveDirtyForms = function(container) {
+ if (!container) return;
+ container.querySelectorAll('form,div[data-form],.ss-body').forEach(function(el) {
+ // Buscar el elemento raíz marcado por _trackFormChanges
+ var target = el._dirty !== undefined ? el : el.closest ? el.closest('[data-form]') : null;
+ if (!target) {
+ // Buscar formularios hijo que tengan _dirty
+ container.querySelectorAll('*').forEach(function(child) {
+ if (child._dirty && child._draftKey) _autoSave(child);
+ });
+ return;
+ }
+ if (target._dirty && target._draftKey) _autoSave(target);
+ });
+ // Búsqueda directa — recorrer todos los descendientes
+ container.querySelectorAll('*').forEach(function(el) {
+ if (el._dirty && el._draftKey) {
+ _autoSave(el);
+ el._dirty = false; // marcar como guardado
+ }
+ });
  };
 })();
 </script>
