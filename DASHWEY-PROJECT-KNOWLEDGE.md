@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.568-dev
+**Versión:** v1.3.574-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -158,7 +158,8 @@ CAPA 4 — Firestore Rules Backend Google — define quién lee/escribe qué. NO
 - NUNCA hardcodear tab inicial (idx===1) en `_initTrack` — leer `window._DASHWEY_MODE`
 - El bump de versión debe actualizar EXACTAMENTE 4 archivos: `index.html`, `sw.js CACHE_NAME`, `version.json`, `version.txt`
 - CSS de modos de app SIEMPRE en `html[data-app-mode="X"]` — nunca `body[data-app-mode]`
-- NUNCA mismo componente visual implementado diferente en dos módulos sin justificación — crea inconsistencia UX acumulativa (aprendido en A-3: PTR Dashboard vs PTR Almacén)
+- NUNCA mismo componente visual implementado diferente en dos módulos sin justificación
+- NUNCA usar el índice del `.map()` post-`filter()` como referencia a arrays de estado — preservar siempre el índice original como propiedad explícita del objeto resultante (`{ p, originalIdx }`) — crea inconsistencia UX acumulativa (aprendido en A-3: PTR Dashboard vs PTR Almacén)
 
 ### Búsqueda global obligatoria
 - Si se reporta un bug en función X → buscar el mismo patrón en TODA la app antes de parchear
@@ -282,6 +283,10 @@ print("OK" if r.returncode == 0 else r.stderr.decode())
 ## PENDIENTES
 
 - **Firestore Security Rules** — endurecer antes de Play Store ⚠️ CRÍTICO
+- ~~**TPV-A1**~~ — ✅ resuelto en v1.3.574-dev
+- **TPV-A2** — `cobro-total-num` no se actualiza si `chgQ` con cobro abierto en tablet (⚠️ ALTO)
+- **TPV-M1** — `_tpvFlyToCart` fallback pill usa `left/top` directo en vez de `transform` (MEDIO)
+- **TPV-B1** — `animationend` en flash del dock sin fallback timeout (BAJO)
 - ✅ **CSS dead code auditado** — 720 líneas eliminadas en v1.3.571 (grupos: orden-*, card-period-*, po-card-*, prov-prod-*, kpi-*, bn-*, rv-*, rank-*, top-*, ds-list-*, merma-*, ns-*, art-toggle-*, skeleton-card/chart/item/list, fin-kpi/hero-amount/label/ia-*, ia-*, fc-sparkline-*, ventas-prod-*, visita-*, ta-header-*, pe-period-*, bar-chart-*, tpv-cats-*, alm-confirm-*/hdr-*/summary-*)
 - ⏳ **CSS dudoso pendiente** — settings-row (selector compartido), ss-row, alm-banner/dock/prov parciales, snap-fc parcial, pedcal parcial
 - Módulo **Hogar** — finanzas personales (roadmap)
@@ -313,6 +318,8 @@ print("OK" if r.returncode == 0 else r.stderr.decode())
 | Cajón FC scroll bloqueado | `overscroll-behavior-y: contain` en `.snap-fc-scroll` impedía propagación al snap padre | Cambiar a `auto` — chaining nativo: scroll cajón → snap tarjeta al llegar al límite |
 | Margen erróneo en snap cards | `mgBruto` usaba `revenue()` que incluye `ingFin` → denominador inflado; `margenMedio` usaba `precioCompra` directo sin prorratear `udsCaja` | Fix 1: `_vtaTPV` separado para mgBruto. Fix 2: `_calcMargenProd` para margenMedio |
 | PTR Almacén sin fade | PTR Dash y PTR Alm implementados diferente | Mismo componente visual = mismo comportamiento (corregido v1.3.560) |
+| Swipe-delete dock no ejecuta en WebView | `transitionend` unreliable — item desaparecía visualmente pero seguía en `_cart` | Patrón doble-seguro: `_swipeDone` flag + `transitionend` + `setTimeout(350)` — el que llega primero ejecuta, el segundo es no-op (corregido v1.3.574) |
+| Hot Grid pins corruptos al borrar producto | `filter(Boolean)` post-map reindexaba slots — `data-slot` apuntaba a posición incorrecta en `_hotPins` | NUNCA usar índice post-filter como referencia a arrays de estado — preservar `originalIdx` explícitamente (corregido v1.3.573) |
 | Fallback a función legacy | UI inconsistente, código obsoleto activado | Fallbacks deben fallar silencioso — nunca degradar a legacy |
 
 ---
