@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.612-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.614-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.612-dev</title>
+<title>Dashwey v1.3.614-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9238,6 +9238,7 @@ const State = (() => {
  let _pendingQueue = []; // escrituras offline pendientes
  let _isSyncing = false;
  let _isSaving = false; // guard: evita writes concurrentes
+ let _dirtyDuringSave = false; // v1.3.613: cambios ocurridos durante un write activo
  let _saveTimer = null; // debounce timer
 
  // ── 1. Siempre local (síncrono) ────────────────────────────────
@@ -9462,7 +9463,7 @@ const State = (() => {
  return;
  }
  // Guard de concurrencia: no escribir si ya hay un write en curso
- if (_isSaving) return;
+ if (_isSaving) { _dirtyDuringSave = true; return; } // v1.3.613: marcar cambio pendiente
  // Guard de duplicados: no escribir si el estado no ha cambiado
  // v1.3.294: FIX — pendingOrders e ingresosFin incluidos para evitar sync silenciosa fallida
  // v1.3.431: hash ampliado -- incluye settings, historialPedidos, mermas, tickets, visitas
@@ -9485,6 +9486,7 @@ const State = (() => {
  if (_hashable === _lastSavedHash) return;
  _lastSavedHash = _hashable;
  _isSaving = true;
+     _dirtyDuringSave = false; // v1.3.613: resetear — nuevo write cubre el estado actual
  // v1.3.377: estampar timestamp ANTES de _writeLocal
  const _ts = Date.now();
  const _did = window._DashweyDeviceId || 'unknown';
@@ -9507,19 +9509,22 @@ const State = (() => {
  var badge = document.getElementById('sync-badge');
  if (badge) badge.style.opacity = '0.4';
  }, 3000);
- // v1.3.596: re-disparar save() si el estado cambió durante el write (red lenta)
- // Captura cambios hechos mientras _isSaving=true bloqueaba el envío a Firebase
- clearTimeout(_saveTimer);
- _saveTimer = setTimeout(save, 300);
+ // v1.3.613: re-disparar save() SOLO si hubo cambios durante el write
+ if (_dirtyDuringSave) {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(save, 300);
+ }
  })
  .catch((err) => {
  _isSaving = false;
  _lastSavedHash = ''; // reset hash on error — fuerza re-sync en próximo save()
  console.warn('[Dashwey sync] ✗ firebase write failed:', err?.message || err);
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
- // v1.3.596: re-disparar save() tras error — sube los datos pendientes cuando la red vuelva
- clearTimeout(_saveTimer);
- _saveTimer = setTimeout(save, 500);
+ // v1.3.613: re-disparar save() tras error solo si hay cambios pendientes
+ if (_dirtyDuringSave) {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(save, 500);
+ }
  });
  }, 800);
  }
@@ -11425,7 +11430,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.612-dev';
+ const _APP_VERSION = 'v1.3.614-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12472,7 +12477,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.612-dev': {
+  'v1.3.614-dev': {
    id: 'wn-2026-04-07-v609',
   sections: [{
   title: '✨ Mejoras',
@@ -24015,7 +24020,9 @@ const marginLine = '';
  mgEl.style.color = mg === null ? 'var(--ink)'
  : mg >= 30 ? '#16A34A' : mg >= 15 ? '#F97316' : '#E53935';
  }
- if (ganEl) ganEl.textContent = ganCaja > 0 ? '+' + feur(ganCaja) + '/bulto' : '\u2014';
+ var pvpNetoEl = document.getElementById('ea-r-pvpneto');
+  if (pvpNetoEl) pvpNetoEl.textContent = pvpNeto > 0 ? feur(pvpNeto) : '\u2014';
+   if (ganEl) ganEl.textContent = ganCaja > 0 ? '+' + feur(ganCaja) + '/bulto' : '\u2014';
  }
 
  function _eaSave(id) {
@@ -25560,6 +25567,7 @@ const nPending = (State.get.pendingOrders() || [])
  oninput="App.alm.calcIAAnalysis()">
  <span class="alm-input-suffix-label">€</span>
  </div>
+ <div id="fpr-derived" style="display:none;margin-top:4px;font-size:10px;color:var(--ink-soft);font-weight:600"><span id="fpr-cu"></span></div>
  </div>
  <div id="cj-nc" style="display:${lv.fmt==='s'?'none':'block'}">
  <div class="fl">Nº bultos</div>
@@ -25614,6 +25622,9 @@ const nPending = (State.get.pendingOrders() || [])
  oninput="App.alm.calcIAAnalysis()">
  <span class="alm-input-suffix-label" style="right:38px">€</span>
  <button id="pvp-rec-btn" class="alm-pvp-rec-btn" onclick="App.alm._applyRecomPvp()">✦</button>
+ </div>
+ <div id="fpvp-derived" style="display:none;margin-top:4px;font-size:10px;color:var(--ink-soft);font-weight:600;line-height:1.6">
+  <span id="fpvp-neto"></span>
  </div>
  </div>
  </div>
@@ -26137,6 +26148,14 @@ const nPending = (State.get.pendingOrders() || [])
  '<button class="' + bs + '" onclick="App.alm._applyRecomPvpVal(' + pvpOpt + ')">Aplicar ' + feur(pvpOpt) + '</button>'
  : '';
 
+ // v1.3.614: labels derivados
+ var _cuEl = document.getElementById('fpr-derived');
+ var _cuSpan = document.getElementById('fpr-cu');
+ var _pvpNetoEl = document.getElementById('fpvp-derived');
+ var _pvpNetoSpan = document.getElementById('fpvp-neto');
+ if (_cuEl && _cuSpan) { if (costeUd > 0) { _cuSpan.textContent = 'Coste/ud: ' + feur(costeUd); _cuEl.style.display = 'block'; } else { _cuEl.style.display = 'none'; } }
+ if (_pvpNetoEl && _pvpNetoSpan) { if (pvpNeto > 0) { _pvpNetoSpan.textContent = 'PVP neto: ' + feur(pvpNeto); _pvpNetoEl.style.display = 'block'; } else { _pvpNetoEl.style.display = 'none'; } }
+
  box.classList.add('visible');
  box.style.background = mBg;
  // Ganancia como dato principal/héroe (punto 3)
@@ -26478,6 +26497,7 @@ const nPending = (State.get.pendingOrders() || [])
  <div class="alm-analysis-title">Rentabilidad</div>
  <div class="alm-analysis-kpis">
  <div><div class="alm-analysis-kpi-lbl">Coste/ud</div><div class="alm-analysis-kpi-val" id="ea-r-coste">—</div></div>
+ <div><div class="alm-analysis-kpi-lbl">PVP neto</div><div class="alm-analysis-kpi-val" id="ea-r-pvpneto">—</div></div>
  <div><div class="alm-analysis-kpi-lbl">Margen</div><div class="alm-analysis-kpi-val" id="ea-r-mg">—</div></div>
  <div><div class="alm-analysis-kpi-lbl">Ganancia/bulto</div><div class="alm-analysis-kpi-val" id="ea-r-gan">—</div></div>
  </div>
