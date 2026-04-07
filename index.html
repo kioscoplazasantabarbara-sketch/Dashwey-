@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.604-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.605-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.604-dev</title>
+<title>Dashwey v1.3.605-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11430,7 +11430,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.604-dev';
+ const _APP_VERSION = 'v1.3.605-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17501,6 +17501,8 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
  el.classList.add('snap-counting');
 
  function step(ts) {
+ // v1.3.605: guard DOM detached
+ if (!el.isConnected) { el._snapRafId = null; return; }
  if (!startTime) startTime = ts;
  var progress = Math.min((ts - startTime) / duration, 1);
  var ease = 1 - Math.pow(1 - progress, 3);
@@ -17509,6 +17511,14 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
  else if (isPct) el.textContent = _snapFmt(current, 1) + '%';
  else el.textContent = _snapFmt(Math.round(current));
  if (progress < 1) {
+  el._snapRafId = requestAnimationFrame(step);
+ } else {
+  el._snapRafId = null;
+  el.classList.remove('snap-counting');
+  el.classList.add('snap-pop');
+  setTimeout(function() { if (el.isConnected) el.classList.remove('snap-pop'); }, 400);
+ }
+ }
  el._snapRafId = requestAnimationFrame(step);
  } else {
  el._snapRafId = null;
@@ -19214,10 +19224,16 @@ var lbl = bar.dataset.lbl;
  return 'snap-kpi-delta ' + (map[status] || 'neutral');
  }
 
- function _snapRenderCard(cardId) {
+ function _snapRenderCard(cardId, _sharedSnap) {
  var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
  var snap = null;
- try { snap = FinEngine.snapshot(period); } catch(_) {}
+ // v1.3.605: aceptar snapshot precalculado de _snapDoRenderAll — evita N llamadas
+ // a FinEngine.snapshot() durante forEach; si no se pasa, calcular localmente
+ if (_sharedSnap) {
+  snap = _sharedSnap;
+ } else {
+  try { snap = FinEngine.snapshot(period); } catch(_) {}
+ }
  if (!snap) return;
 
  var eur = _snapFeur;
@@ -19738,8 +19754,8 @@ var lbl = bar.dataset.lbl;
  // Reset guard — permite re-render aunque sean tarjetas ya visitadas
  _snapLastRenderedCardId = null;
  // Re-render agenda (timeline) + alertas (pestaña proveedores)
- _snapRenderCard('agenda');
- _snapRenderCard('caducidades');
+ try { _snapRenderCard('agenda'); } catch(_e) {}
+ try { _snapRenderCard('caducidades'); } catch(_e) {}
  }
 
  // ── Re-render tarjeta activa cuando cambia el periodo ───────────────────
@@ -19874,7 +19890,7 @@ var lbl = bar.dataset.lbl;
  if (cardId && cardId !== _snapLastRenderedCardId) {
  _snapLastRenderedCardId = cardId;
  _snapUpdateTitle(cardId);
- _snapRenderCard(cardId);
+ try { _snapRenderCard(cardId); } catch(_e) {}
  }
  }
  });
@@ -19908,15 +19924,17 @@ var lbl = bar.dataset.lbl;
  Math.max(best.getBoundingClientRect().top, contR.top)
  ) / best.getBoundingClientRect().height;
  if (visRatio >= 0.55) {
- _snapLastRenderedCardId = best.dataset.cardId;
- _snapUpdateTitle(best.dataset.cardId);
- _snapRenderCard(best.dataset.cardId);
+ // v1.3.605: guard race con IntersectionObserver
+ var _fbCardId = best.dataset.cardId;
+ _snapLastRenderedCardId = _fbCardId;
+ _snapUpdateTitle(_fbCardId);
+ try { _snapRenderCard(_fbCardId); } catch(_e) {}
  }
  }
  };
  cont._snapFallbackHandler = function() {
- clearTimeout(_snapFbTimer);
- _snapFbTimer = setTimeout(_snapFbPoll, 120);
+  clearTimeout(_snapFbTimer);
+  _snapFbTimer = setTimeout(_snapFbPoll, 120);
  };
  // scrollend disponible en Chrome 114+ / Android WebView basado en Chromium 114+
  if ('onscrollend' in cont) {
@@ -19964,7 +19982,7 @@ var lbl = bar.dataset.lbl;
  const first = document.querySelector('#dash-cards-container [data-card-id]');
  if (first) {
  _snapUpdateTitle(first.dataset.cardId);
- _snapRenderCard(first.dataset.cardId);
+ try { _snapRenderCard(first.dataset.cardId); } catch(_e) {}
  }
  // Wire settings buttons
  setTimeout(_snapAttachSettingsButtons, 100);
