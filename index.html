@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.600-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.601-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.600-dev</title>
+<title>Dashwey v1.3.601-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10617,11 +10617,35 @@ const FinEngine = (() => {
   const _daysInSnapMonth = new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate();
   const _snapFrac = Math.max(0, (range.end - range.start)) / (_daysInSnapMonth * 86400000);
   const benNeto = money(ing - cogs - money(gop * _snapFrac));
- // v1.3.562: mgBruto usa solo ventas TPV (sin ingFin) — margen es KPI comercial puro
- const _vtaTPV = (State.get.ventas() || [])
-   .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
-   .reduce((s, v) => s + ventaIngresos(v), 0);
- const mgBruto = _vtaTPV > 0 ? Math.round((_vtaTPV - cogs) / _vtaTPV * 100) : 0;
+ // v1.3.601: mgBruto = promedio ponderado de (PVP - costeUnit) / PVP por producto vendido
+ // costeUnit = precioCompra / udsCaja (con IVA) — fórmula real coste/unidad vs PVP
+ const _vtasPeriodo = (State.get.ventas() || [])
+   .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; });
+ const _vtaTPV = _vtasPeriodo.reduce((s, v) => s + ventaIngresos(v), 0);
+ const mgBruto = (() => {
+   var totalPeso = 0, totalMgPeso = 0;
+   _vtasPeriodo.forEach(function(v) {
+     var items = v.items && v.items.length ? v.items : [{ prodId: v.prodId, qty: v.qty || 1, pvp: v.pvp || 0 }];
+     items.forEach(function(it) {
+       var pvp = it.pvp || 0; if (pvp <= 0) return;
+       var qty = it.qty || 1;
+       var ingItem = pvp * qty;
+       // coste unitario real: precioCompra/udsCaja con IVA (via _calcMargenProd)
+       var p = State.get.prod(it.prodId);
+       if (p) {
+         var r = _calcMargenProd(p);
+         if (r.valid) { totalPeso += ingItem; totalMgPeso += r.mg * ingItem; return; }
+       }
+       // fallback: usar coste registrado en la venta si existe
+       var costeUnit = it.coste || 0;
+       if (costeUnit > 0 && pvp > 0) {
+         var mgFb = Math.round((pvp - costeUnit) / pvp * 100);
+         totalPeso += ingItem; totalMgPeso += mgFb * ingItem;
+       }
+     });
+   });
+   return totalPeso > 0 ? Math.round(totalMgPeso / totalPeso) : 0;
+ })();
  const saldo = saldoCuentas();
  const rw = runway();
  const ratio = ratioLiquidez();
@@ -11420,7 +11444,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.600-dev';
+ const _APP_VERSION = 'v1.3.601-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
