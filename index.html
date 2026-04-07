@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.601-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.602-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.601-dev</title>
+<title>Dashwey v1.3.602-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9892,12 +9892,11 @@ function _calcMargenProd(p) {
  return { cu: 0, mg: null, valid: false, reason: 'uds-invalido' };
  }
 
- // Coste unitario = (precio bulto * (1 + IVA%)) / uds_por_bulto
- var cu = (pCompra * (1 + ivaPct / 100)) / udsCaja;
- cu = +cu.toFixed(4);
-
- // Margen % = (PVP - cu) / PVP * 100
- var mg = Math.round((pvp - cu) / pvp * 100);
+ // v1.3.602: todo neto — coste/ud sin IVA vs pvp_neto sin IVA
+ var cu = +(pCompra / udsCaja).toFixed(4);
+ var pvpNeto = +(pvp / (1 + ivaPct / 100)).toFixed(4);
+ // Margen % = (pvp_neto - coste_unitario) / pvp_neto * 100
+ var mg = pvpNeto > 0 ? Math.round((pvpNeto - cu) / pvpNeto * 100) : 0;
 
  return { cu: cu, mg: mg, valid: true };
 }
@@ -10026,8 +10025,8 @@ const KPI = (() => {
  const prodsDelProv = State.get.productos().filter(p => p.prov === provId);
  const margenProm = prodsDelProv.length > 0
  ? Math.round(prodsDelProv.reduce((s, p) => {
- const cu = p.precioCompra * 1.10;
- return s + (p.pvp > 0 ? (p.pvp - cu) / p.pvp * 100 : 0);
+ // v1.3.602: _calcMargenProd — fuente única
+        var _r = _calcMargenProd(p); return s + (_r.valid ? _r.mg : 0);
  }, 0) / prodsDelProv.length)
  : 0;
  const pct = grandTotal > 0 ? Math.round((gasto / grandTotal) * 100) : 0;
@@ -11444,7 +11443,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.601-dev';
+ const _APP_VERSION = 'v1.3.602-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24112,17 +24111,18 @@ const marginLine = '';
  const ivaPct = ivaSelect === 'otro'
  ? parseFloat(document.getElementById('ea-iva-custom')?.value) || 0
  : _parseIva(ivaSelect);
- const costeIva = +(pc * (1 + ivaPct / 100)).toFixed(2);
  const uc = parseInt(document.getElementById('ea-uc')?.value) || 12;
- const ganCaja = pvp > 0 ? +((pvp - costeIva / uc) * uc).toFixed(2) : 0;
- const mg = pvp > 0 && costeIva > 0
- ? Math.round((pvp - costeIva / uc) / pvp * 100) : null;
+ // v1.3.602: todo neto
+ const cu = pc > 0 && uc > 0 ? +(pc / uc).toFixed(4) : 0;
+ const pvpNeto = pvp > 0 ? +(pvp / (1 + ivaPct / 100)).toFixed(4) : 0;
+ const mg = pvpNeto > 0 && cu > 0 ? Math.round((pvpNeto - cu) / pvpNeto * 100) : null;
+ const ganCaja = pvpNeto > 0 && cu > 0 ? +((pvpNeto - cu) * uc).toFixed(2) : 0;
  const rentEl = document.getElementById('ea-rent');
  const costeEl = document.getElementById('ea-r-coste');
  const mgEl = document.getElementById('ea-r-mg');
  const ganEl = document.getElementById('ea-r-gan');
  if (rentEl) rentEl.classList.toggle('visible', pc > 0 || pvp > 0);
- if (costeEl) costeEl.textContent = pc > 0 ? feur(costeIva) + '/bulto' : '\u2014';
+ if (costeEl) costeEl.textContent = cu > 0 ? feur(cu) + '/ud' : '\u2014';
  if (mgEl) {
  mgEl.textContent = mg !== null ? mg + '%' : '\u2014';
  mgEl.style.color = mg === null ? 'var(--ink)'
@@ -25353,18 +25353,27 @@ const nPending = (State.get.pendingOrders() || [])
  if(!items.length && _carritoKeys.length) { _openAceptarPopupFromCarrito(sel); return; }
 
  // ── Fórmulas correctas (punto 5) ──────────────────────────────
- const invTotal = items.reduce((s,o) => s + o.ncajas * o.precio * 1.10, 0);
+ // v1.3.602: neto/neto — IVA real por ítem
+ const _ivaItemFn = (o) => {
+  const _p = State.get.prod(o.prodId);
+  const _r = o.iva != null ? o.iva : (_p?.iva ?? '10%');
+  return parseFloat(String(_r).replace('%','')) / 100 || 0.10;
+ };
+ const invTotal = items.reduce((s,o) => s + o.ncajas * o.precio * (1 + _ivaItemFn(o)), 0);
  const totalUds = items.reduce((s,o) => s + o.ncajas * o.udscaja, 0);
- const ventaEst = items.reduce((s,o) => s + o.ncajas * o.udscaja * o.pvp, 0);
- const gananciaEst = ventaEst - invTotal;
+ const ventaEstNeta = items.reduce((s,o) => s + o.ncajas * o.udscaja * (o.pvp / (1 + _ivaItemFn(o))), 0);
+ const gananciaEst = ventaEstNeta - invTotal;
  const roi = invTotal > 0 ? Math.round((gananciaEst / invTotal) * 100) : 0;
- const margenGlob = ventaEst > 0 ? Math.round((gananciaEst / ventaEst) * 100) : 0;
- const breakEven = ventaEst > 0 ? Math.ceil(invTotal / (ventaEst / totalUds)) : 0;
+ const margenGlob = ventaEstNeta > 0 ? Math.round((gananciaEst / ventaEstNeta) * 100) : 0;
+ const _pvpNetMed = totalUds > 0 ? ventaEstNeta / totalUds : 0;
+ const breakEven = _pvpNetMed > 0 ? Math.ceil(invTotal / _pvpNetMed) : 0;
 
  // ── Consolidación de sugerencias (punto 3) ─────────────────────
  const itemMargs = items.map(o => {
- const cu = (o.ncajas * o.precio * 1.10) / (o.ncajas * o.udscaja);
- const mg = o.pvp > 0 ? Math.round((o.pvp - cu) / o.pvp * 100) : 0;
+ const _iva = _ivaItemFn(o);
+ const cu = o.udscaja > 0 ? o.precio / o.udscaja : 0;
+ const pvpN = o.pvp / (1 + _iva);
+ const mg = pvpN > 0 && cu > 0 ? Math.round((pvpN - cu) / pvpN * 100) : 0;
  return { o, cu, mg, p: State.get.prod(o.prodId) };
  });
  const excelentes = itemMargs.filter(x => x.mg >= 40);
@@ -26190,13 +26199,26 @@ const nPending = (State.get.pendingOrders() || [])
  if(!pr || !pvp || !uc) { box.classList.remove('visible'); _calcIALastKey = ''; return; }
 
  // ── Fórmulas correctas (punto 5) ──────────────────────────────
- const invTotal = pr * nc * 1.10; // Inversión = Precio×Cajas + IVA
+ // v1.3.602: fórmulas neto/neto
+ const _ivaSelIA = document.getElementById('fiv')?.value || '10%';
+ const _ivaPctIA = _ivaSelIA === 'otro'
+  ? (parseFloat(document.getElementById('fiv-custom')?.value) || 10)
+  : (parseFloat(String(_ivaSelIA).replace('%','')) || 10);
+ const _descRawIA = document.getElementById('fdesc')?.value?.trim() || '';
+ let _descValIA = 0;
+ if (_descRawIA) {
+  if (_descRawIA.includes('%')) { _descValIA = pr * nc * (parseFloat(_descRawIA) / 100); }
+  else { _descValIA = parseFloat(_descRawIA) || 0; }
+ }
+ const invTotal = pr * nc * (1 + _ivaPctIA / 100) - _descValIA;
  const totalUds = nc * uc;
- const costeUd = invTotal / totalUds;
- const ganBruta = (totalUds * pvp) - invTotal; // Ganancia = (Uds×PVP) − Inversión
- const roi = Math.round((ganBruta / invTotal) * 100); // ROI = Ganancia/Inversión × 100
- const margen = pvp > 0 ? Math.round((ganBruta / (totalUds * pvp)) * 100) : 0; // Margen = Gan/Ventas × 100
- const breakEven = pvp > 0 ? Math.ceil(invTotal / pvp) : 0; // Punto de equilibrio
+ const costeUd = totalUds > 0 ? invTotal / totalUds : 0;
+ const pvpNeto = pvp / (1 + _ivaPctIA / 100);
+ const ganUd = pvpNeto - costeUd;
+ const ganBruta = ganUd * totalUds;
+ const roi = invTotal > 0 ? Math.round((ganBruta / invTotal) * 100) : 0;
+ const margen = pvpNeto > 0 ? Math.round((ganUd / pvpNeto) * 100) : 0;
+ const breakEven = pvpNeto > 0 ? Math.ceil(invTotal / pvpNeto) : 0;
 
  // ── Semántica de color de rentabilidad (punto 2) ──────────────
  const mColor = margen >= 40 ? 'var(--green-dark)' : margen >= 15 ? 'var(--green)' : 'var(--orange)';
@@ -26207,8 +26229,9 @@ const nPending = (State.get.pendingOrders() || [])
  : margen > 0 ? `Margen bajo (${margen}%) — Revisa el PVP`
  : `Margen negativo — PVP por debajo del coste`;
 
- const pvpOpt = +(costeUd / 0.70).toFixed(2);
- const pvpMin = +(costeUd / 0.85).toFixed(2);
+ // v1.3.602: pvp recomendado en bruto
+ const pvpOpt = +((costeUd / 0.70) * (1 + _ivaPctIA / 100)).toFixed(2);
+ const pvpMin = +((costeUd / 0.85) * (1 + _ivaPctIA / 100)).toFixed(2);
  // Mostrar botón IA junto al PVP cuando el margen es mejorable
  const pvpRecBtn = document.getElementById('pvp-rec-btn');
  if (pvpRecBtn) {
@@ -26564,7 +26587,7 @@ const nPending = (State.get.pendingOrders() || [])
  <div id="ea-rent" class="alm-analysis-block" style="display:none">
  <div class="alm-analysis-title">Rentabilidad</div>
  <div class="alm-analysis-kpis">
- <div><div class="alm-analysis-kpi-lbl">Coste+IVA</div><div class="alm-analysis-kpi-val" id="ea-r-coste">—</div></div>
+ <div><div class="alm-analysis-kpi-lbl">Coste/ud</div><div class="alm-analysis-kpi-val" id="ea-r-coste">—</div></div>
  <div><div class="alm-analysis-kpi-lbl">Margen</div><div class="alm-analysis-kpi-val" id="ea-r-mg">—</div></div>
  <div><div class="alm-analysis-kpi-lbl">Ganancia/bulto</div><div class="alm-analysis-kpi-val" id="ea-r-gan">—</div></div>
  </div>
