@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.641-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.642-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.641-dev</title>
+<title>Dashwey v1.3.642-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10351,15 +10351,16 @@ const FinEngine = (() => {
  // ── Utilidad: coste total de un pedido de almacén (+IVA) ─────────
  function pedidoCoste(ped) {
  if (!ped || !ped.items) return 0;
- return ped.items.reduce((s, it) => {
- const base = (it.ncajas || 0) * (it.precio || 0);
- // v1.3.577: it.iva puede ser 0 (falsy) — usar != null para detectar ausencia real
- // Fallback: leer iva del producto actual; si no existe, usar 10% (hostelería)
- const _ivaRaw = it.iva != null ? it.iva
- : (State.get.prod(it.prodId)?.iva ?? '10%');
- const ivaPct = parseFloat(String(_ivaRaw).replace('%', '')) / 100 || 0;
- return s + base * (1 + ivaPct);
+ var _base = ped.items.reduce((s, it) => {
+  const base = (it.ncajas || 0) * (it.precio || 0);
+  const _ivaRaw = it.iva != null ? it.iva : (State.get.prod(it.prodId)?.iva ?? '10%');
+  const ivaPct = parseFloat(String(_ivaRaw).replace('%', '')) / 100 || 0;
+  return s + base * (1 + ivaPct);
  }, 0);
+ // v1.3.642: cargos extra (RE, Punto Verde, cargo custom)
+ var _ce = ped.cargosExtra || {};
+ var _extra = (_ce.re || 0) + (_ce.puntoVerde || 0) + ((_ce.custom && _ce.custom.importe) || 0);
+ return _base + _extra;
  }
 
  // ── Utilidad: gastoMensual equivalente (respeta periodicidad) ────
@@ -11457,7 +11458,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.641-dev';
+ const _APP_VERSION = 'v1.3.642-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12504,7 +12505,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.641-dev': {
+  'v1.3.642-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -32165,50 +32166,154 @@ window._almCarritoOptions = function() {
 
  /* ── Popup "¿Confirmar recepción?" Sí / No — v1.2.37 ──────────── */
  function _showConfirmPopup() {
- _removeConfirmPopup(); // limpiar si ya existe
+ _removeConfirmPopup();
+ var S = window.checkModalState;
+ var items = S.items || [];
+
+ // Calcular RE sugerido por tipo de IVA
+ var reMap = { 21: 5.2, 10: 1.4, 4: 0.5 };
+ var reSug = 0;
+ items.forEach(function(it) {
+  var base = (it.ncajas || 0) * (it.precio || 0);
+  var ivaStr = String(it.iva != null ? it.iva : '10').replace('%','');
+  var ivaPct = parseFloat(ivaStr) || 10;
+  var rePct  = reMap[ivaPct] !== undefined ? reMap[ivaPct] : reMap[10];
+  reSug += base * rePct / 100;
+ });
+ reSug = Math.round(reSug * 100) / 100;
+
+ // ── DOM ────────────────────────────────────────────────────
  var pop = document.createElement('div');
  pop.id = 'cm-confirm-popup';
- pop.style.cssText = [
- 'position:fixed;inset:0;z-index:10300',
- 'display:flex;align-items:center;justify-content:center',
- 'background:rgba(0,0,0,0.55);padding:20px',
- ].join(';');
- pop.innerHTML =
- '<div style="background:var(--surface);border-radius:20px;padding:28px 24px;' +
- 'width:100%;max-width:320px;box-shadow:0 24px 64px rgba(0,0,0,0.30);' +
- 'font-family:var(--font);text-align:center;">' +
- '<div style="font-size:36px;margin-bottom:12px">📦</div>' +
- '<div style="font-size:18px;font-weight:800;color:var(--ink);letter-spacing:-0.4px;margin-bottom:8px">' +
- '¿Confirmar recepción?' +
- '</div>' +
- '<div style="font-size:13px;color:var(--ink-soft);margin-bottom:24px;line-height:1.5">' +
- 'El stock se actualizará con los artículos marcados.' +
- '</div>' +
- '<div style="display:flex;gap:10px">' +
- '<button id="cm-pop-no" style="flex:1;height:48px;border-radius:14px;border:1.5px solid var(--border);' +
- 'background:var(--surface);color:var(--ink);font-size:15px;font-weight:600;' +
- 'font-family:var(--font);cursor:pointer;touch-action:manipulation">No</button>' +
- '<button id="cm-pop-si" style="flex:1;height:48px;border-radius:14px;border:none;' +
- 'background:var(--red);color:#fff;font-size:15px;font-weight:700;' +
- 'font-family:var(--font);cursor:pointer;touch-action:manipulation;' +
- 'box-shadow:0 4px 16px rgba(139,26,47,0.28)">Sí, confirmar</button>' +
- '</div>' +
- '</div>';
+ pop.style.cssText = 'position:fixed;inset:0;z-index:10300;display:flex;align-items:center;' +
+  'justify-content:center;background:rgba(0,0,0,0.55);padding:20px;overflow-y:auto';
+
+ var box = document.createElement('div');
+ box.style.cssText = 'background:var(--surface);border-radius:20px;padding:24px 20px;' +
+  'width:100%;max-width:340px;box-shadow:0 24px 64px rgba(0,0,0,0.30);font-family:var(--font)';
+
+ // titulo
+ var ttl = document.createElement('div');
+ ttl.style.cssText = 'font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-0.3px;margin-bottom:4px';
+ ttl.textContent = 'Confirmar recepción';
+ var sub = document.createElement('div');
+ sub.style.cssText = 'font-size:12px;color:var(--ink-soft);margin-bottom:18px;line-height:1.4';
+ sub.textContent = 'El stock se actualizará. Añade cargos de la factura si aplican.';
+
+ // helper: campo con etiqueta
+ function makeField(id, labelTxt, badge, placeholder, val) {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-bottom:12px';
+  var lrow = document.createElement('div');
+  lrow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px';
+  var lbl = document.createElement('span');
+  lbl.style.cssText = 'font-size:11px;font-weight:700;color:var(--ink-soft);' +
+   'text-transform:uppercase;letter-spacing:.5px';
+  lbl.textContent = labelTxt;
+  lrow.appendChild(lbl);
+  if (badge) {
+   var bdg = document.createElement('span');
+   bdg.style.cssText = 'font-size:10px;color:var(--ink-soft);font-weight:500';
+   bdg.textContent = badge;
+   lrow.appendChild(bdg);
+  }
+  var inp = document.createElement('input');
+  inp.id = id;
+  inp.type = 'number';
+  inp.step = '0.01';
+  inp.min = '0';
+  inp.placeholder = placeholder;
+  if (val !== undefined) inp.value = val;
+  inp.style.cssText = 'height:40px;border-radius:10px;border:1.5px solid var(--border);' +
+   'padding:0 10px;font-size:14px;font-family:var(--font);color:var(--ink);' +
+   'background:var(--bg);outline:none;width:100%;box-sizing:border-box';
+  inp.addEventListener('focus',  function(){ this.style.borderColor = 'var(--indigo)'; });
+  inp.addEventListener('blur',   function(){ this.style.borderColor = 'var(--border)'; });
+  wrap.appendChild(lrow);
+  wrap.appendChild(inp);
+  return wrap;
+ }
+
+ // campo custom (concepto + importe)
+ var wrapCustom = document.createElement('div');
+ wrapCustom.style.cssText = 'margin-bottom:20px';
+ var lblCustom = document.createElement('div');
+ lblCustom.style.cssText = 'font-size:11px;font-weight:700;color:var(--ink-soft);' +
+  'text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px';
+ lblCustom.textContent = 'Cargo adicional (opcional)';
+ var rowCustom = document.createElement('div');
+ rowCustom.style.cssText = 'display:flex;gap:8px';
+ var inpLbl = document.createElement('input');
+ inpLbl.id = 'cm-cargo-custom-lbl';
+ inpLbl.type = 'text';
+ inpLbl.placeholder = 'Concepto';
+ inpLbl.style.cssText = 'flex:2;height:40px;border-radius:10px;border:1.5px solid var(--border);' +
+  'padding:0 10px;font-size:14px;font-family:var(--font);color:var(--ink);' +
+  'background:var(--bg);outline:none;box-sizing:border-box';
+ var inpImp = document.createElement('input');
+ inpImp.id = 'cm-cargo-custom-imp';
+ inpImp.type = 'number';
+ inpImp.step = '0.01';
+ inpImp.min = '0';
+ inpImp.placeholder = '0,00';
+ inpImp.style.cssText = 'flex:1;height:40px;border-radius:10px;border:1.5px solid var(--border);' +
+  'padding:0 10px;font-size:14px;font-family:var(--font);color:var(--ink);' +
+  'background:var(--bg);outline:none;box-sizing:border-box';
+ rowCustom.appendChild(inpLbl);
+ rowCustom.appendChild(inpImp);
+ wrapCustom.appendChild(lblCustom);
+ wrapCustom.appendChild(rowCustom);
+
+ // botones
+ var btns = document.createElement('div');
+ btns.style.cssText = 'display:flex;gap:10px';
+ var bNo = document.createElement('button');
+ bNo.id = 'cm-pop-no';
+ bNo.style.cssText = 'flex:1;height:48px;border-radius:14px;border:1.5px solid var(--border);' +
+  'background:var(--surface);color:var(--ink);font-size:15px;font-weight:600;' +
+  'font-family:var(--font);cursor:pointer;touch-action:manipulation';
+ bNo.textContent = 'Cancelar';
+ var bSi = document.createElement('button');
+ bSi.id = 'cm-pop-si';
+ bSi.style.cssText = 'flex:1;height:48px;border-radius:14px;border:none;background:var(--red);' +
+  'color:#fff;font-size:15px;font-weight:700;font-family:var(--font);cursor:pointer;' +
+  'touch-action:manipulation;box-shadow:0 4px 16px rgba(139,26,47,0.28)';
+ bSi.textContent = 'Confirmar';
+ btns.appendChild(bNo);
+ btns.appendChild(bSi);
+
+ // ensamblar
+ box.appendChild(ttl);
+ box.appendChild(sub);
+ box.appendChild(makeField('cm-cargo-re', 'Recargo de Equivalencia', 'calculado auto', '0,00 €', reSug.toFixed(2)));
+ box.appendChild(makeField('cm-cargo-pv', 'Punto Verde (opcional)',  null,             '0,00 €', undefined));
+ box.appendChild(wrapCustom);
+ box.appendChild(btns);
+ pop.appendChild(box);
  document.body.appendChild(pop);
- // Animar entrada
+
+ // animar
  pop.style.opacity = '0';
  requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- pop.style.transition = 'opacity 0.18s ease';
- pop.style.opacity = '1';
+  requestAnimationFrame(function() {
+   pop.style.transition = 'opacity 0.18s ease';
+   pop.style.opacity = '1';
+  });
  });
- });
- // Listeners
- document.getElementById('cm-pop-no').addEventListener('click', function() {
- _removeConfirmPopup(); // volver al modal de comprobación
- }, { once: true });
- document.getElementById('cm-pop-si').addEventListener('click', function() {
- window._checkModal._doConfirm();
+
+ // listeners
+ bNo.addEventListener('click', function() { _removeConfirmPopup(); }, { once: true });
+ bSi.addEventListener('click', function() {
+  var re   = parseFloat(document.getElementById('cm-cargo-re').value)          || 0;
+  var pv   = parseFloat(document.getElementById('cm-cargo-pv').value)          || 0;
+  var cLbl = (document.getElementById('cm-cargo-custom-lbl').value || '').trim();
+  var cImp = parseFloat(document.getElementById('cm-cargo-custom-imp').value)  || 0;
+  S._cargosExtra = {
+   re:         Math.round(re   * 100) / 100,
+   puntoVerde: Math.round(pv   * 100) / 100,
+   custom:     (cLbl || cImp > 0) ? { label: cLbl, importe: Math.round(cImp * 100) / 100 } : null,
+  };
+  window._checkModal._doConfirm();
  }, { once: true });
  }
 
@@ -32240,7 +32345,9 @@ window._almCarritoOptions = function() {
  }
  };
 
- var totalInv = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.precio||0)*1.10;},0);
+ var _ceS = (meta && meta.cargosExtra) || {};
+    var _extraS = (_ceS.re||0) + (_ceS.puntoVerde||0) + ((_ceS.custom&&_ceS.custom.importe)||0);
+    var totalInv = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.precio||0)*1.10 + _extraS;},0);
  var totalVta = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.udscaja||1)*(i.pvpActual||0);},0);
  var ganancia = totalVta - totalInv;
  var margen = totalVta>0?Math.round(ganancia/totalVta*100):0;
@@ -32527,7 +32634,9 @@ window._almCarritoOptions = function() {
  pvp: o.pvpActual || 0,
  };
  }),
+ cargosExtra: S._cargosExtra || null, // v1.3.642: ALM-F6
  };
+ S._cargosExtra = null;
 
  try {
  St.set.addPedido(pedido);
