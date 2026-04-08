@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.622-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.623-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.622-dev</title>
+<title>Dashwey v1.3.623-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10449,7 +10449,28 @@ const FinEngine = (() => {
  // ── 4. GASTOS OPERATIVOS ─────────────────────────────────────────
  // gastoMensualTotal(): equivalente mensual de todos los gastos
  function gastoMensualTotal() {
- return money(gastoMensualEq(State.get.gastosOp()));
+  return money(gastoMensualEq(State.get.gastosOp()));
+ }
+
+ // v1.3.623: gastoGlobalPeriodo(range) — gasto total real del negocio
+ // Incluye: gastos operativos (prorateados) + compras Almacén + mermas
+ function gastoGlobalPeriodo(range) {
+  const _daysInRef = range
+   ? new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate()
+   : 30;
+  const _msRange = range ? (range.end - range.start) : 30 * 86400000;
+  const _frac = Math.max(0, _msRange) / (_daysInRef * 86400000);
+  const gop = money(gastoMensualTotal() * _frac);
+  const compras = range ? comprasPeriodo(range) : comprasMesActual();
+  const mermas = (State.get.mermas ? State.get.mermas() : []);
+  const mermasCost = mermas
+   .filter(function(m) {
+    if (!range) return true;
+    const f = new Date(m.fecha);
+    return f >= range.start && f < range.end;
+   })
+   .reduce(function(s, m) { return s + (m.coste || 0); }, 0);
+  return money(gop + compras + mermasCost);
  }
 
  // gastoFijoMensual(): solo gastos recurrentes
@@ -10702,7 +10723,7 @@ const FinEngine = (() => {
  // Costs
  costeVentas, costeVentasMesActual,
  comprasPeriodo, comprasMesActual,
- gastoMensualTotal, gastoFijoMensual, gastoVariableMensual, gastoBruto,
+ gastoMensualTotal, gastoFijoMensual, gastoVariableMensual, gastoBruto, gastoGlobalPeriodo,
 
  // Profit
  beneficioNeto, beneficioNetoMesActual,
@@ -11434,7 +11455,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.622-dev';
+ const _APP_VERSION = 'v1.3.623-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12481,7 +12502,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.622-dev': {
+  'v1.3.623-dev': {
    id: 'wn-2026-04-07-v609',
   sections: [{
   title: '✨ Mejoras',
@@ -15349,13 +15370,18 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
  // Dirty-check -- skip si datos no cambiaron
  // v1.3.516: separador '|' evita colisiones por concatenación de strings
  const _fcPeriod = State.get.period();
+ const _pedidos = State.get.historialPedidos ? State.get.historialPedidos() : [];
+ const _mermas = State.get.mermas ? State.get.mermas() : [];
+ const _ventas = State.get.ventas ? State.get.ventas() : [];
  const _newFcHash = JSON.stringify([
- cuentas.map(c => c.saldo + '|' + c.nombre),
- gastos.map(g => g.importe + '|' + g.fecha),
- ingresos.map(i => i.importe + '|' + i.fecha),
- // v1.3.583: periodo en hash — label y tipo deben actualizar al cambiar periodo
- (_fcPeriod.type||'') + '|' + (_fcPeriod.offset||0) + '|' + (_fcPeriod.label||'')
- ]);
+  cuentas.map(c => c.saldo + '|' + c.nombre),
+  gastos.map(g => g.importe + '|' + g.fecha),
+  ingresos.map(i => i.importe + '|' + i.fecha),
+  _pedidos.length + '|' + (_pedidos[_pedidos.length-1]?.id||''),
+  _mermas.length + '|' + (_mermas[_mermas.length-1]?.id||''),
+  _ventas.length + '|' + (_ventas[_ventas.length-1]?.id||''),
+  (_fcPeriod.type||'') + '|' + (_fcPeriod.offset||0) + '|' + (_fcPeriod.label||'')
+ ])
  if (_newFcHash === _fcHash) return;
  _fcHash = _newFcHash;
 
@@ -15442,23 +15468,43 @@ Sé directo, usa números concretos, tono profesional pero cercano.`;
 
  // Ingresos manuales → income
  ingresos.forEach(i => moves.push({
- type: 'income',
- nombre: i.concepto || 'Ingreso',
- importe: +(i.importe || 0),
- fecha: i.fecha || '',
+  type: 'income', nombre: i.concepto || 'Ingreso manual',
+  importe: +(i.importe || 0), fecha: i.fecha || '',
  }));
 
- // Gastos → expense
+ // Gastos operativos → expense
  gastos.forEach(g => moves.push({
- type: 'expense',
- nombre: g.nombre || 'Gasto',
- importe: +(g.importe || 0),
- fecha: g.fecha || '',
+  type: 'expense', nombre: g.nombre || 'Gasto',
+  importe: +(g.importe || 0), fecha: g.fecha || '',
  }));
 
- // Ordenar por fecha desc, tomar los 5 más recientes
+ // v1.3.623: Compras Almacén → expense
+ _pedidos.forEach(p => {
+  const _prov = State.get.prov ? State.get.prov(p.provId) : null;
+  const _coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+  if (_coste > 0) moves.push({ type: 'expense',
+   nombre: '🏪 ' + (_prov ? _prov.nombre : 'Compra almacén'),
+   importe: _coste, fecha: p.fecha || '' });
+ });
+
+ // v1.3.623: Mermas → expense
+ _mermas.forEach(m => {
+  const _prod = State.get.prod ? State.get.prod(m.prodId) : null;
+  if (m.coste > 0) moves.push({ type: 'expense',
+   nombre: '📉 ' + (_prod ? _prod.nombre : 'Merma'),
+   importe: +(m.coste || 0), fecha: m.fecha || '' });
+ });
+
+ // v1.3.623: Ventas TPV → income
+ _ventas.forEach(v => {
+  const _tot = (v.items || []).reduce((s, it) => s + (it.pvp||0)*(it.qty||0), 0) || (v.total||0);
+  if (_tot > 0) moves.push({ type: 'income',
+   nombre: '🧾 Venta TPV', importe: _tot, fecha: v.fecha || '' });
+ });
+
+ // Ordenar por fecha desc, tomar los 8 más recientes
  moves.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
- const recent = moves.slice(0, 5);
+ const recent = moves.slice(0, 8);
 
  if (!recent.length) {
  movesEl.innerHTML = '<div style="font-size:12px;color:var(--ink-soft);padding:8px 0">Sin movimientos registrados</div>';
@@ -19140,15 +19186,32 @@ var lbl = bar.dataset.lbl;
   }).join('');
 
  // ── Lista de últimos movimientos ─────────────────────────────────
+ // v1.3.623: movimientos globales — gastosOp + pedidos + mermas + ingresos + ventas
+ var pedidosSnap = State.get.historialPedidos ? State.get.historialPedidos() : [];
+ var mermasSnap = State.get.mermas ? State.get.mermas() : [];
+ var ventasSnap = State.get.ventas ? State.get.ventas() : [];
  var movs = [];
  gastosOp.forEach(function(g) {
- movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)' });
+  movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)' });
  });
  ingresos.forEach(function(i) {
- movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: '#16A34A' });
+  movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: '#16A34A' });
+ });
+ pedidosSnap.forEach(function(p) {
+  var prov = State.get.prov ? State.get.prov(p.provId) : null;
+  var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+  if (coste > 0) movs.push({ nombre: '🏪 ' + (prov ? prov.nombre : 'Compra'), importe: coste, fecha: p.fecha||'', color: '#E53935' });
+ });
+ mermasSnap.forEach(function(m) {
+  var prod = State.get.prod ? State.get.prod(m.prodId) : null;
+  if (m.coste > 0) movs.push({ nombre: '📉 ' + (prod ? prod.nombre : 'Merma'), importe: m.coste||0, fecha: m.fecha||'', color: '#F97316' });
+ });
+ ventasSnap.forEach(function(v) {
+  var tot = (v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||0); }, 0) || (v.total||0);
+  if (tot > 0) movs.push({ nombre: '🧾 Venta TPV', importe: tot, fecha: v.fecha||'', color: '#16A34A' });
  });
  movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
- var recientes = movs.slice(0, 5);
+ var recientes = movs.slice(0, 8);
 
  movsEl.innerHTML = recientes.length === 0
  ? '<div style="font-size:11px;color:var(--ink-soft);padding:4px 0">Sin movimientos</div>'
