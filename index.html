@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.665-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.667-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.665-dev</title>
+<title>Dashwey v1.3.667-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3884,7 +3884,10 @@ body:not([data-tab="1"]) .snap-narrative-cursor {
 .tpv-prod-list { display: flex; flex-direction: column; gap: 5px; content-visibility: auto; contain-intrinsic-size: 0 500px; }
 .tpv-prod-item {
  background: var(--surface); border: 1px solid var(--border);
- border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+ border-radius: var(--r-lg);
+ animation: staggerFadeIn 240ms var(--ease-decelerate) both;
+ animation-delay: calc(var(--item-index, 0) * 35ms);
+ box-shadow: var(--shadow-sm);
  padding: 9px 12px; display: flex; align-items: center; gap: 10px;
  cursor: pointer; position: relative; overflow: hidden;
  transition: transform 0.12s var(--spring), box-shadow 0.15s;
@@ -4652,6 +4655,8 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  padding: 14px 12px;
  border-radius: 14px;
  background: var(--surface);
+ animation: staggerFadeIn 260ms var(--ease-decelerate) both;
+ animation-delay: calc(var(--item-index, 0) * 45ms);
  margin-bottom: 8px;
  cursor: pointer;
  border: 1.5px solid transparent;
@@ -6866,6 +6871,8 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
  border: 1.5px solid var(--border);
  margin-bottom: 8px;
  background: var(--surface);
+ animation: staggerFadeIn 260ms var(--ease-decelerate) both;
+ animation-delay: calc(var(--item-index, 0) * 45ms);
  cursor: pointer;
  touch-action: manipulation;
  -webkit-tap-highlight-color: transparent;
@@ -11518,7 +11525,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.665-dev';
+ const _APP_VERSION = 'v1.3.667-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12565,7 +12572,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.665-dev': {
+  'v1.3.667-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -22429,7 +22436,7 @@ const tpv = (() => {
  }
 
  const frag = document.createDocumentFragment();
- prods.forEach(p => {
+ prods.forEach((p, _pi) => {
  const isBest = maxV>0 && p.ventas===maxV && (p.stockActual||0)>0;
  const isLow = prods.length>1 && p.ventas===minV && minV<maxV && (p.stockActual||0)>0;
  const isAgot = (p.stockActual||0) <= 0;
@@ -22441,6 +22448,7 @@ const tpv = (() => {
  const qInCart = _cart[p.id]?.q||0;
  const div = document.createElement('div');
  div.className = 'tpv-prod-item';
+ div.style.setProperty('--item-index', Math.min(_pi, 8));
  div.dataset.pid = p.id; // v1.3.296: usado por event delegation
  div.onclick = () => addCart(p.id, div);
  div.innerHTML = `
@@ -23898,17 +23906,45 @@ const alm = (() => {
    });
   });
   var resultado = [];
+  var yaIncluido = {}; // evitar duplicados si un prod entra por ambas vías
   prods.forEach(function(p) {
    var uds30 = vtaMap[p.id] || 0;
-   if (uds30 <= 0) return; // sin ventas recientes — no calcular
-   var ritmoDiario = uds30 / 30;
-   var diasStock = ritmoDiario > 0 ? Math.max(0, Math.floor(p.stockActual / ritmoDiario)) : 999; // v1.3.665: stock negativo → 0 días
-   if (diasStock <= 7) {
-    resultado.push({ p: p, dias: diasStock, urgente: diasStock <= 2 });
+   if (uds30 > 0) {
+    // Vía principal: ritmo de ventas
+    var ritmoDiario = uds30 / 30;
+    var diasStock = ritmoDiario > 0 ? Math.max(0, Math.floor(p.stockActual / ritmoDiario)) : 999;
+    if (diasStock <= 7) {
+     resultado.push({ p: p, dias: diasStock, urgente: diasStock <= 2, sinDatos: false });
+     yaIncluido[p.id] = true;
+    }
+   } else {
+    // Vía secundaria: sin ventas recientes pero stock bajo o agotado
+    var stockMin = p.stockMinimo || p.stockMin || 3;
+    var stockAct = p.stockActual || 0;
+    if (stockAct <= stockMin && !yaIncluido[p.id]) {
+     resultado.push({
+      p: p,
+      dias: stockAct <= 0 ? 0 : null, // null = sin datos de ritmo
+      urgente: stockAct <= 0,
+      sinDatos: true // señal para el render
+     });
+     yaIncluido[p.id] = true;
+    }
    }
   });
-  // Ordenar: urgentes primero, luego por días asc
-  resultado.sort(function(a, b) { return a.dias - b.dias; });
+  // v1.3.666: urgentes primero, luego por días asc, sinDatos con stock>0 al final
+  resultado.sort(function(a, b) {
+   // urgentes siempre primero
+   if (a.urgente !== b.urgente) return a.urgente ? -1 : 1;
+   // sinDatos con stock>0 van al final (menos urgente que datos reales)
+   var aLast = a.sinDatos && (a.p.stockActual||0) > 0;
+   var bLast = b.sinDatos && (b.p.stockActual||0) > 0;
+   if (aLast !== bLast) return aLast ? 1 : -1;
+   // por días asc (null = Infinity para ordenar al final dentro del grupo)
+   var da = a.dias === null ? 999 : a.dias;
+   var db = b.dias === null ? 999 : b.dias;
+   return da - db;
+  });
   return resultado.slice(0, 8); // máx 8 sugerencias
  }
 
@@ -23927,8 +23963,10 @@ const alm = (() => {
    '<span class="alm-sug-badge">' + items.length + ' artículo' + (items.length !== 1 ? 's' : '') + '</span>' +
    '</div>';
   var rows = items.map(function(x) {
-   var col = x.urgente ? 'var(--red)' : x.dias <= 4 ? '#F97316' : '#CA8A04';
-   var txt = x.dias <= 0 ? 'Sin stock' : x.dias === 1 ? '1 día' : x.dias + ' días';
+   var col = x.urgente ? 'var(--red)' : (x.sinDatos ? '#CA8A04' : x.dias <= 4 ? '#F97316' : '#CA8A04');
+   var txt = x.sinDatos
+    ? (x.dias === 0 ? 'Sin stock' : 'Stock bajo (' + (x.p.stockActual||0) + ' uds)')
+    : (x.dias <= 0 ? 'Sin stock' : x.dias === 1 ? '1 día' : x.dias + ' días');
    return '<div class="alm-sug-item">' +
     '<div class="alm-sug-e">' + (x.p.e || '📦') + '</div>' +
     '<div class="alm-sug-info">' +
@@ -29007,7 +29045,7 @@ _eaRecalc();
 
  // ── Construir cards ──────────────────────────────────────
  var allRows = [];
- var sections = provOrder.map(function(provId) {
+ var sections = provOrder.map(function(provId, _provIdx) {
  var orders = byProv[provId];
  var prov = State.get.prov(provId);
  var provNombre = prov ? prov.nombre : provId;
@@ -29058,7 +29096,10 @@ _eaRecalc();
  '<div data-order-id="'+mainId+'" data-prov-id="'+provId+'" data-order-ids="'+orderIds.join(',')+'" ' +
  'style="display:flex;align-items:center;gap:12px;padding:14px 2px;' +
  'border-bottom:1px solid var(--border);cursor:pointer;position:relative;' +
- 'transition:transform 0.18s ease,opacity 0.18s ease;touch-action:pan-y"' +
+ 'transition:transform 0.18s ease,opacity 0.18s ease;touch-action:pan-y;' +
+ '--item-index:' + Math.min(_provIdx, 8) + ';' +
+ 'animation:staggerFadeIn 260ms var(--ease-decelerate) both;' +
+ 'animation-delay:calc(' + Math.min(_provIdx, 8) + ' * 45ms)' + '"' +
  ' onclick="window._closeAlmOverlay();setTimeout(function(){if('+orders.length+'>1){App.alm._listarPedidosProveedor(\''+provId+'\')}else{App.alm._abrirCheckModalById(\''+mainId+'\');}},260)">' +
  '<div style="width:44px;height:44px;border-radius:12px;background:var(--red-s);' +
  'display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">' +
