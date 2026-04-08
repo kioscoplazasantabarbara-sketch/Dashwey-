@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-664-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
+const CACHE_NAME  = 'dashwey-v1-3-665-dev'; /* v1.3.116: cache bust — invalida versiones anteriores */
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
