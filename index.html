@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.710-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.711-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.710-dev</title>
+<title>Dashwey v1.3.711-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3506,6 +3506,11 @@ input:focus, select:focus, textarea:focus {
  transition: border-color 140ms, color 140ms;
 }
 .fc-add-btn:active { border-color: var(--red); color: var(--red); }
+.fc-move-editable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.fc-move-editable:active { background: var(--bg); }
+.fc-move-edit-hint { font-size: 16px; color: var(--ink-soft); flex-shrink: 0; padding-left: 4px; }
+.mov-type-row { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+.mov-type-row::-webkit-scrollbar { display: none; }
 .fc-move-amount.income { color: #16A34A; }
 .fc-move-amount.expense { color: var(--red); }
 .fc-move-amount.transfer { color: var(--ink-mid); }
@@ -8255,7 +8260,8 @@ function _authTabSafe(tab) {
  </div>
  <div class="fc-section-title">Cuentas</div>
  <div id="fc-account-list"></div>
- <div class="fc-section-title" style="margin-top:14px">Últimos movimientos</div>
+ <div class="fc-section-title" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between"><span>Últimos movimientos</span><button id="fc-search-btn" style="background:none;border:none;cursor:pointer;padding:2px 4px;color:var(--ink-soft);-webkit-tap-highlight-color:transparent"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button></div>
+ <div id="fc-search-wrap" style="display:none;padding:0 14px 6px"><input id="fc-search-input" type="text" placeholder="Buscar movimiento…" style="width:100%;height:34px;border-radius:10px;border:1.5px solid var(--border);background:var(--bg);color:var(--ink);font-size:13px;font-family:var(--font);padding:0 10px;box-sizing:border-box"></div>
  <div id="fc-moves-list"></div>
  <div id="fc-add-btn-wrap" style="padding:0 14px 4px"></div>
  <div class="snap-narrative-zone" id="snap-narrative-flujo-caja">
@@ -11683,7 +11689,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.710-dev';
+ const _APP_VERSION = 'v1.3.711-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12730,7 +12736,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.710-dev': {
+  'v1.3.711-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -15712,16 +15718,18 @@ function _toggleCardFromManager(id, btn) {
 
  const moves = [];
 
- // Ingresos manuales → income
+ // Ingresos manuales → income (editables)
  ingresos.forEach(i => moves.push({
   type: 'income', nombre: i.concepto || 'Ingreso manual',
   importe: +(i.importe || 0), fecha: i.fecha || '',
+  id: i.id || '', src: 'ingreso',
  }));
 
- // Gastos operativos → expense
+ // Gastos operativos → expense (editables)
  gastos.forEach(g => moves.push({
   type: 'expense', nombre: g.nombre || 'Gasto',
   importe: +(g.importe || 0), fecha: g.fecha || '',
+  id: g.id || '', src: 'gasto',
  }));
 
  // v1.3.623: Compras Almacén → expense
@@ -15767,19 +15775,34 @@ function _toggleCardFromManager(id, btn) {
  } catch (_) { return iso; }
  };
 
- movesEl.innerHTML = recent.map(m => {
- const sign = m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '';
- return `<div class="fc-move-row">
- <div class="fc-move-icon ${m.type}">${ICONS[m.type] || '·'}</div>
- <div class="fc-move-info">
- <div class="fc-move-name">${esc(m.nombre)}</div>
- <div class="fc-move-date">${fmtD(m.fecha)}</div>
- </div>
- <div class="fc-move-amount ${m.type}">${sign}${_feur(m.importe)}</div>
- </div>`;
- }).join('');
+ // Buscador — filtrar por query si hay activa
+ var _fcQ = (document.getElementById('fc-search-input') ? document.getElementById('fc-search-input').value : '').toLowerCase().trim();
+ var _filtered = _fcQ ? recent.filter(function(m){ return m.nombre.toLowerCase().includes(_fcQ) || String(m.importe).includes(_fcQ); }) : recent;
 
- // Botón + Movimiento — renderizado una vez, reutiliza listener
+ movesEl.innerHTML = _filtered.length ? _filtered.map(m => {
+  const sign = m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '';
+  const editable = !!(m.id && m.src);
+  const editAttrs = editable ? ` data-mov-id="${m.id}" data-mov-src="${m.src}"` : '';
+  return `<div class="fc-move-row${editable?' fc-move-editable':''}"${editAttrs}>
+  <div class="fc-move-icon ${m.type}">${ICONS[m.type] || '·'}</div>
+  <div class="fc-move-info">
+  <div class="fc-move-name">${esc(m.nombre)}</div>
+  <div class="fc-move-date">${fmtD(m.fecha)}</div>
+  </div>
+  <div class="fc-move-amount ${m.type}">${sign}${_feur(m.importe)}</div>
+  ${editable ? '<div class="fc-move-edit-hint">›</div>' : ''}
+  </div>`;
+ }).join('')
+ : '<div style="font-size:12px;color:var(--ink-soft);padding:8px 0">Sin resultados</div>';
+
+ // Wire tap en movimientos editables
+ requestAnimationFrame(function() {
+  movesEl.querySelectorAll('.fc-move-editable').forEach(function(row) {
+   row.addEventListener('click', function() {
+    try { _openEditMovimientoSheet(row.dataset.movId, row.dataset.movSrc); } catch(e) {}
+   }, { once: true });
+  });
+ });
  var _addWrap = document.getElementById('fc-add-btn-wrap');
  if (_addWrap) {
   if (!_addWrap.querySelector('.fc-add-btn')) {
@@ -15791,6 +15814,25 @@ function _toggleCardFromManager(id, btn) {
    });
    _addWrap.appendChild(_addBtn);
   }
+ }
+ // Wire buscador
+ var _srchBtn = document.getElementById('fc-search-btn');
+ var _srchWrap = document.getElementById('fc-search-wrap');
+ var _srchInput = document.getElementById('fc-search-input');
+ if (_srchBtn && _srchWrap && !_srchBtn.dataset.wired) {
+  _srchBtn.dataset.wired = '1';
+  _srchBtn.addEventListener('click', function() {
+   var open = _srchWrap.style.display !== 'none';
+   _srchWrap.style.display = open ? 'none' : '';
+   if (!open && _srchInput) { _srchInput.value = ''; _srchInput.focus(); }
+   if (open) { if (_srchInput) _srchInput.value = ''; renderFlujoCaja(); }
+  });
+ }
+ if (_srchInput && !_srchInput.dataset.wired) {
+  _srchInput.dataset.wired = '1';
+  _srchInput.addEventListener('input', function() {
+   try { renderFlujoCaja(); } catch(e) {}
+  });
  }
  }
 
@@ -15839,6 +15881,9 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
     '<button class="mov-type-btn active" data-tipo="gasto">💸 Gasto</button>' +
     '<button class="mov-type-btn" data-tipo="ingreso">💰 Ingreso</button>' +
     '<button class="mov-type-btn" data-tipo="transferencia">🔄 Transfer</button>' +
+    '<button class="mov-type-btn" data-tipo="devolucion">↩️ Dev.</button>' +
+    '<button class="mov-type-btn" data-tipo="ajuste">⚖️ Ajuste</button>' +
+    '<button class="mov-type-btn" data-tipo="capital">🏦 Capital</button>' +
    '</div>' +
    // Display importe
    '<div class="mov-amount-display zero" id="mov-amount-display">€ 0</div>' +
@@ -15979,6 +16024,118 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
   }, { once: true });
  }
 
+function _openEditMovimientoSheet(id, src) {
+  if (!id || !src) return;
+  var registro = null;
+  if (src === 'gasto') {
+   registro = (State.get.gastosOp() || []).find(function(g){ return g.id === id; });
+  } else if (src === 'ingreso') {
+   registro = (State.get.ingresosFin() || []).find(function(i){ return i.id === id; });
+  }
+  if (!registro) { showToast('Movimiento no encontrado'); return; }
+
+  var nombre = registro.nombre || registro.concepto || '';
+  var importe = registro.importe || 0;
+  var fecha = (registro.fecha || registro.fechaPago || '').slice(0,10) || new Date().toISOString().slice(0,10);
+
+  var sheet = document.createElement('div');
+  sheet.className = 'mov-sheet-overlay';
+  sheet.innerHTML =
+   '<div class="mov-sheet-panel">' +
+   '<div class="mov-sheet-handle"></div>' +
+   '<div style="padding:14px 16px 4px;display:flex;align-items:center;justify-content:space-between">' +
+   '<div style="font-size:16px;font-weight:700;color:var(--ink)">Editar movimiento</div>' +
+   '<button id="edit-mov-close" style="background:none;border:none;font-size:20px;color:var(--ink-soft);cursor:pointer;padding:4px">×</button>' +
+   '</div>' +
+   '<div class="mov-amount-display' + (importe ? '' : ' zero') + '" id="edit-mov-display">€ ' + (importe ? importe.toLocaleString('es-ES', {minimumFractionDigits:0, maximumFractionDigits:2}) : '0') + '</div>' +
+   '<input class="mov-amount-input" id="edit-mov-input" type="text" inputmode="decimal" pattern="[0-9.,]*" value="' + importe + '">' +
+   '<div class="mov-fields">' +
+   '<input class="fi" id="edit-mov-nombre" type="text" placeholder="Concepto" value="' + esc(nombre) + '">' +
+   '<input class="fi" id="edit-mov-fecha" type="date" value="' + fecha + '">' +
+   '</div>' +
+   '<div style="display:flex;gap:8px;padding:4px 16px 0">' +
+   '<button class="mov-submit-btn" id="edit-mov-save" style="flex:2">Guardar</button>' +
+   '<button class="mov-submit-btn" id="edit-mov-del" style="flex:1;background:rgba(139,26,47,0.12);color:var(--red)">Eliminar</button>' +
+   '</div>' +
+   '</div>';
+
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
+
+  // Abrir teclado
+  setTimeout(function() {
+   var inp = document.getElementById('edit-mov-input');
+   if (inp) inp.focus();
+  }, 350);
+
+  // Cerrar overlay
+  sheet.addEventListener('click', function(e) {
+   if (e.target === sheet) { sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320); }
+  });
+
+  document.getElementById('edit-mov-close').addEventListener('click', function() {
+   sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+  }, { once: true });
+
+  // Sync display
+  var _editDisplay = document.getElementById('edit-mov-display');
+  var _editInput = document.getElementById('edit-mov-input');
+  _editDisplay.addEventListener('click', function() { _editInput.focus(); });
+  _editInput.addEventListener('input', function() {
+   var num = parseFloat((_editInput.value||'').replace(',','.'));
+   _editDisplay.textContent = '€ ' + (isNaN(num) ? '0' : num.toLocaleString('es-ES',{minimumFractionDigits:0,maximumFractionDigits:2}));
+   _editDisplay.classList.toggle('zero', isNaN(num));
+  });
+
+  // Guardar
+  document.getElementById('edit-mov-save').addEventListener('click', function() {
+   var nuevoImporte = parseFloat((document.getElementById('edit-mov-input').value||'').replace(',','.')) || 0;
+   var nuevoNombre = document.getElementById('edit-mov-nombre').value.trim();
+   var nuevaFecha = document.getElementById('edit-mov-fecha').value;
+   if (!nuevoImporte || nuevoImporte <= 0) { showToast('Introduce un importe'); return; }
+
+   if (src === 'gasto') {
+    var gastos = State.get.gastosOp().map(function(g) {
+     if (g.id !== id) return g;
+     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: new Date(nuevaFecha+'T12:00:00').toISOString(), fechaPago: nuevaFecha });
+    });
+    State.set.setGastos(gastos);
+    DashweyBus.emit('gasto');
+   } else if (src === 'ingreso') {
+    var ingresos = State.get.ingresosFin().map(function(i) {
+     if (i.id !== id) return i;
+     return Object.assign({}, i, { concepto: nuevoNombre||i.concepto, importe: nuevoImporte, fecha: new Date(nuevaFecha+'T12:00:00').toISOString() });
+    });
+    State.set.setIngresos(ingresos);
+    DashweyBus.emit('ingreso');
+   }
+   sheet.classList.remove('open');
+   setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+   showToast('✅ Movimiento actualizado');
+  }, { once: true });
+
+  // Eliminar
+  document.getElementById('edit-mov-del').addEventListener('click', function() {
+   window._showDestructiveConfirm({
+    title: 'Eliminar movimiento',
+    message: '¿Eliminar "' + nombre + '"? Esta acción no se puede deshacer.',
+    confirmText: 'Eliminar',
+    onConfirm: function() {
+     if (src === 'gasto') {
+      State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.id !== id; }));
+      DashweyBus.emit('gasto');
+     } else if (src === 'ingreso') {
+      State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.id !== id; }));
+      DashweyBus.emit('ingreso');
+     }
+     sheet.classList.remove('open');
+     setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+     showToast('🗑️ Movimiento eliminado');
+    }
+   });
+  }, { once: true });
+ }
+
  function _closeMovimientoSheet() {
   if (!_movSheet) return;
   _movSheet.classList.remove('open');
@@ -16089,8 +16246,34 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
    DashweyBus.emit('cuenta');
    DashweyBus.emit('gasto');
    showToast('✅ Transferencia registrada');
-  }
 
+  } else if (_movTipo === 'devolucion') {
+   State.set.addIngreso({ id:'i'+Date.now(), concepto:concepto||'Devolución', importe:importe,
+    fecha:new Date(fecha+'T12:00:00').toISOString(), cuentaId:cuentaA, recurrente:false, tipo:'devolucion' });
+   if(cuentaA){var cDev=State.get.cuentas().find(function(x){return x.id===cuentaA;});
+    if(cDev)State.set.updateCuenta(cuentaA,{saldo:(cDev.saldo||0)+importe});}
+   DashweyBus.emit('ingreso'); showToast('✅ Devolución registrada');
+
+  } else if (_movTipo === 'ajuste') {
+   if(!cuentaA){showToast('Selecciona una cuenta');return;}
+   var cAj=State.get.cuentas().find(function(x){return x.id===cuentaA;});
+   if(cAj){
+    State.set.updateCuenta(cuentaA,{saldo:importe});
+    State.set.addIngreso({id:'i'+Date.now(),
+     concepto:concepto||('Ajuste: '+_feur(cAj.saldo||0)+' → '+_feur(importe)),
+     importe:Math.abs(importe-(cAj.saldo||0)),
+     fecha:new Date(fecha+'T12:00:00').toISOString(),cuentaId:cuentaA,recurrente:false,tipo:'ajuste'});}
+   DashweyBus.emit('cuenta'); showToast('✅ Saldo ajustado a '+_feur(importe));
+
+  } else if (_movTipo === 'capital') {
+   State.set.addIngreso({id:'i'+Date.now(),
+    concepto:concepto||(importe>0?'Aportación de capital':'Retirada de capital'),
+    importe:Math.abs(importe),fecha:new Date(fecha+'T12:00:00').toISOString(),
+    cuentaId:cuentaA,recurrente:false,tipo:'capital'});
+   if(cuentaA){var cCap=State.get.cuentas().find(function(x){return x.id===cuentaA;});
+    if(cCap)State.set.updateCuenta(cuentaA,{saldo:(cCap.saldo||0)+Math.abs(importe)});}
+   DashweyBus.emit('ingreso'); showToast('✅ Movimiento de capital registrado');
+  }
   _closeMovimientoSheet();
  }
 
@@ -21426,7 +21609,7 @@ var lbl = bar.dataset.lbl;
   setTimeout(function() { openFinModal('cuentas'); }, Utils.ANIM_DELAY);
  }
 
- return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
+ return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
 })();
 
 // ══════════════════════════════════════════
