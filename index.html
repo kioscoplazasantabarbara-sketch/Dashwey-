@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.730-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.731-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.730-dev</title>
+<title>Dashwey v1.3.731-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11678,7 +11678,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.730-dev';
+ const _APP_VERSION = 'v1.3.731-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12733,7 +12733,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.730-dev': {
+  'v1.3.731-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -31446,6 +31446,40 @@ _eaRecalc();
  // Si el remoto es más nuevo (lastSyncAt), merge y re-render.
  // ── Helpers de sincronización ────────────────────────────────
  // Construye el snapshot del estado local para subir a Firebase
+ // ── Merge por ID para arrays acumulativos ──────────────────────
+ // Une dos arrays tomando el elemento con timestamp más reciente cuando hay conflicto de ID.
+ // Arrays sin ID (objetos sin .id) se dejan en manos del last-write-wins normal.
+ function _mergeById(localArr, remoteArr) {
+  if (!Array.isArray(localArr) || !Array.isArray(remoteArr)) {
+   return remoteArr || localArr || [];
+  }
+  // Si ningún elemento tiene id, devolver el más largo (conservador)
+  var hasId = function(arr) { return arr.length > 0 && arr[0] && arr[0].id; };
+  if (!hasId(localArr) && !hasId(remoteArr)) {
+   return remoteArr.length >= localArr.length ? remoteArr : localArr;
+  }
+  var map = {};
+  // Primero indexar el local
+  localArr.forEach(function(item) {
+   if (item && item.id) map[item.id] = item;
+  });
+  // Luego el remoto — si hay conflicto de id, gana el más reciente por fecha
+  remoteArr.forEach(function(item) {
+   if (!item || !item.id) return;
+   var existing = map[item.id];
+   if (!existing) { map[item.id] = item; return; }
+   // Comparar por fecha — soporta ISO string y timestamp ms
+   var _ts = function(x) {
+    var f = x.fecha || x.updatedAt || x.createdAt || 0;
+    if (!f) return 0;
+    if (typeof f === 'number') return f;
+    var d = new Date(f); return isNaN(d.getTime()) ? 0 : d.getTime();
+   };
+   if (_ts(item) >= _ts(existing)) map[item.id] = item;
+  });
+  return Object.values(map);
+ }
+
  function _buildLocalSnapshot() {
  // Estampar deviceId+ts directamente en snapshot (sin State.set para no disparar save)
  const now = Date.now();
@@ -31471,6 +31505,12 @@ _eaRecalc();
  period: State.get.period(),
  settings: State.get.settings(),
  perfil: State.get.perfil(),
+ // v1.3.730: campos faltantes
+ cierresCaja: State.get.cierresCaja ? State.get.cierresCaja() : [],
+ hotPins: State.get.hotPins ? State.get.hotPins() : [],
+ catLabels: State.get.catLabels ? State.get.catLabels() : {},
+ hiddenCards: State.get.hiddenCards ? State.get.hiddenCards() : [],
+ qgCells: State.get.qgCells ? State.get.qgCells() : [],
  };
  }
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
@@ -31537,6 +31577,14 @@ _eaRecalc();
  JSON.parse(JSON.stringify(remote)),
  { settings: _mergedSettings }
  );
+ // v1.3.730: merge por ID para arrays acumulativos
+ var _mKeys = ['ventas','cuentas','gastosOp','ingresosFin','historialPedidos','mermas','pendingOrders','visitasComerciales','cierresCaja'];
+ _mKeys.forEach(function(k) {
+  var _localArr = typeof State.get[k] === 'function' ? State.get[k]() : null;
+  if (Array.isArray(merged[k]) && Array.isArray(_localArr)) {
+   merged[k] = _mergeById(_localArr, merged[k]);
+  }
+ });
  // Bloquear writes durante merge para no re-subir lo que bajamos
  window._DashweySavingCtrl.isSaving = true;
  try {
@@ -31548,6 +31596,8 @@ _eaRecalc();
  }
  _renderAll();
  showToast('☁️ Datos sincronizados');
+  // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
+  setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
  } else if (localTs > remoteTs && localTs > 0) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
@@ -31620,6 +31670,14 @@ _eaRecalc();
   if (_deleted && _deleted.size && Array.isArray(merged.productos)) {
    merged.productos = merged.productos.filter(p => !_deleted.has(p.id));
   }
+ // v1.3.730: merge por ID para arrays acumulativos (onSnapshot)
+ var _mKeys2 = ['ventas','cuentas','gastosOp','ingresosFin','historialPedidos','mermas','pendingOrders','visitasComerciales','cierresCaja'];
+ _mKeys2.forEach(function(k) {
+  var _localArr2 = typeof State.get[k] === 'function' ? State.get[k]() : null;
+  if (Array.isArray(merged[k]) && Array.isArray(_localArr2)) {
+   merged[k] = _mergeById(_localArr2, merged[k]);
+  }
+ });
  window._DashweySavingCtrl.isSaving = true;
  try {
  Object.keys(merged).forEach(k => {
