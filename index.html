@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.721-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.722-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.721-dev</title>
+<title>Dashwey v1.3.722-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9459,6 +9459,7 @@ const State = (() => {
  visitasComerciales: [],
  cuentas: [],
  gastosOp: [],
+  cierresCaja: [],
  };
 
  const STORAGE_KEY = 'dashwey_v3';
@@ -9794,6 +9795,7 @@ const State = (() => {
  activeContext: () => (_state.user?.activeContext) || 'business',
  cuentas: () => _state.cuentas || [],
  gastosOp: () => _state.gastosOp || [],
+  cierresCaja: () => _state.cierresCaja || [],
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
  hotPins: () => _state.hotPins || [],
@@ -9880,6 +9882,7 @@ const State = (() => {
  setCuentas: (v) => { _state.cuentas = v; save(); },
  updateCuenta: (id, v) => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
  addGasto: (g) => { _state.gastosOp.push(g); save(); },
+  addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
  setGastos: (v) => { _state.gastosOp = v; save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
@@ -11693,7 +11696,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.721-dev';
+ const _APP_VERSION = 'v1.3.722-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12740,7 +12743,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.721-dev': {
+  'v1.3.722-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -16336,6 +16339,122 @@ function _openEditMovimientoSheet(id, src) {
    setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
    showToast('✅ Saldo ajustado a ' + _feur(nuevoSaldo));
   }, { once: true });
+ }
+
+ // ── Cierre de Caja ─────────────────────────────────────────────
+ function _openCierreCajaSheet() {
+  var hoy = new Date(); hoy.setHours(0,0,0,0);
+  var manana = new Date(hoy); manana.setDate(hoy.getDate()+1);
+  var ayer = new Date(hoy); ayer.setDate(hoy.getDate()-1);
+
+  var ventas = State.get.ventas ? State.get.ventas() : [];
+  var ventasHoy = ventas.filter(function(v){
+   var d = new Date(v.fecha); return d >= hoy && d < manana;
+  });
+  var ventasAyer = ventas.filter(function(v){
+   var d = new Date(v.fecha); return d >= ayer && d < hoy;
+  });
+
+  // Agrupar por método de pago
+  var porMetodo = { efectivo: 0, tarjeta: 0, otro: 0 };
+  ventasHoy.forEach(function(v) {
+   var m = (v.metodo || 'otro').toLowerCase();
+   var tot = v.total || 0;
+   if (m === 'efectivo') porMetodo.efectivo += tot;
+   else if (m === 'tarjeta') porMetodo.tarjeta += tot;
+   else porMetodo.otro += tot;
+  });
+
+  var totalHoy = ventasHoy.reduce(function(s,v){ return s+(v.total||0); }, 0);
+  var totalAyer = ventasAyer.reduce(function(s,v){ return s+(v.total||0); }, 0);
+  var nTickets = ventasHoy.length;
+  var ticketMedio = nTickets > 0 ? totalHoy / nTickets : 0;
+  var delta = totalAyer > 0 ? Math.round(((totalHoy - totalAyer) / totalAyer) * 100) : null;
+  var deltaStr = delta !== null ? (delta >= 0 ? '+' + delta + '%' : delta + '%') : '—';
+  var deltaColor = delta === null ? 'var(--ink-soft)' : delta >= 0 ? '#16A34A' : 'var(--red)';
+
+  // Verificar si ya se hizo cierre hoy
+  var cierres = State.get.cierresCaja ? State.get.cierresCaja() : [];
+  var yaHecho = cierres.some(function(c){
+   var d = new Date(c.fecha); d.setHours(0,0,0,0);
+   return d.getTime() === hoy.getTime();
+  });
+
+  var _feur2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
+  var fechaHoy = hoy.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
+
+  var html =
+   '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   +'<div class="mhd-title">Cierre de caja</div>'
+   +'<div class="mhd-sub">' + fechaHoy + '</div>'
+   +'</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   // Total del día
+   +'<div style="padding:20px 16px 12px;text-align:center">'
+   +'<div style="font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total del día</div>'
+   +'<div style="font-size:40px;font-weight:800;color:var(--ink);letter-spacing:-2px">' + _feur2(totalHoy) + '</div>'
+   +'<div style="font-size:12px;font-weight:600;color:' + deltaColor + ';margin-top:4px">' + deltaStr + ' vs ayer (' + _feur2(totalAyer) + ')</div>'
+   +'</div>'
+   // Desglose por método
+   +'<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">'
+   +'<div style="flex:1;padding:12px 8px;text-align:center;border-right:1px solid var(--border)">'
+   +'<div style="font-size:10px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Efectivo</div>'
+   +'<div style="font-size:17px;font-weight:800;color:var(--ink);margin-top:2px">' + _feur2(porMetodo.efectivo) + '</div>'
+   +'</div>'
+   +'<div style="flex:1;padding:12px 8px;text-align:center;border-right:1px solid var(--border)">'
+   +'<div style="font-size:10px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Tarjeta</div>'
+   +'<div style="font-size:17px;font-weight:800;color:var(--ink);margin-top:2px">' + _feur2(porMetodo.tarjeta) + '</div>'
+   +'</div>'
+   +'<div style="flex:1;padding:12px 8px;text-align:center">'
+   +'<div style="font-size:10px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Otro</div>'
+   +'<div style="font-size:17px;font-weight:800;color:var(--ink);margin-top:2px">' + _feur2(porMetodo.otro) + '</div>'
+   +'</div>'
+   +'</div>'
+   // Stats
+   +'<div style="display:flex;border-bottom:1px solid var(--border)">'
+   +'<div style="flex:1;padding:12px 16px;border-right:1px solid var(--border)">'
+   +'<div style="font-size:10px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Tickets</div>'
+   +'<div style="font-size:22px;font-weight:800;color:var(--ink)">' + nTickets + '</div>'
+   +'</div>'
+   +'<div style="flex:1;padding:12px 16px">'
+   +'<div style="font-size:10px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Ticket medio</div>'
+   +'<div style="font-size:22px;font-weight:800;color:var(--ink)">' + _feur2(ticketMedio) + '</div>'
+   +'</div>'
+   +'</div>'
+   // Nota opcional
+   +'<div style="padding:12px 16px 0">'
+   +'<input id="cierre-nota" class="fi" placeholder="Nota (opcional)" style="width:100%;box-sizing:border-box">'
+   +'</div>'
+   // Botón confirmar
+   +(yaHecho
+    ? '<div style="padding:12px 16px;font-size:13px;color:var(--ink-soft);text-align:center">✅ Cierre ya registrado hoy</div>'
+    : '<button id="cierre-confirmar" class="btn-ok" style="margin:12px 16px 0;width:calc(100% - 32px)">Confirmar cierre de caja</button>'
+   )
+   +'<div style="height:24px"></div>';
+
+  ui.setFs(html);
+  ui.openFs();
+
+  if (!yaHecho) {
+   var btn = document.getElementById('cierre-confirmar');
+   if (btn) btn.addEventListener('click', function() {
+    var nota = (document.getElementById('cierre-nota') ? document.getElementById('cierre-nota').value.trim() : '');
+    try {
+     State.set.addCierre({
+      id: 'cc' + Date.now(),
+      fecha: new Date().toISOString(),
+      total: totalHoy,
+      efectivo: porMetodo.efectivo,
+      tarjeta: porMetodo.tarjeta,
+      otro: porMetodo.otro,
+      nTickets: nTickets,
+      ticketMedio: ticketMedio,
+      nota: nota,
+     });
+     showToast('✅ Cierre de caja registrado');
+    } catch(e) { showToast('Error al guardar el cierre'); }
+    App.ui.closeFs();
+   }, { once: true });
+  }
  }
 
  function openFinModal(type) {
@@ -20673,7 +20792,8 @@ var lbl = bar.dataset.lbl;
  title: 'Resumen de Ventas',
  icon: '📊',
  actions: [
- { label: 'Ver ventas completas', fn: function(){ try{ App.dash.openTopVentasModal(); }catch(_){} } },
+  { label: 'Ver ventas completas', fn: function(){ try{ App.dash.openTopVentasModal(); }catch(_){} } },
+  { label: '🧾 Cierre de caja', fn: function(){ try{ App.dash._openCierreCajaSheet(); }catch(_){} } },
  ]
  },
  'caducidades': {
@@ -21813,7 +21933,7 @@ var lbl = bar.dataset.lbl;
   setTimeout(function() { openFinModal('cuentas'); }, Utils.ANIM_DELAY);
  }
 
- return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
+ return { render, refresh, shiftPeriod, openPeriodPicker, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _switchAgendaTab, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
 })();
 
 // ══════════════════════════════════════════
