@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.741-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.742-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.741-dev</title>
+<title>Dashwey v1.3.742-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9571,6 +9571,7 @@ const State = (() => {
  cuentas: [],
  gastosOp: [],
   cierresCaja: [],
+  lotesStock: [],
  };
 
  const STORAGE_KEY = 'dashwey_v3';
@@ -9907,6 +9908,7 @@ const State = (() => {
  cuentas: () => _state.cuentas || [],
  gastosOp: () => _state.gastosOp || [],
   cierresCaja: () => _state.cierresCaja || [],
+  lotesStock: () => _state.lotesStock || [],
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
  hotPins: () => _state.hotPins || [],
@@ -9994,6 +9996,8 @@ const State = (() => {
  updateCuenta: (id, v) => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
  addGasto: (g) => { _state.gastosOp.push(g); save(); },
   addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
+  addLote: (l) => { if(!_state.lotesStock) _state.lotesStock=[]; _state.lotesStock.push(l); save(); },
+  setLotes: (v) => { _state.lotesStock = v; save(); },
  setGastos: (v) => { _state.gastosOp = v; save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
@@ -10645,7 +10649,7 @@ const KPI = (() => {
  return { start, end };
  }
 
- return { getKPIs, getTopCompras, getGastoPorProv, getChartData, pedidosEnPeriodo, mermasEnPeriodo, ventasEnPeriodo, getVentasChartData, getTopVentas, getTopRoi, getCaducidadesAlerta, getBeneficioNeto, ALL_CATS, getRange: periodRange, getPresetRange };
+ return { getKPIs, getTopCompras, getGastoPorProv, crearLotesDesdeItems, consumirLotesFIFO, getChartData, pedidosEnPeriodo, mermasEnPeriodo, ventasEnPeriodo, getVentasChartData, getTopVentas, getTopRoi, getCaducidadesAlerta, getBeneficioNeto, ALL_CATS, getRange: periodRange, getPresetRange };
 })();
 
 // ══════════════════════════════════════════════════════════════════
@@ -10899,6 +10903,15 @@ const FinEngine = (() => {
  // v1.3.593: precioCompra es precio de BULTO — dividir entre udscaja para obtener coste unitario
  // Si udscaja no definido → usa precioCompra directamente como fallback
  function valorStock() {
+ // v1.3.741: FIFO — usar lotes históricos si existen
+ var lotes = State.get.lotesStock ? State.get.lotesStock() : [];
+ if (lotes.length > 0) {
+  // Sumar qty * costeUnit de todos los lotes activos
+  return money(lotes.reduce(function(s, l) {
+   return s + (l.qty || 0) * (l.costeUnit || 0);
+  }, 0));
+ }
+ // Fallback: sin lotes — usar precioCompra actual (comportamiento legacy)
  return money((State.get.productos() || [])
  .reduce((s, p) => {
  const uds = p.udscaja || 1;
@@ -10906,6 +10919,47 @@ const FinEngine = (() => {
  return s + (p.stockActual || 0) * cu;
  }, 0)
  );
+ }
+
+ // ── FIFO: crear lotes al recibir stock ──────────────────────────
+ function crearLotesDesdeItems(items, fecha) {
+  if (!items || !items.length) return;
+  var lotes = State.get.lotesStock ? State.get.lotesStock() : [];
+  items.forEach(function(it) {
+   var p = State.get.prod(it.prodId);
+   var uds = Math.max(1, (it.ncajas || 1) * (it.udscaja || (p && p.udscaja) || 1));
+   var costeUnit = it.precio ? (it.precio / Math.max(1, it.udscaja || (p && p.udscaja) || 1)) : ((p && p.precioCompra || 0) / Math.max(1, (p && p.udscaja) || 1));
+   if (uds > 0 && it.prodId) {
+    lotes.push({
+     id: 'l' + Date.now() + '_' + it.prodId,
+     prodId: it.prodId,
+     qty: uds,
+     costeUnit: +costeUnit.toFixed(4),
+     fecha: fecha || new Date().toISOString(),
+    });
+   }
+  });
+  if (State.set.setLotes) State.set.setLotes(lotes);
+ }
+
+ // ── FIFO: consumir lotes al vender ───────────────────────────────
+ function consumirLotesFIFO(prodId, qty) {
+  if (!prodId || !qty) return;
+  var lotes = State.get.lotesStock ? State.get.lotesStock() : [];
+  var restante = qty;
+  // Ordenar por fecha asc (FIFO)
+  var propios = lotes
+   .filter(function(l) { return l.prodId === prodId && l.qty > 0; })
+   .sort(function(a, b) { return new Date(a.fecha) - new Date(b.fecha); });
+  propios.forEach(function(lote) {
+   if (restante <= 0) return;
+   var consumido = Math.min(lote.qty, restante);
+   lote.qty -= consumido;
+   restante -= consumido;
+  });
+  // Eliminar lotes agotados + guardar
+  var nuevosLotes = lotes.filter(function(l) { return l.qty > 0; });
+  if (State.set.setLotes) State.set.setLotes(nuevosLotes);
  }
 
  // valorStockBulto(): valor de referencia al precio de bulto (sin prorratear)
@@ -11807,7 +11861,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.741-dev';
+ const _APP_VERSION = 'v1.3.742-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -12862,7 +12916,7 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.741-dev': {
+  'v1.3.742-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
   title: '✨ Novedades',
@@ -24230,6 +24284,8 @@ const tpv = (() => {
  stockActual: (p.stockActual || 0) - i.q,
  ventas: (p.ventas || 0) + i.q
  });
+    // v1.3.741: FIFO — consumir lotes al vender
+    try { if(typeof FinEngine!=='undefined'&&FinEngine.consumirLotesFIFO) FinEngine.consumirLotesFIFO(i.p.id, i.q); } catch(_){}
  });
 
  // 5. v1.3.441: sync via State principal -- State.set.addVenta ya llama save()
@@ -27100,6 +27156,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
         (_ord2.items||[]).forEach(function(it){
          var p=State.get.prod(it.prodId);
          if(p){var ns=(p.stockActual||0)+(it.ncajas||1)*(it.udscaja||p.udscaja||1); State.set.updateProd(it.prodId,{stockActual:Math.max(0,ns)});}
+         // v1.3.741: FIFO — crear lote con coste histórico
+         try { if(typeof FinEngine!=='undefined'&&FinEngine.crearLotesDesdeItems) FinEngine.crearLotesDesdeItems([it], new Date().toISOString()); } catch(_){}
         });
         State.set.removePendingOrder(orderId);
         try{App.alm.updateBadge();}catch(_){}
@@ -31641,6 +31699,7 @@ _eaRecalc();
  perfil: State.get.perfil(),
  // v1.3.730: campos faltantes
  cierresCaja: State.get.cierresCaja ? State.get.cierresCaja() : [],
+  lotesStock: State.get.lotesStock ? State.get.lotesStock() : [],
  hotPins: State.get.hotPins ? State.get.hotPins() : [],
  catLabels: State.get.catLabels ? State.get.catLabels() : {},
  hiddenCards: State.get.hiddenCards ? State.get.hiddenCards() : [],
