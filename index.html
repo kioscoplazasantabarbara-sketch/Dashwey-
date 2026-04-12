@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.817-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.818-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.817-dev</title>
+<title>Dashwey v1.3.818-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1789,7 +1789,7 @@ body[data-dash-snap="1"] .snap-narrative-zone,
 .dash-landscape-main .snap-narrative-zone {
  display: block;
  flex-shrink: 0;
- padding: 20px 24px calc(var(--tab-real, 56px) + 20px);
+ padding: 20px 24px 20px;
  font-family: 'Inter', var(--font), sans-serif;
  border-top: 1px solid var(--border);
  background: var(--surface);
@@ -2350,13 +2350,13 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
 .snap-narrative-text {
  font-size: var(--fs-base); font-weight: var(--fw-reg); line-height: 1.6;
  color: var(--ink);
- /* min-height 3 líneas — expande si la frase es más larga */
- min-height: 68px;
+ /* altura fija — el cajón no cambia tamaño con el typewriter */
+ height: 72px; overflow: hidden;
 }
 .snap-narrative-text .snap-highlight { font-weight: var(--fw-bold); color: var(--red); }
 .snap-insight-dots {
  display: flex; gap: 4px; align-items: center;
- margin-top: 6px; justify-content: flex-start;
+ margin-top: 12px; justify-content: center;
 }
 .snap-insight-dot {
  width: 5px; height: 5px; border-radius: 50%;
@@ -11433,7 +11433,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.817-dev';
+ const _APP_VERSION = 'v1.3.818-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16196,6 +16196,122 @@ function _openEditMovimientoSheet(id, src) {
   }
  }
 
+ function _openComprasCompletasSheet() {
+  var hoy = new Date(); hoy.setHours(0,0,0,0);
+  var manana = new Date(hoy); manana.setDate(hoy.getDate()+1);
+  var ayer = new Date(hoy); ayer.setDate(hoy.getDate()-1);
+  var p = State.get.period ? State.get.period() : { type:'month', offset:0 };
+  var range = null;
+  try { range = KPI.getRange ? KPI.getRange(p) : null; } catch(_) {}
+
+  var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+  var prods = State.get.productos ? (State.get.productos() || []) : [];
+  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+
+  // Pedidos del periodo
+  var pedsPeriodo = range
+   ? historial.filter(function(p) { var d = new Date(p.fecha); return d >= range.start && d < range.end; })
+   : historial;
+  var pedsPeriodoAnt = [];
+  if (range) {
+   var durMs = range.end - range.start;
+   var prevStart = new Date(range.start.getTime() - durMs);
+   pedsPeriodoAnt = historial.filter(function(p) { var d = new Date(p.fecha); return d >= prevStart && d < range.start; });
+  }
+
+  // Totales
+  var totalPeriodo = pedsPeriodo.reduce(function(s, ped) {
+   return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
+  }, 0);
+  var totalAnt = pedsPeriodoAnt.reduce(function(s, ped) {
+   return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
+  }, 0);
+  var nPedidos = pedsPeriodo.length;
+  var nItems = pedsPeriodo.reduce(function(s, ped) { return s + (ped.items || []).length; }, 0);
+  var delta = totalAnt > 0 ? Math.round(((totalPeriodo - totalAnt) / totalAnt) * 100) : null;
+  var deltaStr = delta !== null ? (delta >= 0 ? '+' + delta + '%' : delta + '%') : '—';
+  var deltaColor = delta === null ? 'var(--ink-soft)' : delta <= 0 ? '#16A34A' : 'var(--red)';
+
+  // Top productos comprados
+  var prodMap = {};
+  pedsPeriodo.forEach(function(ped) {
+   (ped.items || []).forEach(function(it) {
+    if (!prodMap[it.prodId]) prodMap[it.prodId] = { nombre: it.nombre || it.prodId, total: 0, uds: 0 };
+    prodMap[it.prodId].total += (it.precio || 0) * (it.cajas || 1);
+    prodMap[it.prodId].uds += (it.cajas || 1);
+   });
+  });
+  var topProds = Object.values(prodMap).sort(function(a,b){ return b.total - a.total; }).slice(0, 4);
+
+  // Top proveedores
+  var provMap = {};
+  pedsPeriodo.forEach(function(ped) {
+   var prov = provs.find(function(v){ return v.id === ped.provId; });
+   var nombre = prov ? prov.nombre : (ped.provId || 'Desconocido');
+   if (!provMap[nombre]) provMap[nombre] = 0;
+   provMap[nombre] += (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
+  });
+  var topProvs = Object.entries(provMap).sort(function(a,b){ return b[1]-a[1]; }).slice(0, 3);
+
+  var _feur2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
+  var periodoLabel = p.label || 'Este mes';
+
+  var topProdsHtml = topProds.length > 0
+   ? topProds.map(function(pr) {
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'
+     + '<span style="font-size:var(--fs-md);color:var(--ink);font-weight:var(--fw-med)">' + (pr.nombre.length > 22 ? pr.nombre.slice(0,22)+'…' : pr.nombre) + '</span>'
+     + '<span style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink)">' + _feur2(pr.total) + '</span>'
+     + '</div>';
+   }).join('')
+   : '<div style="color:var(--ink-soft);font-size:var(--fs-md);padding:8px 0">Sin compras en este periodo</div>';
+
+  var topProvsHtml = topProvs.length > 0
+   ? topProvs.map(function(pv) {
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'
+     + '<span style="font-size:var(--fs-md);color:var(--ink);font-weight:var(--fw-med)">' + pv[0] + '</span>'
+     + '<span style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink)">' + _feur2(pv[1]) + '</span>'
+     + '</div>';
+   }).join('')
+   : '<div style="color:var(--ink-soft);font-size:var(--fs-md);padding:8px 0">Sin proveedores</div>';
+
+  var html =
+   '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   + '<div class="mhd-title">Compras completas</div>'
+   + '<div class="mhd-sub">' + periodoLabel + '</div>'
+   + '</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   // Total del periodo
+   + '<div style="padding:20px 16px 12px;text-align:center">'
+   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total comprado</div>'
+   + '<div style="font-size:40px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-2px">' + _feur2(totalPeriodo) + '</div>'
+   + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + ' vs periodo anterior (' + _feur2(totalAnt) + ')</div>'
+   + '</div>'
+   // Stats
+   + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">'
+   + '<div style="flex:1;padding:12px 8px;text-align:center;border-right:1px solid var(--border)">'
+   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Pedidos</div>'
+   + '<div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">' + nPedidos + '</div>'
+   + '</div>'
+   + '<div style="flex:1;padding:12px 8px;text-align:center">'
+   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Líneas</div>'
+   + '<div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">' + nItems + '</div>'
+   + '</div>'
+   + '</div>'
+   // Top productos
+   + '<div style="padding:16px 16px 0">'
+   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Top productos</div>'
+   + topProdsHtml
+   + '</div>'
+   // Top proveedores
+   + '<div style="padding:16px 16px 0">'
+   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Por proveedor</div>'
+   + topProvsHtml
+   + '</div>'
+   + '<div style="height:32px"></div>';
+
+  ui.setFs(html);
+  ui.openFs();
+ }
+
  function openFinModal(type) {
  if (type === 'flujo-caja') _openFlujoCajaModal();
  if (type === 'cuentas') _openCuentasModal();
@@ -16794,7 +16910,9 @@ function _openEditMovimientoSheet(id, src) {
  '<div style="display:flex;gap:8px;padding:0 16px 4px">' +
  '<button id="ingr-tipo-manual" class="gasto-periodo-btn active" data-tipo="manual" style="flex:1">Manual</button>' +
  '<button id="ingr-tipo-prog" class="gasto-periodo-btn" data-tipo="programado" style="flex:1">Programado</button>' +
+ '<button id="ingr-tipo-caja" class="gasto-periodo-btn" data-tipo="caja" style="flex:1">Caja</button>' +
  '</div>' +
+ '<div id="ingr-caja-info" style="display:none;margin:6px 16px 0;padding:8px 10px;background:rgba(42,157,124,0.08);border-radius:var(--r-md);font-size:var(--fs-xs);color:#2A9D7C;line-height:1.5">Este ingreso se añade a ventas globales y aparecerá en la gráfica del día seleccionado.</div>' +
  '</div>' +
 
  // Importe — calculadora
@@ -16858,6 +16976,8 @@ function _openEditMovimientoSheet(id, src) {
  });
  var sec = document.getElementById('ingr-periodo-section');
  if (sec) sec.style.display = _ingresoTipo === 'programado' ? '' : 'none';
+ var cajaInfo = document.getElementById('ingr-caja-info');
+ if (cajaInfo) cajaInfo.style.display = _ingresoTipo === 'caja' ? 'block' : 'none';
  });
  });
 
@@ -16897,18 +17017,35 @@ function _openEditMovimientoSheet(id, src) {
  if (c) State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
  }
 
- State.set.addIngreso({
- id: 'ing' + Date.now(),
- fecha: new Date(fecha).toISOString(),
- concepto,
- importe,
- cuentaId,
- recurrente,
- frecuencia: _ingresoPeriodo,
- mensualEq,
- });
-
- DashweyBus.emit('ingreso');
+ // Tipo Caja: registrar como venta para que aparezca en gráfica y KPIs
+ if (_ingresoTipo === 'caja') {
+  var negocioId = State.get.settings().negocioId || 'local';
+  var fechaISO = new Date(fecha + 'T12:00:00').toISOString();
+  State.set.addVenta({
+   id: 'v_caja_' + Date.now(),
+   negocioId: negocioId,
+   ticketId: 'caja_' + Date.now(),
+   fecha: fechaISO,
+   metodo: 'efectivo',
+   total: importe,
+   tipoCaja: true,
+   concepto: concepto,
+   items: [{ prodId: '_caja', nombre: concepto || 'Caja', qty: 1, pvp: importe, coste: 0, margen: 0 }]
+  });
+  DashweyBus.emit('venta', { total: importe, metodo: 'efectivo' });
+ } else {
+  State.set.addIngreso({
+   id: 'ing' + Date.now(),
+   fecha: new Date(fecha).toISOString(),
+   concepto,
+   importe,
+   cuentaId,
+   recurrente,
+   frecuencia: _ingresoPeriodo,
+   mensualEq,
+  });
+  DashweyBus.emit('ingreso');
+ }
  renderFinanciero();
  _calcReset();
  App.ui.closeFs();
@@ -20461,7 +20598,13 @@ var lbl = bar.dataset.lbl;
  icon: '📊',
  actions: [
   { label: 'Ver ventas completas', fn: function(){ try{ App.dash.openTopVentasModal(); }catch(_){} } },
-  { label: '🧾 Cierre de caja', fn: function(){ try{ App.dash._openCierreCajaSheet(); }catch(_){} } },
+  ]
+ },
+ 'compras': {
+ title: 'Inversión de Mercancía',
+ icon: '📦',
+ actions: [
+  { label: 'Ver compras completas', fn: function(){ try{ App.dash._openComprasCompletasSheet(); }catch(_){} } },
  ]
  },
  'flujo-caja': {
@@ -21571,7 +21714,7 @@ var lbl = bar.dataset.lbl;
   setTimeout(function() { openFinModal('cuentas'); }, Utils.ANIM_DELAY);
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
 })();
 
 // ══════════════════════════════════════════
