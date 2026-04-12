@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.820-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.821-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.820-dev</title>
+<title>Dashwey v1.3.821-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11435,7 +11435,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.820-dev';
+ const _APP_VERSION = 'v1.3.821-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15278,50 +15278,83 @@ function _toggleCardFromManager(id, btn) {
 
  // Abrir lista completa al tap en sección inferior
  function openTopVentasModal() {
- const period = State.get.period();
- const source = KPI.ventasEnPeriodo(period);
+ var period = State.get.period();
+ var source = KPI.ventasEnPeriodo(period);
 
- const map = {};
- source.forEach(v => {
- const items = v.items || [{ prodId: v.prodId, qty: v.qty || 1, pvp: v.pvp || 0 }];
- items.forEach(it => {
- if (!it.prodId) return;
- if (!map[it.prodId]) map[it.prodId] = { uds: 0, total: 0 };
- map[it.prodId].uds += (it.qty || 1);
- map[it.prodId].total += (it.pvp || 0) * (it.qty || 1);
+ // KPI cabecera
+ var totalVentas = source.reduce(function(s,v){ return s+(v.total||0); }, 0);
+ var nTickets = source.length;
+ var ticketMedio = nTickets > 0 ? totalVentas / nTickets : 0;
+
+ // Comparativa vs periodo anterior
+ var range = null; try { range = KPI.getRange(period); } catch(_) {}
+ var deltaStr = '—'; var deltaColor = 'var(--ink-soft)';
+ if (range) {
+  var durMs = range.end - range.start;
+  var prevStart = new Date(range.start.getTime() - durMs);
+  var ventasAnt = (State.get.ventas ? State.get.ventas() : []).filter(function(v){
+   var d = new Date(v.fecha); return d >= prevStart && d < range.start;
+  });
+  var totalAnt = ventasAnt.reduce(function(s,v){ return s+(v.total||0); }, 0);
+  if (totalAnt > 0) {
+   var delta = Math.round(((totalVentas - totalAnt) / totalAnt) * 100);
+   deltaStr = (delta >= 0 ? '+' : '') + delta + '% vs periodo anterior (' + feur(totalAnt) + ')';
+   deltaColor = delta >= 0 ? '#2A9D7C' : 'var(--red)';
+  }
+ }
+
+ // Agrupar por producto
+ var map = {};
+ source.forEach(function(v) {
+  (v.items || []).forEach(function(it) {
+   if (!it.prodId || it.prodId === '_caja') return;
+   if (!map[it.prodId]) map[it.prodId] = { uds: 0, total: 0 };
+   map[it.prodId].uds += (it.qty || 1);
+   map[it.prodId].total += (it.pvp || 0) * (it.qty || 1);
+  });
  });
- });
 
- const all = Object.entries(map)
- .map(([id, d]) => ({ prod: State.get.prod(id), ...d }))
- .filter(x => x.prod)
- .sort((a, b) => b.uds - a.uds);
+ var all = Object.keys(map).map(function(id) {
+  return { prod: State.get.prod(id), uds: map[id].uds, total: map[id].total };
+ }).filter(function(x){ return x.prod; }).sort(function(a,b){ return b.uds - a.uds; });
 
- // Formato idéntico ta-item: emoji/imagen + € total + x uds
- const rows = all.map(({ prod, uds, total }) => {
- const thumb = prod.foto
- ? `<div class="ta-thumb"><img src="${prod.foto}" alt="${esc(prod.nombre)}" loading="lazy"></div>`
- : `<div class="ta-thumb">${prod.e || '📦'}</div>`;
- return `<div class="ta-item">
- ${thumb}
- <div class="ta-info">
- <div class="ta-name">${esc(prod.nombre)}</div>
- </div>
- <div class="ta-right">
- <div class="ta-price">${feur(total)}</div>
- <div class="ta-sold">x ${uds} vendidos</div>
- </div>
- </div>`;
+ var rows = all.map(function(x) {
+  var thumb = x.prod.foto
+   ? '<div class="ta-thumb"><img src="' + x.prod.foto + '" alt="' + esc(x.prod.nombre) + '" loading="lazy"></div>'
+   : '<div class="ta-thumb">' + (x.prod.e || '📦') + '</div>';
+  return '<div class="ta-item">' + thumb
+   + '<div class="ta-info"><div class="ta-name">' + esc(x.prod.nombre) + '</div></div>'
+   + '<div class="ta-right"><div class="ta-price">' + feur(x.total) + '</div>'
+   + '<div class="ta-sold">x ' + x.uds + ' vendidos</div></div></div>';
  }).join('');
 
+ var _f2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
+
+ var kpiHtml =
+  '<div style="padding:16px 16px 0;text-align:center">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total ventas</div>'
+  + '<div style="font-size:36px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _f2(totalVentas) + '</div>'
+  + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + '</div>'
+  + '</div>'
+  + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:12px 0 0">'
+  + '<div style="flex:1;padding:10px 8px;text-align:center;border-right:1px solid var(--border)">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Tickets</div>'
+  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + nTickets + '</div>'
+  + '</div>'
+  + '<div style="flex:1;padding:10px 8px;text-align:center">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Ticket medio</div>'
+  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + _f2(ticketMedio) + '</div>'
+  + '</div></div>';
+
  ui.setFs(
- `<div class="modal-header-dark"><div class="mhd-row"><div>` +
- `<div class="mhd-title">Artículos vendidos</div>` +
- `<div class="mhd-sub">${period.label} · ${all.length} referencias</div>` +
- `</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>` +
- `<div style="padding:12px 14px 20px;font-family:var(--font)">` +
- (rows || `<div class="ta-empty">Sin ventas en este periodo</div>`) +
- `</div>`
+  '<div class="modal-header-dark"><div class="mhd-row"><div>'
+  + '<div class="mhd-title">Ventas completas</div>'
+  + '<div class="mhd-sub">' + period.label + ' · ' + all.length + ' referencias</div>'
+  + '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'
+  + kpiHtml
+  + '<div style="padding:12px 14px 20px;font-family:var(--font)">'
+  + (rows || '<div class="ta-empty">Sin ventas en este periodo</div>')
+  + '</div>'
  );
  ui.openFs();
  }
@@ -16199,120 +16232,97 @@ function _openEditMovimientoSheet(id, src) {
  }
 
  function _openComprasCompletasSheet() {
-  var hoy = new Date(); hoy.setHours(0,0,0,0);
-  var manana = new Date(hoy); manana.setDate(hoy.getDate()+1);
-  var ayer = new Date(hoy); ayer.setDate(hoy.getDate()-1);
-  var p = State.get.period ? State.get.period() : { type:'month', offset:0 };
-  var range = null;
-  try { range = KPI.getRange ? KPI.getRange(p) : null; } catch(_) {}
+ var period = State.get.period();
+ var range = null; try { range = KPI.getRange(period); } catch(_) {}
+ var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
 
-  var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
-  var prods = State.get.productos ? (State.get.productos() || []) : [];
-  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+ // Filtrar por periodo
+ var pedsPeriodo = range
+  ? historial.filter(function(p){ var d=new Date(p.fecha); return d>=range.start && d<range.end; })
+  : historial;
 
-  // Pedidos del periodo
-  var pedsPeriodo = range
-   ? historial.filter(function(p) { var d = new Date(p.fecha); return d >= range.start && d < range.end; })
-   : historial;
-  var pedsPeriodoAnt = [];
-  if (range) {
-   var durMs = range.end - range.start;
-   var prevStart = new Date(range.start.getTime() - durMs);
-   pedsPeriodoAnt = historial.filter(function(p) { var d = new Date(p.fecha); return d >= prevStart && d < range.start; });
+ // KPI total
+ var totalPeriodo = pedsPeriodo.reduce(function(s,ped){
+  return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
+ }, 0);
+ var nPedidos = pedsPeriodo.length;
+
+ // Comparativa vs periodo anterior
+ var deltaStr = '—'; var deltaColor = 'var(--ink-soft)';
+ if (range) {
+  var durMs = range.end - range.start;
+  var prevStart = new Date(range.start.getTime() - durMs);
+  var pedsAnt = historial.filter(function(p){ var d=new Date(p.fecha); return d>=prevStart && d<range.start; });
+  var totalAnt = pedsAnt.reduce(function(s,ped){ return s+(FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0); }, 0);
+  if (totalAnt > 0) {
+   var delta = Math.round(((totalPeriodo - totalAnt) / totalAnt) * 100);
+   deltaStr = (delta >= 0 ? '+' : '') + delta + '% vs periodo anterior (' + feur(totalAnt) + ')';
+   deltaColor = delta <= 0 ? '#2A9D7C' : 'var(--red)';
   }
-
-  // Totales
-  var totalPeriodo = pedsPeriodo.reduce(function(s, ped) {
-   return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
-  }, 0);
-  var totalAnt = pedsPeriodoAnt.reduce(function(s, ped) {
-   return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
-  }, 0);
-  var nPedidos = pedsPeriodo.length;
-  var nItems = pedsPeriodo.reduce(function(s, ped) { return s + (ped.items || []).length; }, 0);
-  var delta = totalAnt > 0 ? Math.round(((totalPeriodo - totalAnt) / totalAnt) * 100) : null;
-  var deltaStr = delta !== null ? (delta >= 0 ? '+' + delta + '%' : delta + '%') : '—';
-  var deltaColor = delta === null ? 'var(--ink-soft)' : delta <= 0 ? '#16A34A' : 'var(--red)';
-
-  // Top productos comprados
-  var prodMap = {};
-  pedsPeriodo.forEach(function(ped) {
-   (ped.items || []).forEach(function(it) {
-    if (!prodMap[it.prodId]) prodMap[it.prodId] = { nombre: it.nombre || it.prodId, total: 0, uds: 0 };
-    prodMap[it.prodId].total += (it.precio || 0) * (it.cajas || 1);
-    prodMap[it.prodId].uds += (it.cajas || 1);
-   });
-  });
-  var topProds = Object.values(prodMap).sort(function(a,b){ return b.total - a.total; }).slice(0, 4);
-
-  // Top proveedores
-  var provMap = {};
-  pedsPeriodo.forEach(function(ped) {
-   var prov = provs.find(function(v){ return v.id === ped.provId; });
-   var nombre = prov ? prov.nombre : (ped.provId || 'Desconocido');
-   if (!provMap[nombre]) provMap[nombre] = 0;
-   provMap[nombre] += (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
-  });
-  var topProvs = Object.entries(provMap).sort(function(a,b){ return b[1]-a[1]; }).slice(0, 3);
-
-  var _feur2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
-  var periodoLabel = p.label || 'Este mes';
-
-  var topProdsHtml = topProds.length > 0
-   ? topProds.map(function(pr) {
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'
-     + '<span style="font-size:var(--fs-md);color:var(--ink);font-weight:var(--fw-med)">' + (pr.nombre.length > 22 ? pr.nombre.slice(0,22)+'…' : pr.nombre) + '</span>'
-     + '<span style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink)">' + _feur2(pr.total) + '</span>'
-     + '</div>';
-   }).join('')
-   : '<div style="color:var(--ink-soft);font-size:var(--fs-md);padding:8px 0">Sin compras en este periodo</div>';
-
-  var topProvsHtml = topProvs.length > 0
-   ? topProvs.map(function(pv) {
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'
-     + '<span style="font-size:var(--fs-md);color:var(--ink);font-weight:var(--fw-med)">' + pv[0] + '</span>'
-     + '<span style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink)">' + _feur2(pv[1]) + '</span>'
-     + '</div>';
-   }).join('')
-   : '<div style="color:var(--ink-soft);font-size:var(--fs-md);padding:8px 0">Sin proveedores</div>';
-
-  var html =
-   '<div class="modal-header-dark"><div class="mhd-row"><div>'
-   + '<div class="mhd-title">Compras completas</div>'
-   + '<div class="mhd-sub">' + periodoLabel + '</div>'
-   + '</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
-   // Total del periodo
-   + '<div style="padding:20px 16px 12px;text-align:center">'
-   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total comprado</div>'
-   + '<div style="font-size:40px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-2px">' + _feur2(totalPeriodo) + '</div>'
-   + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + ' vs periodo anterior (' + _feur2(totalAnt) + ')</div>'
-   + '</div>'
-   // Stats
-   + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">'
-   + '<div style="flex:1;padding:12px 8px;text-align:center;border-right:1px solid var(--border)">'
-   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Pedidos</div>'
-   + '<div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">' + nPedidos + '</div>'
-   + '</div>'
-   + '<div style="flex:1;padding:12px 8px;text-align:center">'
-   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Líneas</div>'
-   + '<div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">' + nItems + '</div>'
-   + '</div>'
-   + '</div>'
-   // Top productos
-   + '<div style="padding:16px 16px 0">'
-   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Top productos</div>'
-   + topProdsHtml
-   + '</div>'
-   // Top proveedores
-   + '<div style="padding:16px 16px 0">'
-   + '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Por proveedor</div>'
-   + topProvsHtml
-   + '</div>'
-   + '<div style="height:32px"></div>';
-
-  ui.setFs(html);
-  ui.openFs();
  }
+
+ // Agrupar por producto
+ var map = {};
+ pedsPeriodo.forEach(function(ped) {
+  (ped.items || []).forEach(function(it) {
+   var prodId = it.prodId;
+   if (!prodId) return;
+   var prod = State.get.prod(prodId);
+   var nombre = prod ? prod.nombre : (it.nombre || prodId);
+   var foto = prod ? (prod.foto || null) : null;
+   var e = prod ? (prod.e || '📦') : '📦';
+   var coste = (it.ncajas||1) * (it.precio||0) * 1.10;
+   var cajas = (it.ncajas||1);
+   if (!map[prodId]) map[prodId] = { nombre: nombre, foto: foto, e: e, total: 0, cajas: 0 };
+   map[prodId].total += coste;
+   map[prodId].cajas += cajas;
+  });
+ });
+
+ var all = Object.keys(map).map(function(id){ return map[id]; })
+  .sort(function(a,b){ return b.total - a.total; });
+
+ var rows = all.map(function(x) {
+  var thumb = x.foto
+   ? '<div class="ta-thumb"><img src="' + x.foto + '" loading="lazy"></div>'
+   : '<div class="ta-thumb">' + (x.e || '📦') + '</div>';
+  return '<div class="ta-item">' + thumb
+   + '<div class="ta-info"><div class="ta-name">' + esc(x.nombre) + '</div></div>'
+   + '<div class="ta-right"><div class="ta-price">' + feur(x.total) + '</div>'
+   + '<div class="ta-sold">x ' + x.cajas + ' caja' + (x.cajas !== 1 ? 's' : '') + '</div></div></div>';
+ }).join('');
+
+ var _f2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
+
+ var kpiHtml =
+  '<div style="padding:16px 16px 0;text-align:center">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total comprado</div>'
+  + '<div style="font-size:36px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _f2(totalPeriodo) + '</div>'
+  + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + '</div>'
+  + '</div>'
+  + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:12px 0 0">'
+  + '<div style="flex:1;padding:10px 8px;text-align:center;border-right:1px solid var(--border)">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Pedidos</div>'
+  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + nPedidos + '</div>'
+  + '</div>'
+  + '<div style="flex:1;padding:10px 8px;text-align:center">'
+  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Referencias</div>'
+  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + all.length + '</div>'
+  + '</div></div>';
+
+ ui.setFs(
+  '<div class="modal-header-dark"><div class="mhd-row"><div>'
+  + '<div class="mhd-title">Compras completas</div>'
+  + '<div class="mhd-sub">' + period.label + ' · ' + all.length + ' referencias</div>'
+  + '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'
+  + kpiHtml
+  + '<div style="padding:12px 14px 20px;font-family:var(--font)">'
+  + (rows || '<div class="ta-empty">Sin compras en este periodo</div>')
+  + '</div>'
+ );
+ ui.openFs();
+ }
+
 
  function openFinModal(type) {
  if (type === 'flujo-caja') _openFlujoCajaModal();
