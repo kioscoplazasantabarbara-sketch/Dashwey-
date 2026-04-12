@@ -9300,6 +9300,7 @@ const State = (() => {
  async function _writeFirebase(data) {
  const fb = window._DashweyFirebase;
  if (!fb?.enabled || !fb?.ready) return false;
+ if (window._DashweyBooting) return false;
  if (!fb.isRegistered()) {
  // No mutar syncStatus aqui: evita save() loop
  return false;
@@ -9422,16 +9423,11 @@ const State = (() => {
 
  // -- save: escribe local siempre, Firebase con guards anti-loop
  function save() {
+ if (window._DashweyBooting) { console.warn('BLOCK save during boot'); return; }
  clearTimeout(_saveTimer);
- _saveTimer = setTimeout(() => { if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
+ _saveTimer = setTimeout(() => { if (window._DashweyBooting) return; if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
  const _t0Sync = Date.now();
  const fb = window._DashweyFirebase;
- // Guard: no escribir a Firebase antes del primer sync inicial.
- // Evita que un estado local vacío (tras borrar almacenamiento) sobrescriba la nube.
- if (fb?.enabled && fb.isRegistered?.() && !window._DashweyInitialSyncDone) {
-  _writeLocal(_archivePayload(_state));
-  return;
- }
  if (!fb?.enabled || !fb.isRegistered?.()) {
  // Sin Firebase — escribir local una sola vez con timestamp
  const _ts0 = Date.now();
@@ -11748,19 +11744,19 @@ const ui = (() => {
  if (fb._auth?.currentUser?.isAnonymous) {
  try { await fb._signOut(); } catch(_) {}
  }
-  // NO resetear datos antes del login
-  window._DashweyInitialSyncDone = false;
-  try { window._DashweyFirebase?.unsubscribeAll?.(); } catch(_) {}
+   // NO resetear datos antes del login
+   try { window._DashweyFirebase?.unsubscribeAll?.(); } catch(_) {}
    try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {}
    try { localStorage.removeItem('dashwey_last_prov_v1'); } catch(_) {}
  const res = await fb.login(email, pass);
  if (res.ok) {
+  window._DashweyBooting = true;
  // Limpiar flag de logout intencional
  try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
  // AJU-A1: usar State.set.user para no saltarse watchers
  // Object.assign preserva todos los campos existentes
  try {
-  State.set.user(Object.assign({}, State.get.user(), { email: res.user.email, uid: res.user.uid }));
+  State.set.user(Object.assign({}, State.get.user(), { email: res.user.email, uid: res.user.uid, lastSyncAt: 0 }));
  } catch(_) {}
  hideAuthScreen();
  showToast('👋 Bienvenido');
@@ -14819,7 +14815,8 @@ function _toggleCardFromManager(id, btn) {
  }
 
  // Badge de pin en modo fijo para tarjetas fijadas
- if (mode === 'fixed' && isPinned) {
+ // FIX: no renderizar en Flujo de Caja (el dot aparece pegado a la llave mecánica)
+ if (mode === 'fixed' && isPinned && id !== 'flujo-caja') {
  const badge = document.createElement('div');
  badge.className = 'card-pinned-badge';
  badge.title = 'Tarjeta fija';
@@ -15700,6 +15697,8 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
   _movSheet.className = 'mov-sheet-overlay';
   _movSheet.innerHTML = '<div class="mov-sheet-panel">' + html + '</div>';
   document.body.appendChild(_movSheet);
+  // Bloquear scroll del background mientras el sheet estÃ¡ abierto
+  document.body.style.overflow = 'hidden';
 
   // Fijar altura del scrim en px — window.innerHeight NO cambia con el teclado
   _movSheet.style.height = window.innerHeight + 'px';
@@ -15757,9 +15756,13 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
     // keyboard height = diferencia entre innerHeight y visualViewport.height
     var kbH = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     if (kbH > 50) {
+     // Subir panel sobre el teclado (posicion fixed)
+     _movPanel.style.bottom = kbH + 'px';
      // Teclado activo: anadir padding-bottom = 12px de separacion
      _movPanel.style.paddingBottom = (kbH + 12) + 'px';
     } else {
+     // Teclado cerrado: restaurar bottom base
+     _movPanel.style.bottom = '0px';
      // Teclado cerrado: restaurar padding base
      _movPanel.style.paddingBottom = '';
     }
@@ -15889,6 +15892,8 @@ function _openEditMovimientoSheet(id, src) {
    '</div>';
 
   document.body.appendChild(sheet);
+  // Bloquear scroll del background mientras el sheet está abierto
+  document.body.style.overflow = 'hidden';
   requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
 
   // Abrir teclado
@@ -15900,13 +15905,24 @@ function _openEditMovimientoSheet(id, src) {
    }
   }, 350);
 
+  var _editMovVpResizeFn = null;
+  function _editMovCleanup() {
+   if (window.visualViewport && _editMovVpResizeFn) {
+    window.visualViewport.removeEventListener('resize', _editMovVpResizeFn);
+    window.visualViewport.removeEventListener('scroll', _editMovVpResizeFn);
+    _editMovVpResizeFn = null;
+   }
+   document.body.style.overflow = '';
+   setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+  }
   // Cerrar overlay
   sheet.addEventListener('click', function(e) {
-   if (e.target === sheet) { sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320); }
+   if (e.target === sheet) { sheet.classList.remove('open'); _editMovCleanup(); }
   });
 
   document.getElementById('edit-mov-close').addEventListener('click', function() {
-   sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+   sheet.classList.remove('open');
+   _editMovCleanup();
   }, { once: true });
 
   // Sync display
@@ -15924,6 +15940,27 @@ function _openEditMovimientoSheet(id, src) {
    var num = parseFloat(raw);
    if (!isNaN(num) && num > 0) { _editInput.value = num.toFixed(2).replace('.', ','); _resizeEdit(); }
   });
+
+  // Keyboard handler: subir panel con visualViewport
+  var _editPanel = sheet.querySelector('.mov-sheet-panel');
+  _editMovVpResizeFn = function() {
+   try {
+    var vv = window.visualViewport;
+    if (!vv || !_editPanel) return;
+    var kbH = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    if (kbH > 50) {
+     _editPanel.style.bottom = kbH + 'px';
+     _editPanel.style.paddingBottom = (kbH + 12) + 'px';
+    } else {
+     _editPanel.style.bottom = '0px';
+     _editPanel.style.paddingBottom = '';
+    }
+   } catch(_) {}
+  };
+  if (window.visualViewport) {
+   window.visualViewport.addEventListener('resize', _editMovVpResizeFn, { passive: true });
+   window.visualViewport.addEventListener('scroll', _editMovVpResizeFn, { passive: true });
+  }
 
   // Guardar
   document.getElementById('edit-mov-save').addEventListener('click', function() {
@@ -15947,9 +15984,9 @@ function _openEditMovimientoSheet(id, src) {
     State.set.setIngresos(ingresos);
     DashweyBus.emit('ingreso');
    }
-   sheet.classList.remove('open');
-   setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
-   showToast('✅ Movimiento actualizado');
+  sheet.classList.remove('open');
+  _editMovCleanup();
+  showToast('✅ Movimiento actualizado');
   }, { once: true });
 
   // Eliminar
@@ -15967,7 +16004,7 @@ function _openEditMovimientoSheet(id, src) {
       DashweyBus.emit('ingreso');
      }
      sheet.classList.remove('open');
-     setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+     _editMovCleanup();
      showToast('🗑️ Movimiento eliminado');
     }
    });
@@ -15979,12 +16016,13 @@ function _openEditMovimientoSheet(id, src) {
   _movSheet.classList.remove('open');
   var sheet = _movSheet;
   _movSheet = null;
-  if (window.visualViewport && _movVpResizeFn) {
-   window.visualViewport.removeEventListener('resize', _movVpResizeFn);
-   window.visualViewport.removeEventListener('scroll', _movVpResizeFn);
-   _movVpResizeFn = null;
-  }
-  setTimeout(function() { if (sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+ if (window.visualViewport && _movVpResizeFn) {
+  window.visualViewport.removeEventListener('resize', _movVpResizeFn);
+  window.visualViewport.removeEventListener('scroll', _movVpResizeFn);
+  _movVpResizeFn = null;
+ }
+ document.body.style.overflow = '';
+ setTimeout(function() { if (sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
  }
 
  function _getMovimientoImporte() {
@@ -16145,13 +16183,25 @@ function _openEditMovimientoSheet(id, src) {
    '</div>';
 
   document.body.appendChild(sheet);
+  // Bloquear scroll del background mientras el sheet está abierto
+  document.body.style.overflow = 'hidden';
   requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
 
+  var _ajusteVpResizeFn = null;
+  function _ajusteCleanup() {
+   if (window.visualViewport && _ajusteVpResizeFn) {
+    window.visualViewport.removeEventListener('resize', _ajusteVpResizeFn);
+    window.visualViewport.removeEventListener('scroll', _ajusteVpResizeFn);
+    _ajusteVpResizeFn = null;
+   }
+   document.body.style.overflow = '';
+   setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+  }
   sheet.addEventListener('click', function(e) {
-   if (e.target === sheet) { sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320); }
+   if (e.target === sheet) { sheet.classList.remove('open'); _ajusteCleanup(); }
   });
   document.getElementById('ajuste-close').addEventListener('click', function() {
-   sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+   sheet.classList.remove('open'); _ajusteCleanup();
   }, { once: true });
 
   // Sync display
@@ -16169,6 +16219,27 @@ function _openEditMovimientoSheet(id, src) {
    var num = parseFloat(raw);
    if (!isNaN(num) && num > 0) { _inp.value = num.toFixed(2).replace('.', ','); _resizeAjuste(); }
   });
+
+  // Keyboard handler: subir panel con visualViewport
+  var _ajustePanel = sheet.querySelector('.mov-sheet-panel');
+  _ajusteVpResizeFn = function() {
+   try {
+    var vv = window.visualViewport;
+    if (!vv || !_ajustePanel) return;
+    var kbH = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    if (kbH > 50) {
+     _ajustePanel.style.bottom = kbH + 'px';
+     _ajustePanel.style.paddingBottom = (kbH + 12) + 'px';
+    } else {
+     _ajustePanel.style.bottom = '0px';
+     _ajustePanel.style.paddingBottom = '';
+    }
+   } catch(_) {}
+  };
+  if (window.visualViewport) {
+   window.visualViewport.addEventListener('resize', _ajusteVpResizeFn, { passive: true });
+   window.visualViewport.addEventListener('scroll', _ajusteVpResizeFn, { passive: true });
+  }
   setTimeout(function() {
    if(_inp) {
     _inp.focus();
@@ -31613,7 +31684,6 @@ _eaRecalc();
  State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
- window._DashweyInitialSyncDone = true;
  return;
  }
 
@@ -31628,29 +31698,9 @@ _eaRecalc();
 
  const localTs = _toMs(State.get.user().lastSyncAt);
  const remoteTs = _toMs(remote.user?.lastSyncAt);
- // Detectar estado local "vacío" (típico tras borrar almacenamiento).
- const _hasLocalData = (() => {
-  try {
-   const a = (fn) => (typeof fn === 'function' ? (fn() || []) : []);
-   const hasArr =
-    a(State.get.productos).length ||
-    a(State.get.proveedores).length ||
-    a(State.get.ventas).length ||
-    a(State.get.historialPedidos).length ||
-    a(State.get.gastosOp).length ||
-    a(State.get.ingresosFin).length ||
-    a(State.get.cuentas).length ||
-    a(State.get.mermas).length ||
-    a(State.get.pendingOrders).length ||
-    a(State.get.visitasComerciales).length ||
-    a(State.get.cierresCaja).length ||
-    a(State.get.ticketsAbiertos).length;
-   return !!hasArr;
-  } catch(_) { return false; }
- })();
 
 
- if (remoteTs > localTs || (!_hasLocalData && remoteTs > 0)) {
+ if (remoteTs > localTs) {
  // Remoto mas reciente: aplicar datos de la nube
  // PROTECCION: si remoto tiene arrays vacios pero local tiene datos, usar local
  var _safeRemote = JSON.parse(JSON.stringify(remote));
@@ -31705,7 +31755,7 @@ _eaRecalc();
   // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
   setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
- } else if (localTs > remoteTs && localTs > 0 && _hasLocalData) {
+ } else if (localTs > remoteTs && localTs > 0) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
  await fb.write('state', _buildLocalSnapshot());
  }
@@ -31830,23 +31880,21 @@ _eaRecalc();
  // _DashweyOnLocalWrite: ya no necesita State.set.user (lo hace save() directamente)
  // Se mantiene como hook vacio por compatibilidad con modulos externos
  window._DashweyOnLocalWrite = () => {};
- // Marcar sync inicial completado (permite writes a Firebase)
- window._DashweyInitialSyncDone = true;
 
- } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { _syncRunning = false; }
+ } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { window._DashweyBooting = false; _syncRunning = false; }
 }
  window._DashweyInitialSync = _doInitialSync;
 
 
  // ── Device ID — identificador único por dispositivo (persistente) ──
  // Usado por el sistema de sync para ignorar snapshots propios (Guard 2).
-// Se genera una única vez y se persiste en localStorage.
-// Set de IDs borrados localmente — el onSnapshot no los restaura
-window._DashweyLocalDeletedIds = window._DashweyLocalDeletedIds || new Set();
-// Flag de sync inicial (evita writes prematuros tras limpiar almacenamiento)
-window._DashweyInitialSyncDone = false;
+ // Se genera una única vez y se persiste en localStorage.
+ // Set de IDs borrados localmente — el onSnapshot no los restaura
+ window._DashweyLocalDeletedIds = window._DashweyLocalDeletedIds || new Set();
+ // Guard de arranque: bloquea writes antes del sync inicial
+ window._DashweyBooting = false;
 
-window._DashweyDeviceId = (() => {
+ window._DashweyDeviceId = (() => {
  try {
  const KEY = 'dashwey_device_id';
  let id = localStorage.getItem(KEY);
