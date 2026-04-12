@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.861-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.859-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.861-dev</title>
+<title>Dashwey v1.3.859-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9426,6 +9426,12 @@ const State = (() => {
  _saveTimer = setTimeout(() => { if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
  const _t0Sync = Date.now();
  const fb = window._DashweyFirebase;
+ // Guard: no escribir a Firebase antes del primer sync inicial.
+ // Evita que un estado local vacío (tras borrar almacenamiento) sobrescriba la nube.
+ if (fb?.enabled && fb.isRegistered?.() && !window._DashweyInitialSyncDone) {
+  _writeLocal(_archivePayload(_state));
+  return;
+ }
  if (!fb?.enabled || !fb.isRegistered?.()) {
  // Sin Firebase — escribir local una sola vez con timestamp
  const _ts0 = Date.now();
@@ -9648,7 +9654,6 @@ const State = (() => {
  get isSaving() { return _isSaving; },
  set isSaving(v) { _isSaving = v; },
  resetHash() { _lastSavedHash = ''; },
- cancelSave() { clearTimeout(_saveTimer); _saveTimer = null; }, // v1.3.860: cancela debounce pendiente antes del merge
  };
  return { get, set };
 })();
@@ -11436,7 +11441,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.861-dev';
+ const _APP_VERSION = 'v1.3.859-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11743,8 +11748,9 @@ const ui = (() => {
  if (fb._auth?.currentUser?.isAnonymous) {
  try { await fb._signOut(); } catch(_) {}
  }
-   // NO resetear datos antes del login
-   try { window._DashweyFirebase?.unsubscribeAll?.(); } catch(_) {}
+  // NO resetear datos antes del login
+  window._DashweyInitialSyncDone = false;
+  try { window._DashweyFirebase?.unsubscribeAll?.(); } catch(_) {}
    try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {}
    try { localStorage.removeItem('dashwey_last_prov_v1'); } catch(_) {}
  const res = await fb.login(email, pass);
@@ -11754,7 +11760,7 @@ const ui = (() => {
  // AJU-A1: usar State.set.user para no saltarse watchers
  // Object.assign preserva todos los campos existentes
  try {
-  State.set.user(Object.assign({}, State.get.user(), { email: res.user.email, uid: res.user.uid, lastSyncAt: 0 }));
+  State.set.user(Object.assign({}, State.get.user(), { email: res.user.email, uid: res.user.uid }));
  } catch(_) {}
  hideAuthScreen();
  showToast('👋 Bienvenido');
@@ -31607,6 +31613,7 @@ _eaRecalc();
  State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
+ window._DashweyInitialSyncDone = true;
  return;
  }
 
@@ -31621,9 +31628,29 @@ _eaRecalc();
 
  const localTs = _toMs(State.get.user().lastSyncAt);
  const remoteTs = _toMs(remote.user?.lastSyncAt);
+ // Detectar estado local "vacío" (típico tras borrar almacenamiento).
+ const _hasLocalData = (() => {
+  try {
+   const a = (fn) => (typeof fn === 'function' ? (fn() || []) : []);
+   const hasArr =
+    a(State.get.productos).length ||
+    a(State.get.proveedores).length ||
+    a(State.get.ventas).length ||
+    a(State.get.historialPedidos).length ||
+    a(State.get.gastosOp).length ||
+    a(State.get.ingresosFin).length ||
+    a(State.get.cuentas).length ||
+    a(State.get.mermas).length ||
+    a(State.get.pendingOrders).length ||
+    a(State.get.visitasComerciales).length ||
+    a(State.get.cierresCaja).length ||
+    a(State.get.ticketsAbiertos).length;
+   return !!hasArr;
+  } catch(_) { return false; }
+ })();
 
 
- if (remoteTs > localTs) {
+ if (remoteTs > localTs || (!_hasLocalData && remoteTs > 0)) {
  // Remoto mas reciente: aplicar datos de la nube
  // PROTECCION: si remoto tiene arrays vacios pero local tiene datos, usar local
  var _safeRemote = JSON.parse(JSON.stringify(remote));
@@ -31657,7 +31684,6 @@ _eaRecalc();
   }
  });
  // Bloquear writes durante merge para no re-subir lo que bajamos
- window._DashweySavingCtrl.cancelSave(); // v1.3.860: cancelar debounce pendiente ANTES del lock
  window._DashweySavingCtrl.isSaving = true;
  try {
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
@@ -31671,16 +31697,15 @@ _eaRecalc();
   });
  } finally {
  window._DashweySavingCtrl.isSaving = false;
- // v1.3.861: forzar save() explícito — cancelSave() anuló el timer, _dirtyDuringSave no re-dispara sin write previo
+ // BUG-REAL-03: forzar re-sync si hubo cambios durante el merge
  try { window._DashweySavingCtrl.resetHash(); } catch(_) {}
- try { State.save(); } catch(_) {}
  }
  _renderAll();
  showToast('☁️ Datos sincronizados');
   // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
   setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
- } else if (localTs > remoteTs && localTs > 0) {
+ } else if (localTs > remoteTs && localTs > 0 && _hasLocalData) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
  await fb.write('state', _buildLocalSnapshot());
  }
@@ -31770,7 +31795,6 @@ _eaRecalc();
    merged[k] = _mergeById(_localArr2, merged[k]);
   }
  });
- window._DashweySavingCtrl.cancelSave(); // v1.3.860: cancelar debounce pendiente ANTES del lock
  window._DashweySavingCtrl.isSaving = true;
  try {
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
@@ -31784,9 +31808,8 @@ _eaRecalc();
   });
  } finally {
  window._DashweySavingCtrl.isSaving = false;
- // v1.3.861: forzar save() explícito — cancelSave() anuló el timer, _dirtyDuringSave no re-dispara sin write previo
+ // v1.3.735: resetear hash para que save() suba el estado fusionado
  window._DashweySavingCtrl.resetHash();
- try { State.save(); } catch(_) {}
  }
 
  // v1.3.581: verificar que _ticketActivo sigue existiendo en los tickets remotos
@@ -31807,6 +31830,8 @@ _eaRecalc();
  // _DashweyOnLocalWrite: ya no necesita State.set.user (lo hace save() directamente)
  // Se mantiene como hook vacio por compatibilidad con modulos externos
  window._DashweyOnLocalWrite = () => {};
+ // Marcar sync inicial completado (permite writes a Firebase)
+ window._DashweyInitialSyncDone = true;
 
  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { _syncRunning = false; }
 }
@@ -31815,11 +31840,13 @@ _eaRecalc();
 
  // ── Device ID — identificador único por dispositivo (persistente) ──
  // Usado por el sistema de sync para ignorar snapshots propios (Guard 2).
- // Se genera una única vez y se persiste en localStorage.
- // Set de IDs borrados localmente — el onSnapshot no los restaura
- window._DashweyLocalDeletedIds = window._DashweyLocalDeletedIds || new Set();
+// Se genera una única vez y se persiste en localStorage.
+// Set de IDs borrados localmente — el onSnapshot no los restaura
+window._DashweyLocalDeletedIds = window._DashweyLocalDeletedIds || new Set();
+// Flag de sync inicial (evita writes prematuros tras limpiar almacenamiento)
+window._DashweyInitialSyncDone = false;
 
- window._DashweyDeviceId = (() => {
+window._DashweyDeviceId = (() => {
  try {
  const KEY = 'dashwey_device_id';
  let id = localStorage.getItem(KEY);
