@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.846-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.847-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.846-dev</title>
+<title>Dashwey v1.3.847-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9304,6 +9304,15 @@ const State = (() => {
  // No mutar syncStatus aqui: evita save() loop
  return false;
  }
+ // GUARD HIDRATACION: nunca escribir en Firebase sin haber leido primero
+ if (!_hydrated) { console.warn("[Dashwey] write bloqueado: no hidratado"); return false; }
+ // GUARD SOBREESCRITURA: nunca subir state vacio si Firebase tiene datos
+ var _wProvs = (data && Array.isArray(data.proveedores)) ? data.proveedores.length : -1;
+ var _wProds = (data && Array.isArray(data.productos)) ? data.productos.length : -1;
+ if (_wProvs === 0 && _wProds === 0) {
+  console.warn("[Dashwey] write bloqueado: state vacio");
+  return false;
+ }
  // Asegurar que el data lleva deviceId actualizado (guard onSnapshot)
  if (data?.user && window._DashweyDeviceId) {
  data.user.lastDeviceId = window._DashweyDeviceId;
@@ -11435,7 +11444,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.846-dev';
+ const _APP_VERSION = 'v1.3.847-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31592,6 +31601,7 @@ _eaRecalc();
 
  // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
  let _syncRunning = false; // anti-race: evita _doInitialSync concurrente
+let _hydrated = false; // CRITICO: false hasta que Firebase haya sido leido
  async function _doInitialSync() {
  if (_syncRunning) { return; } // guard: ya en curso
  _syncRunning = true;
@@ -31614,13 +31624,14 @@ _eaRecalc();
  var _hasLocalData = _localProvs.length > 0 || _localProds.length > 0;
  if (_hasLocalData) {
   // Primera vez real con datos locales -- subir
+  _hydrated = true; // primera vez con datos locales
   const ok = await fb.write('state', _buildLocalSnapshot());
   if (ok) {
    State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
    if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
   }
  } else {
-  // Sin datos locales y sin datos remotos -- puede ser error de lectura, no subir nada
+  // Sin datos locales ni remotos -- no hidratar, no subir
   if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
  return;
@@ -31692,14 +31703,19 @@ _eaRecalc();
  // BUG-REAL-03: forzar re-sync si hubo cambios durante el merge
  try { window._DashweySavingCtrl.resetHash(); } catch(_) {}
  }
+ _hydrated = true; // Firebase leido y aplicado
  _renderAll();
  showToast('☁️ Datos sincronizados');
   // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
   setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
  } else if (localTs > remoteTs && localTs > 0) {
- // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
+ // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente
+ _hydrated = true; // local es fuente de verdad
  await fb.write('state', _buildLocalSnapshot());
+ } else {
+ // remoteTs === localTs: ya sincronizados
+ _hydrated = true;
  }
  // Actualizar syncStatus y uid via State API (sin disparar save())
  // State.set.syncStatus no llama save() - es seguro
