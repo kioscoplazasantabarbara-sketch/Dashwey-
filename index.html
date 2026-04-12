@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.822-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.823-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.822-dev</title>
+<title>Dashwey v1.3.823-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11441,7 +11441,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.822-dev';
+ const _APP_VERSION = 'v1.3.823-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15679,6 +15679,15 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
        '<button class="mov-type-btn" data-subtipo="programado" style="height:36px;font-size:12px">Programado</button>' +
       '</div>' +
      '</div>' +
+     '<div id="mov-ingreso-tipo-wrap" style="display:none">' +
+      '<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Tipo de ingreso</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+       '<button class="mov-type-btn active" data-ingreso-tipo="normal" style="height:36px;font-size:12px">Normal</button>' +
+       '<button class="mov-type-btn" data-ingreso-tipo="caja" style="height:36px;font-size:12px">Caja</button>' +
+       '<button class="mov-type-btn" data-ingreso-tipo="reembolso_proveedor" style="height:36px;font-size:12px">Reembolso</button>' +
+      '</div>' +
+      '<div id="mov-ingreso-tipo-info" style="display:none;margin-top:6px;padding:8px 10px;border-radius:var(--r-md);font-size:var(--fs-xs);line-height:1.5"></div>' +
+     '</div>' +
     '</div>' +
    '</div>' +
    '<button class="mov-submit-btn" id="mov-submit">Guardar</button>';
@@ -15765,6 +15774,8 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
     // Mostrar/ocultar subtipo según tipo
     var subtipoWrap = document.getElementById('mov-subtipo-wrap');
     if (subtipoWrap) subtipoWrap.style.display = _movTipo === 'gasto' ? '' : 'none';
+    var ingresoTipoWrap = document.getElementById('mov-ingreso-tipo-wrap');
+    if (ingresoTipoWrap) ingresoTipoWrap.style.display = _movTipo === 'ingreso' ? '' : 'none';
    });
   });
 
@@ -15778,6 +15789,35 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
     if (recurWrap) recurWrap.style.display = btn.dataset.subtipo === 'recurrente' ? '' : 'none';
    });
   });
+
+  // Tipo especial ingreso (normal/caja/reembolso_proveedor)
+  var _movIngresoTipo = 'normal';
+  _movSheet.querySelectorAll('.mov-type-btn[data-ingreso-tipo]').forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    _movIngresoTipo = btn.dataset.ingresoTipo;
+    _movSheet.querySelectorAll('.mov-type-btn[data-ingreso-tipo]').forEach(function(b) {
+     b.classList.toggle('active', b.dataset.ingresoTipo === _movIngresoTipo);
+    });
+    var infoEl = document.getElementById('mov-ingreso-tipo-info');
+    if (infoEl) {
+     if (_movIngresoTipo === 'caja') {
+      infoEl.style.display = 'block';
+      infoEl.style.background = 'rgba(42,157,124,0.08)';
+      infoEl.style.color = '#2A9D7C';
+      infoEl.textContent = 'Se añade a ventas globales y aparecerá en la gráfica del día seleccionado.';
+     } else if (_movIngresoTipo === 'reembolso_proveedor') {
+      infoEl.style.display = 'block';
+      infoEl.style.background = 'rgba(59,130,246,0.08)';
+      infoEl.style.color = '#2563EB';
+      infoEl.textContent = 'Aumenta el saldo y reduce el coste de compras. No afecta a ventas.';
+     } else {
+      infoEl.style.display = 'none';
+     }
+    }
+   });
+  });
+  // Exponer para _confirmarMovimiento
+  _movSheet._ingresoTipo = function() { return _movIngresoTipo; };
 
   // Toggle avanzado
   var _advToggle = document.getElementById('mov-adv-toggle');
@@ -15991,21 +16031,44 @@ function _openEditMovimientoSheet(id, src) {
    showToast('✅ Gasto registrado');
 
   } else if (_movTipo === 'ingreso') {
-   State.set.addIngreso({
-    id: 'i' + Date.now(),
-    concepto: concepto || 'Ingreso',
-    importe: importe,
-    fecha: new Date(fecha + 'T12:00:00').toISOString(),
-    cuentaId: cuentaA,
-    recurrente: false,
-   });
+   var _mIT = (_movSheet && typeof _movSheet._ingresoTipo === 'function') ? _movSheet._ingresoTipo() : 'normal';
+   var fechaISO = new Date(fecha + 'T12:00:00').toISOString();
+   if (_mIT === 'caja') {
+    var negocioId = State.get.settings().negocioId || 'local';
+    State.set.addVenta({
+     id: 'v_caja_' + Date.now(), negocioId: negocioId,
+     ticketId: 'caja_' + Date.now(), fecha: fechaISO,
+     metodo: 'efectivo', total: importe, tipoCaja: true,
+     concepto: concepto,
+     items: [{ prodId: '_caja', nombre: concepto || 'Caja', qty: 1, pvp: importe, coste: 0, margen: 0 }]
+    });
+    DashweyBus.emit('venta', { total: importe, metodo: 'efectivo' });
+    showToast('✅ Ingreso tipo Caja registrado');
+   } else if (_mIT === 'reembolso_proveedor') {
+    State.set.addIngreso({
+     id: 'i' + Date.now(), concepto: concepto || 'Reembolso proveedor',
+     importe: importe, fecha: fechaISO, cuentaId: cuentaA,
+     tipo: 'reembolso_proveedor', recurrente: false, frecuencia: 'unico', mensualEq: importe,
+    });
+    DashweyBus.emit('ingreso'); DashweyBus.emit('pedido');
+    showToast('✅ Reembolso de proveedor registrado');
+   } else {
+    State.set.addIngreso({
+     id: 'i' + Date.now(),
+     concepto: concepto || 'Ingreso',
+     importe: importe,
+     fecha: fechaISO,
+     cuentaId: cuentaA,
+     recurrente: false,
+    });
+    DashweyBus.emit('ingreso');
+    showToast('✅ Ingreso registrado');
+   }
    // Sumar a cuenta si está asignada
-   if (cuentaA) {
+   if (cuentaA && _mIT !== 'caja') {
     var cI = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
     if (cI) State.set.updateCuenta(cuentaA, { saldo: (cI.saldo||0) + importe });
    }
-   DashweyBus.emit('ingreso');
-   showToast('✅ Ingreso registrado');
 
   } else if (_movTipo === 'transferencia') {
    if (!cuentaB || cuentaA === cuentaB) { showToast('⚠️ Selecciona dos cuentas distintas'); return; }
