@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.847-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.850-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.847-dev</title>
+<title>Dashwey v1.3.850-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8601,10 +8601,34 @@ window._DashweyFirebase = {
 
  async write(coleccion, data, _attempt = 0) {
  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
+ // GUARD HIDRATACION: bloquear writes hasta que Firebase haya sido leido
+ if (!window._DashweyHydrated) {
+  // Excepcion: _doInitialSync puede escribir cuando es primera vez real
+  // Se detecta porque lo llama explicitamente con _forceWrite=true
+  if (!data || !data._forceWrite) {
+   console.warn('[Dashwey] fb.write bloqueado: no hidratado', coleccion);
+   return false;
+  }
+ }
+ // GUARD PAYLOAD VACIO: nunca escribir objeto sin campos
+ if (!data || (typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length === 0)) {
+  console.warn('[Dashwey] fb.write bloqueado: payload vacio', coleccion);
+  return false;
+ }
+ // GUARD SOBREESCRITURA: no subir state con arrays clave vacios
+ if (coleccion === 'state' && data && _attempt === 0) {
+  var _gProvs = Array.isArray(data.proveedores) ? data.proveedores.length : -1;
+  var _gProds = Array.isArray(data.productos) ? data.productos.length : -1;
+  if (_gProvs === 0 && _gProds === 0 && !data._forceWrite) {
+   console.warn('[Dashwey] fb.write bloqueado: state vacio');
+   return false;
+  }
+ }
  try {
- const clean = JSON.parse(JSON.stringify(data, (key, val) =>
- typeof val === 'function' ? undefined : val
+ const _cleanData = JSON.parse(JSON.stringify(data, (key, val) =>
+  key === '_forceWrite' ? undefined : (typeof val === 'function' ? undefined : val)
  ));
+ const clean = _cleanData;
  await setDoc(
  this._ref(_uid, coleccion),
  { ...clean, _updatedAt: serverTimestamp() },
@@ -9305,7 +9329,7 @@ const State = (() => {
  return false;
  }
  // GUARD HIDRATACION: nunca escribir en Firebase sin haber leido primero
- if (!_hydrated) { console.warn("[Dashwey] write bloqueado: no hidratado"); return false; }
+ if (!window._DashweyHydrated) { console.warn("[Dashwey] write bloqueado: no hidratado"); return false; }
  // GUARD SOBREESCRITURA: nunca subir state vacio si Firebase tiene datos
  var _wProvs = (data && Array.isArray(data.proveedores)) ? data.proveedores.length : -1;
  var _wProds = (data && Array.isArray(data.productos)) ? data.productos.length : -1;
@@ -11444,7 +11468,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.847-dev';
+ const _APP_VERSION = 'v1.3.850-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31601,7 +31625,7 @@ _eaRecalc();
 
  // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
  let _syncRunning = false; // anti-race: evita _doInitialSync concurrente
-let _hydrated = false; // CRITICO: false hasta que Firebase haya sido leido
+window._DashweyHydrated = false; // CRITICO: false hasta que Firebase haya sido leido
  async function _doInitialSync() {
  if (_syncRunning) { return; } // guard: ya en curso
  _syncRunning = true;
@@ -31624,7 +31648,7 @@ let _hydrated = false; // CRITICO: false hasta que Firebase haya sido leido
  var _hasLocalData = _localProvs.length > 0 || _localProds.length > 0;
  if (_hasLocalData) {
   // Primera vez real con datos locales -- subir
-  _hydrated = true; // primera vez con datos locales
+  window._DashweyHydrated = true; // primera vez con datos locales
   const ok = await fb.write('state', _buildLocalSnapshot());
   if (ok) {
    State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
@@ -31703,7 +31727,7 @@ let _hydrated = false; // CRITICO: false hasta que Firebase haya sido leido
  // BUG-REAL-03: forzar re-sync si hubo cambios durante el merge
  try { window._DashweySavingCtrl.resetHash(); } catch(_) {}
  }
- _hydrated = true; // Firebase leido y aplicado
+ window._DashweyHydrated = true; // Firebase leido y aplicado
  _renderAll();
  showToast('☁️ Datos sincronizados');
   // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
@@ -31711,11 +31735,11 @@ let _hydrated = false; // CRITICO: false hasta que Firebase haya sido leido
  // NO subir de vuelta -- ya tenemos los datos remotos
  } else if (localTs > remoteTs && localTs > 0) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente
- _hydrated = true; // local es fuente de verdad
+ window._DashweyHydrated = true; // local es fuente de verdad
  await fb.write('state', _buildLocalSnapshot());
  } else {
  // remoteTs === localTs: ya sincronizados
- _hydrated = true;
+ window._DashweyHydrated = true;
  }
  // Actualizar syncStatus y uid via State API (sin disparar save())
  // State.set.syncStatus no llama save() - es seguro
