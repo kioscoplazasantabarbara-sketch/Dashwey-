@@ -162,14 +162,14 @@
  }
  }
 </script>
-<link rel="manifest" href="./manifest.json?v=v1.3.854-dev"><!-- v1.1.8-dev: cache-bust manifest -->
+<link rel="manifest" href="./manifest.json?v=v1.3.855-dev"><!-- v1.1.8-dev: cache-bust manifest -->
 <link rel="apple-touch-icon" href="/Dashwey-/icon-192.png?v=v1.2.43-dev"><!-- v1.1.8-dev: cache-bust icon -->
 <link rel="icon" type="image/png" href="/Dashwey-/icon-192.png?v=9.5.74">
 <!-- Inter — v1.2.92: tipografía premium para tarjetas snap -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.854-dev</title>
+<title>Dashwey v1.3.855-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8601,26 +8601,6 @@ window._DashweyFirebase = {
 
  async write(coleccion, data, _attempt = 0) {
  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
- // GUARD 1: no escribir hasta haber leido Firebase (hidratacion)
- if (!window._DashweyHydrated) {
-  console.warn('[Dashwey] BLOCKED write (not hydrated):', coleccion);
-  return false;
- }
- // GUARD 1b: si Firebase tenia datos reales, exigir _hasRemoteData
- // Excepcion: primera vez real (local tiene datos, Firebase vacio)
- if (!window._DashweyHasRemote && coleccion === 'state') {
-  var _wP = typeof State !== 'undefined' && State.get.proveedores ? (State.get.proveedores()||[]) : [];
-  var _wR = typeof State !== 'undefined' && State.get.productos ? (State.get.productos()||[]) : [];
-  if (_wP.length === 0 && _wR.length === 0) {
-   console.warn('[Dashwey] BLOCKED write (no remote data confirmed, state empty):', coleccion);
-   return false;
-  }
- }
- // GUARD 2: no escribir payload vacio
- if (!data || (typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length === 0)) {
-  console.warn('[Dashwey] BLOCKED write (empty payload):', coleccion);
-  return false;
- }
  try {
  const clean = JSON.parse(JSON.stringify(data, (key, val) =>
  typeof val === 'function' ? undefined : val
@@ -11455,7 +11435,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.854-dev';
+ const _APP_VERSION = 'v1.3.855-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -11772,19 +11752,13 @@ const ui = (() => {
  try { localStorage.removeItem('dashwey_logged_out'); } catch(_) {}
  // AJU-A1: usar State.set.user para no saltarse watchers
  // Object.assign preserva todos los campos existentes
- // Orden correcto: 1) bloquear writes 2) login 3) fetch Firebase 4) hydrate
- window._DashweyHydrated = false; // bloquear writes durante sync
  try {
   State.set.user(Object.assign({}, State.get.user(), { email: res.user.email, uid: res.user.uid, lastSyncAt: 0 }));
  } catch(_) {}
  hideAuthScreen();
  showToast('👋 Bienvenido');
  if (typeof window._DashweyInitialSync === 'function') {
-  // _doInitialSync activa _DashweyHydrated=true SOLO si recibe datos reales
-  // NO hay fallback -- si falla el fetch, los writes quedan bloqueados (correcto)
-  window._DashweyInitialSync().catch(function(e){
-   console.warn('[Dashwey] sync failed, writes remain blocked:', e);
-  });
+ try { window._DashweyInitialSync(); } catch(e) { console.warn('[Dashwey] sync error:', e); }
  }
  } else {
  if (err) err.textContent = res.error || 'Error de autenticación';
@@ -31611,8 +31585,6 @@ _eaRecalc();
 
  // ── Sync inicial — expuesta globalmente para authLogin/authRegister ──
  let _syncRunning = false; // anti-race: evita _doInitialSync concurrente
-window._DashweyHydrated = false; // CRITICO: bloquea fb.write hasta leer Firebase
-window._DashweyHasRemote = false;  // true solo si Firebase devolvio datos reales
  async function _doInitialSync() {
  if (_syncRunning) { return; } // guard: ya en curso
  _syncRunning = true;
@@ -31628,20 +31600,11 @@ window._DashweyHasRemote = false;  // true solo si Firebase devolvio datos reale
 
  const remote = await fb.read('state');
  if (!remote) {
- // remote===null: puede ser primera vez O error de lectura sin sesion
- // Activar hydrated en cualquier caso para no bloquear la app
- window._DashweyHydrated = true;
- // Solo subir si hay datos locales reales
- var _lP = State.get.proveedores ? (State.get.proveedores()||[]) : [];
- var _lR = State.get.productos ? (State.get.productos()||[]) : [];
- if (_lP.length > 0 || _lR.length > 0) {
-  const ok = await fb.write('state', _buildLocalSnapshot());
-  if (ok) {
-   State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
-   if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
-  }
- } else {
-  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
+ // Primera vez en la nube — subir snapshot del estado local
+ const ok = await fb.write('state', _buildLocalSnapshot());
+ if (ok) {
+ State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
+ if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
  return;
  }
@@ -31709,20 +31672,14 @@ window._DashweyHasRemote = false;  // true solo si Firebase devolvio datos reale
  // BUG-REAL-03: forzar re-sync si hubo cambios durante el merge
  try { window._DashweySavingCtrl.resetHash(); } catch(_) {}
  }
- window._DashweyHydrated = true; // Firebase leido y aplicado
- window._DashweyHasRemote = true;
  _renderAll();
  showToast('☁️ Datos sincronizados');
   // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
   setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
  } else if (localTs > remoteTs && localTs > 0) {
- // local mas reciente: activar hydrated antes de subir
- window._DashweyHydrated = true;
+ // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
  await fb.write('state', _buildLocalSnapshot());
- } else {
- // remoteTs === localTs: ya sincronizados
- window._DashweyHydrated = true;
  }
  // Actualizar syncStatus y uid via State API (sin disparar save())
  // State.set.syncStatus no llama save() - es seguro

@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.742-dev
+**Versión:** v1.3.778-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -219,8 +219,6 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 
 | # | Área | Pendiente | Prioridad |
 |---|---|---|---|
-| 14 | TPV | Resumen post-cobro | 🟢 |
-| 15 | TPV | Historial ventas del día desde TPV | 🟢 |
 | 21 | Sistema | Push APK — Gradle 8.7 pendiente | 🔵 WIP |
 | — | Seguridad | Firestore Security Rules | ⚠️ CRÍTICO |
 
@@ -245,4 +243,69 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 
 ---
 
+| `_snapCardChanged` doble definición | Segunda def en dynFab IIFE sobreescribía la primera (más completa, con data-tab + retry) | NUNCA duplicar `window.X =` en IIFEs distintos sin consolidar — la última sobreescribe |
+| `subNavC` tab=2 stub vacío | Llamaba `openCatalogoPicker()` (stub vacío) en vez de `openProvPicker()` | Al cambiar el flujo de un botón, actualizar TODOS los callers del stub |
+
+---
+
+| `_onAcceptBtnTap` guard liberado sin try/finally | Si `_guardarComoOrdenPendiente` lanzaba excepción no capturada, `btn.dataset.processing` nunca se liberaba → botón bloqueado permanente | Toda función que establece un guard DEBE liberarlo en `finally`, no en línea siguiente |
+
+---
+
+| Guard `_running` sin try/finally en `saveArt`, `saveProvEdit`, `_eaSave` | Si State.set lanza excepción inesperada (ej. localStorage lleno), el formulario quedaba bloqueado permanentemente | TODO guard `_running = true` debe tener un `finally { _running = false }` — nunca liberar en línea secuencial |
+
+---
+
+| Render loops sin try/catch por item (`renderCatInline`, `_renderProds`) | Un producto con datos corruptos (p.nombre=undefined) crasheaba el render entero — lista completa desaparecía | Todo forEach/map que renderiza items debe tener try/catch interno — skip silencioso del item corrupto, resto del listado sigue funcionando |
+| `saveMerma` guard sin finally | Helper `_smDone()` manual podía no ejecutarse si State.set lanzaba | Reemplazar helpers manuales de liberación por try/finally |
+
+---
+
+| Renders TPV sin try/catch por item (`_renderHotGrid`, `_renderDockItems`, `tpv-right`, `cobro`) | Un item con p.nombre=undefined crasheaba el render completo — hot grid, dock, resumen lateral o panel de cobro desaparecían | Todo .map()/.forEach() de render de items debe tener try/catch interno; los renders ya envueltos en try en el caller no protegen el crash dentro del .map() |
+
+---
+
+| `}` de cierre de funcion eliminado al reemplazar el ultimo fragmento de un .map() | FIX I reemplazo el bloque del .map() pero el `}` de cierre de _updateTabletTicket estaba pegado al .join — quedo eliminado → SyntaxError en cierre del IIFE | Antes de cualquier replace sobre el ultimo fragmento de una funcion, verificar balance de llaves del bloque resultante e incluir el `}` de cierre de la funcion |
+
+---
+
+| Cuentas/gastos/ingresos borrados vuelven a aparecer | `cuentas`, `gastosOp`, `ingresosFin`, `visitasComerciales` estaban en `_MERGE_KEYS`. `_mergeById` restaura items que el remoto tiene y el local no — diseñado para arrays acumulativos, no para datos mutables. Sin campo `fecha`, el comparador devuelve `0>=0=true` y el remoto siempre gana. | `_MERGE_KEYS` solo para arrays ACUMULATIVOS (ventas, pedidos, mermas). Datos de configuracion mutables (cuentas, gastos, ingresos) usan last-write-wins |
+
+---
+
+| Pills +1 fantasma al pulsar en TPV/Almacén | Web Animations API no soporta CSS variables en easing. El try/catch capturaba el fallo de animate() pero pill ya estaba en el DOM y el setTimeout de cleanup estaba DENTRO del try — nunca se ejecutaba. | NUNCA usar var(--X) en el parámetro easing de pill.animate(). El setTimeout de cleanup de elementos DOM debe estar SIEMPRE fuera del try/catch. |
+
+---
+
 *Actualizar versión y pendientes al cerrar cada sesión.*
+
+---
+
+## FIXES CRÍTICOS — SESIÓN 2026-04-12
+
+### Pérdida de datos en logout/login (RESUELTO v1.3.842)
+
+**Causa raíz:** `authLogout()` y `authLogin()` llamaban `State.set.resetStorage()` que borraba el localStorage y lo subía vacío a Firebase via `save()`. Al volver a hacer login, `_doInitialSync` veía el timestamp remoto más reciente y aplicaba los datos vacíos de Firebase.
+
+**Fixes aplicados:**
+- `authLogout()` — eliminado `resetStorage()` — solo limpia sesión Firebase
+- `authLogin()` — eliminado `resetStorage()` — no borrar datos antes del login
+- `_doInitialSync` — protección: si Firebase tiene arrays vacíos pero local tiene datos, preservar local (`productos`, `proveedores`, `ventas`, `historialPedidos`, `gastosOp`, `ingresosFin`, `cuentas`)
+
+**REGLA PERMANENTE:**
+`resetStorage()` SOLO puede llamarse desde:
+- `doReset()` — reset manual explícito del usuario
+- `authRegister()` — cuenta nueva necesita estado limpio
+NUNCA desde `authLogout()`, `authLogin()` ni ningún flujo automático.
+
+### Auth-screen en flujo del documento (RESUELTO v1.3.836)
+
+**Causa raíz:** `#auth-screen` estaba dentro de `<div id="app">` que tiene `overflow:hidden`. En Android WebView, `overflow:hidden` en un ancestro destruye `position:fixed` — el auth-screen se comportaba como `position:absolute` empujando el dashboard hacia abajo.
+
+**Fix:** auth-screen movido fuera del `#app`, como hermano directo en `body`.
+
+**REGLA PERMANENTE:** Elementos con `position:fixed` NUNCA deben estar dentro de un ancestro con `overflow:hidden` o `transform` en Android WebView.
+
+### Dot rojo en tarjeta Agenda (PENDIENTE)
+
+No identificado en código fuente. No está en HTML estático ni en JS auditado. Requiere DevTools en runtime (chrome://inspect con APK en modo debug).
