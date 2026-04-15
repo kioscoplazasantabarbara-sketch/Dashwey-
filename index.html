@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.878-dev</title>
+<title>Dashwey v1.3.880-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11445,7 +11445,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.878-dev';
+ const _APP_VERSION = 'v1.3.880-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15893,6 +15893,8 @@ function _openMovimientoFullscreen() {
   // Campos básicos — sin scroll
   '<div style="flex-shrink:0;padding:0 16px;display:flex;flex-direction:column;gap:8px">' +
   '<input class="fi" id="mov-amount-input" type="hidden" value="0">' +
+  '<input type="hidden" id="mov-recur-n" value="1">' +
+  '<input type="hidden" id="mov-recur-unit" value="month">' +
   '<div id="mov-fs-cuenta-wrap">' +
   '<select class="fi" id="mov-cuenta-a" style="width:100%">' + _cOpts(def) + '</select>' +
   '</div>' +
@@ -15902,6 +15904,31 @@ function _openMovimientoFullscreen() {
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
   '<input class="fi" id="mov-fecha" type="date" value="' + hoy + '">' +
   '<input class="fi" id="mov-concepto" placeholder="Concepto (opcional)">' +
+  '</div>' +
+  '</div>' +
+  // Panel subtipo — se muestra bajo los campos, cambia con el tipo
+  '<div id="mov-fs-subtipo-wrap" style="flex-shrink:0;padding:0 16px 8px">' +
+  // Subtipo gasto: Único / Recurrente
+  '<div id="mov-fs-subtipo-gasto" style="display:flex;gap:6px">' +
+  '<button class="mov-type-btn active" data-subtipo="unico" style="flex:1;height:36px;font-size:var(--fs-xs)">Único</button>' +
+  '<button class="mov-type-btn" data-subtipo="recurrente" style="flex:1;height:36px;font-size:var(--fs-xs)">Recurrente</button>' +
+  '</div>' +
+  // Subtipo ingreso: Normal / Caja / Reembolso
+  '<div id="mov-fs-subtipo-ingreso" style="display:none;gap:6px">' +
+  '<button class="mov-type-btn active" data-ingreso-tipo="normal" style="flex:1;height:36px;font-size:var(--fs-xs)">Normal</button>' +
+  '<button class="mov-type-btn" data-ingreso-tipo="caja" style="flex:1;height:36px;font-size:var(--fs-xs)">Caja</button>' +
+  '<button class="mov-type-btn" data-ingreso-tipo="reembolso" style="flex:1;height:36px;font-size:var(--fs-xs)">Reembolso</button>' +
+  '</div>' +
+  // Recurrente — cada N periodo (solo visible cuando subtipo=recurrente)
+  '<div id="mov-fs-recur-wrap" style="display:none;margin-top:6px;display:none;gap:8px;align-items:center">' +
+  '<span style="font-size:var(--fs-xs);color:var(--ink-soft)">Cada</span>' +
+  '<input id="mov-fs-recur-n" type="number" inputmode="numeric" value="1" min="1" style="width:56px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);text-align:center;font-family:var(--font)">' +
+  '<select id="mov-fs-recur-unit" style="flex:1;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);font-family:var(--font)">' +
+  '<option value="day">Día</option>' +
+  '<option value="week">Semana</option>' +
+  '<option value="month" selected>Mes</option>' +
+  '<option value="year">Año</option>' +
+  '</select>' +
   '</div>' +
   '</div>' +
   // Calculadora — flex:1 llena el espacio restante
@@ -15935,11 +15962,88 @@ function _openMovimientoFullscreen() {
     if (bWrap) bWrap.style.display = _movTipo === 'transferencia' ? '' : 'none';
    });
   });
+  // Init estado global subtipo
+  window._movFsSubtipo = 'unico';
+  window._movFsIngresoTipo = 'normal';
+
+  // Listener subtipo gasto
+  var _subGasto = document.querySelectorAll('#mov-fs-subtipo-gasto [data-subtipo]');
+  _subGasto.forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    _subGasto.forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    window._movFsSubtipo = btn.dataset.subtipo;
+    var recurWrap = document.getElementById('mov-fs-recur-wrap');
+    if (recurWrap) recurWrap.style.display = (window._movFsSubtipo === 'recurrente') ? 'flex' : 'none';
+    // Sincronizar inputs hidden que lee _confirmarMovimiento
+    var rn = document.getElementById('mov-recur-n');
+    var ru = document.getElementById('mov-recur-unit');
+    var fsn = document.getElementById('mov-fs-recur-n');
+    var fsu = document.getElementById('mov-fs-recur-unit');
+    if (rn && fsn) rn.value = fsn.value;
+    if (ru && fsu) ru.value = fsu.value;
+   });
+  });
+
+  // Listener subtipo ingreso
+  var _subIngreso = document.querySelectorAll('#mov-fs-subtipo-ingreso [data-ingreso-tipo]');
+  _subIngreso.forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    _subIngreso.forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    window._movFsIngresoTipo = btn.dataset.ingresoTipo;
+   });
+  });
+
+  // Sincronizar recur-n/unit cuando cambian en el panel
+  var _fsRecurN = document.getElementById('mov-fs-recur-n');
+  var _fsRecurU = document.getElementById('mov-fs-recur-unit');
+  if (_fsRecurN) _fsRecurN.addEventListener('input', function() {
+   var rn = document.getElementById('mov-recur-n');
+   if (rn) rn.value = _fsRecurN.value || '1';
+  });
+  if (_fsRecurU) _fsRecurU.addEventListener('change', function() {
+   var ru = document.getElementById('mov-recur-unit');
+   if (ru) ru.value = _fsRecurU.value;
+  });
+
+  // Actualizar paneles de subtipo cuando cambia el tipo principal
+  // (el listener de tipo ya existe arriba — extender su lógica)
+  var typebtns2 = document.querySelectorAll('#fs-content .mov-type-btn[data-tipo]');
+  typebtns2.forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    var tipo = btn.dataset.tipo;
+    var sgEl = document.getElementById('mov-fs-subtipo-gasto');
+    var siEl = document.getElementById('mov-fs-subtipo-ingreso');
+    var rwEl = document.getElementById('mov-fs-recur-wrap');
+    if (tipo === 'gasto') {
+     if (sgEl) sgEl.style.display = 'flex';
+     if (siEl) siEl.style.display = 'none';
+    } else if (tipo === 'ingreso') {
+     if (sgEl) sgEl.style.display = 'none';
+     if (siEl) siEl.style.display = 'flex';
+     if (rwEl) rwEl.style.display = 'none';
+    } else {
+     if (sgEl) sgEl.style.display = 'none';
+     if (siEl) siEl.style.display = 'none';
+     if (rwEl) rwEl.style.display = 'none';
+    }
+    // Reset subtipos
+    window._movFsSubtipo = 'unico';
+    window._movFsIngresoTipo = 'normal';
+    _subGasto.forEach(function(b) { b.classList.toggle('active', b.dataset.subtipo==='unico'); });
+    _subIngreso.forEach(function(b) { b.classList.toggle('active', b.dataset.ingresoTipo==='normal'); });
+   });
+  });
+
   // Submit
   var submitEl = document.getElementById('mov-fs-submit');
   if (submitEl) submitEl.addEventListener('click', function() {
    _syncAmt();
+   // Limpiar window vars después de confirmar
    _confirmarMovimiento();
+   window._movFsSubtipo = 'unico';
+   window._movFsIngresoTipo = 'normal';
    if (typeof App !== 'undefined') App.ui.closeFs();
   }, { once: true });
  });
@@ -16099,9 +16203,9 @@ function _openEditMovimientoSheet(id, src) {
   var fecha = fechaEl ? fechaEl.value : new Date().toISOString().slice(0,10);
   var concepto = conceptoEl ? conceptoEl.value.trim() : '';
 
-  // Subtipo activo (gasto)
+  // Subtipo activo — sheet legacy o fullscreen (window._movFsSubtipo)
   var subtipoBtn = _movSheet ? _movSheet.querySelector('.mov-type-btn[data-subtipo].active') : null;
-  var subtipo = subtipoBtn ? subtipoBtn.dataset.subtipo : 'unico';
+  var subtipo = subtipoBtn ? subtipoBtn.dataset.subtipo : (window._movFsSubtipo || 'unico');
 
   // Recurrente: cada N unidad
   var recurN = parseInt(document.getElementById('mov-recur-n')?.value || '1') || 1;
@@ -16143,7 +16247,7 @@ function _openEditMovimientoSheet(id, src) {
    showToast('✅ Gasto registrado');
 
   } else if (_movTipo === 'ingreso') {
-   var _mIT = (_movSheet && typeof _movSheet._ingresoTipo === 'function') ? _movSheet._ingresoTipo() : 'normal';
+   var _mIT = (_movSheet && typeof _movSheet._ingresoTipo === 'function') ? _movSheet._ingresoTipo() : (window._movFsIngresoTipo || 'normal');
    var fechaISO = new Date(fecha + 'T12:00:00').toISOString();
    if (_mIT === 'caja') {
     var negocioId = State.get.settings().negocioId || 'local';
@@ -29196,14 +29300,27 @@ _eaRecalc();
   var r = inp.getBoundingClientRect();
   var vv = window.visualViewport;
   var vvH = vv ? vv.height : window.innerHeight;
-  var vvOff = vv ? vv.offsetTop : 0;
-  // Ajustar por offset del visualViewport (teclado abierto en Android)
-  var rTop = r.top - vvOff;
-  var rBottom = r.bottom - vvOff;
-  var below = vvH - rBottom - 8;
-  var above = rTop - 8;
-  var panelH = below >= 100 ? Math.min(220, below) : Math.min(220, above);
-  dd.style.top = (below >= 100 ? rBottom + 4 : rTop - panelH - 4) + 'px';
+  // Android WebView: vv.offsetTop = 0 aunque teclado esté abierto
+  // getBoundingClientRect() da posición real en el viewport físico
+  // Si r.top > vvH → input está debajo del teclado → colocar dd arriba del teclado
+  var panelH = 220;
+  var ddTop;
+  if (r.bottom <= vvH - 8 && vvH - r.bottom >= 80) {
+   // Espacio suficiente debajo del input
+   panelH = Math.min(220, vvH - r.bottom - 8);
+   ddTop = r.bottom + 4;
+  } else if (r.top >= 80) {
+   // Poner encima del input
+   panelH = Math.min(220, r.top - 8);
+   ddTop = r.top - panelH - 4;
+  } else {
+   // Input fuera del área visible — centrar en zona visible
+   panelH = Math.min(220, vvH - 16);
+   ddTop = Math.max(8, vvH - panelH - 8);
+  }
+  // Clamp final: nunca fuera del viewport
+  ddTop = Math.max(8, Math.min(ddTop, vvH - panelH - 8));
+  dd.style.top = ddTop + 'px';
   dd.style.left = r.left + 'px';
   dd.style.width = r.width + 'px';
   dd.style.maxHeight = panelH + 'px';
