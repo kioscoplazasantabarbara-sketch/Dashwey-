@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.873-dev</title>
+<title>Dashwey v1.3.874-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11445,7 +11445,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.873-dev';
+ const _APP_VERSION = 'v1.3.874-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15860,6 +15860,91 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
   }, { once: true });
  }
 
+function _openMovimientoFullscreen() {
+ _movTipo = 'gasto';
+ var _movIngresoTipoFS = 'normal';
+ var cuentas = State.get.cuentas() || [];
+ var hoy = new Date().toISOString().slice(0,10);
+ var _cOpts = function(defId) {
+  if (!cuentas.length) return '<option value="">Sin cuentas</option>';
+  return cuentas.map(function(c) {
+   return '<option value="' + c.id + '"' + (c.id===defId?' selected':'') + '>' + esc(c.nombre) + ' · ' + _feur(c.saldo||0) + '</option>';
+  }).join('');
+ };
+ var def = _movUltimaCuenta || (cuentas[0]?cuentas[0].id:'');
+ _calcReset();
+ App.ui.setFs(
+  '<div class="modal-header-dark" style="padding-top:var(--sat)">' +
+  '<div class="mhd-row"><div class="mhd-title">Nuevo movimiento</div>' +
+  '<button id="mov-fs-close" class="mhd-close">✕</button></div>' +
+  '</div>' +
+  '<div style="display:flex;flex-direction:column;height:calc(100% - 56px - var(--sat));overflow:hidden">' +
+  // Tipo selector
+  '<div class="mov-type-row" style="flex-shrink:0">' +
+  '<button class="mov-type-btn active" data-tipo="gasto">Gasto</button>' +
+  '<button class="mov-type-btn" data-tipo="ingreso">Ingreso</button>' +
+  '<button class="mov-type-btn" data-tipo="transferencia">Transfer</button>' +
+  '</div>' +
+  // Display importe — usa _calcVal vía _calcGet()
+  '<div class="calc-display" style="flex-shrink:0">' +
+  '<div class="calc-display-lbl" id="mov-fs-tipo-lbl">Gasto</div>' +
+  '<div class="calc-display-val" id="calc-val-disp">0</div>' +
+  '</div>' +
+  // Campos básicos — sin scroll
+  '<div style="flex-shrink:0;padding:0 16px;display:flex;flex-direction:column;gap:8px">' +
+  '<input class="fi" id="mov-amount-input" type="hidden" value="0">' +
+  '<div id="mov-fs-cuenta-wrap">' +
+  '<select class="fi" id="mov-cuenta-a" style="width:100%">' + _cOpts(def) + '</select>' +
+  '</div>' +
+  '<div id="mov-fs-cuentab-wrap" style="display:none">' +
+  '<select class="fi" id="mov-cuenta-b" style="width:100%">' + _cOpts('') + '</select>' +
+  '</div>' +
+  '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+  '<input class="fi" id="mov-fecha" type="date" value="' + hoy + '">' +
+  '<input class="fi" id="mov-concepto" placeholder="Concepto (opcional)">' +
+  '</div>' +
+  '</div>' +
+  // Calculadora — flex:1 llena el espacio restante
+  '<div style="flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end">' +
+  _buildCalcPad() +
+  '<div style="padding:8px 16px 0">' +
+  '<button id="mov-fs-submit" class="btn-ok" style="width:100%;height:48px;font-size:var(--fs-base)">Guardar</button>' +
+  '</div>' +
+  '</div>' +
+  '</div>'
+ );
+ App.ui.openFs('full');
+ requestAnimationFrame(function() {
+  // Sync _calcVal → input hidden antes de confirmar
+  var _syncAmt = function() {
+   var inp = document.getElementById('mov-amount-input');
+   if (inp) inp.value = _calcGet();
+  };
+  // Close
+  var closeEl = document.getElementById('mov-fs-close');
+  if (closeEl) closeEl.addEventListener('click', function() { App.ui.closeFs(); }, { once: true });
+  // Tipo selector
+  var typebtns = document.querySelectorAll('#fs-content .mov-type-btn[data-tipo]');
+  typebtns.forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    _movTipo = btn.dataset.tipo;
+    typebtns.forEach(function(b) { b.classList.toggle('active', b===btn); });
+    var lbl = document.getElementById('mov-fs-tipo-lbl');
+    if (lbl) lbl.textContent = _movTipo === 'gasto' ? 'Gasto' : _movTipo === 'ingreso' ? 'Ingreso' : 'Transferencia';
+    var bWrap = document.getElementById('mov-fs-cuentab-wrap');
+    if (bWrap) bWrap.style.display = _movTipo === 'transferencia' ? '' : 'none';
+   });
+  });
+  // Submit
+  var submitEl = document.getElementById('mov-fs-submit');
+  if (submitEl) submitEl.addEventListener('click', function() {
+   _syncAmt();
+   _confirmarMovimiento();
+   if (typeof App !== 'undefined') App.ui.closeFs();
+  }, { once: true });
+ });
+}
+
 function _openEditMovimientoSheet(id, src) {
   if (!id || !src) return;
   var registro = null;
@@ -16501,7 +16586,7 @@ function _openEditMovimientoSheet(id, src) {
  <div style="padding:0 16px 8px">${movesHtml}</div>
     <div style="padding:0 16px">
     <button class="btn-ok" style="width:100%"
-    onclick="App.ui.closeFs();setTimeout(function(){try{App.dash._openMovimientoSheet();}catch(e){}},220)">
+    onclick="App.ui.closeFs();setTimeout(function(){try{App.dash._openMovimientoFullscreen();}catch(e){}},220)">
     + Movimiento
     </button>
  </div>
@@ -16576,28 +16661,13 @@ function _openEditMovimientoSheet(id, src) {
  </div>
  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
  <div style="font-size:var(--fs-h3);font-weight:700">${_feur(c.saldo)}</div>
- <div style="display:flex;gap:5px">
- <button class="cuenta-action-btn ingreso" data-ingreso="${c.id}">+ Ingreso</button>
- <button class="cuenta-action-btn borrar" data-borrar="${c.id}">Borrar</button>
- </div>
+ <button class="cuenta-action-btn editar" data-editar="${c.id}" style="height:32px;padding:0 14px;border-radius:var(--r-sm2);border:1px solid var(--border);background:none;color:var(--ink-soft);font-size:var(--fs-xs);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;touch-action:manipulation">Editar ›</button>
  </div>
  </div>`;
  }).join('')}
  </div>
  <div class="fin-modal-section">
- <div class="fin-modal-section-title">Añadir cuenta</div>
- <div style="display:flex;flex-direction:column;gap:10px">
- <input id="fm-cuenta-nombre" class="fi" placeholder="Nombre de la cuenta">
- <input id="fm-cuenta-banco" class="fi" placeholder="Banco (ej: BBVA)">
- <div class="calc-display">
- <div class="calc-display-lbl">Saldo inicial</div>
- <div class="calc-display-val" id="calc-val-disp">0</div>
- </div>
- ${_buildCalcPad()}
- <button onclick="App.dash._addCuenta()" class="btn-ok" style="background:var(--blue);box-shadow:0 4px 16px rgba(37,99,235,0.28)">
- + Añadir cuenta
- </button>
- </div>
+ <button id="btn-nueva-cuenta" class="btn-ok" style="width:100%;background:var(--blue);box-shadow:0 4px 16px rgba(37,99,235,0.18)">+ Nueva cuenta</button>
  </div>
  </div>`;
  _calcReset();
@@ -16607,12 +16677,11 @@ function _openEditMovimientoSheet(id, src) {
  setTimeout(function() {
  var fc = document.getElementById('fs-content');
  if (!fc) return;
- fc.querySelectorAll('[data-ingreso]').forEach(function(b) {
- b.addEventListener('click', function() { App.dash._openIngresoSheet(b.dataset.ingreso); }, { once: true });
+ fc.querySelectorAll('[data-editar]').forEach(function(b) {
+  b.addEventListener('click', function() { App.dash._openEditCuentaSheet(b.dataset.editar); }, { once: true });
  });
- fc.querySelectorAll('[data-borrar]').forEach(function(b) {
- b.addEventListener('click', function() { App.dash._confirmBorrarCuenta(b.dataset.borrar); }, { once: true });
- });
+ var btnNueva = document.getElementById('btn-nueva-cuenta');
+ if (btnNueva) btnNueva.addEventListener('click', function() { App.dash._openAddCuentaFs(); }, { once: true });
  }, 50);
  }
 
@@ -16632,7 +16701,41 @@ function _openEditMovimientoSheet(id, src) {
  setTimeout(() => openFinModal('cuentas'), Utils.ANIM_DELAY);
  }
 
- function _confirmBorrarCuenta(id) {
+ function _openAddCuentaFs() {
+ _calcReset();
+ App.ui.setFs(
+  '<div class="modal-header-dark">' +
+  '<div><div class="mhd-title">Nueva cuenta</div></div>' +
+  '<button id="btn-add-cuenta-close" class="mhd-close">✕</button>' +
+  '</div>' +
+  '<div class="dash-modal-body">' +
+  '<div style="display:flex;flex-direction:column;gap:10px;padding-bottom:10px">' +
+  '<input id="fm-cuenta-nombre" class="fi" placeholder="Nombre (ej: Caja, BBVA)">' +
+  '<input id="fm-cuenta-banco" class="fi" placeholder="Banco (opcional)">' +
+  '</div>' +
+  '<div class="calc-display">' +
+  '<div class="calc-display-lbl">Saldo inicial</div>' +
+  '<div class="calc-display-val" id="calc-val-disp">0</div>' +
+  '</div>' +
+  _buildCalcPad() +
+  '<button id="btn-confirmar-add-cuenta" class="btn-confirm" style="background:var(--blue)">Crear cuenta</button>' +
+  '</div>'
+ );
+ App.ui.openFs();
+ requestAnimationFrame(function() {
+  var closeBtn = document.getElementById('btn-add-cuenta-close');
+  if (closeBtn) closeBtn.addEventListener('click', function() {
+   App.ui.closeFs();
+   setTimeout(function() { openFinModal('cuentas'); }, Utils.ANIM_DELAY);
+  }, { once: true });
+  var confirmBtn = document.getElementById('btn-confirmar-add-cuenta');
+  if (confirmBtn) confirmBtn.addEventListener('click', function() {
+   App.dash._addCuenta();
+  }, { once: true });
+ });
+}
+
+function _confirmBorrarCuenta(id) {
  const c = State.get.cuentas().find(x => x.id === id);
  if (!c) return;
  App.ui.openModal(
@@ -21865,7 +21968,7 @@ var lbl = bar.dataset.lbl;
   setTimeout(function() { openFinModal('cuentas'); }, Utils.ANIM_DELAY);
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
 })();
 
 // ══════════════════════════════════════════
@@ -24145,15 +24248,73 @@ return `<button
  autocomplete="off" autocorrect="off"></div>
  <div><div class="fl">Importe (€)</div>
  <input class="fi" id="manual-importe" type="number" step="0.01" min="0" placeholder="0,00"></div>
- <div class="alm-form-footer">
- <button class="btn-sec" onclick="App.ui.closeFs()">Cancelar</button>
- <button class="btn-ok" onclick="App.tpv.confirmManualSale()">Añadir al ticket</button>
+ <div style="font-size:var(--fs-xs);color:var(--ink-soft);padding:4px 0 2px">Guardar como artículo lo añade al catálogo de Almacén para uso futuro.</div>
+ <div class="alm-form-footer" style="flex-direction:column;gap:8px">
+ <button class="btn-ok" onclick="App.tpv.confirmManualSale()" style="width:100%">Añadir al ticket</button>
+ <button class="btn-sec" onclick="App.tpv._guardarComoArticuloYAnadir()" style="width:100%">Guardar como artículo y añadir</button>
  </div>
  </div>`);
  ui.openFs();
  }
 
- function confirmManualSale() {
+ function _guardarComoArticuloYAnadir() {
+ var nombre = document.getElementById('manual-nombre')?.value?.trim();
+ var importe = Math.round(parseFloat(document.getElementById('manual-importe')?.value) * 100) / 100;
+ if (!nombre) { showToast('⚠️ Escribe el nombre del artículo'); return; }
+ if (!importe || importe <= 0) { showToast('⚠️ Importe inválido'); return; }
+ // Crear artículo real en Almacén con datos mínimos
+ var ahora = new Date().toISOString();
+ var prodId = 'p_tpv_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+ var sel = (typeof State !== 'undefined' && State.get.selectedProv) ? State.get.selectedProv() : '';
+ var artData = {
+  id: prodId,
+  nombre: nombre,
+  provId: sel || '',
+  cat: 'TPV',
+  iva: '10%',
+  pvp: importe,
+  precioCompra: 0,
+  stockActual: 0,
+  stockMinimo: 0,
+  udscaja: 1,
+  fmt: 's',
+  cad: null,
+  descuento: 0,
+  descRaw: '',
+  foto: null,
+  stockInicial: 0,
+  historialPrecios: importe > 0 ? [{ fecha: ahora, precio: 0, pvp: importe }] : [],
+  re: false,
+  trackStock: false, // sin seguimiento de stock — artículo TPV
+ };
+ try {
+  if (typeof App !== 'undefined' && App.alm && App.alm._createArticle) {
+   App.alm._createArticle(artData);
+  } else {
+   State.set.addProd(Object.assign({}, artData, {
+    nombre: artData.nombre, prov: artData.provId, precioCompra: 0,
+    pvp: artData.pvp, stockActual: 0, stockMinimo: 0, udscaja: 1,
+    cat: artData.cat, iva: artData.iva,
+   }));
+  }
+  // Añadir al ticket activo como producto real
+  var tickets = State.get.ticketsAbiertos();
+  var ticket = tickets.find(function(t){ return t.id === _ticketActivo; });
+  if (!ticket) { showToast('⚠️ Crea un ticket primero'); App.ui.closeFs(); return; }
+  var newItem = { id: prodId, nombre: nombre, pvp: importe, q: 1, manual: false };
+  State.set.saveTicket(Object.assign({}, ticket, { items: (ticket.items||[]).concat([newItem]) }));
+  try { DashweyBus.emit('stock'); } catch(_) {}
+  App.ui.closeFs();
+  render();
+  showToast('✅ ' + nombre + ' guardado en Almacén');
+  try { Utils.triggerHaptic('medium'); } catch(_) {}
+ } catch(e) {
+  console.error('[TPV] _guardarComoArticuloYAnadir:', e);
+  showToast('⚠️ Error al guardar el artículo');
+ }
+}
+
+function confirmManualSale() {
   if (_procesandoManual) return;
   _procesandoManual = true;
   try {
