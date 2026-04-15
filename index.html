@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.881-dev</title>
+<title>Dashwey v1.3.882-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9192,7 +9192,7 @@ const State = (() => {
  idioma: 'es',
  foto: null, // base64 de la foto de perfil del negocio
  },
- baseCats: ['Bebidas','Cervezas','Snacks','Gominolas','Cafetería','Agua'],
+ baseCats: [], // categorías definidas por el usuario — sin seed legacy
  // ── Finanzas ────────────────────────────────────────────────
  hiddenCards: [], // v1.3.445: tarjetas ocultas del Dashboard — en State para sync
  catLabels: {}, // v1.3.462: labels custom de chips TPV — en State para sync
@@ -11447,7 +11447,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.881-dev';
+ const _APP_VERSION = 'v1.3.882-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15909,7 +15909,13 @@ function _openMovimientoFullscreen() {
   '</div>' +
   '</div>' +
   // Panel subtipo — se muestra bajo los campos, cambia con el tipo
-  '<div id="mov-fs-subtipo-wrap" style="flex-shrink:0;padding:8px 16px 4px">' +
+  '<div style="flex-shrink:0;padding:0 16px 6px;display:flex;align-items:center;gap:10px">' +
+  '<div id="mov-fs-hist-toggle" style="width:40px;height:22px;border-radius:11px;background:var(--red);cursor:pointer;position:relative;transition:background 0.2s;flex-shrink:0">' +
+  '<div id="mov-fs-hist-knob" style="position:absolute;top:3px;left:20px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>' +
+  '</div>' +
+  '<span id="mov-fs-hist-lbl" style="font-size:var(--fs-xs);color:var(--ink-mid);font-weight:var(--fw-semi)">Registrar en historial</span>' +
+  '</div>' +
+'<div id="mov-fs-subtipo-wrap" style="flex-shrink:0;padding:8px 16px 4px">' +
   // Subtipo gasto: Único / Recurrente
   '<div id="mov-fs-subtipo-gasto" style="display:flex;gap:6px">' +
   '<button class="mov-type-btn active" data-subtipo="unico" style="flex:1;height:36px;font-size:var(--fs-xs)">Único</button>' +
@@ -15964,9 +15970,23 @@ function _openMovimientoFullscreen() {
     if (bWrap) bWrap.style.display = _movTipo === 'transferencia' ? '' : 'none';
    });
   });
-  // Init estado global subtipo
+  // Init estado global subtipo e historial
   window._movFsSubtipo = 'unico';
   window._movFsIngresoTipo = 'normal';
+  window._movFsHistorial = true; // ON por defecto
+
+  // Listener toggle historial
+  var _histToggle = document.getElementById('mov-fs-hist-toggle');
+  var _histKnob = document.getElementById('mov-fs-hist-knob');
+  var _histLbl = document.getElementById('mov-fs-hist-lbl');
+  if (_histToggle) {
+   _histToggle.addEventListener('click', function() {
+    window._movFsHistorial = !window._movFsHistorial;
+    _histToggle.style.background = window._movFsHistorial ? 'var(--red)' : 'var(--border)';
+    if (_histKnob) _histKnob.style.left = window._movFsHistorial ? '20px' : '3px';
+    if (_histLbl) _histLbl.textContent = window._movFsHistorial ? 'Registrar en historial' : 'Solo modificar saldo';
+   });
+  }
 
   // Listener subtipo gasto
   var _subGasto = document.querySelectorAll('#mov-fs-subtipo-gasto [data-subtipo]');
@@ -16046,6 +16066,7 @@ function _openMovimientoFullscreen() {
    _confirmarMovimiento();
    window._movFsSubtipo = 'unico';
    window._movFsIngresoTipo = 'normal';
+   window._movFsHistorial = true;
    if (typeof App !== 'undefined') App.ui.closeFs();
   }, { once: true });
  });
@@ -16227,66 +16248,68 @@ function _openEditMovimientoSheet(id, src) {
   // Guardar última cuenta
   if (cuentaA) _movUltimaCuenta = cuentaA;
 
+  // Registro contable — OFF = solo saldo, sin historial gastosOp/ingresosFin
+  var _registrarHistorial = (window._movFsHistorial !== false);
+
   if (_movTipo === 'gasto') {
-   State.set.addGasto({
-    id: 'g' + Date.now(),
-    nombre: concepto || 'Gasto',
-    categoria: 'Otros',
-    importe: importe,
-    mensualEq: mensualEq,
-    fecha: new Date(fecha + 'T12:00:00').toISOString(),
-    fechaPago: fecha,
-    cuentaId: cuentaA,
-    recurrente: recurrente,
-    frecuencia: recurrente ? (recurN + '_' + recurUnit) : 'unico',
-   });
-   // Descontar de cuenta si está asignada
+   // Descontar de cuenta (siempre, independiente del historial)
    if (cuentaA) {
     var cA = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
     if (cA) State.set.updateCuenta(cuentaA, { saldo: (cA.saldo||0) - importe });
    }
-   DashweyBus.emit('gasto');
-   showToast('✅ Gasto registrado');
+   // Solo registrar en historial si toggle activo
+   if (_registrarHistorial) {
+    State.set.addGasto({
+     id: 'g' + Date.now(),
+     nombre: concepto || 'Gasto',
+     categoria: 'Otros',
+     importe: importe,
+     mensualEq: mensualEq,
+     fecha: new Date(fecha + 'T12:00:00').toISOString(),
+     fechaPago: fecha,
+     cuentaId: cuentaA,
+     recurrente: recurrente,
+     frecuencia: recurrente ? (recurN + '_' + recurUnit) : 'unico',
+    });
+    DashweyBus.emit('gasto');
+   }
+   showToast(_registrarHistorial ? '✅ Gasto registrado' : '✅ Saldo actualizado');
 
   } else if (_movTipo === 'ingreso') {
    var _mIT = (_movSheet && typeof _movSheet._ingresoTipo === 'function') ? _movSheet._ingresoTipo() : (window._movFsIngresoTipo || 'normal');
    var fechaISO = new Date(fecha + 'T12:00:00').toISOString();
-   if (_mIT === 'caja') {
-    var negocioId = State.get.settings().negocioId || 'local';
-    State.set.addVenta({
-     id: 'v_caja_' + Date.now(), negocioId: negocioId,
-     ticketId: 'caja_' + Date.now(), fecha: fechaISO,
-     metodo: 'efectivo', total: importe, tipoCaja: true,
-     concepto: concepto,
-     items: [{ prodId: '_caja', nombre: concepto || 'Caja', qty: 1, pvp: importe, coste: 0, margen: 0 }]
-    });
-    DashweyBus.emit('venta', { total: importe, metodo: 'efectivo' });
-    showToast('✅ Ingreso tipo Caja registrado');
-   } else if (_mIT === 'reembolso_proveedor') {
-    State.set.addIngreso({
-     id: 'i' + Date.now(), concepto: concepto || 'Reembolso proveedor',
-     importe: importe, fecha: fechaISO, cuentaId: cuentaA,
-     tipo: 'reembolso_proveedor', recurrente: false, frecuencia: 'unico', mensualEq: importe,
-    });
-    DashweyBus.emit('ingreso'); DashweyBus.emit('pedido');
-    showToast('✅ Reembolso de proveedor registrado');
-   } else {
-    State.set.addIngreso({
-     id: 'i' + Date.now(),
-     concepto: concepto || 'Ingreso',
-     importe: importe,
-     fecha: fechaISO,
-     cuentaId: cuentaA,
-     recurrente: false,
-    });
-    DashweyBus.emit('ingreso');
-    showToast('✅ Ingreso registrado');
-   }
-   // Sumar a cuenta si está asignada
+   // Actualizar saldo siempre (con o sin historial)
    if (cuentaA && _mIT !== 'caja') {
     var cI = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
     if (cI) State.set.updateCuenta(cuentaA, { saldo: (cI.saldo||0) + importe });
    }
+   if (_registrarHistorial) {
+    if (_mIT === 'caja') {
+     var negocioId = State.get.settings().negocioId || 'local';
+     State.set.addVenta({
+      id: 'v_caja_' + Date.now(), negocioId: negocioId,
+      ticketId: 'caja_' + Date.now(), fecha: fechaISO,
+      metodo: 'efectivo', total: importe, tipoCaja: true,
+      concepto: concepto,
+      items: [{ prodId: '_caja', nombre: concepto || 'Caja', qty: 1, pvp: importe, coste: 0, margen: 0 }]
+     });
+     DashweyBus.emit('venta', { total: importe, metodo: 'efectivo' });
+    } else if (_mIT === 'reembolso_proveedor') {
+     State.set.addIngreso({
+      id: 'i' + Date.now(), concepto: concepto || 'Reembolso proveedor',
+      importe: importe, fecha: fechaISO, cuentaId: cuentaA,
+      tipo: 'reembolso_proveedor', recurrente: false, frecuencia: 'unico', mensualEq: importe,
+     });
+     DashweyBus.emit('ingreso'); DashweyBus.emit('pedido');
+    } else {
+     State.set.addIngreso({
+      id: 'i' + Date.now(), concepto: concepto || 'Ingreso',
+      importe: importe, fecha: fechaISO, cuentaId: cuentaA, recurrente: false,
+     });
+     DashweyBus.emit('ingreso');
+    }
+   }
+   showToast(_registrarHistorial ? '✅ Ingreso registrado' : '✅ Saldo actualizado');
 
   } else if (_movTipo === 'transferencia') {
    if (!cuentaB || cuentaA === cuentaB) { showToast('⚠️ Selecciona dos cuentas distintas'); return; }
@@ -16814,17 +16837,20 @@ function _openEditMovimientoSheet(id, src) {
   '<div><div class="mhd-title">Nueva cuenta</div></div>' +
   '<button id="btn-add-cuenta-close" class="mhd-close">✕</button>' +
   '</div>' +
-  '<div class="dash-modal-body">' +
-  '<div style="display:flex;flex-direction:column;gap:10px;padding-bottom:10px">' +
+  '<div style="display:flex;flex-direction:column;flex:1;overflow:hidden">' +
+  '<div style="flex-shrink:0;padding:16px 16px 8px;display:flex;flex-direction:column;gap:10px">' +
   '<input id="fm-cuenta-nombre" class="fi" placeholder="Nombre (ej: Caja, BBVA)">' +
   '<input id="fm-cuenta-banco" class="fi" placeholder="Banco (opcional)">' +
   '</div>' +
-  '<div class="calc-display">' +
+  '<div class="calc-display" style="flex-shrink:0">' +
   '<div class="calc-display-lbl">Saldo inicial</div>' +
   '<div class="calc-display-val" id="calc-val-disp">0</div>' +
   '</div>' +
+  '<div style="flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end">' +
   _buildCalcPad() +
-  '<button id="btn-confirmar-add-cuenta" class="btn-confirm" style="background:var(--blue)">Crear cuenta</button>' +
+  '<div style="padding:8px 16px;padding-bottom:max(16px,env(safe-area-inset-bottom,16px))">' +
+  '<button id="btn-confirmar-add-cuenta" class="btn-ok" style="width:100%;height:48px;font-size:var(--fs-base);background:var(--blue)">Crear cuenta</button>' +
+  '</div></div>' +
   '</div>'
  );
  App.ui.openFs('full');
