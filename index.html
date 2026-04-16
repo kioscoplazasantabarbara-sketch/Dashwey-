@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-939-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-940-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.939-dev</title>
+<title>Dashwey v1.3.940-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9241,6 +9241,8 @@ const State = (() => {
  productos: [],
  // historialPedidos: array de {id, fecha(ISO), provId, items:[{prodId,ncajas,udscaja,precio,pvp}]}
  historialPedidos: [],
+ // facturas: array de {id,fecha,provId,provNombre,provCif,provDireccion,items,subtotalBase,totalIva,totalRE,total}
+ facturas: [],
  // mermas: array de {id, fecha(ISO), prodId, qty, motivo, coste}
  mermas: [],
  // ventas: array de {id, fecha(ISO), prodId, qty, pvp, metodo}
@@ -9349,6 +9351,7 @@ const State = (() => {
  var MS_90 = 90 * 24 * 60 * 60 * 1000; // 90 días en ms
  var CAP_MERMAS = 1000;
  var CAP_PEDIDOS = 1000;
+ var CAP_FACTURAS = 500;
  var CAP_VENTAS = 3000;
  // Recortar ventas: si > CAP_VENTAS, conservar periodo activo + recientes
  var ventas = state.ventas || [];
@@ -9371,14 +9374,16 @@ const State = (() => {
  ? state.mermas.slice(-CAP_MERMAS) : state.mermas;
  var historialPedidos = (state.historialPedidos || []).length > CAP_PEDIDOS
  ? state.historialPedidos.slice(-CAP_PEDIDOS) : state.historialPedidos;
+ var facturas = (state.facturas || []).length > CAP_FACTURAS
+ ? state.facturas.slice(-CAP_FACTURAS) : (state.facturas || []);
  var CAP_CHAT = 200; // mensajes internos — cap fijo más recientes
  var chatMessages = (state.chatMessages || []).length > CAP_CHAT
   ? state.chatMessages.slice(-CAP_CHAT) : state.chatMessages;
  // Solo crear objeto nuevo si hay diferencia — evita clone innecesario
- if (ventas === state.ventas && mermas === state.mermas && historialPedidos === state.historialPedidos && chatMessages === state.chatMessages) {
+ if (ventas === state.ventas && mermas === state.mermas && historialPedidos === state.historialPedidos && chatMessages === state.chatMessages && facturas === (state.facturas||[])) {
  return state;
  }
- return Object.assign({}, state, { ventas: ventas, mermas: mermas, historialPedidos: historialPedidos, chatMessages: chatMessages }); // v1.3.543
+ return Object.assign({}, state, { ventas: ventas, mermas: mermas, historialPedidos: historialPedidos, chatMessages: chatMessages, facturas: facturas }); // v1.3.543
  }
 
  function _writeLocal(data) {
@@ -9392,6 +9397,7 @@ const State = (() => {
  var slim = JSON.parse(JSON.stringify(data));
  if (slim.ventas && slim.ventas.length > 200) slim.ventas = slim.ventas.slice(-200);
  if (slim.historialPedidos && slim.historialPedidos.length > 200) slim.historialPedidos = slim.historialPedidos.slice(-200);
+ if (slim.facturas && slim.facturas.length > 100) slim.facturas = slim.facturas.slice(-100);
  if (slim.mermas && slim.mermas.length > 200) slim.mermas = slim.mermas.slice(-200);
  localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
  retried = true;
@@ -9636,6 +9642,7 @@ const State = (() => {
  proveedores: () => _state.proveedores || [],
  productos: () => _state.productos || [],
  historialPedidos: () => _state.historialPedidos || [],
+ facturas: () => _state.facturas || [],
  mermas: () => _state.mermas || [],
  ventas: () => _state.ventas || [],
  ordenItems: () => _state.ordenItems || [],
@@ -9672,6 +9679,8 @@ const State = (() => {
  proveedores: (v) => { _state.proveedores = v; save(); },
  productos: (v) => { _state.productos = v; save(); },
  historialPedidos: (v) => { _state.historialPedidos = v; save(); },
+ facturas: (v) => { _state.facturas = v; save(); },
+ addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); save(); },
  mermas: (v) => { _state.mermas = v; save(); },
  ventas: (v) => { _state.ventas = v; save(); },
  ordenItems: (v) => { _state.ordenItems = v; save(); },
@@ -11556,7 +11565,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.939-dev';
+ const _APP_VERSION = 'v1.3.940-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26973,8 +26982,11 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  <div class="pe-section-title">Proveedor</div>
  <div class="prov-edit-card">
  <div><div class="fl">Nombre</div><input class="fi" id="pe-n" value="${esc(p.nombre||'')}" placeholder="Nombre del proveedor"></div>
+ <div><div class="fl">CIF / NIF</div><input class="fi" id="pe-cif" value="${esc(p.cif||'')}" placeholder="B12345678" autocomplete="off"></div>
  <div><div class="fl">Teléfono</div><input class="fi" type="tel" id="pe-t" value="${esc(p.telefono||'')}" placeholder="000 000 000"></div>
  <div><div class="fl">Dirección <span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:10px">(opcional)</span></div><input class="fi" id="pe-dir" value="${esc(p.direccion||'')}" placeholder="Calle, ciudad…" autocomplete="off"></div>
+ <div><div class="fl">Email</div><input class="fi" type="email" id="pe-email" value="${esc(p.email||'')}" placeholder="contacto@proveedor.com" autocomplete="off"></div>
+ <div><div class="fl">Web <span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:10px">(opcional)</span></div><input class="fi" type="url" id="pe-web" value="${esc(p.web||'')}" placeholder="www.proveedor.com" autocomplete="off"></div>
  </div>
  </div>
 
@@ -27151,8 +27163,11 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  function saveProvEdit(id) {
  if (saveProvEdit._running) return; saveProvEdit._running = true; // v1.3.557: anti-doble-tap
  const n = document.getElementById('pe-n')?.value?.trim();
+ const cif = document.getElementById('pe-cif')?.value?.trim();
  const tel = document.getElementById('pe-t')?.value?.trim();
  const dir = document.getElementById('pe-dir')?.value?.trim();
+ const email = document.getElementById('pe-email')?.value?.trim();
+ const web = document.getElementById('pe-web')?.value?.trim();
  const ag = document.getElementById('pe-ag')?.value?.trim();
  const rep = document.getElementById('pe-rep')?.value?.trim();
  const trel = document.getElementById('pe-trel')?.value?.trim();
@@ -27165,7 +27180,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
   // v1.3.427: si es proveedor nuevo pendiente, crear en State ahora
   if (_provNuevoPendiente && _provNuevoPendiente.id === id) {
   const newProv = Object.assign({}, _provNuevoPendiente, {
-  nombre: n, telefono: tel || '', direccion: dir || '',
+  nombre: n, cif: cif||'', telefono: tel || '', direccion: dir || '',
+  email: email||'', web: web||'',
   agente: ag || '', repartidor: rep || '', telReparto: trel || '',
   periodicidad: periodoBase,
   });
@@ -27176,7 +27192,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
   _almSaveLastProv(newProv.id);
   } else {
   State.set.updateProv(id, {
-  nombre: n, telefono: tel, direccion: dir,
+  nombre: n, cif: cif||'', telefono: tel, direccion: dir,
+  email: email||'', web: web||'',
   agente: ag, repartidor: rep, telReparto: trel,
   periodicidad: periodoBase,
   });
@@ -27717,6 +27734,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     var allChk = items.every(function(o){ return !!_checked[o.prodId]; });
     var _bR2 = document.getElementById('ldc-btn-recibido');
     if (_bR2) _bR2.style.opacity = allChk ? '1' : '0.5';
+    var _bGS = document.getElementById('ldc-btn-guardar');
+    if (_bGS) _bGS.style.opacity = allChk ? '1' : '0.5';
    };
 
    // KPIs — solo Inversión, Venta est., Margen (sin ROI ni Score — redundantes)
@@ -27726,17 +27745,17 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
    var scoreBlockHtml =
     '<div style="padding:12px 14px 12px;border-top:1px solid var(--border)">'
     +'<div style="display:flex;border-radius:var(--r-md);border:1px solid var(--border);overflow:hidden;margin-bottom:10px">'
-    +'<div class="ldc-kpi-item" style="flex:1;padding:9px 12px;border-right:1px solid var(--border)"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:var(--ink-soft)">ÍNVERSIÓN</div><div id="ldc-inv-val" style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">'+feur(totalInv)+'</div></div>'
-    +'<div class="ldc-kpi-item" style="flex:1;padding:9px 12px;border-right:1px solid var(--border)"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:var(--ink-soft)">VENTA EST.</div><div style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">'+feur(totalVta)+'</div></div>'
-    +'<div class="ldc-kpi-item" style="flex:1;padding:9px 12px"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:var(--ink-soft)">GANANCIA</div><div style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:'+(ganancia>=0?'#16A34A':'#E53935')+';margin-top:2px">'+feur(ganancia)+'</div></div>'
+    +'<div class="ldc-kpi-item" style="width:56px;min-width:56px;max-width:56px;flex-shrink:0;padding:9px 8px;border-right:1px solid var(--border)"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.4px;text-transform:uppercase;color:var(--ink-soft)">ÍNV.</div><div id="ldc-inv-val" style="font-size:var(--fs-sm);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">'+feur(totalInv)+'</div></div>'
+    +'<div class="ldc-kpi-item" style="flex:1;padding:9px 10px;border-right:1px solid var(--border);text-align:center"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.4px;text-transform:uppercase;color:var(--ink-soft)">VENTA EST.</div><div style="font-size:var(--fs-sm);font-weight:var(--fw-xbold);color:var(--ink);margin-top:2px">'+feur(totalVta)+'</div></div>'
+    +'<div class="ldc-kpi-item" style="width:56px;min-width:56px;max-width:56px;flex-shrink:0;padding:9px 8px;text-align:right"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.4px;text-transform:uppercase;color:var(--ink-soft)">GANANCIA</div><div style="font-size:var(--fs-sm);font-weight:var(--fw-xbold);color:'+(ganancia>=0?'#16A34A':'#E53935')+';margin-top:2px">'+feur(ganancia)+'</div></div>'
     +'</div>'
     +'<div style="display:flex;align-items:center;background:'+scBg+';border-radius:var(--r-card);padding:14px 14px;position:relative;overflow:hidden">'
-    +'<div class="ldc-side-roi" style="text-align:center;min-width:56px"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:'+scColor+';opacity:0.65">ROI</div><div style="font-size:20px;font-weight:var(--fw-xbold);color:'+roiColor+';line-height:1.1">'+roi+'%</div></div>'
+    +'<div class="ldc-side-roi" style="text-align:center;width:56px;min-width:56px;max-width:56px;flex-shrink:0"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:'+scColor+';opacity:0.65">ROI</div><div style="font-size:20px;font-weight:var(--fw-xbold);color:'+roiColor+';line-height:1.1">'+roi+'%</div></div>'
     +'<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px">'
     +'<div class="ldc-sello-num" style="font-size:56px;font-weight:var(--fw-xbold);color:'+scColor+';letter-spacing:-3px;line-height:1">'+score.toFixed(1)+'<span style="font-size:20px;font-weight:var(--fw-semi);opacity:0.55">/10</span></div>'
     +'<div class="ldc-sello-sub" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:0.8px;color:'+scColor+';text-transform:uppercase">SCORE DEL PEDIDO</div>'
     +'</div>'
-    +'<div class="ldc-side-mg" style="text-align:center;min-width:56px"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:'+scColor+';opacity:0.65">MARGEN</div><div style="font-size:20px;font-weight:var(--fw-xbold);color:'+mgColor+';line-height:1.1">'+margen+'%</div></div>'
+    +'<div class="ldc-side-mg" style="text-align:center;width:56px;min-width:56px;max-width:56px;flex-shrink:0"><div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:0.5px;text-transform:uppercase;color:'+scColor+';opacity:0.65">MARGEN</div><div style="font-size:20px;font-weight:var(--fw-xbold);color:'+mgColor+';line-height:1.1">'+margen+'%</div></div>'
     +'</div>'
     +'</div>';
 
@@ -27757,7 +27776,12 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     +'<div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.5px;line-height:1.1">'+esc(prov&&prov.nombre?prov.nombre:'Proveedor')+'</div>'
     +'<div style="font-size:var(--fs-md);color:var(--ink-soft);margin-top:4px">'+fmtFull(order.date)+'</div>'
     +'</div>'
-    +'<button class="mhd-close" onclick="App.ui.closeFs()" style="flex-shrink:0;margin-left:8px">×</button>'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">'
+    +'<button id="ldc-btn-camara" title="Escanear factura" style="width:36px;height:36px;border-radius:50%;border:none;background:var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink-soft)" onclick="try{Utils.showToast(\'📷 Próximamente: verificación automática con foto\');}catch(_){}">'
+    +'<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>'
+    +'</button>'
+    +'<button class="mhd-close" onclick="App.ui.closeFs()" style="flex-shrink:0">×</button>'
+    +'</div>'
     +'</div></div>'
     // Cajón artículos — flex:1 + overflow-y:auto propio
     // El crash del checkbox está resuelto con setTimeout — scroll anidado seguro
@@ -27780,7 +27804,7 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Total con cargos</span><span id="ldc-imp-total" style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(totalInv)+'</span></div>'
     +'</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
-    +'<button id="ldc-btn-guardar" class="btn-sec" style="height:44px">Guardar en historial</button>'
+    +'<button id="ldc-btn-guardar" class="btn-sec" style="height:44px;opacity:0.5">Emitir factura</button>'
     +'<button id="ldc-btn-recibido" class="btn-ok" style="height:44px;opacity:0.5">Pedido recibido</button>'
     +'</div>'
     +'</div>'
@@ -27909,14 +27933,44 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     var _bG = document.getElementById('ldc-btn-guardar');
     if (_bG) {
      _bG.addEventListener('click', function() {
+      var allChkF=items.every(function(o){return !!_checked[o.prodId];});
+      if(!allChkF){try{showToast('Comprueba todos los artículos antes de emitir la factura');}catch(_){}return;}
       if (_bG.dataset.p==='1') return; _bG.dataset.p='1';
       try {
        var _ord=(State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
        if (_ord) {
-        State.set.addPedido({id:'ph_'+Date.now(),fecha:new Date().toISOString(),provId:_ord.provId,items:_ord.items});
-        State.set.removePendingOrder(orderId);
-        try{App.alm.updateBadge();}catch(_){}
-        try{showToast('✅ Guardado en el historial');}catch(_){}
+        var _pv=State.get.prov(_ord.provId)||{};
+        var _now=new Date();
+        var _ymd=_now.getFullYear()+''+String(_now.getMonth()+1).padStart(2,'0')+String(_now.getDate()).padStart(2,'0');
+        var _fid='FAC-'+_ymd+'-'+String(Math.floor(Math.random()*900)+100);
+        // Leer impuestos adicionales si panel abierto
+        var _reVal=parseFloat((document.getElementById('ldc-imp-re')||{}).value)||0;
+        var _pvVal=parseFloat((document.getElementById('ldc-imp-pv')||{}).value)||0;
+        var _exVal=parseFloat((document.getElementById('ldc-imp-extra')||{}).value)||0;
+        // Construir lineas de factura
+        var _lineas=(_ord.items||[]).map(function(it){
+         var _p=State.get.prod(it.prodId)||{};
+         var _ivaPct=parseFloat(String(_p.iva||'10%').replace('%',''))/100||0.10;
+         var _uds=(it.ncajas||1)*(it.udscaja||_p.udscaja||1);
+         var _precioBase=(it.precio||0)/(1+_ivaPct); // precio bulto sin IVA
+         var _ivaLin=(it.precio||0)-_precioBase;
+         var _tot=(it.ncajas||1)*(it.precio||0);
+         return {nombre:_p.nombre||'Artículo',ncajas:it.ncajas||1,udscaja:it.udscaja||_p.udscaja||1,
+          precioUnit:_precioBase,ivaPct:Math.round(_ivaPct*100),
+          importeBase:(it.ncajas||1)*_precioBase,importeIva:(it.ncajas||1)*_ivaLin,total:_tot};
+        });
+        var _subBase=_lineas.reduce(function(s,l){return s+l.importeBase;},0);
+        var _totIva=_lineas.reduce(function(s,l){return s+l.importeIva;},0);
+        var _totRE=_reVal+_pvVal+_exVal;
+        var _factura={
+         id:_fid,fecha:_now.toISOString(),provId:_ord.provId,
+         provNombre:_pv.nombre||'',provCif:_pv.cif||'',provDireccion:_pv.direccion||'',
+         items:_lineas,subtotalBase:_subBase,totalIva:_totIva,
+         totalRE:_totRE,total:_subBase+_totIva+_totRE,
+         impuestos:{re:_reVal,pv:_pvVal,extra:_exVal}
+        };
+        try{State.set.addFactura(_factura);}catch(_){}
+        try{showToast('🟢 Factura '+_fid+' emitida');}catch(_){}
         try{App.ui.closeFs();}catch(_){}
        }
       } catch(e){_bG.dataset.p='';}
@@ -27997,19 +28051,13 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     if (_bExp) {
      _bExp.addEventListener('click', function() {
       try {
-       var re2 = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
-       var pv2 = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
-       var ex2 = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
-       var totalConCargos = totalInv + re2 + pv2 + ex2;
        var provNom = prov ? (prov.nombre || 'Proveedor') : 'Proveedor';
-       var fmtDate2 = function(iso) { try { var d=new Date(iso); return String(d.getDate()).padStart(2,'0')+'/'+(d.getMonth()+1)+'/'+d.getFullYear(); } catch(_) { return '—'; } };
-       // Lista simplificada: nombre + unidades totales, sin precios ni emojis
-       var txt = 'PEDIDO ' + provNom + '\n';
+       var txt = ' PEDIDO\n\n';
        items.forEach(function(o) {
         var nom = o.p && o.p.nombre ? o.p.nombre : o.prodId;
-        var uds = (o.ncajas||1) * (o.udscaja||o.p&&o.p.udscaja||1);
+        var uds = (o.ncajas||1) * (o.udscaja||1);
         var cajas = o.ncajas||1;
-        txt += nom + ' ' + uds + 'uds (' + cajas + (cajas===1?'caja':'cajas') + ')\n';
+        txt += '- ' + nom + ' ' + uds + 'uds (' + cajas + (cajas===1?' caja':' cajas') + ')\n';
        });
        if (navigator.share) {
         navigator.share({ text: txt }).catch(function(){});
@@ -28017,10 +28065,10 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
         navigator.clipboard.writeText(txt).then(function() {
          try{showToast('✅ Copiado al portapapeles');}catch(_){}
         }).catch(function() {
-         try{showToast('📋 ' + txt.slice(0,60) + '…');}catch(_){}
+         try{showToast('📋 Copiado');}catch(_){}
         });
        }
-      } catch(e) { try{showToast('⚠️ Error al exportar');}catch(_){} }
+      } catch(e) { try{showToast('⚠️ Error al compartir');}catch(_){} }
      });
     }
 
@@ -32840,7 +32888,7 @@ _eaRecalc();
 
 
  // v1.3.732: siempre hacer merge de arrays acumulativos aunque el remoto sea más antiguo
- var _MERGE_KEYS = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja'];
+ var _MERGE_KEYS = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','facturas'];
  var _hasMergeableChanges = _MERGE_KEYS.some(function(k) {
   var localArr = typeof State.get[k] === 'function' ? State.get[k]() : [];
   var remoteArr = remoteData[k];
