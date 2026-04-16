@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.888-dev</title>
+<title>Dashwey v1.3.889-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11450,7 +11450,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.888-dev';
+ const _APP_VERSION = 'v1.3.889-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20240,248 +20240,226 @@ function _confirmBorrarCuenta(id) {
  // ── Distribución de cuentas + pie chart — v1.3.03 ─────────────────────────
  function _snapRenderChart(cardId, period, colorOverride) {
  var wrap = document.getElementById('snap-chart-' + cardId);
- var svg = document.getElementById('snap-chart-svg-' + cardId);
- var tip = document.getElementById('snap-chart-tip-' + cardId);
+ var svg  = document.getElementById('snap-chart-svg-' + cardId);
+ var tip  = document.getElementById('snap-chart-tip-' + cardId);
  if (!wrap || !svg) return;
 
- // ── Calcular datos según periodo ────────────────────────────────────
- var labels = [];
- var vals = [];
- var xMode = 'hora'; // 'hora' | 'dia' | 'semana' | 'mes'
+ // ── 1. DATASET ────────────────────────────────────────────────────────
+ // Misma arquitectura para rendimiento y compras.
+ // compras: fuente = historialPedidos filtrado por periodo, coste via FinEngine.pedidoCoste
+ // rendimiento: fuente = KPI.ventasEnPeriodo (sin cambios)
+ var ptype = (period && period.type) ? period.type : 'month';
+ var events = []; // [{fecha, valor}]
 
  try {
- // v1.3.862: tarjeta compras usa historialPedidos, no ventas TPV
- var ptype = period ? period.type : 'month';
- var ventas, _isComprasChart;
- if (cardId === 'compras') {
-  _isComprasChart = true;
-  var _allPeds = (window.State && State.get.historialPedidos) ? (State.get.historialPedidos() || []) : [];
-  var _pedRange = null;
-  try { _pedRange = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
-  var _peds = _pedRange
-   ? _allPeds.filter(function(p){ var d=new Date(p.fecha); return d>=_pedRange.start && d<_pedRange.end; })
-   : _allPeds;
-  // Convertir pedidos a formato compatible con el loop de ventas
-  ventas = _peds.map(function(p) {
-   var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
-   return { fecha: p.fecha, total: coste, items: [] };
-  });
- } else {
-  _isComprasChart = false;
-  ventas = KPI.ventasEnPeriodo(period) || [];
- }
-
- if (ptype === 'today' || ptype === 'hours') {
- // Horas 0-23
- xMode = 'hora';
- vals = new Array(24).fill(0);
- labels = Array.from({length:24}, function(_,i){ return i+'h'; });
- ventas.forEach(function(v) {
- var h = new Date(v.fecha).getHours();
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- vals[h] += ing;
- });
- } else if (ptype === 'week') {
- // Días de la semana Lu-Do
- xMode = 'dia';
- vals = new Array(7).fill(0);
- labels = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
- ventas.forEach(function(v) {
- var d = new Date(v.fecha).getDay();
- var dow = d === 0 ? 6 : d - 1;
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- vals[dow] += ing;
- });
- } else if (ptype === 'month') {
- // Días del mes 1-31
- xMode = 'dia';
- var now = new Date();
- var dim = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
- vals = new Array(dim).fill(0);
- labels = Array.from({length:dim}, function(_,i){ return (i+1)+''; });
- ventas.forEach(function(v) {
- var day = new Date(v.fecha).getDate() - 1;
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- if (day >= 0 && day < dim) vals[day] += ing;
- });
- } else if (ptype === 'year') {
- // Meses Ene-Dic
- xMode = 'mes';
- vals = new Array(12).fill(0);
- labels = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
- ventas.forEach(function(v) {
- var m = new Date(v.fecha).getMonth();
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- vals[m] += ing;
- });
- } else {
- // Custom: calcular rango y usar días o meses según duración
- var range = KPI.getRange ? KPI.getRange(period) : null;
- if (range) {
- var diffDays = Math.ceil((range.end - range.start) / 86400000);
- if (diffDays <= 31) {
- // Días individuales
- xMode = 'dia';
- vals = new Array(diffDays).fill(0);
- labels = Array.from({length:diffDays}, function(_,i){
- var d = new Date(range.start.getTime() + i*86400000);
- return String(d.getDate()).padStart(2,'0')+'/'+(d.getMonth()+1);
- });
- ventas.forEach(function(v) {
- var idx = Math.floor((new Date(v.fecha) - range.start) / 86400000);
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- if (idx >= 0 && idx < diffDays) vals[idx] += ing;
- });
- } else {
- // Meses
- xMode = 'mes';
- var months = [];
- var cur = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
- while (cur <= range.end) {
- months.push(new Date(cur));
- cur.setMonth(cur.getMonth()+1);
- }
- vals = new Array(months.length).fill(0);
- var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
- labels = months.map(function(m){ return MON[m.getMonth()]; });
- ventas.forEach(function(v) {
- var vd = new Date(v.fecha);
- var idx = months.findIndex(function(m){ return m.getMonth()===vd.getMonth() && m.getFullYear()===vd.getFullYear(); });
- var ing = _isComprasChart ? (v.total||0) : ((v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||1); }, 0) || (v.total||0));
- if (idx >= 0) vals[idx] += ing;
- });
- }
- } else {
- // Fallback: 7 buckets
- vals = new Array(7).fill(0); labels = ['1','2','3','4','5','6','7'];
- }
- }
+  if (cardId === 'compras') {
+   var _range = null;
+   try { _range = KPI.getRange ? KPI.getRange(period) : null; } catch(_e) {}
+   var _peds = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+   if (_range) {
+    _peds = _peds.filter(function(p) {
+     var d = new Date(p.fecha);
+     return d >= _range.start && d < _range.end;
+    });
+   }
+   events = _peds.map(function(p) {
+    var coste = 0;
+    try { coste = FinEngine.pedidoCoste ? FinEngine.pedidoCoste(p) : 0; } catch(_e) {}
+    return { fecha: p.fecha, valor: coste || 0 };
+   });
+   console.log('[Chart compras] pedidos totales:', State.get.historialPedidos ? State.get.historialPedidos().length : 0,
+    '| en periodo:', _peds.length, '| range:', _range ? (_range.start.toISOString().slice(0,10) + ' → ' + _range.end.toISOString().slice(0,10)) : 'none');
+  } else {
+   // rendimiento: mantener arquitectura existente via ventasEnPeriodo
+   var _ventas = KPI.ventasEnPeriodo ? (KPI.ventasEnPeriodo(period) || []) : [];
+   events = _ventas.map(function(v) {
+    var ing = (v.items || []).reduce(function(s, it) { return s + (it.pvp || 0) * (it.qty || 1); }, 0) || (v.total || 0);
+    return { fecha: v.fecha, valor: ing };
+   });
+  }
  } catch(e) {
- console.warn('[Dashwey snap chart] data error:', e);
- vals = new Array(7).fill(0); labels = ['—','—','—','—','—','—','—'];
+  console.warn('[Chart ' + cardId + '] data error:', e);
+  events = [];
  }
 
- var n = vals.length;
- var maxVal = Math.max.apply(null, vals) || 1;
- var yMax = Math.ceil(maxVal / 10) * 10 || 10;
+ // ── 2. AGGREGATION por periodo ────────────────────────────────────────
+ // Misma lógica de bucketing para ambas tarjetas
+ var labels = [];
+ var vals   = [];
+ var xMode  = 'dia';
 
- // ── Layout ───────────────────────────────────────────────────────────
- var W = wrap.clientWidth || 300;
- var H = wrap.clientHeight || 140;
- if (H < 60) H = 120;
- if (W < 4) {
-  // Tarjeta no visible — guardar pendiente para re-render al activarse
-  if (!window._snapChartPending) window._snapChartPending = {};
-  window._snapChartPending[cardId] = { period: period, color: color };
-  return;
+ try {
+  if (ptype === 'today' || ptype === 'hours') {
+   xMode = 'hora';
+   vals   = new Array(24).fill(0);
+   labels = Array.from({length: 24}, function(_, i) { return i + 'h'; });
+   events.forEach(function(e) {
+    var hh = new Date(e.fecha).getHours();
+    if (hh >= 0 && hh < 24) vals[hh] += e.valor;
+   });
+  } else if (ptype === 'week') {
+   xMode  = 'dia';
+   vals   = new Array(7).fill(0);
+   labels = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
+   events.forEach(function(e) {
+    var d   = new Date(e.fecha).getDay();
+    var dow = d === 0 ? 6 : d - 1;
+    vals[dow] += e.valor;
+   });
+  } else if (ptype === 'month') {
+   xMode = 'dia';
+   var _now = new Date();
+   var _dim = new Date(_now.getFullYear(), _now.getMonth() + 1, 0).getDate();
+   vals   = new Array(_dim).fill(0);
+   labels = Array.from({length: _dim}, function(_, i) { return (i + 1) + ''; });
+   events.forEach(function(e) {
+    var day = new Date(e.fecha).getDate() - 1;
+    if (day >= 0 && day < _dim) vals[day] += e.valor;
+   });
+  } else if (ptype === 'year') {
+   xMode  = 'mes';
+   vals   = new Array(12).fill(0);
+   labels = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+   events.forEach(function(e) {
+    var m = new Date(e.fecha).getMonth();
+    vals[m] += e.valor;
+   });
+  } else {
+   // custom
+   var _cr = null;
+   try { _cr = KPI.getRange ? KPI.getRange(period) : null; } catch(_e) {}
+   if (_cr) {
+    var _diffDays = Math.ceil((_cr.end - _cr.start) / 86400000);
+    if (_diffDays <= 31) {
+     xMode  = 'dia';
+     vals   = new Array(_diffDays).fill(0);
+     labels = Array.from({length: _diffDays}, function(_, i) {
+      var d = new Date(_cr.start.getTime() + i * 86400000);
+      return String(d.getDate()).padStart(2,'0') + '/' + (d.getMonth() + 1);
+     });
+     events.forEach(function(e) {
+      var idx = Math.floor((new Date(e.fecha) - _cr.start) / 86400000);
+      if (idx >= 0 && idx < _diffDays) vals[idx] += e.valor;
+     });
+    } else {
+     xMode = 'mes';
+     var _months = [];
+     var _cur = new Date(_cr.start.getFullYear(), _cr.start.getMonth(), 1);
+     while (_cur <= _cr.end) { _months.push(new Date(_cur)); _cur.setMonth(_cur.getMonth() + 1); }
+     vals   = new Array(_months.length).fill(0);
+     var _MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+     labels = _months.map(function(m) { return _MON[m.getMonth()]; });
+     events.forEach(function(e) {
+      var _ed = new Date(e.fecha);
+      var idx = _months.findIndex(function(m) { return m.getMonth() === _ed.getMonth() && m.getFullYear() === _ed.getFullYear(); });
+      if (idx >= 0) vals[idx] += e.valor;
+     });
+    }
+   } else {
+    vals = new Array(7).fill(0); labels = ['1','2','3','4','5','6','7'];
+   }
+  }
+ } catch(e) {
+  console.warn('[Chart ' + cardId + '] aggregation error:', e);
+  vals = new Array(7).fill(0); labels = ['—','—','—','—','—','—','—'];
  }
+
+ console.log('[Chart ' + cardId + '] vals sum:', vals.reduce(function(s,v){return s+v;},0).toFixed(2), '| buckets:', vals.length);
+
+ // ── 3. LAYOUT — altura fija via CSS (160px), no depende de clientHeight ──
+ var n    = vals.length;
+ var W    = wrap.clientWidth || 320;
+ var H    = 160; // altura fija — CSS ya garantiza 160px, sin colapso
+ if (W < 8) { W = 320; } // fallback mínimo — no guardar pending (CSS ya fija altura)
+
+ var maxVal = Math.max.apply(null, vals.concat([0]));
+ var yMax   = maxVal > 0 ? (Math.ceil(maxVal / 10) * 10 || 10) : 10;
 
  var padL = 36; var padR = 8; var padT = 8; var padB = 20;
  var chartW = W - padL - padR;
  var chartH = H - padT - padB;
+ var barW   = Math.max(2, Math.floor(chartW / n * 0.7));
+ var slot   = chartW / n;
 
- // Bar width: adapt to number of bars
- var barW = Math.max(2, Math.floor(chartW / n * 0.7));
- var slot = chartW / n;
-
- // v1.3.629: índices explícitos por tipo — sin solapamiento en días 29-30 o horas 22-23
+ // ── 4. X-AXIS labels — índices explícitos por modo ──────────────────
  var _xIdxSet;
  if (xMode === 'hora') {
-  // 24 barras: mostrar 0h, 6h, 12h, 18h — sin forzar última
   _xIdxSet = new Set([0, 6, 12, 18]);
  } else if (xMode === 'dia' && n <= 7) {
-  // Semana: todas
-  _xIdxSet = null; // mostrar todas
+  _xIdxSet = null; // semana: todas
  } else if (xMode === 'dia' && n <= 31) {
-  // Mes: 1, 8, 15, 22 — sin forzar último (evita solapamiento día 29-30-31)
   _xIdxSet = new Set([0, 7, 14, 21]);
- } else if (xMode === 'mes') {
-  // Año 12 meses: todas
-  _xIdxSet = null;
  } else {
-  // Custom: cada 4 barras
-  var _every = Math.max(1, Math.ceil(n / 8));
-  _xIdxSet = new Set();
-  for (var _xi = 0; _xi < n; _xi += _every) { _xIdxSet.add(_xi); }
+  _xIdxSet = null; // mes/custom: todas
  }
 
- var svgParts = [];
- svgParts.push('<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif">');
+ // ── 5. SVG ────────────────────────────────────────────────────────────
+ var _barColor    = colorOverride || '#E53935';
+ var _barColorDim = 'rgba(229,57,53,0.15)';
+ if (colorOverride && colorOverride.indexOf('rgb(') === 0) {
+  _barColorDim = colorOverride.replace('rgb(', 'rgba(').replace(')', ',0.15)');
+ }
+
+ var parts = ['<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,sans-serif;display:block">'];
 
  // Y gridlines
  [0, 0.25, 0.5, 0.75, 1].forEach(function(pct) {
- var y = padT + chartH * (1 - pct);
- var yVal = yMax * pct;
- var lbl = yVal >= 1000 ? (yVal/1000).toFixed(1)+'k' : Math.round(yVal)+'€';
- svgParts.push(
- '<line x1="'+padL+'" y1="'+y+'" x2="'+(padL+chartW)+'" y2="'+y+
- '" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>'+
- '<text x="'+(padL-4)+'" y="'+(y+4)+'" text-anchor="end" '+
- 'fill="rgba(0,0,0,0.35)" font-size="9">'+lbl+'</text>'
- );
+  var gy   = padT + chartH * (1 - pct);
+  var gVal = yMax * pct;
+  var gLbl = gVal >= 1000 ? (gVal / 1000).toFixed(1) + 'k' : Math.round(gVal) + '€';
+  parts.push(
+   '<line x1="' + padL + '" y1="' + gy + '" x2="' + (padL + chartW) + '" y2="' + gy + '" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>',
+   '<text x="' + (padL - 4) + '" y="' + (gy + 4) + '" text-anchor="end" fill="rgba(0,0,0,0.35)" font-size="9">' + gLbl + '</text>'
+  );
  });
 
- // v1.3.115: _barColor declarado en scope de función — accesible en setTimeout tooltip
- var _barColor = colorOverride || '#E53935';
- var _barColorDim = colorOverride
- ? colorOverride.replace(')', ',0.15)').replace('rgb(', 'rgba(')
- : 'rgba(229,57,53,0.12)';
-
- // Bars
+ // Bars — barras con valor 0 muestran mínimo 2px para visibilidad
  vals.forEach(function(v, i) {
- var barH = v > 0 ? Math.max(3, (v / yMax) * chartH) : 0;
- var x = padL + i * slot + (slot - barW) / 2;
- var y = padT + chartH - barH;
- var fill = v > 0 ? _barColor : _barColorDim;
- var rx = Math.min(3, barW/2);
- var delay = (i * 6) + 'ms';
-
- svgParts.push(
- '<rect class="snap-bar" data-i="'+i+'" data-v="'+v.toFixed(2)+'" data-lbl="'+labels[i]+'" '+
- 'x="'+x+'" y="'+y+'" width="'+barW+'" height="'+(barH)+'" rx="'+rx+'" '+
- 'fill="'+fill+'" cursor="pointer" '+
- 'style="transform-origin:'+x+'px '+(padT+chartH)+'px;'+
- ''  +
- '-webkit-tap-highlight-color:transparent"/>'
- );
-
- // X label — solo índices del set explícito
- if (_xIdxSet === null || _xIdxSet.has(i)) {
- svgParts.push(
- '<text x="'+(x+barW/2)+'" y="'+(H-4)+'" text-anchor="middle" '+
- 'fill="rgba(0,0,0,0.35)" font-size="8">'+labels[i]+'</text>'
- );
- }
+  var barH = v > 0 ? Math.max(3, (v / yMax) * chartH) : 2;
+  var bx   = padL + i * slot + (slot - barW) / 2;
+  var by   = padT + chartH - barH;
+  var fill = v > 0 ? _barColor : _barColorDim;
+  var rx   = Math.min(3, barW / 2);
+  parts.push(
+   '<rect class="snap-bar" data-i="' + i + '" data-v="' + v.toFixed(2) + '" data-lbl="' + labels[i] + '" ' +
+   'x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + barH + '" rx="' + rx + '" ' +
+   'fill="' + fill + '" cursor="pointer" style="-webkit-tap-highlight-color:transparent"/>'
+  );
+  if (_xIdxSet === null || _xIdxSet.has(i)) {
+   parts.push(
+    '<text x="' + (bx + barW / 2) + '" y="' + (H - 4) + '" text-anchor="middle" fill="rgba(0,0,0,0.35)" font-size="8">' + labels[i] + '</text>'
+   );
+  }
  });
 
- svgParts.push('</svg>');
- svg.setAttribute('width', W);
- svg.setAttribute('height', H);
- svg.setAttribute('viewBox', '0 0 '+W+' '+H);
- svg.innerHTML = svgParts.join('');
+ parts.push('</svg>');
 
- // Tooltip
+ svg.removeAttribute('width');
+ svg.removeAttribute('height');
+ svg.style.width  = W + 'px';
+ svg.style.height = H + 'px';
+ svg.innerHTML = parts.join('');
+
+ // ── 6. TOOLTIP ────────────────────────────────────────────────────────
  if (tip) {
- svg.querySelectorAll('.snap-bar').forEach(function(bar) {
- bar.addEventListener('touchstart', function(e) {
-var lbl = bar.dataset.lbl;
- var v = parseFloat(bar.dataset.v);
- var x = parseFloat(bar.getAttribute('x')) + parseFloat(bar.getAttribute('width'))/2;
- var y = parseFloat(bar.getAttribute('y'));
- tip.textContent = lbl + ' — ' + v.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €';
- tip.style.left = x+'px';
- tip.style.top = Math.max(4, y-36)+'px';
- tip.classList.add('visible');
- bar.setAttribute('fill','#B71C1C');
- setTimeout(function(){
- tip.classList.remove('visible');
- bar.setAttribute('fill', v>0 ? _barColor : _barColorDim);
- }, 2000);
- }, {passive:true});
- });
+  svg.querySelectorAll('.snap-bar').forEach(function(bar) {
+   bar.addEventListener('touchstart', function() {
+    var lbl = bar.dataset.lbl;
+    var v   = parseFloat(bar.dataset.v);
+    var bx  = parseFloat(bar.getAttribute('x')) + parseFloat(bar.getAttribute('width')) / 2;
+    var by  = parseFloat(bar.getAttribute('y'));
+    tip.textContent = lbl + ' — ' + v.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+    tip.style.left = bx + 'px';
+    tip.style.top  = Math.max(4, by - 36) + 'px';
+    tip.classList.add('visible');
+    bar.setAttribute('fill', '#B71C1C');
+    setTimeout(function() {
+     tip.classList.remove('visible');
+     bar.setAttribute('fill', v > 0 ? _barColor : _barColorDim);
+    }, 2000);
+   }, {passive: true});
+  });
  }
-
-
  }
 
 
