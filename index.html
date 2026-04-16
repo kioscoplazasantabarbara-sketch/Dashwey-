@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-916-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-917-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.916-dev</title>
+<title>Dashwey v1.3.917-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11540,7 +11540,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.916-dev';
+ const _APP_VERSION = 'v1.3.917-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33144,479 +33144,61 @@ window._DashweyDeviceId = (() => {
  _curCard = App.dash._getActiveCardId() || null;
  }
 
+ // Retry helper: lanza polling hasta obtener _curCard con Dashboard activo
+ var _fabDoRetry = function() {
+  var _n = 0;
+  var _poll = function() {
+   _n++;
+   var t = document.body.getAttribute('data-tab');
+   if (t !== null) _curTab = parseInt(t);
+   if (_curTab === 1) {
+    if (!_curCard && typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
+     _curCard = App.dash._getActiveCardId() || null;
+    }
+    if (!_curCard) {
+     var first = document.querySelector('#dash-cards-container .card[data-card-id]');
+     if (first) _curCard = first.getAttribute('data-card-id');
+    }
+    if (_curCard) { _update(); return; }
+   }
+   if (_n < 8) setTimeout(_poll, 350);
+  };
+  setTimeout(_poll, 200);
+ };
+
  // Escuchar cambio de tab
  window.addEventListener('dashwey:tab-changed', function(e) {
- _curTab = e.detail ? e.detail.tab : -1;
- if (_curTab !== 1) _curCard = null;
- _update();
+  _curTab = e.detail ? e.detail.tab : -1;
+  if (_curTab !== 1) { _curCard = null; _update(); }
+  else { _update(); if (!_curCard) _fabDoRetry(); }
  });
 
  // MutationObserver en body[data-tab] como fallback para WebView
  try {
- var _tabObs = new MutationObserver(function() {
- var t = document.body.getAttribute('data-tab');
- var newTab = t !== null ? parseInt(t) : -1;
- if (newTab !== _curTab) {
- _curTab = newTab;
- if (_curTab !== 1) _curCard = null;
- _update();
- }
- });
- _tabObs.observe(document.body, { attributes: true, attributeFilter: ['data-tab'] });
+  var _tabObs = new MutationObserver(function() {
+   var t = document.body.getAttribute('data-tab');
+   var newTab = t !== null ? parseInt(t) : -1;
+   if (newTab !== _curTab) {
+    _curTab = newTab;
+    if (_curTab !== 1) { _curCard = null; _update(); }
+    else { _update(); if (!_curCard) _fabDoRetry(); }
+   }
+  });
+  _tabObs.observe(document.body, { attributes: true, attributeFilter: ['data-tab'] });
  } catch(e) {}
 
  // _snapCardChanged: actualiza la tarjeta activa y dispara _update
  window._snapCardChanged = function(cardId) {
- _curCard = cardId;
- // Leer tab actual por si no se recibió el evento
- var t = document.body.getAttribute('data-tab');
- if (t !== null) _curTab = parseInt(t);
- _update();
+  _curCard = cardId;
+  var t = document.body.getAttribute('data-tab');
+  if (t !== null) _curTab = parseInt(t);
+  _update();
  };
 
  _update();
-
- // Retry a 500ms — por si el snap arrancó antes que el FAB
- setTimeout(function() {
- var t = document.body.getAttribute('data-tab');
- if (t !== null) _curTab = parseInt(t);
- if (_curTab === 1 && !_curCard && typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
- _curCard = App.dash._getActiveCardId() || null;
- }
- if (_curCard !== null) _update();
- }, 500);
- }
-
- function _update() {
- _close();
- // Solo en Dashboard (tab 1)
- if (_curTab !== 1) { _hide(); return; }
-
- var cfg = _curCard ? _CARD_CONFIG[_curCard] : null;
- if (!cfg) { _hide(); return; }
-
- // Actualizar icono
- var iconEl = document.getElementById('dyn-fab-icon');
- if (iconEl) {
- if (cfg.icon === 'search') {
- iconEl.innerHTML = '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
- iconEl.setAttribute('stroke-width','2.2');
- } else {
- iconEl.innerHTML = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>';
- iconEl.setAttribute('stroke-width','2.5');
- }
- }
-
- _show();
- }
-
- function _show() {
- if (!_fab || !_wrap) return;
- _wrap.style.display = 'flex';
- requestAnimationFrame(function() {
- _fab.style.opacity = '1';
- _fab.style.transform = 'scale(1)';
- _fab.style.pointerEvents = 'auto';
+ // Retry de arranque — por si snap ya cargó antes que el FAB
+ _fabDoRetry();
  });
- }
-
- function _hide() {
- if (!_fab || !_wrap) return;
- _fab.style.opacity = '0';
- _fab.style.transform = 'scale(0.7)';
- _fab.style.pointerEvents = 'none';
- setTimeout(function() {
- if (_fab.style.opacity === '0') _wrap.style.display = 'none';
- }, 200);
- }
-
- window._dynFabTap = function() {
- var cfg = _curCard ? _CARD_CONFIG[_curCard] : null;
- if (!cfg) return;
- try { Utils.triggerHaptic('light'); } catch(e) {}
-
- if (cfg.single) {
- cfg.single();
- return;
- }
- if (cfg.dial) {
- if (_isOpen) { _close(); return; }
- _openDial(cfg.dial);
- }
- };
-
- function _openDial(items) {
- if (!_actions || !_back) return;
- _isOpen = true;
- _back.style.display = 'block';
- _fab.style.transform = 'rotate(45deg) scale(1)';
-
- _actions.innerHTML = '';
- items.forEach(function(item, i) {
- var row = document.createElement('div');
- row.style.cssText = 'display:flex;align-items:center;gap:10px;opacity:0;transform:translateY(8px);transition:opacity 180ms ease,transform 180ms var(--spring);transition-delay:' + (i * 40) + 'ms';
-
- var lbl = document.createElement('div');
- lbl.textContent = item.label;
- lbl.style.cssText = 'background:var(--surface);color:var(--ink);font-size:13px;font-weight:600;padding:6px 14px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.12);white-space:nowrap;font-family:var(--font)';
-
- var btn = document.createElement('button');
- btn.style.cssText = 'width:42px;height:42px;border-radius:50%;border:none;background:var(--surface);color:var(--red);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.14);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;flex-shrink:0';
- btn.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" style="pointer-events:none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
-
- (function(fn) {
- btn.ontouchend = function(e) { e.preventDefault(); _close(); fn(); };
- btn.onclick = function() { _close(); fn(); };
- lbl.ontouchend = function(e) { e.preventDefault(); _close(); fn(); };
- lbl.onclick = function() { _close(); fn(); };
- })(item.fn);
-
- row.appendChild(lbl);
- row.appendChild(btn);
- _actions.appendChild(row);
-
- requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- row.style.opacity = '1';
- row.style.transform = 'translateY(0)';
- });
- });
- });
- }
-
- function _close() {
- if (!_isOpen) return;
- _isOpen = false;
- if (_back) _back.style.display = 'none';
- if (_fab) _fab.style.transform = 'scale(1)';
- if (_actions) {
- Array.from(_actions.children).forEach(function(row) {
- row.style.opacity = '0';
- row.style.transform = 'translateY(8px)';
- });
- setTimeout(function() { if (_actions) _actions.innerHTML = ''; }, 220);
- }
- }
- window._dynFabClose = _close;
-
- // _snapCardChanged definido en IIFE principal del snap (lógica completa con data-tab)
-
- // Arrancar cuando el DOM esté listo
- if (document.readyState === 'loading') {
- document.addEventListener('DOMContentLoaded', _init);
- } else {
- setTimeout(_init, 0);
- }
-})();
-
- // MutationObserver for fs-box, modal-sheet, cobro, tickets, settings-drawer
- [
- { id: 'fs-box', open: el => el.classList.contains('open') },
- { id: 'modal-sheet', open: el => el.classList.contains('open') },
- { id: 'tpv-cobro-sheet', open: el => el.classList.contains('open') },
- { id: 'tickets-sheet', open: el => el.classList.contains('open') },
- { id: 'settings-drawer', open: el => el.classList.contains('open') },
- ].forEach(({ id, open }) => {
- const el = document.getElementById(id);
- if (!el) return;
- const obs = new MutationObserver(() => {
- obs.disconnect(); // evitar loop durante la ejecución
- open(el) ? hide() : show();
- obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
- });
- obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
- });
-})();
-
-// Exponer módulos públicos
-return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess };
-
-// Fin App
-})();
-
-// ── C1 FIX v1.2.85: exponer App real a window ─────────────────────────
-// `const App` en un script clásico NO va a window automáticamente.
-// Los onclick="App.x()" buscan window.App — sin esto usan el Proxy vacío del HEAD.
-window.App = App;
-// Exponer también Utils para acceso desde otros script blocks y onclicks
-if (typeof Utils !== 'undefined') window.Utils = Utils;
-// v1.3.64: exponer State y DashweyBus — necesario para scripts externos (CheckModal)
-// const no se asigna a window automáticamente en scripts clásicos
-if (typeof State !== 'undefined') window.State = State;
-if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
-// ──────────────────────────────────────────────────────────────────────
-
-/* Splash controller moved to inline script before App script */
-
-
-// ══════════════════════════════════════════════════════════════
-// THEME ENGINE — Día / Noche / Auto
-// Persiste en localStorage. Auto = hora del sistema (7-21 día).
-// ══════════════════════════════════════════════════════════════
-(function() {
- /* ═══════════════════════════════════════════════════════════════════
- _DashweyTheme v9.5.108 — FUENTE ÚNICA DE VERDAD
- ───────────────────────────────────────────────────────────────────
- ESTADO: localStorage 'dashwey_theme' → 'light' | 'dark' | 'auto'
- RESOLUCIÓN 'auto':
- 1. prefers-color-scheme del OS (fuente primaria)
- 2. Hora del día como fallback (solo si matchMedia no disponible)
- PROHIBIDO:
- - NO reload, NO reinicializar App, NO tocar SW
- - NO cambiar tema si ya es el mismo (guard anti-flicker)
- EFECTOS del cambio:
- - data-theme en <html> ('dark' | eliminado para light)
- - meta#theme-color-meta content
- - body/html inline background (limpiados en light, seteados en dark)
- - UI .theme-opt botones activos
- ═══════════════════════════════════════════════════════════════════ */
-
- const LS_KEY = 'dashwey_theme'; // 'light' | 'dark' | 'auto'
- let _currentResolved = null; // 'dark' | 'light' — último tema aplicado real
- let _mediaQuery = null; // listener de prefers-color-scheme
-
- // ── _resolveMode: modo guardado → 'dark' | 'light' ────────────────
- // En 'auto': OS primero, hora como fallback si matchMedia no existe.
- function _resolveMode(mode) {
- if (mode === 'dark') return 'dark';
- if (mode === 'light') return 'light';
- // auto: preguntar al OS
- if (window.matchMedia) {
- return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
- }
- // Fallback hora: 21:00–07:00 → dark
- const h = new Date().getHours();
- return (h >= 21 || h < 7) ? 'dark' : 'light';
- }
-
- // ── _applyResolved: aplica 'dark'|'light' al DOM ───────────────────
- //
- // 1. Añadir 'theme-switching' al <html>: bloquea TODAS las transitions
- // (ningún elemento puede animar mientras cambia el tema)
- // 2. Cambiar data-theme + background + meta en el MISMO frame
- // (un solo repaint, sin frames intermedios)
- // 3. Quitar 'theme-switching' en el siguiente rAF
- // (las transitions de UI vuelven a funcionar normalmente)
- //
- // Guard: si el tema resuelto no cambió, salida inmediata.
- // CRÍTICO: light usa data-theme="light" EXPLÍCITO — nunca removeAttribute.
- function _applyResolved(resolved, withTransition) {
- if (resolved === _currentResolved) return; // guard anti-flicker
- _currentResolved = resolved;
-
- const html = document.documentElement;
- const isDark = resolved === 'dark';
- const bg = isDark ? '#0C0C0E' : '#F7F2F2';
- const theme = isDark ? 'dark' : 'light';
- const meta = isDark ? '#0C0C0E' : '#F7F2F2';
-
- // Bloquear todas las transitions — evita cualquier frame intermedio
- html.classList.add('theme-switching');
-
- // Cambio atómico: data-theme + fondos + meta en el mismo frame
- html.setAttribute('data-theme', theme);
- html.style.background = bg;
- if (document.body) document.body.style.background = bg;
- document.getElementById('theme-color-meta')?.setAttribute('content', meta);
-
- // v1.2.4: StatusBar nativo Android — dos niveles de control:
- //
- // NIVEL 1: Capacitor @capacitor/status-bar plugin
- // → Funciona en APK con plugin instalado
- // 'DARK' = iconos oscuros (para fondo claro = modo light de la app)
- // 'LIGHT' = iconos claros (para fondo oscuro = modo dark de la app)
- //
- // NIVEL 2: Bridge nativo AndroidStatusBar (MainActivity.java)
- // → WindowInsetsController API 30+ / setSystemUiVisibility fallback
- // → Control directo sin depender del plugin
- // → Funciona incluso si el plugin no está instalado
- try {
- const barBg = isDark ? '#0C0C0E' : '#F7F2F2';
- // En Capacitor StatusBar: DARK = iconos oscuros, LIGHT = iconos claros
- // Modo light de la app (fondo claro) → necesita iconos oscuros → style: 'DARK'
- // Modo dark de la app (fondo oscuro) → necesita iconos claros → style: 'LIGHT'
- const barStyle = isDark ? 'LIGHT' : 'DARK';
-
- // Nivel 1: Capacitor plugin
- const { StatusBar } = window.Capacitor?.Plugins || {};
- if (StatusBar) {
- StatusBar.setStyle({ style: barStyle });
- StatusBar.setBackgroundColor({ color: barBg });
- }
-
- // Nivel 2: bridge nativo directo (MainActivity.java)
- // window.AndroidStatusBar es inyectado por addJavascriptInterface
- if (window.AndroidStatusBar) {
- window.AndroidStatusBar.setTheme(isDark ? 'dark' : 'light');
- }
- } catch(e) { /* No disponible en browser — silencioso */ }
-
- // Siguiente rAF: quitar bloqueo — transitions de UI vuelven a funcionar
- requestAnimationFrame(() => {
- html.classList.remove('theme-switching');
- });
- }
-
- // ── _applyMode: resuelve y aplica ─────────────────────────────────
- function _applyMode(mode) {
- _applyResolved(_resolveMode(mode));
- }
-
- // ── Listener OS: solo reacciona si el modo guardado es 'auto' ─────
- if (window.matchMedia) {
- _mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
- _mediaQuery.addEventListener('change', () => {
- const saved = localStorage.getItem(LS_KEY) || 'auto';
- if (saved === 'auto') _applyMode('auto');
- });
- }
-
- // ── API pública ────────────────────────────────────────────────────
- window._DashweyTheme = {
- // Devuelve el modo guardado: 'light' | 'dark' | 'auto'
- get() {
- return localStorage.getItem(LS_KEY) || 'auto';
- },
- // Devuelve el tema realmente aplicado: 'light' | 'dark'
- getResolved() {
- return _currentResolved || _resolveMode(this.get());
- },
- // Cambia modo. NO recarga la app. Solo modifica DOM y meta.
- set(mode) {
- if (!['light', 'dark', 'auto'].includes(mode)) return;
- localStorage.setItem(LS_KEY, mode);
- _applyMode(mode);
- // Actualizar UI del selector (en drawer y en settings)
- document.querySelectorAll('.theme-opt').forEach(btn => {
- btn.classList.toggle('active', btn.dataset.theme === mode);
- });
- },
- // Inicializar: aplicar tema guardado
- init() {
- _applyMode(this.get());
- }
- };
-
- // Inicializar al cargar
- window._DashweyTheme.init();
-})();
-
-// Safety net: si App falla en inicializarse, evitar errores en cascada en onclick handlers
-// si el script principal lanzó una excepción antes de llegar a esa línea.
-if (!window.App || typeof window.App.ui === 'undefined') {
- console.error('[Dashwey] App no se inicializó correctamente.');
- window.App = new Proxy({}, { get: () => new Proxy(() => {}, { apply: () => {}, get: () => new Proxy(() => {}, { apply: () => {} }) }) });
-}
-// Utils safety net — solo actúa si el script principal falló completamente
-if (!window.Utils) {
- window.Utils = { openPeriodSheet:()=>{}, _onPeriodSheetSel:()=>{}, showToast:()=>{}, triggerHaptic:()=>{} };
-}
-</script>
-<!-- QG CONFIG SHEET — fixed global, fuera del swipe-track -->
-<div id="tpv-qg-sheet" onclick="if(event.target===this||event.target.id==='tpv-qg-backdrop')tpvQG.closeSheet()">
- <div id="tpv-qg-backdrop"></div>
- <div id="tpv-qg-panel">
- <div class="tpv-qg-handle"></div>
- <div class="tpv-qg-sheet-title" id="tpv-qg-sheet-title">Configurar celda</div>
- <div class="tpv-qg-sheet-sub" id="tpv-qg-sheet-sub">Elige qué mostrar en esta posición</div>
- <div class="tpv-qg-actions" id="tpv-qg-actions"></div>
- </div>
-</div>
-
-<!-- QG PICKER — fixed global, fuera del swipe-track -->
-<div id="tpv-qg-picker">
- <div class="tpv-qg-picker-header">
- <button class="tpv-qg-picker-back" onclick="tpvQG.closePicker()">‹</button>
- <div class="tpv-qg-picker-title" id="tpv-qg-picker-title">Seleccionar</div>
- </div>
- <input class="tpv-qg-picker-search" id="tpv-qg-picker-search"
- placeholder="Buscar…" autocomplete="off" autocorrect="off"
- oninput="tpvQG.filterPicker(this.value)">
- <div class="tpv-qg-picker-list" id="tpv-qg-picker-list"></div>
-</div>
-
-<!-- PANEL COBRO — fixed global, fuera del swipe-track -->
-<!-- TICKETS SHEET — fixed global, fuera del swipe-track -->
-<div id="tickets-sheet" onclick="if(event.target===this||event.target.id==='tickets-backdrop')App.tpv.closeTickets()">
- <div id="tickets-backdrop"></div>
- <div id="tickets-panel">
- <div class="tickets-handle"></div>
- <div class="tickets-header">
- <span class="tickets-title">Tickets abiertos</span>
- <button class="tickets-new-btn" onclick="App.tpv.nuevoTicket()">+ Nuevo ticket</button>
- </div>
- <div id="tickets-list"></div>
- </div>
-</div>
-
-<div id="tpv-cobro-sheet" onclick="if(event.target===this||event.target.id==='tpv-cobro-backdrop')App.tpv.closeCobro()">
- <div id="tpv-cobro-backdrop"></div>
- <div id="tpv-cobro-panel">
- <div class="cobro-handle"></div>
- <div class="cobro-title">Resumen de venta</div>
- <div class="cobro-total-display">
- <div class="cobro-total-lbl">TOTAL A COBRAR</div>
- <div class="cobro-total-num" id="cobro-total-num">€0,00</div>
- </div>
- <div class="cobro-items-preview" id="cobro-items-list"></div>
- <div class="cobro-pay-methods">
- <button class="cobro-pay-btn cobro-pay-efectivo" aria-label="Pagar en efectivo" onclick="App.tpv.procesarPago('efectivo')">
- <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="14" x2="10" y2="14"/></svg>
- Pago en Efectivo
- </button>
- <button class="cobro-pay-btn cobro-pay-tarjeta" aria-label="Pagar con tarjeta" onclick="App.tpv.procesarPago('tarjeta')">
- <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="7" cy="15" r="1.5" fill="currentColor" stroke="none"/><circle cx="11" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>
- Pago con Tarjeta
- </button>
- </div>
- <button class="cobro-cancel" onclick="App.tpv.closeCobro()">Cancelar</button>
-  <div id="cobro-confirm-overlay"></div>
- </div>
-</div>
-
-<!-- SAC GLOBAL DROPDOWN -->
-<div id="sac-global-dd" style="position:fixed;display:none;z-index:10200;background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:0 12px 40px rgba(80,100,140,0.20);overflow:hidden;overflow-y:auto;"></div>
-
-<script>
-/* ── Check modal + Carrito options helpers — v1.3.32 ─────────────────────── */
-window._cmShowOptions = function() {
- var S = window.checkModalState;
- var existing = document.getElementById('cm-options-popup');
- if (existing) { existing.remove(); return; }
- var popup = document.createElement('div');
- popup.id = 'cm-options-popup';
- popup.style.cssText = 'position:fixed;inset:0;z-index:10200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;font-family:var(--font);opacity:0;transition:opacity 0.18s ease';
- var box = document.createElement('div');
- box.style.cssText = 'background:var(--surface);border-radius:20px;width:100%;max-width:320px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.28);transform:scale(0.94);transition:transform 0.18s var(--spring)';
- var hdr = document.createElement('div');
- hdr.style.cssText = 'padding:16px 16px 12px;border-bottom:1px solid var(--border);font-size:15px;font-weight:800;color:var(--ink)';
- hdr.textContent = 'Opciones del pedido';
- var body = document.createElement('div');
- body.style.cssText = 'padding:8px 0 8px';
- // v1.3.670: fix coma suelta + Eliminar sin orderId + navegación post-acción
- var _opciones = [];
- _opciones.push({ label: '📦 Seguir añadiendo artículos', fn: function() {
-  popup.remove(); window._checkModal.close();
-  setTimeout(function(){ try { App.nav.goTab(2); } catch(_) {} }, 260);
- }});
- var _ordId = S && S._meta && S._meta.orderId;
- if (_ordId) {
-  _opciones.push({ label: '🗑️ Eliminar pedido', fn: function() {
-   popup.remove();
-   window._showDestructiveConfirm({
-    title: 'Eliminar pedido',
-    message: '¿Eliminar este pedido programado? Esta acción no se puede deshacer.',
-    confirmText: 'Eliminar',
-    onConfirm: function() {
-     window._checkModal.close();
-     try { window.State.set.removePendingOrder(_ordId); } catch(_) {}
-     try { App.alm.updateBadge(); } catch(_) {}
-     try { DashweyBus.emit('pedido_stock', {}); } catch(_) {}
-     setTimeout(function() {
-      try { Utils.showToast('Pedido eliminado'); } catch(_) {}
-     }, 300);
-    }
-   });
   }});
  }
  _opciones.push({ label: 'Exportar pedido', fn: function() {
