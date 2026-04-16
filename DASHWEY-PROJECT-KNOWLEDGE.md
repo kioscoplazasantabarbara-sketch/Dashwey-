@@ -218,6 +218,15 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | 2 | Seguridad | Firestore Security Rules endurecidas | ⚠️ CRÍTICO antes de Play Store |
 | 3 | Push | APK FCM — Gradle 8.7 pendiente compilar | 🔵 WIP |
 
+### Cambios sesión v1.3.904
+- **v1.3.904** — FIX UI: Eliminados duplicados en SideSheet "Perfil del negocio" (openCuentaSideSheet). Secciones eliminadas: Equipo (stub Próximamente), Seguridad, Datos (Backup+Importar+Resetear). Estas opciones permanecen únicamente en Settings drawer global donde tienen lógica real + guards de permisos correctos. Sin cambios en lógica funcional.
+
+### Cambios sesión v1.3.903
+- **v1.3.903** — FIX UI: `.sti-section` sin `width:100%` → `align-items:flex-start` en `snap-kpi-zone` lo hacía colapsar al ancho del contenido. Fix: añadido `width:100%`. Cajón "Más vendidos" y "Más comprados" ahora son edge-to-edge idénticos; `.sti-right { right:0 }` llega al borde real en ambas tarjetas.
+
+### Cambios sesión v1.3.887
+- **v1.3.887** — FIX CRÍTICO: gráfica de barras tarjeta Compras (y Rendimiento) invisible en Android WebView. Causa: `@keyframes snapBarGrow` con `scaleY(0→1)` — WebView congela la animación en scaleY(0). Fix: eliminar `@keyframes snapBarGrow` del CSS y atributo `animation` del `<rect>` SVG. Barras renderizan a altura real directamente.
+
 ### Cambios sesión v1.3.867–v1.3.869
 - **v1.3.867** — FIX: `authLogout()` dejaba `_DashweySavingCtrl.isSaving = true` sin liberar → `save()` bloqueado permanentemente hasta reload tras logout+login en la misma sesión. Fix: liberar `isSaving = false` antes del toast de cierre.
 - **v1.3.868** — FIX CRÍTICO lógica financiera: transferencias inflaban `revenue()`, `beneficioNeto` y `gastoMensualTotal()`. Fix: añadido `tipo: 'transferencia'` a los movimientos espejo (addGasto + addIngreso), excluidos en `revenue()` y `gastoMensualEq()`. Ídem para `tipo: 'ajuste'` en `revenue()`.
@@ -265,6 +274,7 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | Botón "Resetear datos" no funciona en WebView | `confirmReset` usaba `setFs` + `onclick` inline — bloqueado silenciosamente en Android WebView | Reemplazado por `_showDestructiveConfirm` con `onConfirm: doReset` |
 | Botón "+ Movimiento" desaparece sin movimientos | `renderFlujoCaja` hacía `return` prematuro al no haber movimientos — el bloque de creación del botón nunca se ejecutaba | Eliminar `return` — mensaje "Sin movimientos" se muestra y el botón se crea siempre |
 | Cuentas/gastos borrados vuelven | `cuentas`, `gastosOp`, `ingresosFin` en `_MERGE_KEYS` — `_mergeById` los restauraba | Solo arrays acumulativos en `_MERGE_KEYS` |
+| Barras gráfica Compras/Rendimiento invisibles | `@keyframes snapBarGrow { scaleY(0→1) }` congela en WebView en estado inicial | NUNCA `@keyframes` con `transform:scale` en SVG — WebView las congela en frame inicial |
 | Guards sin finally | `_running=true` sin `finally` bloqueaba formularios permanentemente | TODO guard DEBE liberarse en `finally` |
 | Renders crasheaban con item corrupto | forEach sin try/catch interno — un item malo borraba toda la lista | try/catch interno en cada item de render |
 | `confirm()` nativo | Bloqueado en WebView | `window._showDestructiveConfirm()` |
