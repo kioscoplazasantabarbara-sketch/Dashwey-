@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-924-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-926-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.924-dev</title>
+<title>Dashwey v1.3.926-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11540,7 +11540,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.924-dev';
+ const _APP_VERSION = 'v1.3.926-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16625,97 +16625,146 @@ function _openEditMovimientoSheet(id, src) {
  }
 
  function _openComprasCompletasSheet() {
- var period = State.get.period();
- var range = null; try { range = KPI.getRange(period); } catch(_) {}
- var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+  var period = State.get.period();
+  var range = null; try { range = KPI.getRange(period); } catch(_) {}
+  var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
 
- // Filtrar por periodo
- var pedsPeriodo = range
-  ? historial.filter(function(p){ var d=new Date(p.fecha); return d>=range.start && d<range.end; })
-  : historial;
+  // Filtrar por periodo
+  var pedsPeriodo = range
+   ? historial.filter(function(p){ var d=new Date(p.fecha); return d>=range.start && d<range.end; })
+   : historial;
 
- // KPI total
- var totalPeriodo = pedsPeriodo.reduce(function(s,ped){
-  return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
- }, 0);
- var nPedidos = pedsPeriodo.length;
+  // KPI total
+  var totalPeriodo = pedsPeriodo.reduce(function(s,ped){
+   return s + (FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0);
+  }, 0);
+  var nPedidos = pedsPeriodo.length;
 
- // Comparativa vs periodo anterior
- var deltaStr = '—'; var deltaColor = 'var(--ink-soft)';
- if (range) {
-  var durMs = range.end - range.start;
-  var prevStart = new Date(range.start.getTime() - durMs);
-  var pedsAnt = historial.filter(function(p){ var d=new Date(p.fecha); return d>=prevStart && d<range.start; });
-  var totalAnt = pedsAnt.reduce(function(s,ped){ return s+(FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0); }, 0);
-  if (totalAnt > 0) {
-   var delta = Math.round(((totalPeriodo - totalAnt) / totalAnt) * 100);
-   deltaStr = (delta >= 0 ? '+' : '') + delta + '% vs periodo anterior (' + feur(totalAnt) + ')';
-   deltaColor = delta <= 0 ? '#2A9D7C' : 'var(--red)';
+  // Comparativa vs periodo anterior
+  var deltaStr = '\u2014'; var deltaColor = 'var(--ink-soft)';
+  if (range) {
+   var durMs = range.end - range.start;
+   var prevStart = new Date(range.start.getTime() - durMs);
+   var pedsAnt = historial.filter(function(p){ var d=new Date(p.fecha); return d>=prevStart && d<range.start; });
+   var totalAnt = pedsAnt.reduce(function(s,ped){ return s+(FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0); }, 0);
+   if (totalAnt > 0) {
+    var delta = Math.round(((totalPeriodo - totalAnt) / totalAnt) * 100);
+    deltaStr = (delta >= 0 ? '+' : '') + delta + '% vs periodo anterior (' + feur(totalAnt) + ')';
+    deltaColor = delta <= 0 ? '#2A9D7C' : 'var(--red)';
+   }
   }
- }
 
- // Agrupar por producto
- var map = {};
- pedsPeriodo.forEach(function(ped) {
-  (ped.items || []).forEach(function(it) {
-   var prodId = it.prodId;
-   if (!prodId) return;
-   var prod = State.get.prod(prodId);
-   var nombre = prod ? prod.nombre : (it.nombre || prodId);
-   var foto = prod ? (prod.foto || null) : null;
-   var e = prod ? (prod.e || '📦') : '📦';
-   var coste = (it.ncajas||1) * (it.precio||0) * 1.10;
-   var cajas = (it.ncajas||1);
-   if (!map[prodId]) map[prodId] = { nombre: nombre, foto: foto, e: e, total: 0, cajas: 0 };
-   map[prodId].total += coste;
-   map[prodId].cajas += cajas;
+  // Agrupar por proveedor → productos
+  var provMap = {};
+  var totalRefs = 0;
+  pedsPeriodo.forEach(function(ped) {
+   var provId = ped.provId || '_sin_proveedor';
+   var prov = State.get.prov ? State.get.prov(provId) : null;
+   var provNombre = prov ? (prov.nombre || 'Sin proveedor') : 'Sin proveedor';
+   var provIcon = prov ? (prov.icon || '\uD83C\uDFEA') : '\uD83C\uDFEA';
+   if (!provMap[provId]) provMap[provId] = { nombre: provNombre, icon: provIcon, total: 0, items: {} };
+   var costeTotal = FinEngine.pedidoCoste ? FinEngine.pedidoCoste(ped) : 0;
+   provMap[provId].total += costeTotal;
+   (ped.items || []).forEach(function(it) {
+    var prodId = it.prodId; if (!prodId) return;
+    var prod = State.get.prod(prodId);
+    var nombre = prod ? prod.nombre : (it.nombre || prodId);
+    var foto = prod ? (prod.foto || null) : null;
+    var e = prod ? (prod.e || '\uD83D\uDCE6') : '\uD83D\uDCE6';
+    var coste = (it.ncajas||1) * (it.precio||0) * 1.10;
+    var cajas = (it.ncajas||1);
+    if (!provMap[provId].items[prodId]) { provMap[provId].items[prodId] = { nombre:nombre, foto:foto, e:e, total:0, cajas:0 }; totalRefs++; }
+    provMap[provId].items[prodId].total += coste;
+    provMap[provId].items[prodId].cajas += cajas;
+   });
   });
- });
 
- var all = Object.keys(map).map(function(id){ return map[id]; })
-  .sort(function(a,b){ return b.total - a.total; });
+  // Ordenar proveedores por gasto desc
+  var provList = Object.keys(provMap).map(function(id){ return Object.assign({ id:id }, provMap[id]); })
+   .sort(function(a,b){ return b.total - a.total; });
 
- var rows = all.map(function(x) {
-  var thumb = x.foto
-   ? '<div class="ta-thumb"><img src="' + x.foto + '" loading="lazy"></div>'
-   : '<div class="ta-thumb">' + (x.e || '📦') + '</div>';
-  return '<div class="ta-item">' + thumb
-   + '<div class="ta-info"><div class="ta-name">' + esc(x.nombre) + '</div></div>'
-   + '<div class="ta-right"><div class="ta-price">' + feur(x.total) + '</div>'
-   + '<div class="ta-sold">x ' + x.cajas + ' caja' + (x.cajas !== 1 ? 's' : '') + '</div></div></div>';
- }).join('');
+  var _f2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' \u20ac'; };
 
- var _f2 = function(n){ return (+(n||0)).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; };
+  // Construir acordeón de proveedores
+  var provRows = provList.map(function(prov, pi) {
+   var prodList = Object.keys(prov.items).map(function(id){ return prov.items[id]; })
+    .sort(function(a,b){ return b.total - a.total; });
+   var prodRows = prodList.map(function(x) {
+    var thumb = x.foto
+     ? '<div class="ta-thumb"><img src="' + x.foto + '" loading="lazy"></div>'
+     : '<div class="ta-thumb" style="font-size:20px">' + (x.e||'\uD83D\uDCE6') + '</div>';
+    return '<div class="ta-item" style="padding-left:8px">' + thumb
+     + '<div class="ta-info"><div class="ta-name">' + esc(x.nombre) + '</div></div>'
+     + '<div class="ta-right"><div class="ta-price">' + _f2(x.total) + '</div>'
+     + '<div class="ta-sold">x ' + x.cajas + ' caja' + (x.cajas!==1?'s':'') + '</div></div></div>';
+   }).join('');
+   var nProds = prodList.length;
+   var provUid = 'prov-acc-' + pi;
+   return '<div style="border:1px solid var(--border);border-radius:var(--r-card);margin-bottom:8px;overflow:hidden">'
+    // Header acordeón — touch/click toggle
+    + '<div data-acc="' + provUid + '" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none">'
+    + '<div style="font-size:20px;flex-shrink:0">' + (prov.icon||'\uD83C\uDFEA') + '</div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(prov.nombre) + '</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">' + nProds + ' ref.' + '</div>'
+    + '</div>'
+    + '<div style="text-align:right;flex-shrink:0">'
+    + '<div style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">' + _f2(prov.total) + '</div>'
+    + '</div>'
+    + '<div id="' + provUid + '-ico" style="font-size:14px;color:var(--ink-soft);margin-left:6px;flex-shrink:0;transition:transform .2s">\u203A</div>'
+    + '</div>'
+    // Lista productos — oculta por defecto
+    + '<div id="' + provUid + '" style="display:none;border-top:1px solid var(--border);padding:6px 6px 2px">'
+    + prodRows
+    + '</div>'
+    + '</div>';
+  }).join('');
 
- var kpiHtml =
-  '<div style="padding:16px 16px 0;text-align:center">'
-  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total comprado</div>'
-  + '<div style="font-size:36px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _f2(totalPeriodo) + '</div>'
-  + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + '</div>'
-  + '</div>'
-  + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:12px 0 0">'
-  + '<div style="flex:1;padding:10px 8px;text-align:center;border-right:1px solid var(--border)">'
-  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Pedidos</div>'
-  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + nPedidos + '</div>'
-  + '</div>'
-  + '<div style="flex:1;padding:10px 8px;text-align:center">'
-  + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Referencias</div>'
-  + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + all.length + '</div>'
-  + '</div></div>';
+  var kpiHtml =
+   '<div style="padding:16px 16px 0;text-align:center">'
+   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Total comprado</div>'
+   + '<div style="font-size:36px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _f2(totalPeriodo) + '</div>'
+   + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + deltaColor + ';margin-top:4px">' + deltaStr + '</div>'
+   + '</div>'
+   + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:12px 0 0">'
+   + '<div style="flex:1;padding:10px 8px;text-align:center;border-right:1px solid var(--border)">'
+   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Pedidos</div>'
+   + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + nPedidos + '</div>'
+   + '</div>'
+   + '<div style="flex:1;padding:10px 8px;text-align:center">'
+   + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Referencias</div>'
+   + '<div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">' + totalRefs + '</div>'
+   + '</div></div>';
 
- ui.setFs(
-  '<div class="modal-header-dark"><div class="mhd-row"><div>'
-  + '<div class="mhd-title">Compras completas</div>'
-  + '<div class="mhd-sub">' + period.label + ' · ' + all.length + ' referencias</div>'
-  + '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'
-  + kpiHtml
-  + '<div style="padding:12px 14px 20px;font-family:var(--font)">'
-  + (rows || '<div class="ta-empty">Sin compras en este periodo</div>')
-  + '</div>'
- );
- ui.openFs();
+  ui.setFs(
+   '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   + '<div class="mhd-title">Compras completas</div>'
+   + '<div class="mhd-sub">' + (period.label||'') + ' \u00b7 ' + provList.length + ' proveedores</div>'
+   + '</div><button class="mhd-close" onclick="App.ui.closeFs()">\u00d7</button></div></div>'
+   + kpiHtml
+   + '<div style="padding:12px 14px 40px;font-family:var(--font)">'
+   + (provRows || '<div class="ta-empty">Sin compras en este periodo</div>')
+   + '</div>'
+  );
+  ui.openFs('full');
+
+  // Acordeón — delegación en fs-content
+  requestAnimationFrame(function() {
+   var fc = document.getElementById('fs-content');
+   if (!fc) return;
+   fc.addEventListener('click', function(e) {
+    var hdr = e.target.closest('[data-acc]');
+    if (!hdr) return;
+    var uid = hdr.getAttribute('data-acc');
+    var body = document.getElementById(uid);
+    var ico  = document.getElementById(uid + '-ico');
+    if (!body) return;
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    if (ico) ico.style.transform = open ? '' : 'rotate(90deg)';
+   });
+  });
  }
-
 
  function openFinModal(type) {
  if (type === 'flujo-caja') _openFlujoCajaModal();
