@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-930-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-931-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.930-dev</title>
+<title>Dashwey v1.3.931-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11540,7 +11540,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.930-dev';
+ const _APP_VERSION = 'v1.3.931-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20629,19 +20629,125 @@ function _confirmBorrarCuenta(id) {
  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
  };
 
- // ── Lista de cuentas: líneas finas, color pos/neg, sparkline, periodo
+
+ // ── Distribución: lista izquierda + donut SVG derecha ──────────────────
+
+ // Datos del período activo
+ var _period = State.get.period ? State.get.period() : { type:'month', offset:0 };
+ var _range = null;
+ try { _range = KPI.getRange(_period); } catch(_) {}
+
+ // Ingresos y gastos del período
+ var _ingPeriodo = 0, _gastoPeriodo = 0;
+ if (_range) {
+  ingresos.forEach(function(i) {
+   var d = new Date(i.fecha); if (d >= _range.start && d < _range.end) _ingPeriodo += (i.importe||0);
+  });
+  gastosOp.forEach(function(g) {
+   var d = new Date(g.fecha||g.fechaPago||''); if (d >= _range.start && d < _range.end) _gastoPeriodo += (g.importe||0);
+  });
+  // Añadir pedidos (compras) al gasto
+  var _peds = State.get.historialPedidos ? State.get.historialPedidos() : [];
+  _peds.forEach(function(p) {
+   var d = new Date(p.fecha||'');
+   if (d >= _range.start && d < _range.end) {
+    _gastoPeriodo += (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+   }
+  });
+ }
+
+ // Saldo total de cuentas
+ var _saldoTotal = cuentas.reduce(function(s,c){ return s+(c.saldo||0); }, 0);
+
+ // Donut SVG — 3 segmentos: saldo (azul cuenta), ingresos (verde), gastos (rojo)
+ var _buildDonut = function() {
+  var R = 44, r = 28, cx = 52, cy = 52;
+  var total = _saldoTotal + _ingPeriodo + _gastoPeriodo;
+  if (total <= 0) {
+   // Donut vacío
+   return '<svg width="104" height="104" viewBox="0 0 104 104">'
+    + '<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="none" stroke="var(--border)" stroke-width="' + (R-r) + '"/>'
+    + '<circle cx="' + cx + '" cy="' + cy + '" r="' + (r+((R-r)/2)) + '" fill="none" stroke="var(--surface)" stroke-width="1"/>'
+    + '</svg>';
+  }
+
+  var _arc = function(startAngle, endAngle, color) {
+   var circ = 2 * Math.PI * (r + (R-r)/2);
+   var mid = r + (R-r)/2;
+   var pct = (endAngle - startAngle) / (2 * Math.PI);
+   var dash = pct * circ;
+   var gap  = circ - dash;
+   var rot  = startAngle * 180 / Math.PI - 90;
+   return '<circle cx="' + cx + '" cy="' + cy + '" r="' + mid + '"'
+    + ' fill="none" stroke="' + color + '" stroke-width="' + (R-r) + '"'
+    + ' stroke-dasharray="' + dash.toFixed(2) + ' ' + gap.toFixed(2) + '"'
+    + ' transform="rotate(' + rot.toFixed(2) + ' ' + cx + ' ' + cy + ')"'
+    + ' stroke-linecap="butt"/>';
+  };
+
+  var PI2 = 2 * Math.PI;
+  var sSaldo  = _saldoTotal  / total * PI2;
+  var sIng    = _ingPeriodo  / total * PI2;
+  var sGasto  = _gastoPeriodo / total * PI2;
+
+  var a0 = 0;
+  var a1 = a0 + sSaldo;
+  var a2 = a1 + sIng;
+  var a3 = a2 + sGasto;
+
+  var segSaldo = sSaldo > 0.01  ? _arc(a0, a1, '#2563EB') : '';
+  var segIng   = sIng   > 0.01  ? _arc(a1, a2, '#16A34A') : '';
+  var segGasto = sGasto > 0.01  ? _arc(a2, a3, 'var(--red)') : '';
+
+  // Centro: saldo total
+  var _fShort = function(n) {
+   if (Math.abs(n) >= 1000) return (n/1000).toFixed(1).replace('.',',') + 'k';
+   return n.toFixed(0);
+  };
+
+  return '<svg width="104" height="104" viewBox="0 0 104 104">'
+   + segSaldo + segIng + segGasto
+   + '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="var(--surface)"/>'
+   + '<text x="' + cx + '" y="' + (cy-4) + '" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)" font-family="Inter,sans-serif">' + _fShort(_saldoTotal) + '\u20ac</text>'
+   + '<text x="' + cx + '" y="' + (cy+9) + '" text-anchor="middle" font-size="7" fill="var(--ink-soft)" font-family="Inter,sans-serif">saldo</text>'
+   + '</svg>';
+ };
+
+ // Lista de cuentas compacta
  var sorted = cuentas.slice().sort(function(a,b){ return (b.saldo||0)-(a.saldo||0); });
  var top5 = sorted.slice(0, 5);
 
-
- cuentasEl.innerHTML = top5.length === 0
-  ? '<div style="font-size:var(--fs-xs);color:var(--ink-soft);padding:4px 0">Sin cuentas</div>'
+ var _listaHtml = top5.length === 0
+  ? '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">Sin cuentas</div>'
   : top5.map(function(c) {
    var saldo = c.saldo || 0;
-   var isPos = saldo >= 0;
-   var color = isPos ? '#16A34A' : '#8B1A2F';
-   return '<div style="padding:var(--sp-2) 0;border-bottom:1px solid var(--border)">'    + '<div style="display:flex;justify-content:space-between;align-items:center">'    + '<span data-cuenta-id="' + c.id + '" ontouchend="event.preventDefault();try{App.dash._openDetalleCuenta(this.dataset.cuentaId);}catch(e){}" onclick="if(event.pointerType!==\'touch\')try{App.dash._openDetalleCuenta(this.dataset.cuentaId);}catch(e){}" style="font-size:var(--fs-base);font-weight:var(--fw-semi);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px">' + esc2(c.nombre||'Cuenta') + '</span>'    + '<span style="font-size:var(--fs-lg);font-weight:var(--fw-bold);color:var(--ink);white-space:nowrap">' + feur(saldo) + '</span>'    + '</div>'    + '</div>';
+   var colS = saldo >= 0 ? 'var(--ink)' : 'var(--red)';
+   return '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border)">'
+    + '<div style="width:7px;height:7px;border-radius:50%;background:' + (c.color||'#2563EB') + ';flex-shrink:0"></div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<span data-cuenta-id="' + c.id + '" ontouchend="event.preventDefault();try{App.dash._openDetalleCuenta(this.dataset.cuentaId);}catch(e){}" onclick="if(event.pointerType!==\'touch\')try{App.dash._openDetalleCuenta(this.dataset.cuentaId);}catch(e){}" style="font-size:var(--fs-xs);font-weight:var(--fw-semi);color:var(--ink);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">' + esc2(c.nombre||'Cuenta') + '</span>'
+    + '<span style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + colS + '">' + feur(saldo) + '</span>'
+    + '</div>'
+    + '</div>';
   }).join('');
+
+ // Leyenda debajo del donut
+ var _leyendaHtml =
+  '<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px;align-items:flex-start">'
+  + '<div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#2563EB;flex-shrink:0"></div><span style="font-size:7px;color:var(--ink-soft)">Saldo</span></div>'
+  + '<div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#16A34A;flex-shrink:0"></div><span style="font-size:7px;color:var(--ink-soft)">Ingresos</span></div>'
+  + '<div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:var(--red);flex-shrink:0"></div><span style="font-size:7px;color:var(--ink-soft)">Gastos</span></div>'
+  + '</div>';
+
+ // Layout: lista izquierda + donut+leyenda derecha
+ cuentasEl.innerHTML =
+  '<div style="display:flex;align-items:flex-start;gap:8px">'
+  + '<div style="flex:1;min-width:0">' + _listaHtml + '</div>'
+  + '<div style="flex-shrink:0;display:flex;flex-direction:column;align-items:center">'
+  + _buildDonut()
+  + _leyendaHtml
+  + '</div>'
+  + '</div>';
 
  // ── Lista de últimos movimientos ─────────────────────────────────
  // v1.3.623: movimientos globales — gastosOp + pedidos + mermas + ingresos + ventas
