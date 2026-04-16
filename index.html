@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.889-dev</title>
+<title>Dashwey v1.3.890-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7790,6 +7790,11 @@ function _authTabSafe(tab) {
  </svg>
  <div class="snap-chart-tooltip" id="snap-chart-tip-rendimiento"></div>
  </div>
+ <!-- TOP MÁS VENDIDOS -->
+ <div class="snap-top-items" id="snap-top-items-rendimiento">
+  <div class="snap-top-items-lbl">Más vendidos</div>
+  <div class="snap-top-items-scroll" id="snap-top-items-list-rendimiento"></div>
+ </div>
  </div>
  <!-- SNAP NARRATIVE ZONE -->
  <!-- Contenido original — visible en modo normal -->
@@ -7858,6 +7863,11 @@ function _authTabSafe(tab) {
  preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
  </svg>
  <div class="snap-chart-tooltip" id="snap-chart-tip-compras"></div>
+ </div>
+ <!-- TOP MÁS COMPRADOS -->
+ <div class="snap-top-items" id="snap-top-items-compras">
+  <div class="snap-top-items-lbl">Más comprados</div>
+  <div class="snap-top-items-scroll" id="snap-top-items-list-compras"></div>
  </div>
  </div>
  <!-- SNAP NARRATIVE ZONE -->
@@ -11450,7 +11460,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.889-dev';
+ const _APP_VERSION = 'v1.3.890-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20946,6 +20956,74 @@ function _confirmBorrarCuenta(id) {
  setTimeout(function() {
  _snapRenderChart('compras', period, _compChartColor);
  }, 400);
+ }
+
+ // ── Top items: más vendidos (rendimiento) / más comprados (compras) ──────────
+ if (cardId === 'rendimiento' || cardId === 'compras') {
+  try {
+   var _tiListEl = document.getElementById('snap-top-items-list-' + cardId);
+   if (_tiListEl) {
+    var _tiRange = null;
+    try { _tiRange = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+    var _tiRows = [];
+
+    if (cardId === 'rendimiento') {
+     // Fuente: ventas del periodo — agregar por prodId
+     var _tiVentas = KPI.ventasEnPeriodo ? (KPI.ventasEnPeriodo(period) || []) : [];
+     var _tiMap = {};
+     _tiVentas.forEach(function(v) {
+      (v.items || []).forEach(function(it) {
+       var pid = it.prodId || it.nombre || '?';
+       if (!_tiMap[pid]) _tiMap[pid] = { nombre: it.nombre || pid, total: 0, qty: 0 };
+       _tiMap[pid].total += (it.pvp || 0) * (it.qty || 1);
+       _tiMap[pid].qty   += (it.qty || 1);
+      });
+     });
+     _tiRows = Object.values(_tiMap).sort(function(a, b) { return b.total - a.total; }).slice(0, 8);
+    } else {
+     // Fuente: historialPedidos del periodo — agregar por prodId
+     var _tiPeds = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+     if (_tiRange) {
+      _tiPeds = _tiPeds.filter(function(p) {
+       var d = new Date(p.fecha); return d >= _tiRange.start && d < _tiRange.end;
+      });
+     }
+     var _tiMap2 = {};
+     var _tiProds = State.get.productos ? (State.get.productos() || []) : [];
+     _tiPeds.forEach(function(ped) {
+      (ped.items || []).forEach(function(it) {
+       var pid = it.prodId || '?';
+       var prod = _tiProds.find(function(p) { return p.id === pid; });
+       var nombre = (prod && prod.nombre) ? prod.nombre : pid;
+       var costeUnit = (it.precio || 0); // precio por bulto
+       var bultos    = (it.ncajas || 1);
+       var uds       = bultos * (it.udscaja || (prod && prod.udscaja) || 1);
+       if (!_tiMap2[pid]) _tiMap2[pid] = { nombre: nombre, total: 0, qty: 0 };
+       _tiMap2[pid].total += costeUnit * bultos;
+       _tiMap2[pid].qty   += uds;
+      });
+     });
+     _tiRows = Object.values(_tiMap2).sort(function(a, b) { return b.total - a.total; }).slice(0, 8);
+    }
+
+    var _feur2 = function(n) { return n.toLocaleString('es-ES', {minimumFractionDigits: 0, maximumFractionDigits: 0}) + '€'; };
+    var _qtyLbl = cardId === 'rendimiento' ? ' ud.' : ' ud.';
+
+    if (_tiRows.length === 0) {
+     _tiListEl.innerHTML = '<div style="font-size:var(--fs-xs);color:var(--ink-soft);padding:4px 0">Sin datos en el periodo</div>';
+    } else {
+     _tiListEl.innerHTML = _tiRows.map(function(r) {
+      return '<div class="snap-top-item-row">' +
+       '<div class="snap-top-item-name">' + (r.nombre || '—') + '</div>' +
+       '<div class="snap-top-item-right">' +
+        '<span class="snap-top-item-eur">' + _feur2(r.total) + '</span>' +
+        '<span class="snap-top-item-qty">' + Math.round(r.qty) + _qtyLbl + '</span>' +
+       '</div>' +
+      '</div>';
+     }).join('');
+    }
+   }
+  } catch(_tiErr) { console.warn('[TopItems] error:', _tiErr); }
  }
 
  // Distribución de cuentas + pie chart — solo flujo-caja
