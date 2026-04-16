@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-919-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-920-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.919-dev</title>
+<title>Dashwey v1.3.920-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11540,7 +11540,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.919-dev';
+ const _APP_VERSION = 'v1.3.920-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33135,48 +33135,33 @@ window._DashweyDeviceId = (() => {
  _back = document.getElementById('dyn-fab-backdrop');
  if (!_fab || !_wrap) return;
 
- // Leer tab actual desde el DOM
- var bodyTab = document.body.getAttribute('data-tab');
- _curTab = bodyTab !== null ? parseInt(bodyTab) : -1;
-
- // Leer tarjeta snap activa si ya está en Dashboard
- if (_curTab === 1 && typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
- _curCard = App.dash._getActiveCardId() || null;
- }
-
- // Escuchar cambio de tab
- window.addEventListener('dashwey:tab-changed', function(e) {
- _curTab = e.detail ? e.detail.tab : -1;
- if (_curTab !== 1) { _curCard = null; _update(); }
- else { _update(); if (!_curCard) _fabDoRetry(); }
- });
-
- // MutationObserver en body[data-tab] como fallback para WebView
- try {
- var _tabObs = new MutationObserver(function() {
- var t = document.body.getAttribute('data-tab');
- var newTab = t !== null ? parseInt(t) : -1;
- if (newTab !== _curTab) {
- _curTab = newTab;
- if (_curTab !== 1) { _curCard = null; _update(); }
- else { _update(); if (!_curCard) _fabDoRetry(); }
- }
- });
- _tabObs.observe(document.body, { attributes: true, attributeFilter: ['data-tab'] });
- } catch(e) {}
-
- // _snapCardChanged: actualiza la tarjeta activa y dispara _update
- window._snapCardChanged = function(cardId) {
- _curCard = cardId;
- // Leer tab actual por si no se recibió el evento
- var t = document.body.getAttribute('data-tab');
- if (t !== null) _curTab = parseInt(t);
- _update();
+ // Helper: leer card activa directamente del DOM (fallback robusto para WebView)
+ var _getCardFromDOM = function() {
+  // 1. Pregunta al módulo dash
+  if (typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
+   var c = App.dash._getActiveCardId();
+   if (c) return c;
+  }
+  // 2. Leer card más visible en dash-cards-container
+  var cont = document.getElementById('dash-cards-container');
+  if (cont) {
+   var cards = cont.querySelectorAll('.card[data-card-id]');
+   var contR = cont.getBoundingClientRect();
+   var center = contR.top + contR.height / 2;
+   var best = null, bestDist = Infinity;
+   cards.forEach(function(card) {
+    var r = card.getBoundingClientRect();
+    var dist = Math.abs((r.top + r.height / 2) - center);
+    if (dist < bestDist) { bestDist = dist; best = card; }
+   });
+   if (best) return best.getAttribute('data-card-id');
+   // 3. Primer hijo
+   if (cards.length) return cards[0].getAttribute('data-card-id');
+  }
+  return null;
  };
 
- _update();
-
- // Retry — garantizar FAB visible al entrar en Dashboard
+ // Retry: polling hasta obtener card con tab=1 activo
  var _fabDoRetry = function() {
   var _n = 0;
   var _poll = function() {
@@ -33184,20 +33169,50 @@ window._DashweyDeviceId = (() => {
    var t = document.body.getAttribute('data-tab');
    if (t !== null) _curTab = parseInt(t);
    if (_curTab === 1) {
-    if (!_curCard && typeof App !== 'undefined' && App.dash && App.dash._getActiveCardId) {
-     _curCard = App.dash._getActiveCardId() || null;
-    }
-    if (!_curCard) {
-     var first = document.querySelector('#dash-cards-container .card[data-card-id]');
-     if (first) _curCard = first.getAttribute('data-card-id');
-    }
+    if (!_curCard) _curCard = _getCardFromDOM();
     if (_curCard) { _update(); return; }
    }
-   if (_n < 8) setTimeout(_poll, 350);
+   if (_n < 10) setTimeout(_poll, 300);
   };
-  setTimeout(_poll, 200);
+  _poll();
  };
- _fabDoRetry();
+
+ // Leer tab actual desde el DOM
+ var bodyTab = document.body.getAttribute('data-tab');
+ _curTab = bodyTab !== null ? parseInt(bodyTab) : -1;
+ if (_curTab === 1) _curCard = _getCardFromDOM();
+
+ // _snapCardChanged: recibe notificación del snap
+ window._snapCardChanged = function(cardId) {
+  _curCard = cardId;
+  var t = document.body.getAttribute('data-tab');
+  if (t !== null) _curTab = parseInt(t);
+  _update();
+ };
+
+ // Escuchar cambio de tab
+ window.addEventListener('dashwey:tab-changed', function(e) {
+  _curTab = e.detail ? e.detail.tab : -1;
+  if (_curTab !== 1) { _curCard = null; _update(); }
+  else { _curCard = _getCardFromDOM(); _update(); if (!_curCard) _fabDoRetry(); }
+ });
+
+ // MutationObserver en body[data-tab] — fallback WebView
+ try {
+  var _tabObs = new MutationObserver(function() {
+   var t = document.body.getAttribute('data-tab');
+   var newTab = t !== null ? parseInt(t) : -1;
+   if (newTab !== _curTab) {
+    _curTab = newTab;
+    if (_curTab !== 1) { _curCard = null; _update(); }
+    else { _curCard = _getCardFromDOM(); _update(); if (!_curCard) _fabDoRetry(); }
+   }
+  });
+  _tabObs.observe(document.body, { attributes: true, attributeFilter: ['data-tab'] });
+ } catch(e) {}
+
+ _update();
+ if (_curTab === 1 && !_curCard) _fabDoRetry();
  }
 
  function _update() {
@@ -33244,6 +33259,7 @@ window._DashweyDeviceId = (() => {
  }
 
  window._dynFabTap = function() {
+ if (!_curCard) _curCard = _getCardFromDOM();
  var cfg = _curCard ? _CARD_CONFIG[_curCard] : null;
  if (!cfg) return;
  try { Utils.triggerHaptic('light'); } catch(e) {}
