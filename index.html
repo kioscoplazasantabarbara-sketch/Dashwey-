@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-926-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-927-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.926-dev</title>
+<title>Dashwey v1.3.927-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11540,7 +11540,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.926-dev';
+ const _APP_VERSION = 'v1.3.927-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22301,114 +22301,146 @@ function _confirmBorrarCuenta(id) {
   if (!c) return;
 
   var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  var fmtFecha = function(iso) {
-   try { var d=new Date(iso); return String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()]+' '+d.getFullYear(); } catch(_){ return '\u2014'; }
+
+  var _fmtFecha = function(iso) {
+   try {
+    var d = new Date(iso);
+    return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear();
+   } catch(_){ return '\u2014'; }
   };
+
+  var _fmtFechaCorta = function(iso) {
+   try {
+    var d = new Date(iso);
+    return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+   } catch(_){ return ''; }
+  };
+
+  var COLORS = ['#2563EB','#16A34A','#F97316','#8B5CF6','#EC4899','#14B8A6'];
 
   var _renderDetalle = function() {
    var cuenta = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
    if (!cuenta) return;
 
-   // Movimientos: gastos + ingresos + transferencias
+   // Movimientos ordenados newest→oldest con saldo acumulado al estilo banco
    var gastos   = (State.get.gastosOp()   || []).filter(function(g){ return g.cuentaId === cuentaId; });
    var ingresos = (State.get.ingresosFin()|| []).filter(function(i){ return i.cuentaId === cuentaId; });
    var movs = [];
    gastos.forEach(function(g){
     movs.push({ id:g.id, src:'gasto', concepto:g.nombre||'Gasto',
-     importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'',
-     tipo: g.tipo||'gasto' });
+     importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'', tipo:g.tipo||'gasto' });
    });
    ingresos.forEach(function(i){
     movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
-     importe:+(i.importe||0), fecha:i.fecha||'',
-     tipo: i.tipo||'ingreso' });
+     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso' });
    });
    movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
 
-   // Icon por tipo
-   var tipoIcon = function(m) {
-    if (m.tipo==='transferencia') return '\uD83D\uDD04';
-    if (m.tipo==='ajuste') return '\u2696\uFE0F';
-    return m.importe >= 0 ? '\u2191' : '\u2193';
-   };
+   // Calcular saldo tras cada movimiento (hacia atrás desde saldo actual)
+   var saldoActual = cuenta.saldo || 0;
+   var saldoTras = []; // saldo DESPUÉS de ese movimiento (cronológico inverso)
+   var acc = saldoActual;
+   movs.forEach(function(m){ saldoTras.push(acc); acc -= m.importe; });
 
+   // Render movimientos estilo extracto bancario
    var movsHtml = movs.length === 0
-    ? '<div style="padding:40px 16px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos registrados</div>'
-    : movs.map(function(m){
-       var col = m.importe >= 0 ? '#16A34A' : 'var(--red)';
-       var sign = m.importe >= 0 ? '+' : '';
-       var icoCol = m.tipo==='transferencia' ? 'var(--ink-soft)' : col;
-       return '<div class="fc-move-row" data-mov-id="'+m.id+'" data-mov-src="'+m.src+'"'
-        +' style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
-        +'<div style="width:28px;height:28px;border-radius:50%;background:'+icoCol+'22;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;color:'+icoCol+'">'+tipoIcon(m)+'</div>'
-        +'<div style="flex:1;min-width:0">'
-        +'<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(m.concepto)+'</div>'
-        +'<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">'+fmtFecha(m.fecha)+'</div>'
-        +'</div>'
-        +'<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:'+col+';flex-shrink:0">'+sign+_feur(Math.abs(m.importe))+'</div>'
-        +'<svg width="12" height="12" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>'
-        +'</div>';
+    ? '<div style="padding:32px 16px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>'
+    : movs.map(function(m, i) {
+       var col   = m.importe >= 0 ? '#16A34A' : 'var(--red)';
+       var sign  = m.importe >= 0 ? '+' : '';
+       var saldoTrasEste = saldoTras[i];
+       var icoTipo = m.tipo === 'transferencia' ? '\uD83D\uDD04' : m.tipo === 'ajuste' ? '\u2696\uFE0F' : m.importe >= 0 ? '\u2191' : '\u2193';
+       return '<div class="fc-move-row" data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"'
+        + ' style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
+        // Fecha
+        + '<div style="flex-shrink:0;width:36px;text-align:center;padding-top:2px">'
+        + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:1.2">' + _fmtFechaCorta(m.fecha) + '</div>'
+        + '</div>'
+        // Icono
+        + '<div style="width:32px;height:32px;border-radius:50%;background:' + col + '18;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;color:' + col + '">' + icoTipo + '</div>'
+        // Info
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.concepto) + '</div>'
+        + '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">Saldo: ' + _feur(saldoTrasEste) + '</div>'
+        + '</div>'
+        // Importe
+        + '<div style="flex-shrink:0;text-align:right">'
+        + '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:' + col + '">' + sign + _feur(Math.abs(m.importe)) + '</div>'
+        + '</div>'
+        + '</div>';
       }).join('');
 
-   var COLORS = ['#2563EB','#16A34A','#F97316','#8B5CF6','#EC4899','#14B8A6'];
+   // Menú llave — 3 secciones colapsables
+   var _seccion = function(id, titulo, contenido) {
+    return '<div style="border-bottom:1px solid var(--border)">'
+     + '<button data-llv="' + id + '" style="width:100%;padding:14px 16px;border:none;background:none;display:flex;align-items:center;justify-content:space-between;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-family:var(--font)">'
+     + '<span style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink)">' + titulo + '</span>'
+     + '<span id="' + id + '-ico" style="font-size:14px;color:var(--ink-soft);transition:transform .2s">\u203A</span>'
+     + '</button>'
+     + '<div id="' + id + '" style="display:none">' + contenido + '</div>'
+     + '</div>';
+   };
+
+   var _contDatos =
+    '<div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px">'
+    + '<input id="dc-edit-nombre" class="fi" type="text" placeholder="Nombre" value="' + esc(cuenta.nombre||'') + '">'
+    + '<input id="dc-edit-banco"  class="fi" type="text" placeholder="Banco"  value="' + esc(cuenta.banco||'')  + '">'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    + COLORS.map(function(col){
+       return '<button class="dc-color-chip" data-color="' + col + '" style="width:30px;height:30px;border-radius:50%;background:' + col
+        + ';border:' + (col===cuenta.color ? '3px solid var(--ink)' : '2px solid transparent')
+        + ';cursor:pointer;touch-action:manipulation"></button>';
+      }).join('')
+    + '</div>'
+    + '<button id="dc-guardar-datos" style="width:100%;height:40px;border-radius:var(--r-md);border:none;background:var(--ink);color:var(--surface);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Guardar</button>'
+    + '</div>';
+
+   var _contAjuste =
+    '<div style="padding:0 16px 16px">'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:8px">Corrige el saldo sin crear movimiento operativo.</div>'
+    + '<div style="display:flex;gap:8px">'
+    + '<input id="dc-ajuste-input" class="fi" type="number" inputmode="decimal" step="0.01" placeholder="Nuevo saldo" style="flex:1">'
+    + '<button id="dc-ajuste-save" style="height:40px;padding:0 16px;border-radius:var(--r-md);border:none;background:#F97316;color:#fff;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation;white-space:nowrap">Ajustar</button>'
+    + '</div>'
+    + '</div>';
+
+   var _contEliminar =
+    '<div style="padding:0 16px 16px">'
+    + '<button id="dc-borrar" style="width:100%;height:40px;border-radius:var(--r-md);border:1.5px solid var(--red);background:none;color:var(--red);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Eliminar esta cuenta</button>'
+    + '</div>';
+
+   var menuLlave =
+    '<div id="dc-menu-llave" style="display:none;position:absolute;right:56px;top:14px;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:0 8px 32px rgba(0,0,0,0.14);min-width:280px;overflow:hidden">'
+    + _seccion('dc-sec-datos', '\u270F\uFE0F Datos de la cuenta', _contDatos)
+    + _seccion('dc-sec-ajuste', '\u2696\uFE0F Ajustar saldo', _contAjuste)
+    + _seccion('dc-sec-eliminar', '\uD83D\uDDD1\uFE0F Eliminar cuenta', _contEliminar)
+    + '</div>';
 
    var html =
-    // ── Header con color de cuenta ──
-    '<div class="modal-header-dark" style="background:var(--surface);border-bottom:1px solid var(--border)">'
-    +'<div style="display:flex;align-items:center;gap:10px;padding:14px 16px 10px">'
-    +'<div style="width:12px;height:12px;border-radius:50%;background:'+cuenta.color+';flex-shrink:0"></div>'
-    +'<div style="flex:1;min-width:0">'
-    +'<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink)">'+esc(cuenta.nombre)+'</div>'
-    +(cuenta.banco ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:1px">'+esc(cuenta.banco)+'</div>' : '')
-    +'</div>'
-    +'<button id="dc-close" class="mhd-close" style="flex-shrink:0">\u2715</button>'
-    +'</div>'
-
-    // ── Saldo destacado ──
-    +'<div style="padding:4px 16px 16px;display:flex;align-items:baseline;gap:8px">'
-    +'<div style="font-size:40px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">'+_feur(cuenta.saldo||0)+'</div>'
-    +'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo actual</div>'
-    +'</div>'
-    +'</div>'
-
-    // ── Sección A: Editar datos de cuenta ──
-    +'<div style="padding:16px 16px 0">'
-    +'<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Datos de la cuenta</div>'
-    +'<div style="display:flex;flex-direction:column;gap:8px">'
-    +'<input id="dc-edit-nombre" class="fi" type="text" placeholder="Nombre de la cuenta" value="'+esc(cuenta.nombre||'')+'">'
-    +'<input id="dc-edit-banco"  class="fi" type="text" placeholder="Banco o entidad"      value="'+esc(cuenta.banco||'')+'">'
-    +'</div>'
-    // Chips de color
-    +'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
-    +COLORS.map(function(col){
-      return '<button class="dc-color-chip" data-color="'+col+'" style="width:28px;height:28px;border-radius:50%;background:'+col
-       +';border:'+(col===cuenta.color ? '3px solid var(--ink)' : '2px solid transparent')
-       +';cursor:pointer;touch-action:manipulation;flex-shrink:0"></button>';
-     }).join('')
-    +'</div>'
-    +'<button id="dc-guardar-datos" style="width:100%;height:40px;margin-top:10px;border-radius:var(--r-md);border:none;background:var(--ink);color:var(--surface);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Guardar datos</button>'
-    +'</div>'
-
-    // ── Sección B: Ajustar saldo ──
-    +'<div style="padding:16px 16px 0;margin-top:8px">'
-    +'<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Ajustar saldo</div>'
-    +'<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:8px">Corrige el saldo sin crear movimiento operativo.</div>'
-    +'<div style="display:flex;gap:8px">'
-    +'<input id="dc-ajuste-input" class="fi" type="number" inputmode="decimal" step="0.01" placeholder="Nuevo saldo" style="flex:1">'
-    +'<button id="dc-ajuste-save" style="height:40px;padding:0 16px;border-radius:var(--r-md);border:none;background:#F97316;color:#fff;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation;white-space:nowrap;flex-shrink:0">Ajustar</button>'
-    +'</div>'
-    +'</div>'
-
-    // ── Sección C: Movimientos ──
-    +'<div style="padding:16px 16px 6px;margin-top:8px;display:flex;align-items:center;justify-content:space-between">'
-    +'<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px">Movimientos ('+movs.length+')</div>'
-    +'</div>'
-    +'<div id="dc-movs">'+movsHtml+'</div>'
-
-    // ── Zona destrucción ──
-    +'<div style="padding:16px;margin-top:8px;border-top:1px solid var(--border)">'
-    +'<button id="dc-borrar" style="width:100%;height:40px;border-radius:var(--r-md);border:1.5px solid var(--red);background:none;color:var(--red);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Eliminar cuenta</button>'
-    +'</div>';
+    // ── Header estilo banco ──
+    '<div style="position:relative;background:var(--surface);border-bottom:1px solid var(--border);padding:16px 16px 14px;flex-shrink:0">'
+    + menuLlave
+    + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+    + '<div style="width:12px;height:12px;border-radius:50%;background:' + cuenta.color + ';flex-shrink:0"></div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink)">' + esc(cuenta.nombre) + '</div>'
+    + (cuenta.banco ? '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">' + esc(cuenta.banco) + '</div>' : '')
+    + '</div>'
+    // Icono llave mecánica
+    + '<button id="dc-llave-btn" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--bg);cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+    + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>'
+    + '</button>'
+    + '<button id="dc-close" class="mhd-close" style="flex-shrink:0">\u2715</button>'
+    + '</div>'
+    // Saldo hero
+    + '<div style="display:flex;align-items:baseline;gap:8px">'
+    + '<div style="font-size:38px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _feur(cuenta.saldo||0) + '</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo actual</div>'
+    + '</div>'
+    + '</div>'
+    // ── Extracto de movimientos ──
+    + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;padding:10px 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0">Movimientos (' + movs.length + ')</div>'
+    + '<div id="dc-movs" style="overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">' + movsHtml + '</div>';
 
    App.ui.setFs(html);
    App.ui.openFs('full');
@@ -22416,9 +22448,49 @@ function _confirmBorrarCuenta(id) {
    requestAnimationFrame(function() {
     // ── Cerrar ──
     var closeEl = document.getElementById('dc-close');
-    if (closeEl) closeEl.addEventListener('click', function() {
-     App.ui.closeFs();
-    }, { once: true });
+    if (closeEl) closeEl.addEventListener('click', function() { App.ui.closeFs(); }, { once: true });
+
+    // ── Menú llave ──
+    var _llaveBtn = document.getElementById('dc-llave-btn');
+    var _llaveMenu = document.getElementById('dc-menu-llave');
+    var _llaveOpen = false;
+    var _toggleLlave = function() {
+     _llaveOpen = !_llaveOpen;
+     if (_llaveMenu) _llaveMenu.style.display = _llaveOpen ? '' : 'none';
+    };
+    if (_llaveBtn) {
+     _llaveBtn.ontouchend = function(e) { e.preventDefault(); e.stopPropagation(); _toggleLlave(); };
+     _llaveBtn.onclick    = function(e) { if (e.pointerType !== 'touch') { e.stopPropagation(); _toggleLlave(); } };
+    }
+    // Cerrar menú al tocar fuera
+    document.addEventListener('click', function _llavClose(e) {
+     if (_llaveMenu && !_llaveMenu.contains(e.target) && e.target !== _llaveBtn) {
+      _llaveMenu.style.display = 'none'; _llaveOpen = false;
+      document.removeEventListener('click', _llavClose);
+     }
+    });
+
+    // ── Acordeón secciones menú ──
+    var _accs = document.querySelectorAll('[data-llv]');
+    _accs.forEach(function(btn) {
+     btn.addEventListener('click', function() {
+      var id = btn.getAttribute('data-llv');
+      var body = document.getElementById(id);
+      var ico  = document.getElementById(id + '-ico');
+      if (!body) return;
+      var open = body.style.display !== 'none';
+      // Cerrar todos los demás
+      _accs.forEach(function(b) {
+       var bid = b.getAttribute('data-llv');
+       var bb = document.getElementById(bid);
+       var bi = document.getElementById(bid + '-ico');
+       if (bb) bb.style.display = 'none';
+       if (bi) bi.style.transform = '';
+      });
+      body.style.display = open ? 'none' : '';
+      if (ico) ico.style.transform = open ? '' : 'rotate(90deg)';
+     });
+    });
 
     // ── Color chips ──
     var _selectedColor = cuenta.color;
@@ -22431,7 +22503,7 @@ function _confirmBorrarCuenta(id) {
      });
     });
 
-    // ── Guardar datos de cuenta (Sección A) ──
+    // ── Guardar datos ──
     var guardarEl = document.getElementById('dc-guardar-datos');
     if (guardarEl) guardarEl.addEventListener('click', function() {
      var nom = (document.getElementById('dc-edit-nombre').value || '').trim();
@@ -22443,7 +22515,7 @@ function _confirmBorrarCuenta(id) {
      setTimeout(function() { _renderDetalle(); }, 180);
     }, { once: true });
 
-    // ── Ajustar saldo (Sección B) ──
+    // ── Ajustar saldo ──
     var ajusteEl = document.getElementById('dc-ajuste-save');
     if (ajusteEl) ajusteEl.addEventListener('click', function() {
      var raw = (document.getElementById('dc-ajuste-input').value || '').replace(',', '.');
@@ -22451,16 +22523,11 @@ function _confirmBorrarCuenta(id) {
      if (isNaN(nuevoSaldo)) { try { showToast('\u26a0\ufe0f Introduce un saldo v\u00e1lido'); } catch(_) {} return; }
      var hoy = new Date().toISOString().slice(0,10);
      var diff = nuevoSaldo - (cuenta.saldo || 0);
-     // Registrar como ajuste en ingresosFin para trazabilidad
-     var ajId = 'aj_' + Date.now();
      if (Math.abs(diff) > 0.001) {
-      var ajReg = { id: ajId, concepto: 'Ajuste de saldo', importe: diff,
+      var ajReg = { id: 'aj_' + Date.now(), concepto: 'Ajuste de saldo', importe: diff,
        cuentaId: cuentaId, fecha: hoy, tipo: 'ajuste', recurrente: false };
-      if (diff > 0) {
-       State.set.addIngreso && State.set.addIngreso(ajReg);
-      } else {
-       State.set.addGasto && State.set.addGasto(Object.assign({}, ajReg, { nombre: 'Ajuste de saldo', importe: Math.abs(diff), tipo: 'ajuste' }));
-      }
+      if (diff > 0) { State.set.addIngreso && State.set.addIngreso(ajReg); }
+      else { State.set.addGasto && State.set.addGasto(Object.assign({}, ajReg, { nombre: 'Ajuste de saldo', importe: Math.abs(diff), tipo: 'ajuste' })); }
      }
      State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo });
      DashweyBus.emit('cuenta');
@@ -22468,13 +22535,13 @@ function _confirmBorrarCuenta(id) {
      setTimeout(function() { _renderDetalle(); }, 180);
     }, { once: true });
 
-    // ── Borrar cuenta ──
+    // ── Eliminar ──
     var borrarEl = document.getElementById('dc-borrar');
     if (borrarEl) borrarEl.addEventListener('click', function() {
      App.dash._confirmBorrarCuenta(cuentaId);
     }, { once: true });
 
-    // ── Tap movimiento → editar (Sección C/D) ──
+    // ── Tap movimiento → editar ──
     var movsEl = document.getElementById('dc-movs');
     if (movsEl) {
      movsEl.addEventListener('click', function(e) {
@@ -22482,10 +22549,7 @@ function _confirmBorrarCuenta(id) {
       for (var _i=0; _i<6 && el && el !== movsEl; _i++) {
        var _id  = el.getAttribute && el.getAttribute('data-mov-id');
        var _src = el.getAttribute && el.getAttribute('data-mov-src');
-       if (_id && _src) {
-        try { App.dash._openEditMovimientoSheet(_id, _src); } catch(_e) {}
-        return;
-       }
+       if (_id && _src) { try { App.dash._openEditMovimientoSheet(_id, _src); } catch(_e) {} return; }
        el = el.parentElement;
       }
      });
