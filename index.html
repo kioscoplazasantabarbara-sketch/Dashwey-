@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-941-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-942-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.941-dev</title>
+<title>Dashwey v1.3.942-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9761,6 +9761,18 @@ const State = (() => {
  addPedido: (p) => { // v1.3.594: deduplicación por ID — consistente con addVenta
  if (p?.id && _state.historialPedidos.some(x => x.id === p.id)) return;
  _state.historialPedidos.push(p); save(); },
+ removeHistorialPedido: (id) => {
+  if (!_state.historialPedidos) return;
+  _state.historialPedidos = _state.historialPedidos.filter(p => p.id !== id);
+  try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  save();
+ },
+ removeFactura: (id) => {
+  if (!_state.facturas) return;
+  _state.facturas = _state.facturas.filter(f => f.id !== id);
+  try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  save();
+ },
  // v1.3.582: deduplicación por ID — evita duplicados si addVenta se llama dos veces con el mismo payload
  addVenta: (v) => { if (v?.id && _state.ventas.some(x => x.id === v.id)) return; _state.ventas.push(v); save(); },
  addProd: (p) => { _state.productos.push(p); save(); },
@@ -11565,7 +11577,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.941-dev';
+ const _APP_VERSION = 'v1.3.942-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31406,27 +31418,77 @@ _eaRecalc();
  return;
  }
 
+ // _histDeleteItem: borra pedido o factura
+ var _histDeleteItem = function(tipo, itemId) {
+  window._showDestructiveConfirm({
+   title: tipo==='factura' ? 'Borrar factura' : 'Borrar pedido',
+   message: 'Se eliminará del historial. Esta acción no se puede deshacer.',
+   confirmLabel: 'Borrar',
+   onConfirm: function() {
+    try{ if(tipo==='factura'){State.set.removeFactura(itemId);}else{State.set.removeHistorialPedido(itemId);} }catch(_){}
+    try{showToast('🗑️ Eliminado del historial');}catch(_){}
+    try{App.ui.closeFs();}catch(_){}
+    setTimeout(function(){try{App.alm.openHistorialPedidos();}catch(_){};},260);
+   }
+  });
+ };
+ // _histOpenFactura: detalle solo lectura con datos fiscales
+ var _histOpenFactura = function(fac) {
+  var MON=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var fmtD=function(iso){try{var d=new Date(iso);return String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()]+' '+d.getFullYear();}catch(_){return '—';}};
+  var lineas=(fac.items||[]).map(function(l){
+   return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--border)">'
+    +'<div style="flex:1;min-width:0"><div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">'+esc(l.nombre||'Artículo')+'</div>'
+    +'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">'+l.ncajas+' bulto · '+(l.ncajas*(l.udscaja||1))+' uds · IVA '+l.ivaPct+'%</div></div>'
+    +'<div style="text-align:right;flex-shrink:0;margin-left:8px">'
+    +'<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink)">'+feur(l.total||0)+'</div>'
+    +'<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Base: '+feur(l.importeBase||0)+'</div>'
+    +'</div></div>';
+  }).join('');
+  var totHtml=
+   '<div style="padding:8px 0">'
+   +'<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:var(--fs-sm);color:var(--ink-soft)">Base imponible</span><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi)">'+feur(fac.subtotalBase||0)+'</span></div>'
+   +'<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:var(--fs-sm);color:var(--ink-soft)">IVA</span><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi)">'+feur(fac.totalIva||0)+'</span></div>'
+   +((fac.totalRE&&fac.totalRE>0)?'<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:var(--fs-sm);color:var(--ink-soft)">Recargos</span><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi)">'+feur(fac.totalRE)+'</span></div>':'')
+   +'<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1.5px solid var(--border);margin-top:4px">'
+   +'<span style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">TOTAL</span>'
+   +'<span style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(fac.total||0)+'</span></div>'
+   +'</div>';
+  var facHtml='<div style="display:flex;flex-direction:column;overflow:hidden">'
+   +'<div style="flex-shrink:0;padding:14px 16px 10px;border-bottom:1px solid var(--border)">'
+   +'<div style="display:flex;align-items:flex-start;justify-content:space-between">'
+   +'<div><div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">'+esc(fac.provNombre||'Proveedor')+'</div>'
+   +'<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">'+esc(fac.id||'FACTURA')+' · '+fmtD(fac.fecha)+'</div>'
+   +(fac.provCif?'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">CIF: '+esc(fac.provCif)+'</div>':'')
+   +(fac.provDireccion?'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">'+esc(fac.provDireccion)+'</div>':'')
+   +'</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>'
+   +'<div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px">'+lineas+totHtml+'</div>'
+   +'</div>';
+  try{App.ui.setFs(facHtml);}catch(_){ui.setFs(facHtml);}
+  try{App.ui.openFs();}catch(_){ui.openFs();}
+ };
  const rows = historial.map(function(item, _hi) {
- const prov = State.get.prov(item.provId);
- const esFactura = item._tipo === 'factura';
- const nArt = (item.items || []).length;
- const total = esFactura
- ? (item.total || 0)
- : (item.items || []).reduce(function(s,o){ return s + (o.ncajas||1)*(o.precio||0)*1.10; }, 0);
- const badge = esFactura
- ? '<div class="os-status-badge" style="background:rgba(220,60,30,0.1);color:#DC3C1E;border:1px solid rgba(220,60,30,0.2);font-size:9px">' + esc(item.id||'FACTURA') + '</div>'
- : '<div class="os-status-badge os-badge-checked">Recibido</div>';
- const icon = esFactura ? '🟢' : '📦';
- const onclick = esFactura ? '' : 'onclick="App.alm._reabrirPedidoHistorial(\'' + item.id + '\')"';
- return '<div class="os-item" style="cursor:' + (esFactura?'default':'pointer') + ';--item-index:' + Math.min(_hi,8) + '" ' + onclick + '>' +
- '<div class="os-item-icon">' + icon + '</div>' +
- '<div class="os-item-info">' +
- '<div class="os-item-prov">' + fmtDate(item.fecha) + '</div>' +
- '<div class="os-item-meta">' + (prov ? esc(prov.nombre) + ' · ' : (esFactura&&item.provNombre ? esc(item.provNombre)+' · ' : '')) +
- nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
- '</div>' +
- '<div class="os-item-right">' + badge + '</div>' +
- '</div>';
+  const prov = State.get.prov(item.provId);
+  const esFactura = item._tipo === 'factura';
+  const nArt = (item.items || []).length;
+  const total = esFactura
+   ? (item.total || 0)
+   : (item.items || []).reduce(function(s,o){ return s + (o.ncajas||1)*(o.precio||0)*1.10; }, 0);
+  const badge = esFactura
+   ? '<div class="os-status-badge" style="background:rgba(220,60,30,0.1);color:#DC3C1E;border:1px solid rgba(220,60,30,0.2);font-size:9px">' + esc(item.id||'FACTURA') + '</div>'
+   : '<div class="os-status-badge os-badge-checked">Recibido</div>';
+  const icon = esFactura ? '🟢' : '📦';
+  const safeId = esc(item.id||'');
+  const safeTipo = esFactura ? 'factura' : 'pedido';
+  return '<div class="os-item" data-hid="' + safeId + '" data-htipo="' + safeTipo + '" style="cursor:pointer;--item-index:' + Math.min(_hi,8) + '">' +
+   '<div class="os-item-icon">' + icon + '</div>' +
+   '<div class="os-item-info">' +
+   '<div class="os-item-prov">' + fmtDate(item.fecha) + '</div>' +
+   '<div class="os-item-meta">' + (prov ? esc(prov.nombre) + ' · ' : (item.provNombre ? esc(item.provNombre)+' · ' : '')) +
+   nArt + ' artículo' + (nArt!==1?'s':'') + ' · ' + feur(total) + '</div>' +
+   '</div>' +
+   '<div class="os-item-right">' + badge + '</div>' +
+   '</div>';
  }).join('');
 
  const nPed = pedidos.length; const nFac = facturas.length;
@@ -31435,43 +31497,80 @@ _eaRecalc();
  '<div class="mhd-title">Historial de pedidos</div>' +
  '<div class="mhd-sub">' + nPed + ' pedido' + (nPed!==1?'s':'') + ' · ' + nFac + ' factura' + (nFac!==1?'s':'') + '</div>' +
  '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
- '<div style="padding:12px 14px 24px;font-family:var(--font)">' + rows + '</div>'
+ '<div style="padding:12px 14px 24px;font-family:var(--font)" id="hist-list">' + rows + '</div>'
  );
  ui.openFs();
+ // Event delegation: tap = detalle, long press = borrar
+ requestAnimationFrame(function(){
+  var _histList = document.getElementById('hist-list');
+  if(!_histList) return;
+  var _lpTimer = null;
+  var _histFindItem = function(el){
+   for(var i=0;i<6&&el;i++){ if(el.dataset&&el.dataset.hid) return el; el=el.parentElement; } return null;
+  };
+  _histList.addEventListener('touchstart', function(e){
+   var _el=_histFindItem(e.target); if(!_el) return;
+   _lpTimer=setTimeout(function(){
+    _lpTimer=null;
+    try{Utils.triggerHaptic('warning');}catch(_){}
+    _histDeleteItem(_el.dataset.htipo, _el.dataset.hid);
+   },600);
+  }, {passive:true});
+  _histList.addEventListener('touchend', function(e){
+   if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null;}
+  });
+  _histList.addEventListener('touchmove', function(e){
+   if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null;}
+  }, {passive:true});
+  _histList.addEventListener('click', function(e){
+   var _el=_histFindItem(e.target); if(!_el) return;
+   var _id=_el.dataset.hid; var _tipo=_el.dataset.htipo;
+   if(_tipo==='factura'){
+    var _fac=(State.get.facturas?State.get.facturas():[]).find(function(f){return f.id===_id;});
+    if(_fac) _histOpenFactura(_fac);
+   } else {
+    App.alm._reabrirPedidoHistorial(_id);
+   }
+  });
+ });
  }
 
  function _reabrirPedidoHistorial(pedidoId) {
  try {
- const allHist = State.get.historialPedidos() || [];
- const pedido = allHist.find(p => p.id === pedidoId);
- if (!pedido) { showToast('⚠️ Pedido no encontrado'); return; }
-
- const prov = State.get.prov(pedido.provId);
- const items = (pedido.items || []).map(o => {
- const p = State.get.prod(o.prodId);
- const hist = (p && p.historialPrecios) || [];
- const ultH = hist.length >= 2 ? hist[hist.length - 2] : null;
- return {
- prodId: o.prodId,
- nombre: (p && p.nombre) || o.prodId,
- e: (p && p.e) || '📦',
- ncajas: o.ncajas || 1,
- udscaja: o.udscaja || (p && p.udscaja) || 12,
- precio: o.precio || (p && p.precioCompra) || 0,
- pvpActual: o.pvp || (p && p.pvp) || 0,
- iva: (p && p.iva) || '10%', // v1.3.638: BUG-07
- precioHistorico: ultH ? (ultH.precio || 0) : 0,
- };
- });
-
- App.ui.closeFs();
- setTimeout(function() {
- if (window._checkModal) {
- window._checkModal.open(items, { sel: pedido.provId, prov, orderId: null });
- }
- }, 260);
-
-
+  var allHist = State.get.historialPedidos() || [];
+  var pedido = allHist.find(function(p){ return p.id === pedidoId; });
+  if (!pedido) { showToast('⚠️ Pedido no encontrado'); return; }
+  var prov = State.get.prov(pedido.provId);
+  var provNom = prov ? (prov.nombre||'Proveedor') : 'Proveedor';
+  var MON=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var fmtD=function(iso){try{var d=new Date(iso);return String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()]+' '+d.getFullYear();}catch(_){return '—';}};
+  var total=(pedido.items||[]).reduce(function(s,o){return s+(o.ncajas||1)*(o.precio||0)*1.10;},0);
+  var rows=(pedido.items||[]).map(function(o){
+   var p=State.get.prod(o.prodId);
+   var nom=(p&&p.nombre)||o.prodId||'Artículo';
+   var uds=(o.ncajas||1)*(o.udscaja||1);
+   var tot=(o.ncajas||1)*(o.precio||0)*1.10;
+   return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">'
+    +'<div><div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">'+esc(nom)+'</div>'
+    +'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">'+(o.ncajas||1)+' bulto·'+uds+' uds</div></div>'
+    +'<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink)">'+feur(tot)+'</div>'
+    +'</div>';
+  }).join('');
+  var html='<div style="display:flex;flex-direction:column;overflow:hidden">'
+   +'<div style="flex-shrink:0;padding:16px 16px 12px;border-bottom:1px solid var(--border)">'
+   +'<div style="display:flex;align-items:flex-start;justify-content:space-between">'
+   +'<div><div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.5px">'+esc(provNom)+'</div>'
+   +'<div style="font-size:var(--fs-md);color:var(--ink-soft);margin-top:3px">'+fmtD(pedido.fecha)+'</div></div>'
+   +'<button class="mhd-close" onclick="App.ui.closeFs()">×</button>'
+   +'</div></div>'
+   +'<div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px">'+rows+'</div>'
+   +'<div style="flex-shrink:0;border-top:1px solid var(--border);padding:12px 16px;display:flex;justify-content:space-between;align-items:center">'
+   +'<div style="font-size:var(--fs-sm);color:var(--ink-soft)">'+(pedido.items||[]).length+' artículo'+((pedido.items||[]).length!==1?'s':'')+'</div>'
+   +'<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(total)+'</div>'
+   +'</div>'
+   +'</div>';
+  try{App.ui.setFs(html);}catch(_){ui.setFs(html);}
+  try{App.ui.openFs();}catch(_){ui.openFs();}
  } catch(e) { console.error('[ALM] _reabrirPedidoHistorial error:', e); }
  }
 
