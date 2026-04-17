@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-992-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-993-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.992-dev</title>
+<title>Dashwey v1.3.993-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9487,7 +9487,11 @@ const State = (() => {
  pedidoGuardado: true, // pedido guardado en pedidos programados (v1.2.41)
  pedidoRealizado: true, // pedido confirmado en almacén
  entregaProxima: true, // entrega próxima (≤ 2 días)
- visitaComercial: true, // visita comercial próxima (≤ 2 días)
+ visitaComercial: true, // visita comercial próxima (≤ 2 días) [LEGACY]
+ // v1.3.993 LOTE D — 4 toggles Agenda spec
+ proximoPedido: true, // día de pedido recurrente por proveedor (LOTE B)
+ alertaStock: true, // sin stock, bajo mínimo, caducidad (tab Alertas)
+ recordatorio: true, // recordatorios personales (tab Recordatorios)
  caducidad: true, // caducidad próxima de artículos
  cierreHora: '21:00', // hora informe cierre
  mensualDia: 1, // día del mes para informe mensual
@@ -11955,7 +11959,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.992-dev';
+ const _APP_VERSION = 'v1.3.993-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18530,15 +18534,118 @@ function _confirmBorrarCuenta(id) {
  }
 
 
+ // ── v1.3.993 LOTE D — Sheet CRUD Recordatorio (crear/editar/eliminar) ──
+ // recId: string → modo edición. null → modo creación.
+ // Campos: título, fecha, hora. (Recurrencia se queda en null por ahora.)
+ function _openRecordatorioSheet(recId) {
+ var existing = null;
+ if (recId) {
+  var arr = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
+  existing = arr.find(function(r){ return r && r.id === recId; }) || null;
+  if (!existing) { if (typeof showToast==='function') showToast('⚠️ Recordatorio no encontrado'); return; }
+ }
+
+ var now = existing ? new Date(existing.fecha) : new Date();
+ var defFecha = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+ var defHora = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+ var defTitulo = existing ? (existing.titulo || '') : '';
+ var isEdit = !!existing;
+
+ var modal = document.createElement('div');
+ modal.style.cssText = 'position:fixed;inset:0;z-index:10103;background:rgba(0,0,0,0.32);display:flex;align-items:flex-end';
+ modal.innerHTML = '<div style="width:100%;background:var(--surface);border-radius:28px 28px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));font-family:var(--font)">'
+  + '<div style="width:32px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 16px"></div>'
+  + '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:16px">'
+  + (isEdit ? '✏️ Editar recordatorio' : '⏰ Nuevo recordatorio') + '</div>'
+  + '<div style="display:flex;flex-direction:column;gap:10px">'
+  + '<input id="nr-titulo" placeholder="¿Qué quieres recordar?" class="fi" value="'+esc(defTitulo)+'">'
+  + '<div style="display:flex;gap:8px">'
+  + '<div style="flex:1;display:flex;flex-direction:column;gap:3px">'
+  + '<label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Fecha</label>'
+  + '<input id="nr-fecha" type="date" value="'+defFecha+'" class="fi">'
+  + '</div>'
+  + '<div style="flex:1;display:flex;flex-direction:column;gap:3px">'
+  + '<label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft)">Hora</label>'
+  + '<input id="nr-hora" type="time" value="'+defHora+'" class="fi">'
+  + '</div>'
+  + '</div>'
+  + '<div style="display:flex;gap:8px;margin-top:6px">'
+  + (isEdit ? '<button id="nr-del" style="flex:1;height:50px;border-radius:13px;background:rgba(139,26,47,0.12);color:var(--red);border:none;font-size:var(--fs-base);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">Eliminar</button>' : '')
+  + '<button id="nr-save" style="flex:2;height:50px;border-radius:13px;background:var(--red);color:#fff;border:none;font-size:var(--fs-lg);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">'
+  + (isEdit ? 'Guardar' : 'Crear') + '</button>'
+  + '</div>'
+  + '</div>'
+  + '</div>';
+
+ modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
+
+ modal.querySelector('#nr-save').addEventListener('click', function(){
+  var titulo = modal.querySelector('#nr-titulo').value.trim();
+  var fecha = modal.querySelector('#nr-fecha').value;
+  var hora = modal.querySelector('#nr-hora').value || '09:00';
+  if (!titulo) { if (typeof showToast==='function') showToast('⚠️ Introduce un título'); return; }
+  if (!fecha) { if (typeof showToast==='function') showToast('⚠️ Introduce una fecha'); return; }
+  var iso = new Date(fecha + 'T' + hora).toISOString();
+  if (isEdit) {
+   State.set.updateRecordatorio(recId, { titulo: titulo, fecha: iso });
+   if (typeof showToast==='function') showToast('✅ Recordatorio actualizado');
+  } else {
+   State.set.addRecordatorio({
+    id: 'rec_' + Date.now(),
+    titulo: titulo,
+    fecha: iso,
+    repite: null,
+    creado: new Date().toISOString()
+   });
+   if (typeof showToast==='function') showToast('✅ Recordatorio creado');
+  }
+  modal.remove();
+  try { dash.render(); } catch(_) {}
+ });
+
+ if (isEdit) {
+  modal.querySelector('#nr-del').addEventListener('click', function(){
+   if (typeof window._showDestructiveConfirm === 'function') {
+    window._showDestructiveConfirm({
+     title: 'Eliminar recordatorio',
+     message: '¿Eliminar "' + (existing.titulo||'(sin título)') + '"?',
+     confirmText: 'Eliminar',
+     onConfirm: function() {
+      State.set.deleteRecordatorio(recId);
+      modal.remove();
+      try { dash.render(); } catch(_) {}
+      if (typeof showToast==='function') showToast('🗑️ Recordatorio eliminado');
+     }
+    });
+   } else {
+    State.set.deleteRecordatorio(recId);
+    modal.remove();
+    try { dash.render(); } catch(_) {}
+    if (typeof showToast==='function') showToast('🗑️ Recordatorio eliminado');
+   }
+  });
+ }
+
+ document.body.appendChild(modal);
+ // Focus el input título
+ setTimeout(function(){ try { modal.querySelector('#nr-titulo').focus(); } catch(_){} }, 120);
+ }
+
+
  // ── Panel de preferencias de notificaciones ──────────────
  function openNotifPrefsPanel() {
   const prefs = State.get.notifPrefs();
   const s = State.get.settings();
 
   // Solo items que funcionan realmente en la app
+  // v1.3.993 LOTE D — 4 toggles Agenda según spec + toggles existentes
   const items = [
-   { key:'whatsNew',       icon:'🎉', bg:'#EEF2FF', title:'Novedades de la app',  sub:'Al actualizar Dashwey' },
-   { key:'pedidoRealizado',icon:'✅', bg:'#ECFDF5', title:'Pedido confirmado',     sub:'Al confirmar un pedido en Almacén' },
+   { key:'whatsNew',        icon:'🎉', bg:'#EEF2FF', title:'Novedades de la app',  sub:'Al actualizar Dashwey' },
+   { key:'pedidoRealizado', icon:'✅', bg:'#ECFDF5', title:'Pedido confirmado',     sub:'Al confirmar un pedido en Almacén' },
+   { key:'proximoPedido',   icon:'📅', bg:'#FEF3C7', title:'Próximo pedido',        sub:'Día de pedido recurrente por proveedor' },
+   { key:'entregaProxima',  icon:'🚚', bg:'#DBEAFE', title:'Entregas próximas',     sub:'Pedidos pendientes de llegar' },
+   { key:'alertaStock',     icon:'⚠️', bg:'#FEE2E2', title:'Alertas de stock',      sub:'Sin stock, bajo mínimo, caducidad' },
+   { key:'recordatorio',    icon:'⏰', bg:'#F3E8FF', title:'Recordatorios',          sub:'Tus recordatorios personales del día' },
   ];
 
   const rowsHtml = items.map(it => {
@@ -20538,9 +20645,14 @@ function _confirmBorrarCuenta(id) {
 
  if (!recs.length) {
   var empty = document.createElement('div');
-  empty.style.cssText = 'text-align:center;padding:20px 0;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
+  empty.style.cssText = 'text-align:center;padding:20px 0 8px;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
   empty.textContent = 'Sin recordatorios';
   wrap.appendChild(empty);
+  var _addRecEmp = document.createElement('button');
+  _addRecEmp.style.cssText = 'width:100%;height:34px;border:1px dashed var(--border);border-radius:var(--r-sm2);background:none;color:var(--ink-soft);font-size:var(--fs-sm);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;margin-top:8px;-webkit-tap-highlight-color:transparent';
+  _addRecEmp.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nuevo recordatorio';
+  _addRecEmp.addEventListener('click', function(){ try { App.dash._openRecordatorioSheet(null); } catch(_) {} });
+  wrap.appendChild(_addRecEmp);
   return;
  }
 
@@ -20591,6 +20703,13 @@ function _confirmBorrarCuenta(id) {
    titEl.textContent = r.titulo || '(sin título)';
    item.appendChild(horaEl);
    item.appendChild(titEl);
+   // v1.3.993 LOTE D — tap en item abre editor
+   item.style.cursor = 'pointer';
+   (function(recId){
+    item.addEventListener('click', function(){
+     try { App.dash._openRecordatorioSheet(recId); } catch(_) {}
+    });
+   })(r.id);
    group.appendChild(item);
   });
 
@@ -20598,6 +20717,13 @@ function _confirmBorrarCuenta(id) {
  });
 
  wrap.appendChild(tl);
+
+ // v1.3.993 LOTE D — botón + Nuevo recordatorio
+ var _addRec = document.createElement('button');
+ _addRec.style.cssText = 'width:100%;height:34px;border:1px dashed var(--border);border-radius:var(--r-sm2);background:none;color:var(--ink-soft);font-size:var(--fs-sm);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;margin-top:8px;-webkit-tap-highlight-color:transparent';
+ _addRec.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nuevo recordatorio';
+ _addRec.addEventListener('click', function(){ try { App.dash._openRecordatorioSheet(null); } catch(_) {} });
+ wrap.appendChild(_addRec);
  }
 
 
@@ -23439,7 +23565,7 @@ function _confirmBorrarCuenta(id) {
   _renderDetalle();
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, _openGastosPeriodPicker, _applyGastosPeriod, _clearGastosPeriod, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard};
 })();
 
 // ══════════════════════════════════════════
