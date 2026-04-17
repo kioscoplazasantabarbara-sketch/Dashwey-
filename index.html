@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-983-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-984-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.983-dev</title>
+<title>Dashwey v1.3.984-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11841,7 +11841,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.983-dev';
+ const _APP_VERSION = 'v1.3.984-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37087,14 +37087,44 @@ window._almCarritoOptions = function() {
 
  // Mostrar container antes del focus
  container.style.display = 'block';
- if (dim) dim.style.display = 'block';
+ if (dim) {
+  dim.style.display = 'block';
+  // v1.3.984: el dim recién visible NO debe recibir clicks sintéticos del FAB
+  // que abrió el spotlight. En Android WebView el click sintético (post-touchend)
+  // puede caer sobre el dim y disparar _spotlightClose(). Bloqueamos 400ms.
+  dim.style.pointerEvents = 'none';
+  setTimeout(function(){ if (dim) dim.style.pointerEvents = ''; }, 400);
+ }
  window._searchOverlayOpen = true;
 
  // Vigilar teclado — cerrar cuando desaparezca
  _startVVWatch();
 
  // Focus — dispara el teclado
- if (inp) inp.focus();
+ // v1.3.984: desacoplar del ciclo touch actual. En Android WebView, focus() dentro
+ // de touchend puede ser ignorado o causar recomposición que pierde el foco.
+ // rAF + setTimeout(0) asegura que corre en el siguiente frame, tras el touch.
+ if (inp) {
+  requestAnimationFrame(function() {
+   setTimeout(function() {
+    if (!window._searchOverlayOpen) return; // spotlight ya cerrado
+    try { inp.focus(); } catch(_) {}
+   }, 0);
+  });
+
+  // v1.3.984: anti-blur defensivo — si el input pierde foco en los primeros 500ms
+  // (por recomposición/click sintético), lo recuperamos UNA vez. Pasado ese tiempo,
+  // blur real del usuario se respeta normalmente.
+  var _refocusGuard = true;
+  var _refocusTimer = setTimeout(function(){ _refocusGuard = false; }, 500);
+  var _onBlur = function() {
+   if (!_refocusGuard || !window._searchOverlayOpen) return;
+   _refocusGuard = false;
+   clearTimeout(_refocusTimer);
+   setTimeout(function(){ try { inp.focus(); } catch(_) {} }, 0);
+  };
+  inp.addEventListener('blur', _onBlur, { once: true });
+ }
 
  try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
  };
