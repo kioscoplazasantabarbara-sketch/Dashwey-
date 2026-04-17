@@ -26851,6 +26851,7 @@ const marginLine = mg === null ? '' :
  var _ALM_LAST_PROV_KEY = 'dashwey_last_prov_v1';
  var _almAnimLock = false;
  var _provNuevoPendiente = null; // v1.3.427: proveedor nuevo pendiente de confirmacion
+ var _provEditDraft = {}; // v1.3.954: snapshot inputs al navegar a historial desde editar proveedor
 
  function _almSaveLastProv(id) {
  if (!id) return; // v1.3.665: no persistir null/undefined
@@ -27149,7 +27150,7 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  </div>
  </div>
  <div style="display:flex;align-items:center;gap:8px">
-<button onclick="App.alm.openHistorialPedidos()" title="Historial de pedidos" style="width:34px;height:34px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;-webkit-tap-highlight-color:transparent"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
+<button onclick="App.alm._openProvHistFromEdit('${pid}')" title="Historial de pedidos" style="width:34px;height:34px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;-webkit-tap-highlight-color:transparent"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
 <button class="mhd-close" onclick="App.alm._cancelEditProv();App.ui.closeFs()">×</button>
 </div>
  </div>
@@ -27426,6 +27427,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  // v1.3.427: limpiar proveedor pendiente si el usuario cancela sin guardar
  function _cancelEditProv() {
  _provNuevoPendiente = null;
+ // v1.3.954: limpiar draft de navegación a historial
+ try { Object.keys(_provEditDraft).forEach(function(k){ delete _provEditDraft[k]; }); } catch(_) {}
  }
 
  function _clearProvBanner(provId) {
@@ -30367,7 +30370,7 @@ _eaRecalc();
  _catFilterInline, _catFilterInlineFocus, _catFilterInlineBlur, _catFilterInlineClear, _catInlineAddNew,
  _abrirCheckModalPendiente, _vaciarCesta,
  selProvInline, openProvPicker, _almShowProvList, _almHideProvList, _almLoadInitialState, _loadCarritoLocal,
- _cancelEditProv,
+ _cancelEditProv, _openProvHistFromEdit, _returnToEditProv,
  _onNuevoArtFsClose,
  };
 
@@ -31558,7 +31561,36 @@ _eaRecalc();
  });
 }
 
- function openHistorialPedidos() {
+ // v1.3.954: Navegar a historial desde editar proveedor SIN cerrar el overlay.
+ // Captura snapshot de inputs, luego reemplaza fs-content (overlay sigue .open).
+ function _openProvHistFromEdit(pid) {
+  // Snapshot de inputs actuales del form editar proveedor
+  var draft = { pid: pid };
+  var ids = ['pe-n','pe-cif','pe-t','pe-dir','pe-email','pe-web','pe-ag','pe-rep','pe-trel'];
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el) draft[id]=el.value; });
+  _provEditDraft[pid] = draft;
+  // Mostrar historial filtrado para este proveedor (overlay ya está abierto — solo setFs)
+  openHistorialPedidos(pid);
+ }
+
+ // v1.3.954: Volver al form editar proveedor desde historial, rehidratando draft.
+ function _returnToEditProv(pid) {
+  var p = State.get.prov(pid) || (_provNuevoPendiente && _provNuevoPendiente.id === pid ? _provNuevoPendiente : null);
+  if (!p) { ui.closeFs(); return; }
+  // Renderizar el form (openProvEdit usa setFs — overlay sigue .open por la regla ya-abierto)
+  App.alm.openProvEdit(pid);
+  // Rehidratar inputs con el draft si existe
+  var draft = _provEditDraft[pid];
+  if (draft) {
+   requestAnimationFrame(function(){
+    var ids = ['pe-n','pe-cif','pe-t','pe-dir','pe-email','pe-web','pe-ag','pe-rep','pe-trel'];
+    ids.forEach(function(id){ var el=document.getElementById(id); if(el && draft[id]!==undefined) el.value=draft[id]; });
+    delete _provEditDraft[pid];
+   });
+  }
+ }
+
+
  const fmtDate = iso => {
  try {
  const d = new Date(iso);
@@ -31571,14 +31603,29 @@ _eaRecalc();
  // Mezclar pedidos y facturas ordenados por fecha desc
  const pedidos = (State.get.historialPedidos() || []).map(function(p){ return Object.assign({}, p, {_tipo:'pedido'}); });
  const facturas = (State.get.facturas ? State.get.facturas() : []).map(function(f){ return Object.assign({}, f, {_tipo:'factura'}); });
- const historial = pedidos.concat(facturas).sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
+ // v1.3.954: filtrar por proveedor si se llama desde editar proveedor
+ const _allItems = pedidos.concat(facturas);
+ const historial = (provId
+  ? _allItems.filter(function(x){ return x.provId === provId; })
+  : _allItems
+ ).sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
+
+ // v1.3.954: botón ← solo cuando venimos del edit de proveedor
+ const _provRetorno = provId && _provEditDraft[provId] ? provId : null;
+ const _backBtn = _provRetorno
+  ? '<button onclick="App.alm._returnToEditProv(\'' + _provRetorno + '\')" title="Volver a editar proveedor" style="width:34px;height:34px;border-radius:50%;border:none;background:none;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-right:4px;-webkit-tap-highlight-color:transparent"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></button>'
+  : '';
+ const _histTitle = _provRetorno && State.get.prov(_provRetorno)
+  ? esc(State.get.prov(_provRetorno).nombre) + ' › Historial'
+  : 'Historial de pedidos';
 
  if (historial.length === 0) {
  ui.setFs(
- '<div class="modal-header-dark"><div class="mhd-row"><div>' +
- '<div class="mhd-title">Historial de pedidos</div>' +
+ '<div class="modal-header-dark"><div class="mhd-row">' +
+ '<div style="display:flex;align-items:center">' + _backBtn + '<div>' +
+ '<div class="mhd-title">' + _histTitle + '</div>' +
  '<div class="mhd-sub">Pedidos y facturas</div>' +
- '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+ '</div></div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
  '<div style="padding:48px 20px;text-align:center;font-family:var(--font)">' +
  '<div style="font-size:40px;margin-bottom:16px">📋</div>' +
  '<div style="font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px">Sin historial</div>' +
@@ -31599,7 +31646,7 @@ _eaRecalc();
     try{ if(tipo==='factura'){State.set.removeFactura(itemId);}else{State.set.removeHistorialPedido(itemId);} }catch(_){}
     try{showToast('🗑️ Eliminado del historial');}catch(_){}
     try{App.ui.closeFs();}catch(_){}
-    setTimeout(function(){try{App.alm.openHistorialPedidos();}catch(_){};},260);
+    setTimeout(function(){try{App.alm.openHistorialPedidos(provId);}catch(_){};},260);
    }
   });
  };
@@ -31663,11 +31710,14 @@ _eaRecalc();
  }).join('');
 
  const nPed = pedidos.length; const nFac = facturas.length;
+ const nPedF = historial.filter(function(x){return x._tipo!=='factura';}).length;
+ const nFacF = historial.filter(function(x){return x._tipo==='factura';}).length;
  ui.setFs(
- '<div class="modal-header-dark"><div class="mhd-row"><div>' +
- '<div class="mhd-title">Historial de pedidos</div>' +
- '<div class="mhd-sub">' + nPed + ' pedido' + (nPed!==1?'s':'') + ' · ' + nFac + ' factura' + (nFac!==1?'s':'') + '</div>' +
- '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
+ '<div class="modal-header-dark"><div class="mhd-row">' +
+ '<div style="display:flex;align-items:center">' + _backBtn + '<div>' +
+ '<div class="mhd-title">' + _histTitle + '</div>' +
+ '<div class="mhd-sub">' + nPedF + ' pedido' + (nPedF!==1?'s':'') + ' · ' + nFacF + ' factura' + (nFacF!==1?'s':'') + '</div>' +
+ '</div></div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
  '<div style="padding:12px 14px 24px;font-family:var(--font)" id="hist-list">' + rows + '</div>'
  );
  ui.openFs();
