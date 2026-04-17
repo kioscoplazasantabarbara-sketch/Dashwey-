@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.968-dev</title>
+<title>Dashwey v1.3.969-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8915,8 +8915,45 @@ window._DashweyFirebase = {
 // Sin VAPID key: falla silenciosamente, las notificaciones locales siguen funcionando.
 window._DashweyRegisterFCM = async function() {
  if (!FIREBASE_ENABLED || !_db || !_uid) return null;
- if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
  try {
+  // ── Capacitor nativo (Android APK) ──────────────────────────
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+   const PushNotifications = window.Capacitor?.Plugins?.PushNotifications;
+   if (PushNotifications) {
+    // Solicitar permiso
+    const permResult = await PushNotifications.requestPermissions();
+    if (permResult.receive !== 'granted') {
+     console.warn('[Dashwey/FCM] Permiso denegado');
+     return null;
+    }
+    // Registrar y esperar token
+    return await new Promise(function(resolve) {
+     PushNotifications.addListener('registration', async function(tokenData) {
+      const token = tokenData.value;
+      if (!token) { resolve(null); return; }
+      try {
+       const { doc: fbDoc, setDoc: fbSetDoc, serverTimestamp: fbTs } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+       const deviceId = window._DashweyDeviceId || 'unknown';
+       await fbSetDoc(
+        fbDoc(_db, 'usuarios', _uid, 'fcmTokens', deviceId),
+        { token, deviceId, updatedAt: fbTs(), platform: 'android' },
+        { merge: true }
+       );
+       console.info('[Dashwey/FCM] Token nativo registrado:', token.slice(0,20)+'...');
+      } catch(e) { console.warn('[Dashwey/FCM] Firestore write error:', e?.message); }
+      resolve(token);
+     });
+     PushNotifications.addListener('registrationError', function(err) {
+      console.warn('[Dashwey/FCM] registrationError:', err);
+      resolve(null);
+     });
+     PushNotifications.register();
+     setTimeout(function(){ resolve(null); }, 8000); // timeout 8s
+    });
+   }
+  }
+  // ── Web Push fallback (PWA / navegador) ─────────────────────
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
   const { getMessaging, getToken } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js');
   const messaging = getMessaging(_fbApp);
   const VAPID_KEY = 'BDck5vcqwviHaMHXNeGoLTouXCKeZEd4dD39a0wVFmhfTTR70DjpZLfSGNTmRcFX3ABG9ssodnNzOHcRpRsRbHs';
@@ -8930,14 +8967,14 @@ window._DashweyRegisterFCM = async function() {
     { token, deviceId, updatedAt: fbTs(), platform: navigator.userAgent.slice(0,100) },
     { merge: true }
    );
-   console.info('[Dashwey/FCM] Token registrado:', token.slice(0,20)+'...');
+   console.info('[Dashwey/FCM] Token web registrado:', token.slice(0,20)+'...');
    return token;
   }
  } catch(e) {
   console.warn('[Dashwey/FCM] getToken error:', e?.code || e?.message);
  }
  return null;
-};
+}
 
 
 // ── FCM Send — enviar notificaciones push a otros dispositivos ──
@@ -11635,7 +11672,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.968-dev';
+ const _APP_VERSION = 'v1.3.969-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
