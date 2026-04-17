@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.970-dev</title>
+<title>Dashwey v1.3.971-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8918,6 +8918,15 @@ window._DashweyRegisterFCM = async function() {
  try {
   // ── Capacitor nativo (Android APK) ──────────────────────────
   if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+   // Usar token early si ya fue capturado antes de que Firebase estuviera listo
+   if (window._DashweyEarlyFCMToken) {
+    const token = window._DashweyEarlyFCMToken;
+    const { doc: fbDoc, setDoc: fbSetDoc, serverTimestamp: fbTs } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    const deviceId = window._DashweyDeviceId || 'unknown';
+    await fbSetDoc(fbDoc(_db, 'usuarios', _uid, 'fcmTokens', deviceId), { token, deviceId, updatedAt: fbTs(), platform: 'android' }, { merge: true });
+    console.info('[Dashwey/FCM] Token early guardado en Firestore:', token.slice(0,20)+'...');
+    return token;
+   }
    const PushNotifications = window.Capacitor?.Plugins?.PushNotifications;
    if (PushNotifications) {
     // Solicitar permiso
@@ -8974,8 +8983,37 @@ window._DashweyRegisterFCM = async function() {
   console.warn('[Dashwey/FCM] getToken error:', e?.code || e?.message);
  }
  return null;
-}
+};
 
+// ── FCM Early Listener — Capacitor registra token ANTES de Firebase ──
+// El plugin nativo genera el token al arrancar. Si Dashwey no tiene listener
+// en ese momento, el token se pierde. Este bloque lo captura temprano.
+(function() {
+ if (!window.Capacitor || !window.Capacitor.isNativePlatform || !window.Capacitor.isNativePlatform()) return;
+ var _earlyToken = null;
+ // Capacitor.Plugins disponible tras DOMContentLoaded
+ document.addEventListener('DOMContentLoaded', function() {
+  var PN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+  if (!PN) return;
+  PN.addListener('registration', function(data) {
+   _earlyToken = data && data.value;
+   if (_earlyToken) {
+    console.info('[Dashwey/FCM] Token capturado early:', _earlyToken.slice(0,20)+'...');
+    window._DashweyEarlyFCMToken = _earlyToken;
+    // Si Firebase ya está listo, guardar ahora
+    if (window._uid && window._db) {
+     try { window._DashweyRegisterFCM && window._DashweyRegisterFCM(); } catch(_) {}
+    }
+   }
+  });
+  PN.addListener('registrationError', function(err) {
+   console.warn('[Dashwey/FCM] registrationError:', err);
+  });
+  PN.requestPermissions().then(function(res) {
+   if (res.receive === 'granted') PN.register();
+  }).catch(function(e) { console.warn('[FCM early]', e); });
+ }, { once: true });
+})();
 
 // ── FCM Send — enviar notificaciones push a otros dispositivos ──
 // Usa Service Account JWT para obtener access token y llamar FCM v1 REST API
@@ -11672,7 +11710,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.970-dev';
+ const _APP_VERSION = 'v1.3.971-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
