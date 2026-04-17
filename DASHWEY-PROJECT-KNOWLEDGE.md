@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.874-dev
+**Versión:** v1.3.967-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -17,11 +17,12 @@
 ## ARQUITECTURA
 
 ```
-index.html (~35.800 líneas) — SPA monolítica completa
+index.html (~37.900 líneas) — SPA monolítica completa
 sw.js          — Service Worker con cache bust por versión
 version.json   — Fuente de verdad de versión
 version.txt    — Mirror de versión
 manifest.json  — PWA manifest
+firestore.rules — Security Rules Firestore (nuevo v1.3.967)
 ```
 
 **Módulos IIFE dentro de App:**
@@ -58,6 +59,7 @@ tpvQG      → Quick Grid TPV
 - **Hogar** — módulo futuro de finanzas personales
 - **Cartera** — módulo futuro de seguimiento de inversiones
 - **Ecosistema Multi-App** — ver sección dedicada abajo
+- **Loyverse POS** — integración futura via Firebase Cloud Functions
 
 ---
 
@@ -79,7 +81,34 @@ Un solo `index.html` en GitHub Pages genera N apps por `?mode=` en `capacitor.co
 | Sync Firebase tiempo real | ✅ |
 | Gestión de equipo | ✅ |
 | `?mode=pos/alm/cfo` | ✅ v1.3.382 |
-| Firestore Security Rules endurecidas | ⏳ CRÍTICO antes de Play Store |
+| Firestore Security Rules endurecidas | ✅ v1.3.967 — pendiente `firebase deploy` |
+
+---
+
+## INTEGRACIÓN LOYVERSE — ARQUITECTURA DISEÑADA
+
+**Flujo:** Loyverse POS → Webhook → Cloud Function → Firestore → Dashwey (onSnapshot)
+
+**Modelo Firestore:**
+```
+productos/{prodId}     → loyverseItemId (FK), ean, nombre, precioCompra, pvp, stockActual...
+ventas/{event_id}      → event_id=loyverseSaleId (idempotencia), event_type, adapterVersion, items[]
+stock_log/{logId}      → event_id, event_type: 'sale'|'order'|'shrinkage'|'adjustment'|'resync'
+config/sync            → adapterVersion, lastWebhookAt, loyverseToken (via Secret Manager)
+sync_errors/{id}       → productos sin mapear (loyverseItemId no encontrado)
+```
+
+**Adapter versionado:** `adapters/v1/LoyverseAdapter.js` — CF lee `config/sync.adapterVersion`
+**Idempotencia:** `ventas/{loyverseSaleId}` — si existe → abort (200 OK)
+**Infra:** Firebase Blaze obligatorio (outbound webhook en CF)
+**Regla:** Dashwey = fuente de verdad (costes, stock, margen). Loyverse = solo TPV.
+
+**Preparativos completados v1.3.967:**
+- ✅ `firestore.rules` — roles admin/staff/viewer, `/ventas/` y `/stock_log/` solo Admin SDK
+- ✅ Campo `loyverseItemId` + `ean` en modelo producto (formulario + `_createArticle`)
+- ✅ `exportarDatos()` completo — incluye `lotesStock`, `facturas`, `pendingOrders`
+- ⏳ Cloud Functions — pendiente implementar
+- ⏳ APK FCM / Gradle 8.7 — pendiente compilar
 
 ---
 
@@ -112,6 +141,7 @@ Un solo `index.html` en GitHub Pages genera N apps por `?mode=` en `capacitor.co
 - Al eliminar bloques JS dentro de `try/finally` → verificar que el `try` exterior sigue válido
 - onclick inline → usar `&apos;` para comillas simples, nunca `''` concatenados
 - Todo guard `_running = true` DEBE tener `finally { _running = false }` — nunca liberar en línea secuencial
+- Python string replace: usar índices de posición para bloques con escapes complejos — `h[:idx] + new + h[idx+len(old):]`
 
 ### Auth y Layout
 - `#auth-screen` SIEMPRE fuera de `<div id="app">` — hermano directo en `body`
@@ -148,12 +178,25 @@ Un solo `index.html` en GitHub Pages genera N apps por `?mode=` en `capacitor.co
 - **Alertas** (default): `_snapRenderAlertasEnAgenda()` — sin stock, bajo mínimo, caducidades
 - **Entregas**: pedidos programados pendientes
 - **Eventos**: ex-Visitas Comerciales. State: `visitasComerciales` (NO renombrar). UI: "Eventos"
+- **Dot rojo "Insight"**: `.snap-narrative-zone:has(.snap-narrative-text:empty) { display:none }` — oculto cuando sin texto
 
 ### FIFO valorStock (v1.3.742)
 - `State.lotesStock[]` — `{ prodId, qty, costeUnit, fecha }`
 - `FinEngine.crearLotesDesdeItems(items, fecha)` — al confirmar pedido
 - `FinEngine.consumirLotesFIFO(prodId, qty)` — al vender en TPV
 - `valorStock()` — suma lotes activos; fallback a precio actual si no hay lotes
+
+### Modelo de producto (campos completos)
+```
+id, nombre, prov, cat, iva, pvp, precioCompra
+udscaja, stockActual, stockMinimo, trackStock
+e (emoji), foto (base64/URL), caducidad
+descuento, descRaw, re (recargo equiv.)
+historialPrecios: [{fecha, precio, pvp}]
+ventas, fmt ('s'|'c')
+ean            ← nuevo v1.3.967 (EAN/código de barras)
+loyverseItemId ← nuevo v1.3.967 (FK a Loyverse POS)
+```
 
 ### Modelo de precios
 - `p.precioCompra` = precio por **BULTO**
@@ -168,6 +211,39 @@ pvpNeto = pvp / (1 + iva%)
 mg = (pvpNeto - cu) / pvpNeto × 100
 ```
 
+### Render items Cesta y Pedido programado (LDC) — formato unificado v1.3.963+
+```
+L1 (bold):   Nombre (Xuds/bulto)
+L2 (gris):   Nbultos · X€+Y%IVA → Z€/bulto
+L3 (mgCol):  Xmg% · Y€/ud · PVP Z€
+Derecha:     Total (gris 2xs) / X€ (xbold)
+```
+- Fuente única de datos — sin recálculo en template
+- `cu = precioConIva / udscaja` (coste por UNIDAD con IVA)
+- `mgCol` semáforo: ≥30% verde · ≥15% naranja · <15% rojo
+- Thumb: `p.foto` → img con `onerror` fallback a emoji
+
+### Render catálogo inline (`_buildCatInlineItem`) — v1.3.965+
+```
+L1: Nombre (Xuds/bulto) — campo alm-cat-name
+L2: X€ +Y%IVA → Z€/bulto — metaLine
+L3: X%mg · Y€/ud · PVP Z€ — marginLine (mgColor semáforo)
+```
+- Hash incluye `po:ids` de pendingOrders → invalidar al borrar pedido
+- `_invalidateCatHash()` expuesto en `App.alm` para forzar rebuild
+
+### Long press en pedido programado (v1.3.964)
+- `.ldc-ped-row` → 600ms → haptic warning → `_showDestructiveConfirm` → `removePendingOrder`
+- `touchmove` cancela timer — sin conflicto con scroll
+- `onConfirm`: `renderOrden()` + `_invalidateCatHash()` + `renderCatInline()`
+
+### Historial de pedidos (`openHistorialPedidos`)
+- Acepta `provId` opcional → filtra por proveedor
+- Hash incluye nombre proveedor en subtítulo
+- `openFs('full')` — full screen
+- Detalle pedido: `setFs(html)` sin `openFs()` (FS ya abierto) → botón ← Volver
+- `_imprimirPedido(id)` → `window.open` + `window.print()` — sin librerías
+
 ### SAC Dropdown
 - `#sac-global-dd` → `position: fixed` — no cambiar a `absolute`
 - `_sacPositionDd` usa `getBoundingClientRect()` + `visualViewport`
@@ -176,6 +252,14 @@ mg = (pvpNeto - cu) / pvpNeto × 100
 - VAPID key: `BDck5vcqwviHaMHXNeGoLTouXCKeZEd4dD39a0wVFmhfTTR70DjpZLfSGNTmRcFX3ABG9ssodnNzOHcRpRsRbHs`
 - `window._DashweyFCM.sendToOthers(title, body, data)` — envía a todos menos el dispositivo actual
 - APK: pendiente compilar — Gradle 8.2 incompatible con JVM 21 → subir a Gradle 8.7
+
+### exportarDatos() — campos completos v1.3.967
+```
+perfil, proveedores, productos, historialPedidos, mermas, ventas
+gastosOp, ingresosFin, cuentas, cierresCaja, eventos
+hotPins, qgCells, notifPrefs, settings, teamMembers
+lotesStock, facturas, pendingOrders   ← añadidos v1.3.967
+```
 
 ---
 
@@ -214,44 +298,9 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 
 | # | Área | Pendiente | Prioridad |
 |---|------|-----------|-----------|
-| 1 | UI | Dot rojo fantasma en tarjeta Agenda — no encontrado en código, requiere DevTools APK debug | 🟠 Importante |
-| 2 | Seguridad | Firestore Security Rules endurecidas | ⚠️ CRÍTICO antes de Play Store |
-| 3 | Push | APK FCM — Gradle 8.7 pendiente compilar | 🔵 WIP |
-
-### Cambios sesión v1.3.904
-- **v1.3.904** — FIX UI: Eliminados duplicados en SideSheet "Perfil del negocio" (openCuentaSideSheet). Secciones eliminadas: Equipo (stub Próximamente), Seguridad, Datos (Backup+Importar+Resetear). Estas opciones permanecen únicamente en Settings drawer global donde tienen lógica real + guards de permisos correctos. Sin cambios en lógica funcional.
-
-### Cambios sesión v1.3.903
-- **v1.3.903** — FIX UI: `.sti-section` sin `width:100%` → `align-items:flex-start` en `snap-kpi-zone` lo hacía colapsar al ancho del contenido. Fix: añadido `width:100%`. Cajón "Más vendidos" y "Más comprados" ahora son edge-to-edge idénticos; `.sti-right { right:0 }` llega al borde real en ambas tarjetas.
-
-### Cambios sesión v1.3.887
-- **v1.3.887** — FIX CRÍTICO: gráfica de barras tarjeta Compras (y Rendimiento) invisible en Android WebView. Causa: `@keyframes snapBarGrow` con `scaleY(0→1)` — WebView congela la animación en scaleY(0). Fix: eliminar `@keyframes snapBarGrow` del CSS y atributo `animation` del `<rect>` SVG. Barras renderizan a altura real directamente.
-
-### Cambios sesión v1.3.867–v1.3.869
-- **v1.3.867** — FIX: `authLogout()` dejaba `_DashweySavingCtrl.isSaving = true` sin liberar → `save()` bloqueado permanentemente hasta reload tras logout+login en la misma sesión. Fix: liberar `isSaving = false` antes del toast de cierre.
-- **v1.3.868** — FIX CRÍTICO lógica financiera: transferencias inflaban `revenue()`, `beneficioNeto` y `gastoMensualTotal()`. Fix: añadido `tipo: 'transferencia'` a los movimientos espejo (addGasto + addIngreso), excluidos en `revenue()` y `gastoMensualEq()`. Ídem para `tipo: 'ajuste'` en `revenue()`.
-- **v1.3.874** — FEAT core financiero + TPV:
-  (1) Cuentas: eliminados botones inline +Ingreso/Borrar → botón "Editar ›" abre _openEditCuentaSheet. Formulario nueva cuenta en FS dedicado (_openAddCuentaFs). _confirmBorrarCuenta intacto.
-  (2) Modal +Movimiento: _openMovimientoFullscreen() — FS fullscreen con calculadora custom (_buildCalcPad), sin teclado nativo. _confirmarMovimiento sin cambios (mismos IDs).
-  (3) TPV: _guardarComoArticuloYAnadir() — crea artículo real en Almacén (trackStock:false) y lo añade al ticket activo. openManualSale mantiene flujo existente.
-  BLOQUEADOS: migración iconos, edición retroactiva movimientos (ver DISEÑO-ICONOS-MOVIMIENTOS.md).
-- **v1.3.873** — FEAT Almacén/Pedidos programados:
-  (1) Long press en artículo del pedido → modal edición qty/precio/eliminar.
-  (2) Botón ⊕ Impuestos en pedido: panel con RE (5.2%), Punto Verde, impuesto adicional, total recalculado en tiempo real.
-  (3) Botón 📤 Compartir: texto WhatsApp-ready vía navigator.share o clipboard.
-  (4) Banner "Añadir artículo" al final del catálogo inline → openNuevoArtFs().
-  (5) Toggle seguimiento de stock (ftrack) en formulario nuevo artículo → campo trackStock en prod; TPV respeta trackStock !== false.
-  (6) Eliminado toggle RE (Recargo de Equivalencia) del formulario nuevo artículo.
-- **v1.3.872** — FIX: (1) Imagen artículo: emoji 📦 reemplazado por SVG neutro en formularios nuevo/editar. CSS `alm-photo-emoji` con `display:flex` para centrado correcto. (2) Sin bug real en saldo 0€ — el dirty-check y State manejan 0 correctamente.
-- **v1.3.871** — FIX Almacén/Dashboard: (1) Banner borrador insertado dentro de `.alm-form-body` en vez del primer hijo de `#fs-content` — ya no tapa el header. (2) `_movTipo` se resetea a `gasto` al abrir el sheet — evita que el tipo anterior persista. (3) `_snapRenderChart` retorna si `wrap.clientWidth < 4` — evita SVG vacío cuando la tarjeta no es activa. (4) PTR indicators (dash + alm) suben de `z-index:50` a `z-index:300` — visibles por encima de `bottom-tabs` (200).
-- **v1.3.870** — FIX UI: `bottom-tabs z-index: 50 → 200` (evita solapamiento con contenido posicionado). `body.keyboard-open .mov-sheet-panel { max-height: 60dvh }` (botón confirmar visible con teclado abierto).
-- **v1.3.869** — FIX UX: `scrollIntoView({ behavior: 'smooth' })` en `_onVVResize` causaba doble salto visual al abrir teclado en Android WebView. Cambiado a `behavior: 'instant', block: 'nearest'`.
-
-### Cambios sesión v1.3.860–v1.3.862
-- **v1.3.860** — Últimos Movimientos (Flujo de Caja): fecha `dd mmm` a la izquierda de cada fila. Nueva clase CSS `.snap-fc-mov-date`.
-- **v1.3.861** — `render()` llama `_snapDoRenderAll()` con guard `body[data-tab="1"]`. Todas las snap cards se actualizan en tiempo real tras pedido, gasto, ingreso, venta, transferencia.
-- **v1.3.862** — Gráfico Inversión en Mercancía corregido: usaba `ventasEnPeriodo`, ahora usa `historialPedidos` + `pedidoCoste()`. Cubre todos los tipos de período.
-- **v1.3.863** — FIX CRÍTICO: botón "Pedido recibido" (flujo LDC `_ldcAbrirDetallePedido`) no llamaba `addPedido()` — el pedido se eliminaba de `pendingOrders` sin pasar a `historialPedidos`. Fix: guardar en historial + emitir `pedido_stock` antes de `removePendingOrder`.
+| 1 | Infra | `firebase deploy --only firestore:rules` — aplicar `firestore.rules` v1.3.967 | ⚠️ CRÍTICO antes de Play Store |
+| 2 | Push | APK FCM — Gradle 8.7 pendiente compilar (Gradle 8.2 incompatible con JVM 21) | 🔵 WIP |
+| 3 | Loyverse | Cloud Functions — `onSaleWebhook`, adapter v1, stock_log writer | 🟢 Próximo bloque |
 
 ---
 
@@ -280,6 +329,9 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | `confirm()` nativo | Bloqueado en WebView | `window._showDestructiveConfirm()` |
 | SAC dropdown fuera de lugar | `position:absolute` dentro de SideSheet | `position:fixed` + `getBoundingClientRect()` |
 | onclick inline falla | `\'id\'` backslash-escaped en WebView | Usar `data-*` attrs + `addEventListener` |
+| `setPrimaryCuenta` no existe | Llamada en try/catch silenciaba TypeError — cuenta nunca se marcaba principal | Definir SIEMPRE la función antes de exponerla en return{} |
+| Hash guard bloquea render tras mutación | `_catInlineHash` no incluía `pendingOrders` → rebuild no disparado al borrar pedido | Incluir `po:ids` en hash + `_invalidateCatHash()` antes de `renderCatInline()` |
+| `openFs()` silencioso si FS ya abierto | Guard `if (overlay.classList.contains('open')) return` — detalle pedido no abría desde historial abierto | Solo llamar `setFs(html)` dentro de FS activo — sin `openFs()` |
 
 ---
 
