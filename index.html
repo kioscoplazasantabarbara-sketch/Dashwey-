@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-984-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-985-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.984-dev</title>
+<title>Dashwey v1.3.985-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11841,7 +11841,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.984-dev';
+ const _APP_VERSION = 'v1.3.985-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37037,26 +37037,23 @@ window._almCarritoOptions = function() {
  }
 
  // ── Detectar teclado oculto via visualViewport ─────────────────
- // v1.3.983: FIX — Android WebView dispara resize ANTES de que el teclado
- // suba visualmente. Con kbH<50 inicial, _spotlightClose se llamaba al instante
- // y blur cerraba el teclado que acababa de abrirse.
- // Patrón correcto: esperar a que kbH supere 100px (teclado realmente abierto),
- // solo entonces empezar a vigilar su desaparición.
+ // v1.3.985: CONTRATO LAZY.
+ // Problema histórico (v1.3.982-984): el watcher se instalaba en _spotlightOpen,
+ // ANTES de que el teclado estuviera estable. Cada reflow del ciclo de apertura
+ // (display change + focus + animación IME) disparaba resize. Valores flickering
+ // entre 0 y kb-height causaban false positives que cerraban el spotlight.
+ // Parches de timing (kbSeenOpen, pointer-events, anti-blur) mitigaban síntomas,
+ // no causa.
+ //
+ // Contrato nuevo: el watcher SOLO se instala cuando el usuario empieza a escribir
+ // (primer `input` event). En ese momento el teclado ya está estable y cualquier
+ // resize posterior con kbH<50 es un cierre real del teclado.
  function _startVVWatch() {
- if (!window.visualViewport) return;
- var _kbSeenOpen = false; // se activa cuando detectamos kb realmente abierto
+ if (!window.visualViewport || _vvHandler) return;
  _vvHandler = function() {
- if (!window._searchOverlayOpen) return;
- var kbH = window.innerHeight - window.visualViewport.height;
- if (!_kbSeenOpen) {
-  // Esperar a confirmar que el teclado subió de verdad
-  if (kbH > 100) _kbSeenOpen = true;
-  return;
- }
- // Teclado había abierto y ahora desaparece
- if (kbH < 50) {
-  window._spotlightClose();
- }
+  if (!window._searchOverlayOpen) return;
+  var kbH = window.innerHeight - window.visualViewport.height;
+  if (kbH < 50) window._spotlightClose();
  };
  window.visualViewport.addEventListener('resize', _vvHandler, { passive: true });
  }
@@ -37085,46 +37082,14 @@ window._almCarritoOptions = function() {
  if (res) res.innerHTML = '';
  if (clear) clear.style.display = 'none';
 
- // Mostrar container antes del focus
+ // Mostrar overlay
  container.style.display = 'block';
- if (dim) {
-  dim.style.display = 'block';
-  // v1.3.984: el dim recién visible NO debe recibir clicks sintéticos del FAB
-  // que abrió el spotlight. En Android WebView el click sintético (post-touchend)
-  // puede caer sobre el dim y disparar _spotlightClose(). Bloqueamos 400ms.
-  dim.style.pointerEvents = 'none';
-  setTimeout(function(){ if (dim) dim.style.pointerEvents = ''; }, 400);
- }
+ if (dim) dim.style.display = 'block';
  window._searchOverlayOpen = true;
 
- // Vigilar teclado — cerrar cuando desaparezca
- _startVVWatch();
-
- // Focus — dispara el teclado
- // v1.3.984: desacoplar del ciclo touch actual. En Android WebView, focus() dentro
- // de touchend puede ser ignorado o causar recomposición que pierde el foco.
- // rAF + setTimeout(0) asegura que corre en el siguiente frame, tras el touch.
- if (inp) {
-  requestAnimationFrame(function() {
-   setTimeout(function() {
-    if (!window._searchOverlayOpen) return; // spotlight ya cerrado
-    try { inp.focus(); } catch(_) {}
-   }, 0);
-  });
-
-  // v1.3.984: anti-blur defensivo — si el input pierde foco en los primeros 500ms
-  // (por recomposición/click sintético), lo recuperamos UNA vez. Pasado ese tiempo,
-  // blur real del usuario se respeta normalmente.
-  var _refocusGuard = true;
-  var _refocusTimer = setTimeout(function(){ _refocusGuard = false; }, 500);
-  var _onBlur = function() {
-   if (!_refocusGuard || !window._searchOverlayOpen) return;
-   _refocusGuard = false;
-   clearTimeout(_refocusTimer);
-   setTimeout(function(){ try { inp.focus(); } catch(_) {} }, 0);
-  };
-  inp.addEventListener('blur', _onBlur, { once: true });
- }
+ // Focus síncrono — sin diferir, sin guards anti-blur.
+ // v1.3.985: watcher NO se instala aquí (ver _startVVWatch comentario).
+ if (inp) inp.focus();
 
  try { if (window.Utils) Utils.triggerHaptic('light'); } catch(_) {}
  };
@@ -37171,6 +37136,11 @@ window._almCarritoOptions = function() {
 
  // ── SEARCH ─────────────────────────────────────────────────────
  window._spotlightSearch = function(val) {
+ // v1.3.985: instalar watcher de IME en el primer input real del usuario.
+ // En este punto el teclado ya está estable — cualquier resize posterior
+ // con kbH<50 es un cierre legítimo. Contrato lazy, no acoplado al ciclo
+ // de apertura.
+ if (!_vvHandler) _startVVWatch();
  var clear = document.getElementById('alm-spotlight-clear');
  if (clear) clear.style.display = val ? 'flex' : 'none';
  clearTimeout(_timer);
