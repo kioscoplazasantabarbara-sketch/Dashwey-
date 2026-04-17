@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-981-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-982-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.981-dev</title>
+<title>Dashwey v1.3.982-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9670,6 +9670,13 @@ const State = (() => {
    _seen[x.id] = 1; return true;
   });
  });
+ // v1.3.982: mapeo legacy tipo:'transferencia' → metaTipo:'transfer' (one-shot al hidratar)
+ ['gastosOp','ingresosFin'].forEach(function(k){
+  if (!Array.isArray(loaded[k])) return;
+  loaded[k].forEach(function(x){
+   if (x && x.tipo === 'transferencia' && !x.metaTipo) x.metaTipo = 'transfer';
+  });
+ });
  return _migrateDemoData(loaded);
  } catch(e) {
  console.warn('[Dashwey] Error cargando estado, usando defaults:', e);
@@ -10607,6 +10614,16 @@ const FinEngine = (() => {
  return Math.round((n || 0) * 100) / 100;
  }
 
+ // ── v1.3.982 — Detección dual de transferencias (legacy + nuevo) ─
+ // Aplica a gastosOp / ingresosFin. Se usa para excluir de agregaciones
+ // financieras (revenue, gastos, insights, snap cards, modales).
+ // NO excluir en extracto de cuenta: allí la transfer SÍ se muestra con su icono.
+ function _isTransfer(x) {
+  return !!(x && (x.metaTipo === 'transfer' || x.tipo === 'transferencia'));
+ }
+ // Expuesta globalmente para uso fuera de FinEngine (dashboard, snap cards)
+ if (typeof window !== 'undefined') window._isTransfer = _isTransfer;
+
  // ── Utilidad: calcular ingresos de una venta (cualquier schema) ─
  // Venta puede ser { total } o { items: [{qty, pvp}] } o { qty, pvp }
  function ventaIngresos(v) {
@@ -10655,7 +10672,7 @@ const FinEngine = (() => {
  // ── Utilidad: gastoMensual equivalente (respeta periodicidad) ────
  function gastoMensualEq(gastos) {
  return (gastos || []).reduce((s, g) => {
- if (g.tipo === 'transferencia') return s; // excluir espejo de transferencia
+ if (_isTransfer(g)) return s; // v1.3.982: excluir transferencias (legacy + metaTipo)
  const eq = g.mensualEq !== undefined ? g.mensualEq : (g.importe || 0);
  return s + eq;
  }, 0);
@@ -10695,7 +10712,7 @@ const FinEngine = (() => {
  const ingFin = (State.get.ingresosFin ? State.get.ingresosFin() : [])
  .filter(i => {
   if (i.tipo === 'reembolso_proveedor') return false;
-  if (i.tipo === 'transferencia' || i.tipo === 'ajuste') return false;
+  if (_isTransfer(i) || i.tipo === 'ajuste') return false; // v1.3.982: detección dual
   const d = new Date(i.fecha); return d >= range.start && d < range.end;
  })
  .reduce((s, i) => s + (i.importe || 0), 0);
@@ -10783,7 +10800,7 @@ const FinEngine = (() => {
 
  // gastoBruto(): suma de importes reales (no equivalentes) — para cash flow
  function gastoBruto() {
- return money((State.get.gastosOp() || []).reduce((s, g) => s + (g.importe || 0), 0));
+ return money((State.get.gastosOp() || []).filter(g => !_isTransfer(g)).reduce((s, g) => s + (g.importe || 0), 0));
  }
 
  // ── 5. BENEFICIO ─────────────────────────────────────────────────
@@ -10985,7 +11002,7 @@ const FinEngine = (() => {
  function comprometido() {
  return money(
  (State.get.gastosOp() || [])
- .filter(g => g.recurrente)
+ .filter(g => g.recurrente && !_isTransfer(g)) // v1.3.982: excluir transfer defensivo
  .reduce((s, g) => s + (g.importe || 0), 0)
  );
  }
@@ -11824,7 +11841,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.981-dev';
+ const _APP_VERSION = 'v1.3.982-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14982,7 +14999,7 @@ function _toggleCardFromManager(id, btn) {
  const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
  const listEl = el('fin-gastos-list');
  if (listEl) {
- const sorted = [...gastos].sort((a,b)=>(b.importe||0)-(a.importe||0)).slice(0,4);
+ const sorted = [...gastos].filter(g => !window._isTransfer?.(g)).sort((a,b)=>(b.importe||0)-(a.importe||0)).slice(0,4);
  listEl.innerHTML = sorted.map(g => `
  <div class="fin-expense-row">
  <div class="fin-expense-icon" style="background:var(--bg)">${ICONS[g.categoria]||'📦'}</div>
@@ -15004,7 +15021,7 @@ function _toggleCardFromManager(id, btn) {
  const sugs = [];
  if (fijos/total > 0.8) sugs.push('⚠️ El '+Math.round(fijos/total*100)+'% son gastos fijos. Alta exposición al riesgo.');
  if (saldo > 0 && total > saldo*0.5) sugs.push('💡 Los gastos mensuales son el '+Math.round(total/saldo*100)+'% del saldo disponible.');
- const mayor = gastos.length ? gastos.reduce((a,b)=>(a.importe||0)>(b.importe||0)?a:b) : null;
+ const mayor = gastos.length ? gastos.filter(g => !window._isTransfer?.(g)).reduce((a,b)=>(a?.importe||0)>(b?.importe||0)?a:b, null) : null;
  if (mayor) sugs.push('📊 Mayor gasto: "'+mayor.nombre+'" ('+_feur(mayor.importe)+'/mes). Revisa si es optimizable.');
  if (sugs.length) { iaText.textContent = sugs[0]; iaBox.style.display = ''; }
  else iaBox.style.display = 'none';
@@ -15901,15 +15918,15 @@ function _toggleCardFromManager(id, btn) {
 
  const moves = [];
 
- // Ingresos manuales → income (editables)
- ingresos.forEach(i => moves.push({
+ // Ingresos manuales → income (editables) — v1.3.982 excluir transfers
+ ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({
   type: 'income', nombre: i.concepto || 'Ingreso manual',
   importe: +(i.importe || 0), fecha: i.fecha || '',
   id: i.id || '', src: 'ingreso',
  }));
 
- // Gastos operativos → expense (editables)
- gastos.forEach(g => moves.push({
+ // Gastos operativos → expense (editables) — v1.3.982 excluir transfers
+ gastos.filter(g => !window._isTransfer?.(g)).forEach(g => moves.push({
   type: 'expense', nombre: g.nombre || 'Gasto',
   importe: +(g.importe || 0), fecha: g.fecha || '',
   id: g.id || '', src: 'gasto',
@@ -16582,41 +16599,82 @@ function _openEditMovimientoSheet(id, src) {
    if (!isNaN(num) && num > 0) { _editInput.value = num.toFixed(2).replace('.', ','); _resizeEdit(); }
   });
 
-  // Guardar
+  // Guardar — v1.3.982 cascade: si transferId existe, sincroniza importe+fecha al gemelo
   document.getElementById('edit-mov-save').addEventListener('click', function() {
    var nuevoImporte = parseFloat((document.getElementById('edit-mov-input').value||'').replace(',','.')) || 0;
    var nuevoNombre = document.getElementById('edit-mov-nombre').value.trim();
    var nuevaFecha = document.getElementById('edit-mov-fecha').value;
    if (!nuevoImporte || nuevoImporte <= 0) { showToast('⚠️ Introduce un importe'); return; }
 
+   var _transferId = registro.transferId || null;
+   var _fechaISO = new Date(nuevaFecha+'T12:00:00').toISOString();
+
    if (src === 'gasto') {
     var gastos = State.get.gastosOp().map(function(g) {
      if (g.id !== id) return g;
-     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: new Date(nuevaFecha+'T12:00:00').toISOString(), fechaPago: nuevaFecha });
+     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha });
     });
     State.set.setGastos(gastos);
+    // Cascade: gemelo en ingresosFin con mismo transferId (solo importe+fecha)
+    if (_transferId) {
+     var _ingArr = State.get.ingresosFin() || [];
+     var _gemeloIdx = -1;
+     for (var _gi=0; _gi<_ingArr.length; _gi++){ if (_ingArr[_gi].transferId === _transferId) { _gemeloIdx = _gi; break; } }
+     if (_gemeloIdx >= 0) {
+      var _ingNew = _ingArr.slice();
+      _ingNew[_gemeloIdx] = Object.assign({}, _ingNew[_gemeloIdx], { importe: nuevoImporte, fecha: _fechaISO });
+      State.set.setIngresos(_ingNew);
+      DashweyBus.emit('ingreso');
+     } else {
+      console.warn('[Dashwey] transferId huérfano en cascade save:', _transferId);
+     }
+    }
     DashweyBus.emit('gasto');
    } else if (src === 'ingreso') {
     var ingresos = State.get.ingresosFin().map(function(i) {
      if (i.id !== id) return i;
-     return Object.assign({}, i, { concepto: nuevoNombre||i.concepto, importe: nuevoImporte, fecha: new Date(nuevaFecha+'T12:00:00').toISOString() });
+     return Object.assign({}, i, { concepto: nuevoNombre||i.concepto, importe: nuevoImporte, fecha: _fechaISO });
     });
     State.set.setIngresos(ingresos);
+    // Cascade: gemelo en gastosOp con mismo transferId (solo importe+fecha)
+    if (_transferId) {
+     var _gasArr = State.get.gastosOp() || [];
+     var _gemeloIdx2 = -1;
+     for (var _gi2=0; _gi2<_gasArr.length; _gi2++){ if (_gasArr[_gi2].transferId === _transferId) { _gemeloIdx2 = _gi2; break; } }
+     if (_gemeloIdx2 >= 0) {
+      var _gasNew = _gasArr.slice();
+      _gasNew[_gemeloIdx2] = Object.assign({}, _gasNew[_gemeloIdx2], { importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha });
+      State.set.setGastos(_gasNew);
+      DashweyBus.emit('gasto');
+     } else {
+      console.warn('[Dashwey] transferId huérfano en cascade save:', _transferId);
+     }
+    }
     DashweyBus.emit('ingreso');
    }
    sheet.classList.remove('open');
    setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
-   showToast('✅ Movimiento actualizado');
+   showToast(_transferId ? '✅ Transferencia actualizada' : '✅ Movimiento actualizado');
   }, { once: true });
 
-  // Eliminar
+  // Eliminar — v1.3.982 cascade: si transferId existe, borra también el gemelo
   document.getElementById('edit-mov-del').addEventListener('click', function() {
+   var _transferId2 = registro.transferId || null;
+   var _msg = _transferId2
+    ? '¿Eliminar esta transferencia? Se borrarán ambos movimientos (gasto e ingreso).'
+    : '¿Eliminar "' + nombre + '"? Esta acción no se puede deshacer.';
    window._showDestructiveConfirm({
-    title: 'Eliminar movimiento',
-    message: '¿Eliminar "' + nombre + '"? Esta acción no se puede deshacer.',
+    title: _transferId2 ? 'Eliminar transferencia' : 'Eliminar movimiento',
+    message: _msg,
     confirmText: 'Eliminar',
     onConfirm: function() {
-     if (src === 'gasto') {
+     if (_transferId2) {
+      // Borrar ambos lados por transferId
+      State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.transferId !== _transferId2 && g.id !== id; }));
+      State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.transferId !== _transferId2 && i.id !== id; }));
+      DashweyBus.emit('gasto');
+      DashweyBus.emit('ingreso');
+     } else if (src === 'gasto') {
       State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.id !== id; }));
       DashweyBus.emit('gasto');
      } else if (src === 'ingreso') {
@@ -16625,7 +16683,7 @@ function _openEditMovimientoSheet(id, src) {
      }
      sheet.classList.remove('open');
      setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
-     showToast('🗑️ Movimiento eliminado');
+     showToast(_transferId2 ? '🗑️ Transferencia eliminada' : '🗑️ Movimiento eliminado');
     }
    });
   }, { once: true });
@@ -17138,10 +17196,10 @@ function _openEditMovimientoSheet(id, src) {
  const runway = FinEngine.runway();
  const gastoM = FinEngine.gastoMensualTotal();
 
- // Todos los movimientos mezclados, fecha desc
+ // Todos los movimientos mezclados, fecha desc — v1.3.982 excluir transfers
  const moves = [];
- ingresos.forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'' }));
- gastos.forEach(g => moves.push({ type:'expense', nombre: g.nombre||'Gasto', importe: +(g.importe||0), fecha: g.fecha||'' }));
+ ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'' }));
+ gastos.filter(g => !window._isTransfer?.(g)).forEach(g => moves.push({ type:'expense', nombre: g.nombre||'Gasto', importe: +(g.importe||0), fecha: g.fecha||'' }));
  moves.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
  const fmtD = iso => { try { const d=new Date(iso); const p=n=>String(n).padStart(2,'0'); return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear(); } catch(_){ return iso||'—'; } };
@@ -17522,7 +17580,7 @@ function _confirmBorrarCuenta(id) {
  const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
  const PLABELS = { mensual:'Mensual', trimestral:'Trimestral', anual:'Anual', unico:'Único' };
  const byCat = {};
- CATS.forEach(c => { byCat[c] = gastos.filter(g=>g.categoria===c).reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0); });
+ CATS.forEach(c => { byCat[c] = gastos.filter(g=>g.categoria===c && !window._isTransfer?.(g)).reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0); });
 
  // Subtítulo: periodo activo
  const _per = State.get.period();
@@ -17571,7 +17629,7 @@ function _confirmBorrarCuenta(id) {
  </div>
  <div class="fin-modal-section">
  <div class="fin-modal-section-title">Todos los gastos</div>
- ${gastos.length ? gastos.map(g => {
+ ${(() => { const _gFilt = gastos.filter(g => !window._isTransfer?.(g)); return _gFilt.length ? _gFilt.map(g => {
  const meq = g.mensualEq !== undefined ? g.mensualEq : g.importe;
  const per = g.frecuencia || 'unico';
  const plbl = PLABELS[per] || per;
@@ -17595,7 +17653,7 @@ function _confirmBorrarCuenta(id) {
  <button data-del-gasto="${g.id}" style="font-size:var(--fs-2xs);color:var(--red);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font);touch-action:manipulation">Eliminar</button>
  </div>
  </div>`;
- }).join('') : '<div style="padding:16px 0;text-align:center;color:var(--ink-soft);font-size:13px">Sin gastos registrados</div>'}
+ }).join('') : '<div style="padding:16px 0;text-align:center;color:var(--ink-soft);font-size:13px">Sin gastos registrados</div>'; })()}
  </div>
  <div class="fin-modal-section">
  <div class="fin-modal-section-title">Nuevo gasto</div>
@@ -18841,9 +18899,9 @@ function _confirmBorrarCuenta(id) {
  const _fcRangeIns = (() => { try { return KPI.getRange(p); } catch(_) { return null; } })();
  const _gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangeIns) : 0;
- const _gastos = State.get.gastosOp ? (State.get.gastosOp() || []) : [];
+ const _gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(g => !window._isTransfer?.(g)) : [];
  const _gasMax = [..._gastos].sort((a,b)=>(b.importe||0)-(a.importe||0))[0] || null;
- const _ingresos= State.get.ingresosFin?.() || [];
+ const _ingresos= (State.get.ingresosFin?.() || []).filter(i => !window._isTransfer?.(i));
  const _ingTotal= _ingresos.reduce((s,i) => s + (i.importe||0), 0);
  const _flujNet = _ingTotal - _gasTotal;
 
@@ -19310,9 +19368,9 @@ function _confirmBorrarCuenta(id) {
  var _fcRangePhr = (function(){ try { return KPI.getRange(period); } catch(_){ return null; } })();
  var gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangePhr) : 0;
- var gastos = State.get.gastosOp ? (State.get.gastosOp() || []) : [];
+ var gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return !window._isTransfer || !window._isTransfer(g); }) : [];
  var gasMax = gastos.slice().sort(function(a,b){return (b.importe||0)-(a.importe||0);})[0]||null;
- var ingresos= State.get.ingresosFin&&State.get.ingresosFin()||[];
+ var ingresos= (State.get.ingresosFin&&State.get.ingresosFin()||[]).filter(function(i){ return !window._isTransfer || !window._isTransfer(i); });
  var ingTotal= ingresos.reduce(function(s,i){return s+(i.importe||0);},0);
  var flujNet = ingTotal - gasTotal;
 
@@ -20969,8 +21027,8 @@ function _confirmBorrarCuenta(id) {
  if (!cuentasEl || !movsEl) return;
 
  var cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
- var gastosOp = State.get.gastosOp ? (State.get.gastosOp() || []) : [];
- var ingresos = State.get.ingresosFin ? (State.get.ingresosFin() || []) : [];
+ var gastosOp = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return !window._isTransfer || !window._isTransfer(g); }) : [];
+ var ingresos = State.get.ingresosFin ? (State.get.ingresosFin() || []).filter(function(i){ return !window._isTransfer || !window._isTransfer(i); }) : [];
 
  var esc2 = function(s) {
  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
@@ -22877,11 +22935,11 @@ function _confirmBorrarCuenta(id) {
    var movs = [];
    gastos.forEach(function(g){
     movs.push({ id:g.id, src:'gasto', concepto:g.nombre||'Gasto',
-     importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'', tipo:g.tipo||'gasto' });
+     importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'', tipo:g.tipo||'gasto', metaTipo:g.metaTipo });
    });
    ingresos.forEach(function(i){
     movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
-     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso' });
+     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:i.metaTipo });
    });
    movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
 
@@ -22898,7 +22956,7 @@ function _confirmBorrarCuenta(id) {
        var col   = m.importe >= 0 ? '#16A34A' : 'var(--red)';
        var sign  = m.importe >= 0 ? '+' : '';
        var saldoTrasEste = saldoTras[i];
-       var icoTipo = m.tipo === 'transferencia' ? '\uD83D\uDD04' : m.tipo === 'ajuste' ? '\u2696\uFE0F' : m.importe >= 0 ? '\u2191' : '\u2193';
+       var icoTipo = (m.metaTipo === 'transfer' || m.tipo === 'transferencia') ? '\uD83D\uDD04' : m.tipo === 'ajuste' ? '\u2696\uFE0F' : m.importe >= 0 ? '\u2191' : '\u2193';
        return '<div class="fc-move-row" data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"'
         + ' style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
         // Fecha
@@ -33582,6 +33640,13 @@ _eaRecalc();
   if (Array.isArray(merged[k]) && Array.isArray(_localArr2)) {
    merged[k] = _mergeById(_localArr2, merged[k]);
   }
+ });
+ // v1.3.982: mapeo legacy tipo:'transferencia' → metaTipo:'transfer' en datos entrantes
+ ['gastosOp','ingresosFin'].forEach(function(k){
+  if (!Array.isArray(merged[k])) return;
+  merged[k].forEach(function(x){
+   if (x && x.tipo === 'transferencia' && !x.metaTipo) x.metaTipo = 'transfer';
+  });
  });
  window._DashweySavingCtrl.isSaving = true;
  try {
