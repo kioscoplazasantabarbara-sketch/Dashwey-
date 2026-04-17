@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-993-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-994-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.993-dev</title>
+<title>Dashwey v1.3.994-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9712,25 +9712,135 @@ const State = (() => {
  const _DEMO_PROD_IDS = ['p1','p2','p3','p4','p5','p6','p7','p8','p9','p10'];
 
  function _migrateDemoData(state) {
- // Eliminar proveedores demo si el usuario no los ha modificado
+ // v1.3.994: LIMPIEZA UNIVERSAL ESTRICTA
+ // Regla: si un producto no tiene proveedor válido vivo → es huérfano → se elimina
+ // él y todos sus datos dependientes (ventas items, pedidos items, mermas, lotes,
+ // hotPins, qgCells). Cascada idempotente.
+ //
+ // Eliminar proveedores demo por ID fijo (comportamiento previo conservado)
  if (Array.isArray(state.proveedores)) {
  state.proveedores = state.proveedores.filter(p => !_DEMO_PROV_IDS.includes(p.id));
  }
- // Eliminar productos demo
+ // Eliminar productos con ID demo conocido (comportamiento previo conservado)
  if (Array.isArray(state.productos)) {
  state.productos = state.productos.filter(p => !_DEMO_PROD_IDS.includes(p.id));
  }
- // Eliminar historial de pedidos demo
+
+ // ── v1.3.994 — Detección universal de productos huérfanos ──
+ // Criterio: prov vacío o apunta a proveedor que no existe en state.proveedores
+ var _provIdsVivos = {};
+ (state.proveedores || []).forEach(function(pv){ if (pv && pv.id) _provIdsVivos[pv.id] = 1; });
+ var _orphanProdIds = {};
+ if (Array.isArray(state.productos)) {
+  state.productos.forEach(function(p){
+   if (!p || !p.id) return;
+   if (!p.prov || !_provIdsVivos[p.prov]) _orphanProdIds[p.id] = 1;
+  });
+  // Borrar productos huérfanos
+  state.productos = state.productos.filter(function(p){ return !_orphanProdIds[p.id]; });
+ }
+
+ // Log informativo (solo si hay huérfanos)
+ var _orphanCount = Object.keys(_orphanProdIds).length;
+ if (_orphanCount > 0) {
+  console.log('[Dashwey] v1.3.994 cleanup: ' + _orphanCount + ' productos huérfanos eliminados');
+ }
+
+ // ── Cascade a colecciones dependientes ──
+ // Ventas: filtrar items huérfanos; si venta queda sin items, eliminar
+ if (Array.isArray(state.ventas)) {
+  state.ventas = state.ventas
+   .map(function(v){
+    if (!v) return v;
+    if (Array.isArray(v.items)) {
+     v.items = v.items.filter(function(it){ return it && it.prodId && !_orphanProdIds[it.prodId]; });
+    }
+    return v;
+   })
+   .filter(function(v){
+    if (!v) return false;
+    // Legacy: ventas con prodId raíz (sin items[])
+    if (v.prodId && _orphanProdIds[v.prodId]) return false;
+    // Si usa items[] y quedó vacío → eliminar
+    if (Array.isArray(v.items) && v.items.length === 0) return false;
+    return true;
+   });
+ }
+
+ // historialPedidos: filtrar items huérfanos; si pedido queda vacío, eliminar
  if (Array.isArray(state.historialPedidos)) {
  state.historialPedidos = state.historialPedidos.filter(p =>
  !p.id?.startsWith('ped_demo')
  );
+  state.historialPedidos = state.historialPedidos
+   .map(function(ped){
+    if (ped && Array.isArray(ped.items)) {
+     ped.items = ped.items.filter(function(it){ return it && it.prodId && !_orphanProdIds[it.prodId]; });
+    }
+    return ped;
+   })
+   .filter(function(ped){
+    if (!ped) return false;
+    if (Array.isArray(ped.items) && ped.items.length === 0) return false;
+    return true;
+   });
  }
- // Eliminar mermas demo
+
+ // pendingOrders: idem historialPedidos
+ if (Array.isArray(state.pendingOrders)) {
+  state.pendingOrders = state.pendingOrders
+   .map(function(o){
+    if (o && Array.isArray(o.items)) {
+     o.items = o.items.filter(function(it){ return it && it.prodId && !_orphanProdIds[it.prodId]; });
+    }
+    return o;
+   })
+   .filter(function(o){
+    if (!o) return false;
+    if (Array.isArray(o.items) && o.items.length === 0) return false;
+    return true;
+   });
+ }
+
+ // Mermas: eliminar las que referencian prodId huérfano (+ comportamiento previo)
  if (Array.isArray(state.mermas)) {
  state.mermas = state.mermas.filter(m => !['m1','m2','m3'].includes(m.id));
+  state.mermas = state.mermas.filter(function(m){ return m && m.prodId && !_orphanProdIds[m.prodId]; });
  }
- // Eliminar visitas demo
+
+ // lotesStock: eliminar los que referencian prodId huérfano
+ if (Array.isArray(state.lotesStock)) {
+  state.lotesStock = state.lotesStock.filter(function(l){ return l && l.prodId && !_orphanProdIds[l.prodId]; });
+ }
+
+ // hotPins: filtrar
+ if (Array.isArray(state.hotPins)) {
+  state.hotPins = state.hotPins.filter(function(pinId){ return pinId && !_orphanProdIds[pinId]; });
+ }
+
+ // qgCells: filtrar (celdas pueden ser strings prodId o objects {prodId,...})
+ if (Array.isArray(state.qgCells)) {
+  state.qgCells = state.qgCells.filter(function(c){
+   if (!c) return true; // celda vacía → conservar
+   var pid = typeof c === 'string' ? c : c.prodId;
+   return !pid || !_orphanProdIds[pid];
+  });
+ }
+
+ // Tombstones: añadir IDs huérfanos para prevenir reaparición vía sync
+ if (_orphanCount > 0 && typeof window !== 'undefined') {
+  try {
+   var _tsKey = 'dashwey_tombstones';
+   var _ts = null;
+   try { _ts = JSON.parse(localStorage.getItem(_tsKey) || 'null'); } catch(_){}
+   if (!_ts || typeof _ts !== 'object') _ts = { ids: {}, ts: Date.now() };
+   if (!_ts.ids) _ts.ids = {};
+   Object.keys(_orphanProdIds).forEach(function(id){ _ts.ids[id] = Date.now(); });
+   localStorage.setItem(_tsKey, JSON.stringify(_ts));
+  } catch(_){}
+ }
+
+ // Eliminar visitas demo (comportamiento previo)
  if (Array.isArray(state.visitasComerciales)) {
  state.visitasComerciales = state.visitasComerciales.filter(v => !['v1','v2'].includes(v.id));
  }
@@ -11959,7 +12069,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.993-dev';
+ const _APP_VERSION = 'v1.3.994-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
