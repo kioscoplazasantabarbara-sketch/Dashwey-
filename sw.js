@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════
    Dashwey Service Worker v1.3.777-dev
-   Cache: dashwey-v1-3-866-dev
+   Cache: dashwey-v1-3-955-dev
 
    ESTRATEGIA DE CACHE v1.0.1:
    - HTML principal: SIEMPRE network-only (NUNCA se cachea)
@@ -12,7 +12,7 @@
    - skipWaiting: inmediato siempre (manual y automático)
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-953-dev';
+const CACHE_NAME  = 'dashwey-v1-3-955-dev';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
