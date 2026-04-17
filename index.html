@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-953-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-980-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.979-dev</title>
+<title>Dashwey v1.3.980-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9802,6 +9802,7 @@ const State = (() => {
  cuentas: () => _state.cuentas || [],
  gastosOp: () => _state.gastosOp || [],
   cierresCaja: () => _state.cierresCaja || [],
+ lotesStock: () => _state.lotesStock || [],
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
  hotPins: () => _state.hotPins || [],
@@ -9865,6 +9866,8 @@ const State = (() => {
  }, // no save: solo en memoria
  lastVal: (id, vals) => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
  addCuenta: (c) => { _state.cuentas.push(c); save(); },
+ setLotesStock: (v) => { _state.lotesStock = Array.isArray(v) ? v : []; save(); },
+ addLoteStock: (l) => { if (!_state.lotesStock) _state.lotesStock = []; if (l?.id && _state.lotesStock.some(x => x.id === l.id)) return; _state.lotesStock.push(l); save(); },
  hiddenCards: (v) => { _state.hiddenCards = v; save(); },
  catLabels: (v) => { _state.catLabels = v; save(); },
  hotPins: (v) => {
@@ -9906,7 +9909,15 @@ const State = (() => {
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
  addPedido: (p) => { // v1.3.594: deduplicación por ID — consistente con addVenta
  if (p?.id && _state.historialPedidos.some(x => x.id === p.id)) return;
- _state.historialPedidos.push(p); save(); },
+ _state.historialPedidos.push(p);
+ // v1.3.980: FIFO — crear lotes con coste histórico al confirmar pedido
+ try {
+  if (typeof FinEngine !== 'undefined' && FinEngine.crearLotesDesdeItems && Array.isArray(p?.items)) {
+   FinEngine.crearLotesDesdeItems(p.items, p.fecha || p.date || new Date().toISOString());
+  }
+ } catch(_e) { console.warn('[FIFO] crearLotesDesdeItems falló:', _e?.message); }
+ save();
+ },
  removeHistorialPedido: (id) => {
   if (!_state.historialPedidos) return;
   _state.historialPedidos = _state.historialPedidos.filter(p => p.id !== id);
@@ -9920,7 +9931,18 @@ const State = (() => {
   save();
  },
  // v1.3.582: deduplicación por ID — evita duplicados si addVenta se llama dos veces con el mismo payload
- addVenta: (v) => { if (v?.id && _state.ventas.some(x => x.id === v.id)) return; _state.ventas.push(v); save(); },
+ addVenta: (v) => {
+ if (v?.id && _state.ventas.some(x => x.id === v.id)) return;
+ _state.ventas.push(v);
+ // v1.3.980: FIFO — consumir lotes para registrar coste real de esta venta
+ try {
+  if (typeof FinEngine !== 'undefined' && FinEngine.consumirLotesFIFO && v?.prodId && v?.qty) {
+   var _r = FinEngine.consumirLotesFIFO(v.prodId, v.qty);
+   if (_r && _r.qtyConsumida > 0) v.costeReal = _r.costeConsumido; // coste histórico al que se vendió
+  }
+ } catch(_e) { console.warn('[FIFO] consumirLotesFIFO falló:', _e?.message); }
+ save();
+ },
  addProd: (p) => { _state.productos.push(p); save(); },
  addProv: (p) => { _state.proveedores.push(p); save(); },
  resetStorage: () => { _state = JSON.parse(JSON.stringify(DEFAULTS)); try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {} save(); },
@@ -10841,6 +10863,84 @@ const FinEngine = (() => {
  );
  }
 
+ // ── FIFO: lotes de stock por coste histórico ────────────────────
+ // v1.3.980: captura coste real al confirmar pedido, consume FIFO al vender
+ //
+ // Estructura lote: { id, prodId, qty, qtyRestante, costeUnit, fecha }
+ //   - qty: unidades originales del lote al crearse
+ //   - qtyRestante: unidades aún no consumidas por ventas/mermas
+ //   - costeUnit: coste unitario REAL del momento de la compra (precioCompra/udscaja)
+ //
+ // crearLotesDesdeItems(items, fecha):
+ //   items: array de línea de pedido { prodId, ncajas, udscaja, precio }
+ //   precio = precio por BULTO  →  costeUnit = precio / udscaja
+ //   qty    = ncajas * udscaja   (unidades que entran al stock)
+ //   Idempotente por (prodId + fecha + idx) en el id del lote.
+ function crearLotesDesdeItems(items, fecha) {
+ if (!Array.isArray(items)) return [];
+ var _fechaIso = (typeof fecha === 'string') ? fecha : new Date(fecha || Date.now()).toISOString();
+ var _ts = new Date(_fechaIso).getTime() || Date.now();
+ var creados = [];
+ items.forEach(function(it, idx) {
+  if (!it || !it.prodId) return;
+  var uds = +it.udscaja || 1;
+  var ncajas = +it.ncajas || 0;
+  var qty = ncajas * uds;
+  if (qty <= 0) return;
+  var precioBulto = +it.precio || 0;
+  var costeUnit = uds > 0 ? (precioBulto / uds) : precioBulto;
+  var lote = {
+   id: 'l' + _ts + '_' + it.prodId + '_' + idx,
+   prodId: it.prodId,
+   qty: qty,
+   qtyRestante: qty,
+   costeUnit: +costeUnit.toFixed(4),
+   fecha: _fechaIso
+  };
+  try { State.set.addLoteStock(lote); } catch(_) {}
+  creados.push(lote);
+ });
+ return creados;
+ }
+
+ // consumirLotesFIFO(prodId, qty):
+ //   Consume `qty` unidades del stock en orden FIFO (lote más antiguo primero).
+ //   Devuelve { costeConsumido, qtyConsumida }.
+ //   Si no hay lotes suficientes, consume lo disponible y devuelve costeConsumido parcial.
+ //   Persiste cambios con setLotesStock() al final.
+ function consumirLotesFIFO(prodId, qty) {
+ var restante = +qty || 0;
+ if (!prodId || restante <= 0) return { costeConsumido: 0, qtyConsumida: 0 };
+ var lotes = (State.get.lotesStock() || []).slice();
+ // Ordenar por fecha asc (FIFO)
+ lotes.sort(function(a, b) {
+  var ta = new Date(a.fecha).getTime() || 0;
+  var tb = new Date(b.fecha).getTime() || 0;
+  return ta - tb;
+ });
+ var coste = 0;
+ var consumido = 0;
+ var mutado = false;
+ for (var i = 0; i < lotes.length && restante > 0; i++) {
+  var L = lotes[i];
+  if (!L || L.prodId !== prodId) continue;
+  var disp = +L.qtyRestante || 0;
+  if (disp <= 0) continue;
+  var take = Math.min(disp, restante);
+  L.qtyRestante = +(disp - take).toFixed(4);
+  coste += take * (+L.costeUnit || 0);
+  consumido += take;
+  restante -= take;
+  mutado = true;
+ }
+ if (mutado) {
+  // Filtrar lotes agotados para mantener el array compacto
+  var vivos = lotes.filter(function(L) { return (+L.qtyRestante || 0) > 0.0001; });
+  try { State.set.setLotesStock(vivos); } catch(_) {}
+ }
+ return { costeConsumido: +coste.toFixed(2), qtyConsumida: consumido };
+ }
+
  // ── 8. TICKET MEDIO ──────────────────────────────────────────────
  function ticketMedio(range) {
  const ventas = State.get.ventas()
@@ -11012,6 +11112,7 @@ const FinEngine = (() => {
 
  // Stock
  valorStock, valorStockBulto, // v1.3.593: bulto = referencia sin prorratear
+ crearLotesDesdeItems, consumirLotesFIFO, // v1.3.980: FIFO de coste histórico
 
  // Ticket
  ticketMedio, ticketMedioMesActual,
@@ -11723,7 +11824,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.979-dev';
+ const _APP_VERSION = 'v1.3.980-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17571,7 +17672,13 @@ function _confirmBorrarCuenta(id) {
  const importe = _calcGet();
  const categoria = document.getElementById('fm-gasto-cat')?.value || 'Otros';
  const fechaPago = document.getElementById('fm-gasto-fecha')?.value || new Date().toISOString().slice(0,10);
- const cuentaId = document.getElementById('fm-gasto-cuenta')?.value || '';
+ let cuentaId = document.getElementById('fm-gasto-cuenta')?.value || '';
+ // v1.3.980 opción B: fallback a cuenta primaria si vacío → nunca gasto huérfano
+ if (!cuentaId) {
+  const _cs = State.get.cuentas() || [];
+  const _pri = _cs.find(c => c.isPrimary) || _cs[0];
+  if (_pri) cuentaId = _pri.id;
+ }
  const periodo = _gastoPeriodo || 'mensual';
  const recurrente= periodo !== 'unico';
  const mensualEq = _mensualEq(importe, periodo);
@@ -17741,6 +17848,12 @@ function _confirmBorrarCuenta(id) {
  var concepto = document.getElementById('ingr-concepto')?.value?.trim() || 'Ingreso manual';
  var fecha = document.getElementById('ingr-fecha')?.value || new Date().toISOString().slice(0,10);
  var cuentaId = document.getElementById('ingr-cuenta')?.value || '';
+ // v1.3.980 opción B: fallback a cuenta primaria si vacío → ingreso siempre impacta saldo
+ if (!cuentaId) {
+  var _cs_i = State.get.cuentas() || [];
+  var _pri_i = _cs_i.find(function(c){ return c.isPrimary; }) || _cs_i[0];
+  if (_pri_i) cuentaId = _pri_i.id;
+ }
  var recurrente = _ingresoTipo === 'programado' && _ingresoPeriodo !== 'unico';
  var mensualEq = _mensualEq(importe, _ingresoPeriodo);
 
@@ -29096,8 +29209,38 @@ const nPending = (State.get.pendingOrders() || [])
  const qReal = Math.min(q, stockActual);
  if (qReal <= 0) { showToast('\u26a0\ufe0f Sin stock disponible para registrar merma'); ui.closeModal(); saveMerma._running = false; return; }
  try {
-  State.set.addMerma({ id:'m'+Date.now(), fecha:new Date().toISOString(), prodId, qty:qReal, motivo:m, coste:+(qReal*p.precioCompra).toFixed(2) });
+  var _mermaId = 'm'+Date.now();
+  // v1.3.980: coste de merma al COSTE UNITARIO REAL (precioCompra / udscaja)
+  var _uds = +p.udscaja || 1;
+  var _cu = (+p.precioCompra || 0) / _uds;
+  var _coste = +(qReal * _cu).toFixed(2);
+  State.set.addMerma({ id:_mermaId, fecha:new Date().toISOString(), prodId, qty:qReal, motivo:m, coste:_coste });
   if (p.trackStock !== false) State.set.updateProd(prodId, { stockActual: stockActual - qReal });
+  // v1.3.980: pérdida contable → gasto + descuento de cuenta primaria
+  if (_coste > 0) {
+   var _cs_m = State.get.cuentas() || [];
+   var _pri_m = _cs_m.find(function(c){ return c.isPrimary; }) || _cs_m[0];
+   var _cuentaId_m = _pri_m ? _pri_m.id : '';
+   try {
+    State.set.addGasto({
+     id: 'g_merma_' + _mermaId,
+     nombre: 'Merma: ' + (p.nombre || prodId),
+     categoria: 'Mermas',
+     importe: _coste,
+     mensualEq: _coste,
+     fecha: new Date().toISOString(),
+     fechaPago: new Date().toISOString().slice(0,10),
+     cuentaId: _cuentaId_m,
+     recurrente: false,
+     frecuencia: 'unico',
+     tipo: 'merma',
+     mermaId: _mermaId
+    });
+    if (_cuentaId_m && _pri_m) {
+     State.set.updateCuenta(_cuentaId_m, { saldo: (_pri_m.saldo || 0) - _coste });
+    }
+   } catch(_em) { console.warn('[MERMA] gasto/cuenta falló:', _em?.message); }
+  }
   ui.closeModal(); dash.render();
   showToast('\u2705 Merma de ' + qReal + ' uds registrada');
  } finally {
