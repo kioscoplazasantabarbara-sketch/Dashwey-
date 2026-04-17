@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-991-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-992-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.991-dev</title>
+<title>Dashwey v1.3.992-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2300,6 +2300,83 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
 }
 #snap-timeline-svg {
  display: none;
+}
+
+/* ── v1.3.992 LOTE C — Timeline vertical Recordatorios (estilo TickTick) ── */
+.snap-tl-v {
+ display: flex;
+ flex-direction: column;
+ padding: 4px 0 8px;
+ max-height: 240px;
+ overflow-y: auto;
+ -webkit-overflow-scrolling: touch;
+ overscroll-behavior: contain;
+}
+.snap-tl-v-group {
+ position: relative;
+ padding-left: 30px; /* espacio para línea + punto */
+}
+.snap-tl-v-group:not(:last-child) { padding-bottom: 8px; }
+.snap-tl-v-group::before {
+ content: "";
+ position: absolute;
+ left: 11px;
+ top: 10px;
+ bottom: -4px;
+ width: 2px;
+ background: var(--border);
+ border-radius: 1px;
+}
+.snap-tl-v-group:last-child::before { bottom: 12px; }
+.snap-tl-v-day {
+ font-size: var(--fs-xs);
+ font-weight: var(--fw-bold);
+ color: var(--ink);
+ letter-spacing: 0.3px;
+ text-transform: uppercase;
+ padding: 4px 0;
+ position: relative;
+}
+.snap-tl-v-day::before {
+ content: "";
+ position: absolute;
+ left: -23px;
+ top: 8px;
+ width: 8px;
+ height: 8px;
+ border-radius: 50%;
+ background: var(--red);
+ box-shadow: 0 0 0 3px var(--surface);
+}
+.snap-tl-v-day.past::before { background: rgba(0,0,0,0.25); }
+.snap-tl-v-day.past { color: rgba(0,0,0,0.35); }
+.snap-tl-v-item {
+ display: flex;
+ gap: 10px;
+ align-items: baseline;
+ padding: 5px 0;
+ font-family: Inter, var(--font), sans-serif;
+}
+.snap-tl-v-item-hora {
+ flex-shrink: 0;
+ width: 44px;
+ font-size: var(--fs-xs);
+ font-weight: var(--fw-semi);
+ color: var(--ink-soft);
+ font-variant-numeric: tabular-nums;
+}
+.snap-tl-v-item-titulo {
+ flex: 1;
+ min-width: 0;
+ font-size: var(--fs-sm);
+ color: var(--ink);
+ word-break: break-word;
+}
+.snap-tl-v-item.past .snap-tl-v-item-titulo,
+.snap-tl-v-item.past .snap-tl-v-item-hora {
+ color: rgba(0,0,0,0.35);
+ text-decoration: line-through;
+ text-decoration-thickness: 1px;
 }
 
 /* Point pop-in animation */
@@ -9445,6 +9522,7 @@ const State = (() => {
  teamMembers: [],
  notifsRead: [],
  visitasComerciales: [],
+ recordatorios: [], // v1.3.992 LOTE C — entidades libres {id,titulo,fecha(ISO),repite,creado}
  cuentas: [],
  gastosOp: [],
   cierresCaja: [],
@@ -9665,7 +9743,7 @@ const State = (() => {
  if (!raw) return JSON.parse(JSON.stringify(DEFAULTS));
  const loaded = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), JSON.parse(raw));
  // v1.3.979: dedup one-shot al hidratar — repara duplicados pre-existentes
- ['ventas','historialPedidos','mermas','facturas','cierresCaja','gastosOp','ingresosFin'].forEach(function(k){
+ ['ventas','historialPedidos','mermas','facturas','cierresCaja','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
   if (!Array.isArray(loaded[k])) return;
   var _seen = {};
   loaded[k] = loaded[k].filter(function(x){
@@ -9681,6 +9759,32 @@ const State = (() => {
    if (x && x.tipo === 'transferencia' && !x.metaTipo) x.metaTipo = 'transfer';
   });
  });
+ // v1.3.992 LOTE C — migrar visitasComerciales con notas → recordatorios (one-shot, idempotente).
+ // Items legacy tras LOTE B quedaron huérfanos: la tab "Próximo Pedido" ya no los lee.
+ // Los que tienen `notas` se recuperan como recordatorios; los sin notas se descartan
+ // (eran solo recordatorio de visita, ya cubierto por recurrencia auto LOTE B).
+ if (Array.isArray(loaded.visitasComerciales) && loaded.visitasComerciales.length) {
+  if (!Array.isArray(loaded.recordatorios)) loaded.recordatorios = [];
+  var _recSeenIds = {};
+  loaded.recordatorios.forEach(function(r){ if (r && r.id) _recSeenIds[r.id] = 1; });
+  var _migrated = 0;
+  loaded.visitasComerciales.forEach(function(v){
+   if (!v || !v.notas || !v.fecha) return;
+   var migId = 'rec_mig_' + (v.id || v.fecha);
+   if (_recSeenIds[migId]) return; // idempotente
+   loaded.recordatorios.push({
+    id: migId,
+    titulo: String(v.notas).slice(0, 120),
+    fecha: v.fecha,
+    repite: null,
+    creado: v.fecha,
+    migratedFrom: 'visitasComerciales'
+   });
+   _recSeenIds[migId] = 1;
+   _migrated++;
+  });
+  if (_migrated > 0) console.log('[Dashwey] Migrados ' + _migrated + ' recordatorios desde visitasComerciales legacy');
+ }
  return _migrateDemoData(loaded);
  } catch(e) {
  console.warn('[Dashwey] Error cargando estado, usando defaults:', e);
@@ -9825,6 +9929,7 @@ const State = (() => {
  teamMembers: () => _state.teamMembers || [],
  notifsRead: () => _state.notifsRead || [],
  visitasComerciales: () => _state.visitasComerciales || [],
+ recordatorios: () => _state.recordatorios || [], // v1.3.992 LOTE C
  ingresosFin: () => _state.ingresosFin || [], // v9.5.73: ingresos manuales
  notifPrefs: () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
  prov: (id) => _state.proveedores.find(p => p.id === id),
@@ -9897,6 +10002,11 @@ const State = (() => {
  markNotifRead: (id) => { if (!_state.notifsRead) _state.notifsRead = []; if (!_state.notifsRead.includes(id)) { _state.notifsRead.push(id); save(); } },
  clearNotifsRead: () => { _state.notifsRead = []; save(); },
  visitasComerciales: (v) => { _state.visitasComerciales = v; save(); },
+ // v1.3.992 LOTE C — Recordatorios (entidades libres)
+ setRecordatorios: (v) => { _state.recordatorios = Array.isArray(v) ? v : []; save(); },
+ addRecordatorio: (r) => { if (!_state.recordatorios) _state.recordatorios = []; if (r?.id && _state.recordatorios.some(x => x.id === r.id)) return; _state.recordatorios.push(r); save(); },
+ updateRecordatorio: (id, v) => { const r = (_state.recordatorios||[]).find(x => x.id === id); if (r) { Object.assign(r, v); save(); } },
+ deleteRecordatorio: (id) => { _state.recordatorios = (_state.recordatorios||[]).filter(x => x.id !== id); save(); },
  addVisita: (v) => { if (!_state.visitasComerciales) _state.visitasComerciales = []; _state.visitasComerciales.push(v); save(); },
  updateVisita: (id, data) => { const v = (_state.visitasComerciales||[]).find(x=>x.id===id); if(v) { Object.assign(v,data); save(); } },
  deleteVisita: (id) => { _state.visitasComerciales = (_state.visitasComerciales||[]).filter(x=>x.id!==id); save(); },
@@ -11845,7 +11955,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.991-dev';
+ const _APP_VERSION = 'v1.3.992-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20037,6 +20147,16 @@ function _confirmBorrarCuenta(id) {
  } else { visEl.textContent = '—'; }
  }
 
+ // v1.3.992 LOTE C — contador Recordatorios (futuros o de hoy)
+ var recEl = document.getElementById('snap-rec-agenda');
+ if (recEl) {
+  var _recs = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
+  var _ahora = new Date();
+  var _hoy00 = new Date(_ahora); _hoy00.setHours(0,0,0,0);
+  var _nRec = _recs.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= _hoy00; }).length;
+  recEl.textContent = _nRec || '0';
+ }
+
  // ── Wire tab clicks ────────────────────────────────────────
  if (tabsEl) {
  tabsEl.querySelectorAll('.snap-agenda-tab').forEach(function(btn) {
@@ -20077,11 +20197,7 @@ function _confirmBorrarCuenta(id) {
  } else if (_snapAgendaActiveTab === 'pedidos') {
   _snapRenderPedidosPanel(wrap, pedidos, calcEnt, hoy, fmtD);
  } else if (_snapAgendaActiveTab === 'recordatorios') {
-  // v1.3.990: placeholder — datos + timeline vertical en LOTE C
-  var _empR = document.createElement('div');
-  _empR.style.cssText = 'text-align:center;padding:20px 0;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
-  _empR.textContent = 'Sin recordatorios';
-  wrap.appendChild(_empR);
+  _snapRenderRecordatoriosPanel(wrap, hoy, fmtD);
  } else {
   _snapRenderVisitasPanel(wrap, visitas, hoy, fmtD);
  }
@@ -20405,6 +20521,83 @@ function _confirmBorrarCuenta(id) {
  _addEvento.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Nuevo evento';
  _addEvento.addEventListener('click', function(){ try{ App.dash.openAddVisita(); }catch(_){} });
  wrap.appendChild(_addEvento);
+ }
+
+ // ── v1.3.992 LOTE C — Panel RECORDATORIOS: timeline vertical (estilo TickTick) ──
+ // Agrupa por día: "Hoy", "Mañana", "Miércoles 14"…
+ // Cada item: hora + título. Punto+línea vertical continua.
+ function _snapRenderRecordatoriosPanel(wrap, hoy, fmtD) {
+ var recs = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
+ // Filtrar: solo futuros o del día de hoy
+ var ahora = new Date();
+ recs = recs
+  .filter(function(r){ return r && r.fecha; })
+  .map(function(r){ return Object.assign({}, r, { _fd: new Date(r.fecha) }); })
+  .filter(function(r){ return !isNaN(r._fd.getTime()); })
+  .sort(function(a,b){ return a._fd - b._fd; });
+
+ if (!recs.length) {
+  var empty = document.createElement('div');
+  empty.style.cssText = 'text-align:center;padding:20px 0;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
+  empty.textContent = 'Sin recordatorios';
+  wrap.appendChild(empty);
+  return;
+ }
+
+ // Agrupar por yyyy-mm-dd
+ var DNAMES_FULL = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+ var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+ var groups = {};
+ var groupOrder = [];
+ recs.forEach(function(r){
+  var d = r._fd;
+  var key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  if (!groups[key]) { groups[key] = { date: new Date(d.getFullYear(), d.getMonth(), d.getDate()), items: [] }; groupOrder.push(key); }
+  groups[key].items.push(r);
+ });
+
+ var tl = document.createElement('div');
+ tl.className = 'snap-tl-v';
+ var hoy0 = new Date(hoy); hoy0.setHours(0,0,0,0);
+ var mañana0 = new Date(hoy0); mañana0.setDate(hoy0.getDate()+1);
+ var semanaLimit = new Date(hoy0); semanaLimit.setDate(hoy0.getDate()+7);
+
+ groupOrder.forEach(function(key){
+  var g = groups[key];
+  var isPast = g.date < hoy0;
+  var lbl;
+  if (g.date.getTime() === hoy0.getTime()) lbl = 'Hoy';
+  else if (g.date.getTime() === mañana0.getTime()) lbl = 'Mañana';
+  else if (g.date < semanaLimit) lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate();
+  else lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate() + ' ' + MON[g.date.getMonth()];
+
+  var group = document.createElement('div');
+  group.className = 'snap-tl-v-group';
+
+  var dayEl = document.createElement('div');
+  dayEl.className = 'snap-tl-v-day' + (isPast ? ' past' : '');
+  dayEl.textContent = lbl;
+  group.appendChild(dayEl);
+
+  g.items.forEach(function(r){
+   var item = document.createElement('div');
+   item.className = 'snap-tl-v-item' + (r._fd < ahora ? ' past' : '');
+   var h = r._fd.getHours(), m = r._fd.getMinutes();
+   var horaEl = document.createElement('div');
+   horaEl.className = 'snap-tl-v-item-hora';
+   horaEl.textContent = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+   var titEl = document.createElement('div');
+   titEl.className = 'snap-tl-v-item-titulo';
+   titEl.textContent = r.titulo || '(sin título)';
+   item.appendChild(horaEl);
+   item.appendChild(titEl);
+   group.appendChild(item);
+  });
+
+  tl.appendChild(group);
+ });
+
+ wrap.appendChild(tl);
  }
 
 
@@ -30522,7 +30715,8 @@ _eaRecalc();
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
    hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
    qgCells:'qgCells', qgSizeIdx:'qgSizeIdx', chatMessages:'chatMessages',
-   chatUsers:'chatUsers', notifsRead:'notifsRead' };
+   chatUsers:'chatUsers', notifsRead:'notifsRead',
+   recordatorios:'setRecordatorios' };
   Object.keys(merged).forEach(function(k) {
    var sk = (_sm[k] !== undefined) ? _sm[k] : k;
    if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
@@ -33484,6 +33678,7 @@ _eaRecalc();
  catLabels: State.get.catLabels ? State.get.catLabels() : {},
  hiddenCards: State.get.hiddenCards ? State.get.hiddenCards() : [],
  qgCells: State.get.qgCells ? State.get.qgCells() : [],
+ recordatorios: State.get.recordatorios ? State.get.recordatorios() : [], // v1.3.992 LOTE C
  };
  }
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
@@ -33596,7 +33791,8 @@ _eaRecalc();
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
    hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
    qgCells:'qgCells', qgSizeIdx:'qgSizeIdx', chatMessages:'chatMessages',
-   chatUsers:'chatUsers', notifsRead:'notifsRead' };
+   chatUsers:'chatUsers', notifsRead:'notifsRead',
+   recordatorios:'setRecordatorios' };
   Object.keys(merged).forEach(function(k) {
    var sk = (_sm[k] !== undefined) ? _sm[k] : k;
    if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
@@ -33692,7 +33888,7 @@ _eaRecalc();
   // v1.3.979: aplicar a TODOS los arrays con id, no solo productos
   const _deleted = window._DashweyLocalDeletedIds;
   if (_deleted && _deleted.size) {
-   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin'].forEach(function(k){
+   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
     if (Array.isArray(merged[k])) {
      merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deleted.has(x.id); });
     }
@@ -33700,7 +33896,8 @@ _eaRecalc();
   }
  // v1.3.730: merge por ID para arrays acumulativos (onSnapshot)
  // v1.3.979: incluir facturas
- var _mKeys2 = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','facturas'];
+ // v1.3.992: incluir recordatorios (LOTE C)
+ var _mKeys2 = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','facturas','recordatorios'];
  _mKeys2.forEach(function(k) {
   var _localArr2 = typeof State.get[k] === 'function' ? State.get[k]() : null;
   if (Array.isArray(merged[k]) && Array.isArray(_localArr2)) {
@@ -33720,7 +33917,8 @@ _eaRecalc();
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
    hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
    qgCells:'qgCells', qgSizeIdx:'qgSizeIdx', chatMessages:'chatMessages',
-   chatUsers:'chatUsers', notifsRead:'notifsRead' };
+   chatUsers:'chatUsers', notifsRead:'notifsRead',
+   recordatorios:'setRecordatorios' };
   Object.keys(merged).forEach(function(k) {
    var sk = (_sm[k] !== undefined) ? _sm[k] : k;
    if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
