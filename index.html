@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-990-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-991-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.990-dev</title>
+<title>Dashwey v1.3.991-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11845,7 +11845,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.990-dev';
+ const _APP_VERSION = 'v1.3.991-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19908,6 +19908,53 @@ function _confirmBorrarCuenta(id) {
  // v1.3.990: default = 'visitas' (ahora renombrado UI "Próximo Pedido"), orden spec
  var _snapAgendaActiveTab = 'visitas';
 
+ // v1.3.991 — LOTE B: helpers puros de recurrencia Próximo Pedido
+ //
+ // diasPedido: array de índices 0..6 (convención local Lu=0 … Do=6)
+ // getDay() JS: 0=Dom … 6=Sáb. Conversión: domingo→6, resto→d-1
+ //
+ // _nextOrderDate(diasPedido, fromDate): devuelve Date del próximo día de pedido
+ // respecto a fromDate. Si hoy coincide con un día de pedido y fromDate es 00:00,
+ // el match de hoy es válido (aún no pasó). Llamadores pasan `hoy` a 00:00.
+ function _nextOrderDate(diasPedido, fromDate) {
+ if (!diasPedido || !diasPedido.length) return null;
+ var base = new Date(fromDate); base.setHours(9, 0, 0, 0); // visita/pedido típico 9am
+ for (var i = 0; i < 14; i++) { // hasta 14 días — cubre cualquier periodicidad semanal
+  var d = new Date(base); d.setDate(base.getDate() + i);
+  var dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Lu … 6=Do
+  if (diasPedido.indexOf(dow) >= 0) return d;
+ }
+ return null;
+ }
+
+ // _computeProximosPedidos(rangeStart, rangeEnd, hoy): itera proveedores con
+ // diasPedido, calcula próxima fecha, filtra por rango del periodo activo,
+ // ordena asc por fecha. Devuelve array de shape compatible con _snapRenderVisitasPanel
+ // ({ provId, fecha, agente }).
+ function _computeProximosPedidos(rangeStart, rangeEnd, hoy) {
+ var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+ var out = [];
+ provs.forEach(function(p) {
+  if (!p || !Array.isArray(p.diasPedido) || !p.diasPedido.length) return;
+  var fecha = _nextOrderDate(p.diasPedido, hoy);
+  if (!fecha) return;
+  // Filtro de periodo si aplica
+  if (rangeStart && rangeEnd) {
+   var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+   var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
+   if (fecha < rS || fecha > rE) return;
+  }
+  out.push({
+   provId: p.id,
+   agente: p.agente || '',
+   fecha: fecha.toISOString(),
+   auto: true
+  });
+ });
+ out.sort(function(a, b) { return new Date(a.fecha) - new Date(b.fecha); });
+ return out;
+ }
+
  function _snapRenderTimeline() {
  var wrap = document.getElementById('snap-agenda-timeline');
  var tabsEl = document.getElementById('snap-agenda-tabs');
@@ -19947,16 +19994,11 @@ function _confirmBorrarCuenta(id) {
  })
  .sort(function(a,b){ return calcEnt(a.date,a.provId) - calcEnt(b.date,b.provId); });
 
- var allVisitas = (State.get.visitasComerciales ? State.get.visitasComerciales() || [] : [])
- .filter(function(v) {
- if (!v.fecha) return false;
- if (!rangeStart || !rangeEnd) return new Date(v.fecha) >= hoy;
- var vd = new Date(v.fecha); vd.setHours(0,0,0,0);
- var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
- var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
- return vd >= rS && vd <= rE;
- })
- .sort(function(a,b){ return new Date(a.fecha) - new Date(b.fecha); });
+ // v1.3.991: LOTE B — allVisitas ahora se auto-genera desde proveedores con diasPedido.
+ // Cada item: { provId, agente, fecha, auto:true } — recurrente calculada.
+ // Antes leíamos State.get.visitasComerciales() (notas manuales libres, legacy).
+ // Esos items legacy migrarán a "Recordatorios" en LOTE C.
+ var allVisitas = _computeProximosPedidos(rangeStart, rangeEnd, hoy);
 
  // ── Actualizar contadores en tabs ──────────────────────────
  // Contador alertas
@@ -20343,10 +20385,10 @@ function _confirmBorrarCuenta(id) {
  card.appendChild(notasEl);
  }
 
- // Timeline horizontal
+ // Timeline horizontal — v1.3.991: labels para recurrencia de pedido
  var tl = _snapHTimeline(
- 'Oficina',
- 'De camino',
+ 'Hoy',
+ 'Preparar',
  fmtD(fechaVis),
  pct,
  '🧑‍💼',
