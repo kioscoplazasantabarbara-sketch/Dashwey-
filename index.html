@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.978-dev</title>
+<title>Dashwey v1.3.979-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9444,6 +9444,8 @@ const State = (() => {
  cuentas: [],
  gastosOp: [],
   cierresCaja: [],
+  // v1.3.979: FIFO — lotes de stock por coste histórico (ver FinEngine.crearLotesDesdeItems/consumirLotesFIFO)
+  lotesStock: [],
  };
 
  const STORAGE_KEY = 'dashwey_v3';
@@ -9658,6 +9660,16 @@ const State = (() => {
  const raw = localStorage.getItem(STORAGE_KEY);
  if (!raw) return JSON.parse(JSON.stringify(DEFAULTS));
  const loaded = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), JSON.parse(raw));
+ // v1.3.979: dedup one-shot al hidratar — repara duplicados pre-existentes
+ ['ventas','historialPedidos','mermas','facturas','cierresCaja','gastosOp','ingresosFin'].forEach(function(k){
+  if (!Array.isArray(loaded[k])) return;
+  var _seen = {};
+  loaded[k] = loaded[k].filter(function(x){
+   if (!x || !x.id) return true; // sin id → no se puede deduplicar, conservar
+   if (_seen[x.id]) return false;
+   _seen[x.id] = 1; return true;
+  });
+ });
  return _migrateDemoData(loaded);
  } catch(e) {
  console.warn('[Dashwey] Error cargando estado, usando defaults:', e);
@@ -9878,7 +9890,7 @@ const State = (() => {
  setCuentas: (v) => { _state.cuentas = v; save(); },
  updateCuenta: (id, v) => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
- addGasto: (g) => { _state.gastosOp.push(g); save(); },
+ addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; _state.gastosOp.push(g); save(); },
   addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
  setGastos: (v) => { _state.gastosOp = v; save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
@@ -9886,8 +9898,8 @@ const State = (() => {
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
  clearTickets: () => { _state.ticketsAbiertos = []; save(); },
  updateProv: (id, vals) => { const p = get.prov(id); if(p) Object.assign(p, vals); save(); },
- addMerma: (m) => { _state.mermas.push(m); save(); },
- addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; _state.ingresosFin.push(v); save(); },
+ addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); save(); },
+ addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; _state.ingresosFin.push(v); save(); },
  setIngresos: (v) => { _state.ingresosFin = v; save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
@@ -11711,7 +11723,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.978-dev';
+ const _APP_VERSION = 'v1.3.979-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33410,12 +33422,18 @@ _eaRecalc();
   // Limpiar datos demo del snapshot remoto antes de aplicar al State
   if (typeof _migrateDemoData === 'function') { try { _migrateDemoData(merged); } catch(_) {} }
   // Filtrar IDs borrados localmente — evitar restauración por onSnapshot
+  // v1.3.979: aplicar a TODOS los arrays con id, no solo productos
   const _deleted = window._DashweyLocalDeletedIds;
-  if (_deleted && _deleted.size && Array.isArray(merged.productos)) {
-   merged.productos = merged.productos.filter(p => !_deleted.has(p.id));
+  if (_deleted && _deleted.size) {
+   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin'].forEach(function(k){
+    if (Array.isArray(merged[k])) {
+     merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deleted.has(x.id); });
+    }
+   });
   }
  // v1.3.730: merge por ID para arrays acumulativos (onSnapshot)
- var _mKeys2 = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja'];
+ // v1.3.979: incluir facturas
+ var _mKeys2 = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','facturas'];
  _mKeys2.forEach(function(k) {
   var _localArr2 = typeof State.get[k] === 'function' ? State.get[k]() : null;
   if (Array.isArray(merged[k]) && Array.isArray(_localArr2)) {
@@ -33514,8 +33532,31 @@ _eaRecalc();
  // ── Device ID — identificador único por dispositivo (persistente) ──
  // Usado por el sistema de sync para ignorar snapshots propios (Guard 2).
 // Se genera una única vez y se persiste en localStorage.
-// Set de IDs borrados localmente — el onSnapshot no los restaura
-window._DashweyLocalDeletedIds = window._DashweyLocalDeletedIds || new Set();
+// v1.3.979: Set persistente de IDs borrados — sobrevive reload, TTL 90 días
+// Estructura storage: { "id": timestamp_ms, ... }
+(function(){
+ var TKEY = 'dashwey_tombstones';
+ var TTL = 90 * 24 * 60 * 60 * 1000; // 90 días
+ if (window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.__persistent) return;
+ var _map = {};
+ try {
+  var raw = localStorage.getItem(TKEY);
+  if (raw) _map = JSON.parse(raw) || {};
+  var now = Date.now();
+  Object.keys(_map).forEach(function(id){ if (now - (_map[id]||0) > TTL) delete _map[id]; });
+ } catch(_) { _map = {}; }
+ var _persist = function(){ try { localStorage.setItem(TKEY, JSON.stringify(_map)); } catch(_){} };
+ var api = {
+  __persistent: true,
+  add: function(id){ if(!id) return api; _map[id] = Date.now(); _persist(); return api; },
+  has: function(id){ return Object.prototype.hasOwnProperty.call(_map, id); },
+  delete: function(id){ if(_map[id]){ delete _map[id]; _persist(); return true;} return false; },
+  clear: function(){ _map = {}; _persist(); },
+  get size(){ return Object.keys(_map).length; },
+  forEach: function(cb){ Object.keys(_map).forEach(function(id){ cb(id, id, api); }); }
+ };
+ window._DashweyLocalDeletedIds = api;
+})();
 // Flag de sync inicial (evita writes prematuros tras limpiar almacenamiento)
 window._DashweyInitialSyncDone = false;
 
