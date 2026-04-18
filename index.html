@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1008-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1009-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1008-dev</title>
+<title>Dashwey v1.3.1009-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8763,6 +8763,12 @@ function _authTabSafe(tab) {
  <div class="sd-info"><div class="sd-title">Reset TOTAL Dashwey</div><div class="sd-sub">⚠️ Borra TODO · Mantiene solo cuentas/perfil</div></div>
  <div class="sd-chev">›</div>
  </div>
+ <!-- v1.3.1009: Limpiar solo transacciones (mantiene catálogo importado) -->
+ <div class="sd-row" onclick="App.ui._cleanTransactionsDashwey()">
+ <div class="sd-icon" style="background:#FEF3C7">🧹</div>
+ <div class="sd-info"><div class="sd-title">Limpiar transacciones</div><div class="sd-sub">Borra ventas/pedidos · Mantiene catálogo</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  </div>
 
  <div class="sd-footer">
@@ -12417,7 +12423,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1008-dev';
+ const _APP_VERSION = 'v1.3.1009-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14293,16 +14299,37 @@ const ui = (() => {
 
   window._showDestructiveConfirm({
    title: 'Importar catálogo Loyverse',
-   message: '⚠️ FRESH START: se eliminarán TODOS los productos actuales de Dashwey y se importarán desde Loyverse. Los pedidos/ventas/stock existentes que referencien productos borrados quedarán huérfanos. ¿Continuar?',
+   message: '⚠️ FRESH START: se eliminarán TODOS los productos y proveedores actuales de Dashwey. Se importarán desde Loyverse organizados por categorías (proveedores). ¿Continuar?',
    confirmText: 'Importar (destructivo)',
    onConfirm: function() {
-    _lvImportItemsPaginated(token, [], null);
+    // v1.3.1009: primero categorías, luego items
+    _lvImportCategories(token);
    }
   });
  }
 
+ // v1.3.1009: Paso 1 — descargar categorías Loyverse
+ function _lvImportCategories(token) {
+  var st = document.getElementById('lv-token-status');
+  if (st) { st.textContent = '⏳ Descargando categorías…'; st.style.color = 'var(--ink-soft)'; }
+  _lvProxyFetch('/categories', token)
+   .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+   })
+   .then(function(data) {
+    var cats = data.categories || [];
+    // Paso 2: items paginados con las categorías en mano
+    _lvImportItemsPaginated(token, [], null, cats);
+   })
+   .catch(function(e) {
+    if (st) { st.textContent = '❌ Error categorías: ' + (e.message||e); st.style.color = 'var(--red)'; }
+    showToast('⚠️ Error al descargar categorías: ' + (e.message||e));
+   });
+ }
+
  // Helper recursivo: pagina items Loyverse con cursor
- function _lvImportItemsPaginated(token, acc, cursor) {
+ function _lvImportItemsPaginated(token, acc, cursor, cats) {
   var st = document.getElementById('lv-token-status');
   if (st) { st.textContent = '⏳ Descargando items… (' + acc.length + ' hasta ahora)'; st.style.color = 'var(--ink-soft)'; }
   var params = { limit: 250 };
@@ -14316,11 +14343,9 @@ const ui = (() => {
     var items = data.items || [];
     var all = acc.concat(items);
     if (data.cursor) {
-     // Hay más páginas
-     _lvImportItemsPaginated(token, all, data.cursor);
+     _lvImportItemsPaginated(token, all, data.cursor, cats);
     } else {
-     // Fin paginación → crear productos
-     _lvCommitCatalog(all);
+     _lvCommitCatalog(all, cats);
     }
    })
    .catch(function(e) {
@@ -14330,53 +14355,71 @@ const ui = (() => {
  }
 
  // Commit: mapea items Loyverse → productos Dashwey y sustituye catálogo completo
- function _lvCommitCatalog(lvItems) {
+ // Commit: crea proveedores desde categorías + productos asignados
+ function _lvCommitCatalog(lvItems, lvCats) {
   var st = document.getElementById('lv-token-status');
   try {
-   // v1.3.1008: asegurar proveedor "Loyverse" auto-creado para que productos sean visibles
-   var provs = State.get.proveedores() || [];
-   var lvProv = provs.find(function(p){ return p && p.id === 'prov_loyverse'; });
-   if (!lvProv) {
-    lvProv = {
-     id: 'prov_loyverse',
-     nombre: 'Loyverse',
+   // v1.3.1009: crear proveedor por cada categoría Loyverse
+   // Fresh start: reemplaza proveedores enteros
+   var newProvs = [];
+   var catIdToProvId = {}; // mapping lvCategoryId → dashweyProvId
+   (lvCats || []).forEach(function(c) {
+    if (!c || !c.id) return;
+    var provId = 'prov_lv_' + c.id;
+    newProvs.push({
+     id: provId,
+     nombre: c.name || 'Sin nombre',
      agente: '',
      tel: '',
      email: '',
      diasPedido: [],
      origen: 'loyverse',
-    };
-    var provsNew = provs.concat([lvProv]);
-    State.set.proveedores(provsNew);
-   }
+     loyverseCategoryId: c.id,
+    });
+    catIdToProvId[c.id] = provId;
+   });
+   // Proveedor fallback para items sin categoría
+   var fallbackProvId = 'prov_lv_nocat';
+   newProvs.push({
+    id: fallbackProvId,
+    nombre: 'Sin categoría',
+    agente: '',
+    tel: '',
+    email: '',
+    diasPedido: [],
+    origen: 'loyverse',
+   });
+   State.set.proveedores(newProvs);
+
+   // Crear productos asignados a proveedor según categoría
    var newProds = [];
    lvItems.forEach(function(it) {
     if (!it || !it.id) return;
-    // Primera variante = precio base
     var variant = (it.variants && it.variants[0]) || {};
     var pvp = parseFloat(variant.default_price || 0) || 0;
     var costeBulto = parseFloat(variant.cost || 0) || 0;
+    var provId = (it.category_id && catIdToProvId[it.category_id]) || fallbackProvId;
     var prod = {
      id: 'p_lv_' + it.id,
      nombre: it.item_name || it.name || 'Sin nombre',
      loyverseItemId: it.id,
      categoria: it.category_id || '',
      pvp: pvp,
-     precioCompra: costeBulto, // Loyverse cost = coste unitario (asumimos 1 unidad)
+     precioCompra: costeBulto,
      udscaja: 1,
-     iva: 21, // default, se puede editar en Dashwey
-     stock: 0, // stock espejado desde Loyverse más tarde (Lote P3)
+     iva: 21,
+     stock: 0,
      barcode: variant.barcode || '',
      origen: 'loyverse',
-     prov: 'prov_loyverse', // v1.3.1008: asignado auto a proveedor Loyverse
+     prov: provId,
     };
     newProds.push(prod);
    });
-   // Fresh start: reemplaza catálogo entero
    State.set.productos(newProds);
    DashweyBus.emit('producto');
-   if (st) { st.textContent = '✅ Catálogo importado: ' + newProds.length + ' productos'; st.style.color = '#16A34A'; }
-   showToast('✅ ' + newProds.length + ' productos importados desde Loyverse');
+   DashweyBus.emit('proveedor');
+   if (st) { st.textContent = '✅ ' + newProds.length + ' productos en ' + newProvs.length + ' proveedores'; st.style.color = '#16A34A'; }
+   showToast('✅ ' + newProds.length + ' productos importados · ' + newProvs.length + ' proveedores');
   } catch(e) {
    if (st) { st.textContent = '❌ Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
    console.error('[Dashwey] _lvCommitCatalog:', e);
@@ -14411,6 +14454,34 @@ const ui = (() => {
      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
     } catch(e) {
      console.error('[Dashwey] _resetTotalDashwey:', e);
+     showToast('⚠️ Error: ' + (e.message||e));
+    }
+   }
+  });
+ }
+
+ // v1.3.1009: Limpiar solo transacciones — mantiene productos, proveedores, cuentas
+ function _cleanTransactionsDashwey() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  window._showDestructiveConfirm({
+   title: 'Limpiar transacciones',
+   message: '⚠️ Se borrarán: ventas, pedidos, mermas, gastos, ingresos, lotes, facturas. Se mantienen: productos, proveedores, cuentas, settings. No toca Loyverse. ¿Continuar?',
+   confirmText: 'Limpiar transacciones',
+   onConfirm: function() {
+    try {
+     State.set.ventas([]);
+     State.set.historialPedidos([]);
+     State.set.pendingOrders([]);
+     State.set.mermas([]);
+     State.set.setGastos([]);
+     State.set.setIngresos([]);
+     State.set.facturas([]);
+     State.set.setLotesStock([]);
+     DashweyBus.emit('reset');
+     showToast('🧹 Transacciones limpiadas — productos intactos');
+     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
+    } catch(e) {
+     console.error('[Dashwey] _cleanTransactionsDashwey:', e);
      showToast('⚠️ Error: ' + (e.message||e));
     }
    }
@@ -14549,7 +14620,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey };
 })();
 
 // ══════════════════════════════════════════
