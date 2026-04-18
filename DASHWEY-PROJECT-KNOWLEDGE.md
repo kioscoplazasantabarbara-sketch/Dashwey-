@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1005-dev
+**Versión:** v1.3.1008-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -216,6 +216,22 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | # | Área | Pendiente | Prioridad |
 |---|------|-----------|-----------|
 | 1 | Seguridad | Firestore Rules: schema estricto por tipo (validar `is list` / `is map` en cada clave). Diseñado y listo — aplicar antes de publicar en Play Store | 🟡 Mejora pre-publicación |
+
+### Cambios sesión v1.3.1007
+- **Lote P2 — Import catálogo Loyverse (destructivo):**
+  - Nuevo botón en Dev tools: "📦 Importar catálogo Loyverse"
+  - `_importLoyverseCatalog()`: destructive confirm → pagina `/items` endpoint vía proxy (250 por página con cursor)
+  - `_lvImportItemsPaginated(token, acc, cursor)`: recursión hasta agotar paginación
+  - `_lvCommitCatalog(lvItems)`: mapea items Loyverse → productos Dashwey con schema:
+    - `id: 'p_lv_' + loyverseId`, `loyverseItemId`, `nombre`, `pvp` (variants[0].default_price), `precioCompra` (variants[0].cost), `iva: 21` default, `barcode`, `origen: 'loyverse'`, `prov: ''` (manual)
+  - **Fresh start:** `State.set.productos(newProds)` reemplaza catálogo completo
+  - Status en UI token Loyverse muestra progreso: "⏳ Descargando items… (N hasta ahora)" → "✅ Catálogo importado: N productos"
+- **Pendiente Lote P3:** import receipts con detalle de items (crear ventas[] con items resueltos por `loyverseItemId`) + pull-to-refresh en cards Dashboard
+- **CSP + network_security_config:** ya deployado en APK anterior, no requiere rebuild para este cambio (solo index.html cambia)
+
+### Cambios sesión v1.3.1006
+- **CSP meta tag:** `connect-src` incluye `https://*.cloudfunctions.net` para permitir proxy Loyverse en WebView Android.
+- **network_security_config.xml + AndroidManifest:** creado en el proyecto Android del APK — permite HTTPS a cloudfunctions.net, loyverse.com, firebaseio.com, googleapis.com.
 
 ### Cambios sesión v1.3.1005
 - **Proxy Cloud Function activo:**
