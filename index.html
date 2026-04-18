@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1021-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1022-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1021-dev</title>
+<title>Dashwey v1.3.1022-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11197,14 +11197,30 @@ const FinEngine = (() => {
  }
 
  // v1.3.623: gastoGlobalPeriodo(range) — gasto total real del negocio
- // Incluye: gastos operativos (prorateados) + compras Almacén + mermas
+ // Incluye: gastos operativos DENTRO del rango + gastos recurrentes prorrateados + compras Almacén + mermas
+ // v1.3.1022 FIX: antes sumaba TODOS los gastos históricos como equivalente mensual → gasto fantasma gigante
  function gastoGlobalPeriodo(range) {
+  // Gastos recurrentes prorrateados al rango
   const _daysInRef = range
    ? new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate()
    : 30;
   const _msRange = range ? (range.end - range.start) : 30 * 86400000;
   const _frac = Math.max(0, _msRange) / (_daysInRef * 86400000);
-  const gop = money(gastoMensualTotal() * _frac);
+  // Solo prorratear los RECURRENTES (los puntuales se suman por fecha abajo)
+  const gopRecurrente = money((State.get.gastosOp() || []).reduce((s, g) => {
+   if (!_isKpiVisible(g)) return s;
+   if (!g.recurrente) return s;
+   return s + (g.mensualEq !== undefined ? g.mensualEq : (g.importe || 0));
+  }, 0) * _frac);
+  // Gastos puntuales DENTRO del rango (no recurrentes)
+  const gopPuntual = (State.get.gastosOp() || []).reduce((s, g) => {
+   if (!_isKpiVisible(g)) return s;
+   if (g.recurrente) return s;
+   if (!range) return s + (g.importe || 0);
+   const f = new Date(g.fecha || 0);
+   if (f >= range.start && f < range.end) return s + (g.importe || 0);
+   return s;
+  }, 0);
   const compras = range ? comprasPeriodo(range) : comprasMesActual();
   const mermas = (State.get.mermas ? State.get.mermas() : []);
   const mermasCost = mermas
@@ -11214,7 +11230,7 @@ const FinEngine = (() => {
     return f >= range.start && f < range.end;
    })
    .reduce(function(s, m) { return s + (m.coste || 0); }, 0);
-  return money(gop + compras + mermasCost);
+  return money(gopRecurrente + gopPuntual + compras + mermasCost);
  }
 
  // gastoFijoMensual(): solo gastos recurrentes
@@ -12456,7 +12472,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1021-dev';
+ const _APP_VERSION = 'v1.3.1022-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
