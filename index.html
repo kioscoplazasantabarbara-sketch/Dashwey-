@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-996-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-997-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.996-dev</title>
+<title>Dashwey v1.3.997-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11426,6 +11426,182 @@ const FinEngine = (() => {
 })();
 
 
+/* ═══════════════════════════════════════════════════════════════════
+ * MODULE: Loyverse — Adaptador ingestion-first (Fase 2 L1)
+ * ───────────────────────────────────────────────────────────────────
+ * Propósito: normalizar ventas de Loyverse POS al modelo canónico de
+ * Dashwey (gastosOp/ingresosFin) sin persistir datos crudos.
+ *
+ * Reglas:
+ *  D1 — 1 ingreso por payment (no por receipt). Soporta tickets
+ *       partidos (efectivo + tarjeta).
+ *  D2 — refunds (importe < 0) → addGasto en lugar de addIngreso.
+ *  D3 — raw receipt NO se persiste. Solo movements derivados +
+ *       sourceRefId para dedup idempotente.
+ *
+ * Receipt canónico (independiente de fuente):
+ *   { id: string, fecha: ISO, total: number, payments: [{type, importe}] }
+ *   type ∈ 'CASH' | 'CARD' | 'OTHER'
+ *
+ * API pública:
+ *   Loyverse.mapSaleToIngresos(receipt, paymentMap) → {created, skipped}
+ *   Loyverse.simulate(n) → {created, skipped}
+ *   Loyverse.normalize(rawReceipt) → receipt canónico (o null si inválido)
+ * ═══════════════════════════════════════════════════════════════════ */
+const Loyverse = (() => {
+
+ // ── Normalización de payment_type Loyverse → canónico ──
+ const _PAYMENT_TYPE_MAP = {
+  'CASH': 'CASH', 'cash': 'CASH', 'Efectivo': 'CASH', 'EFECTIVO': 'CASH',
+  'CARD': 'CARD', 'card': 'CARD', 'Tarjeta': 'CARD', 'TARJETA': 'CARD',
+  'CREDIT_CARD': 'CARD', 'DEBIT_CARD': 'CARD',
+ };
+ const _normalizePaymentType = (t) => {
+  if (!t) return 'OTHER';
+  return _PAYMENT_TYPE_MAP[t] || _PAYMENT_TYPE_MAP[String(t).toUpperCase()] || 'OTHER';
+ };
+
+ // ── normalize: convierte rawReceipt (schema Loyverse API o variantes)
+ // al receipt canónico. Tolera campos faltantes. Devuelve null si inválido.
+ function normalize(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = raw.id || raw.receipt_id || raw.receipt_number;
+  if (!id) return null;
+  // Fecha: Loyverse usa `receipt_date` o `created_at`
+  const fechaRaw = raw.receipt_date || raw.created_at || raw.fecha;
+  const fecha = fechaRaw ? new Date(fechaRaw).toISOString() : new Date().toISOString();
+  // Payments: array de { payment_type, money_amount } (Loyverse API v1.0)
+  // Variantes: { type, importe } | { method, amount }
+  const paymentsRaw = raw.payments || raw.pagos || [];
+  if (!Array.isArray(paymentsRaw) || paymentsRaw.length === 0) return null;
+  const payments = paymentsRaw.map((p) => {
+   const type = _normalizePaymentType(p.payment_type || p.type || p.method || p.tipo);
+   // money_amount Loyverse ya viene en la moneda de la tienda (no en céntimos)
+   const importe = typeof p.money_amount === 'number' ? p.money_amount
+    : typeof p.importe === 'number' ? p.importe
+    : typeof p.amount === 'number' ? p.amount
+    : parseFloat(p.money_amount || p.importe || p.amount || '0') || 0;
+   return { type, importe };
+  }).filter((p) => typeof p.importe === 'number' && !isNaN(p.importe) && p.importe !== 0);
+  if (payments.length === 0) return null;
+  const total = payments.reduce((s, p) => s + p.importe, 0);
+  return { id: String(id), fecha, total, payments };
+ }
+
+ // ── mapSaleToIngresos: 1 receipt → N movements
+ // paymentMap: { CASH: cuentaId, CARD: cuentaId, OTHER: cuentaId }
+ // Idempotente: sourceRefId = receiptId + '_' + idx; skip si ya existe.
+ // Refunds (importe < 0) → addGasto con metaTipo:'refund'.
+ function mapSaleToIngresos(receipt, paymentMap) {
+  const canonical = normalize(receipt) || receipt; // receipt ya puede venir canónico
+  if (!canonical || !canonical.id || !Array.isArray(canonical.payments)) {
+   return { created: 0, skipped: 0, error: 'invalid_receipt' };
+  }
+  const map = paymentMap || {};
+  // Cuenta fallback: primera cuenta de negocio, o primera cualquiera
+  const cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+  const _fallbackCuenta = (cuentas.find((c) => c.scope === 'negocio') || cuentas[0] || {}).id || null;
+
+  // Sets de IDs existentes para dedup
+  const _existingIngSrc = new Set();
+  const _existingGasSrc = new Set();
+  (State.get.ingresosFin ? State.get.ingresosFin() : []).forEach((i) => {
+   if (i && i.sourceRefId) _existingIngSrc.add(i.sourceRefId);
+  });
+  (State.get.gastosOp ? State.get.gastosOp() : []).forEach((g) => {
+   if (g && g.sourceRefId) _existingGasSrc.add(g.sourceRefId);
+  });
+
+  let created = 0, skipped = 0;
+  canonical.payments.forEach((p, idx) => {
+   const srcRef = canonical.id + '_' + idx;
+   if (_existingIngSrc.has(srcRef) || _existingGasSrc.has(srcRef)) { skipped++; return; }
+   const cuentaId = map[p.type] || _fallbackCuenta;
+   const isRefund = p.importe < 0;
+   if (isRefund) {
+    State.set.addGasto({
+     id: 'g_lv_' + srcRef,
+     nombre: '↩️ Reembolso Loyverse',
+     categoria: 'Otros',
+     importe: Math.abs(p.importe),
+     mensualEq: Math.abs(p.importe),
+     fecha: canonical.fecha,
+     fechaPago: canonical.fecha.slice(0, 10),
+     cuentaId: cuentaId,
+     recurrente: false,
+     frecuencia: 'unico',
+     origen: 'loyverse',
+     sourceRefId: srcRef,
+     metaTipo: 'refund',
+     scope: 'negocio',
+     estado: 'confirmado',
+    });
+   } else {
+    State.set.addIngreso({
+     id: 'i_lv_' + srcRef,
+     concepto: '🧾 Venta Loyverse (' + p.type.toLowerCase() + ')',
+     importe: p.importe,
+     fecha: canonical.fecha,
+     cuentaId: cuentaId,
+     recurrente: false,
+     origen: 'loyverse',
+     sourceRefId: srcRef,
+     scope: 'negocio',
+     estado: 'confirmado',
+    });
+   }
+   created++;
+  });
+
+  return { created, skipped };
+ }
+
+ // ── simulate: genera N receipts sintéticos e inyecta vía mapSaleToIngresos
+ // Útil para validar el modelo sin conectar fuente real.
+ // Mezcla: tickets simples, split (cash+card), refund ocasional.
+ function simulate(n) {
+  const count = Math.max(1, Math.min(50, parseInt(n) || 5));
+  const cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+  if (!cuentas.length) return { created: 0, skipped: 0, error: 'no_cuentas' };
+  // paymentMap default: primera cuenta negocio para CASH/CARD/OTHER
+  const primaryId = (cuentas.find((c) => c.scope === 'negocio') || cuentas[0]).id;
+  const paymentMap = { CASH: primaryId, CARD: primaryId, OTHER: primaryId };
+
+  let totalCreated = 0, totalSkipped = 0;
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+   const rnd = Math.random();
+   const receipt = {
+    id: 'sim_' + now + '_' + i,
+    receipt_date: new Date(now - i * 3600000).toISOString(),
+    payments: []
+   };
+   // 15% refund, 20% split, 65% simple
+   if (rnd < 0.15) {
+    receipt.payments.push({ payment_type: 'CARD', money_amount: -(Math.round(Math.random() * 15 + 5) * 100) / 100 });
+   } else if (rnd < 0.35) {
+    const total = Math.round((Math.random() * 40 + 10) * 100) / 100;
+    const parte = Math.round(total * 100 * 0.6) / 100;
+    receipt.payments.push({ payment_type: 'CASH', money_amount: parte });
+    receipt.payments.push({ payment_type: 'CARD', money_amount: Math.round((total - parte) * 100) / 100 });
+   } else {
+    receipt.payments.push({
+     payment_type: Math.random() < 0.5 ? 'CASH' : 'CARD',
+     money_amount: Math.round((Math.random() * 35 + 3) * 100) / 100
+    });
+   }
+   const r = mapSaleToIngresos(receipt, paymentMap);
+   totalCreated += r.created; totalSkipped += r.skipped;
+  }
+  return { created: totalCreated, skipped: totalSkipped };
+ }
+
+ return { mapSaleToIngresos, simulate, normalize };
+})();
+// Exponer para debugging manual desde consola WebView
+if (typeof window !== 'undefined') window.Loyverse = Loyverse;
+
+
 // ══════════════════════════════════════════
 // ══════════════════════════════════════════
 // 3. UTILS — Helpers globales + constantes
@@ -12124,7 +12300,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.996-dev';
+ const _APP_VERSION = 'v1.3.997-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
