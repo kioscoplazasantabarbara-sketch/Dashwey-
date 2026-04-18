@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1016-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1019-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1016-dev</title>
+<title>Dashwey v1.3.1019-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8775,6 +8775,12 @@ function _authTabSafe(tab) {
  <div class="sd-info"><div class="sd-title">Importar BudgetBakers</div><div class="sd-sub">CSV histórico · reemplaza movimientos marcados</div></div>
  <div class="sd-chev">›</div>
  </div>
+ <!-- v1.3.1018: Revertir import BudgetBakers -->
+ <div class="sd-row" onclick="App.ui._revertBudgetBakersImport()">
+ <div class="sd-icon" style="background:#FECACA">🗑️</div>
+ <div class="sd-info"><div class="sd-title">Revertir BudgetBakers</div><div class="sd-sub">Borra solo movimientos origen=budgetbakers + resetea saldos cuentas a 0</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  </div>
 
  <div class="sd-footer">
@@ -12442,7 +12448,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1016-dev';
+ const _APP_VERSION = 'v1.3.1019-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14601,8 +14607,10 @@ const ui = (() => {
    title: 'Importar CSV BudgetBakers',
    message: rows.length + ' movimientos · ' + nGastos + ' gastos · ' + nIngresos + ' ingresos\n' +
             'Cuentas: ' + cuentasTxt + '\n\n' +
-            '⚠️ Se eliminarán movimientos previos con origen=budgetbakers (idempotente).\n' +
-            'Ingresos por ventas se marcarán como sourceHistorical.\n' +
+            '✅ Solo gastos: ' + nGastos + '\n' +
+            '❌ Ingresos por ventas: ignorados (esperamos Loyverse)\n' +
+            '📦 Mercancía → pedidos sintéticos con margen estimado por proveedor\n' +
+            '⚠️ Idempotente: reemplaza movimientos con origen=budgetbakers previos.\n\n' +
             '¿Continuar?',
    confirmText: 'Importar',
    onConfirm: function() { _bbCommit(rows); }
@@ -14634,10 +14642,9 @@ const ui = (() => {
  function _bbCommit(rows) {
   try {
    // 1. Borrar movimientos previos con origen='budgetbakers' (idempotencia)
+   // Solo afecta gastos — ingresos del CSV se ignoran por decisión Q1/Q3.
    var gastosPrev = (State.get.gastosOp ? State.get.gastosOp() : []) || [];
-   var ingresosPrev = (State.get.ingresosFin ? State.get.ingresosFin() : []) || [];
    var gastosKeep = gastosPrev.filter(function(g){ return g.origen !== 'budgetbakers'; });
-   var ingresosKeep = ingresosPrev.filter(function(i){ return i.origen !== 'budgetbakers'; });
 
    // 2. Crear mapping nombre cuenta → cuentaId
    var cuentasDashwey = State.get.cuentas() || [];
@@ -14651,37 +14658,39 @@ const ui = (() => {
     if (p.nombre) provIdByLabel[p.nombre.toLowerCase()] = p.id;
    });
 
-   // 4. Generar gastos e ingresos nuevos
-   var newGastos = [], newIngresos = [];
+   // 4. Calcular margen medio por proveedor (desde productos existentes)
+   // Usado para estimar ganancia de pedidos sintéticos (categoría Mercancía)
+   var productos = State.get.productos() || [];
+   var provMargenAvg = _bbCalcProvMargenAvg(productos);
+
+   // 5. Generar gastos + pedidos sintéticos (NO ingresos por ventas — esperamos Loyverse)
+   var newGastos = [], newPedidos = [];
    var newProvs = [];
    rows.forEach(function(r) {
+    // Ingresos — IGNORAR (esperan Loyverse Lote P3)
+    if (r.type === 'Ingresos') return;
+
     var cuentaId = cuentaIdByName[(r.account||'').toLowerCase()];
-    if (!cuentaId) return; // skip si cuenta no existe (no debería pasar, ya verificamos)
+    if (!cuentaId) return;
     var amountRaw = (r.amount||'0').replace(/\./g,'').replace(',','.');
     var amount = Math.abs(parseFloat(amountRaw) || 0);
     if (amount <= 0) return;
     var fecha = _bbParseDate(r.date);
     var id = _bbHashId(r);
 
-    // Resolver proveedor por label (solo para gastos)
+    // Resolver proveedor por label
     var provId = '';
-    if (r.type === 'Gastos' && r.labels) {
+    if (r.labels) {
      var lblKey = r.labels.toLowerCase();
      if (provIdByLabel[lblKey]) {
       provId = provIdByLabel[lblKey];
-     } else if (r.labels && r.labels !== 'Recaudación del día' && r.payee) {
-      // Crear proveedor manual solo si label es proveedor real
+     } else if (r.labels !== 'Recaudación del día' && r.payee) {
       var newProvId = 'prov_bb_' + r.labels.toLowerCase().replace(/[^a-z0-9]/g,'');
       if (!provIdByLabel[lblKey]) {
        newProvs.push({
-        id: newProvId,
-        nombre: r.labels,
-        agente: '',
-        tel: '',
-        email: '',
-        diasPedido: [],
-        origen: 'manual',
-        createdAt: new Date().toISOString(),
+        id: newProvId, nombre: r.labels,
+        agente: '', tel: '', email: '', diasPedido: [],
+        origen: 'manual', createdAt: new Date().toISOString(),
        });
        provIdByLabel[lblKey] = newProvId;
        provId = newProvId;
@@ -14689,52 +14698,102 @@ const ui = (() => {
      }
     }
 
-    var base = {
+    // GASTO (siempre) — entrada contable
+    var gasto = {
      id: id,
      fecha: fecha,
-     monto: amount,
+     importe: amount,
      cuentaId: cuentaId,
      categoria: r.category || '',
+     nombre: r.payee || r.labels || r.category || 'Gasto',
      concepto: r.note || r.payee || r.labels || '',
+     proveedor: r.payee || '',
      metodo: r.payment_type || '',
      scope: 'negocio',
      estado: 'confirmado',
      origen: 'budgetbakers',
     };
+    if (provId) gasto.provId = provId;
+    newGastos.push(gasto);
 
-    if (r.type === 'Gastos') {
-     base.proveedor = r.payee || '';
-     if (provId) base.provId = provId;
-     newGastos.push(base);
-    } else if (r.type === 'Ingresos') {
-     // Marcar ingresos por ventas para no duplicar con Loyverse futuro
-     if ((r.category||'').toLowerCase().indexOf('ingresos por ventas') >= 0) {
-      base.sourceHistorical = true;
-     }
-     newIngresos.push(base);
+    // PEDIDO SINTÉTICO (solo si categoría Mercancía + tiene provId)
+    var isMercancia = (r.category||'').toLowerCase().indexOf('mercancía') >= 0 ||
+                      (r.category||'').toLowerCase().indexOf('mercancia') >= 0;
+    if (isMercancia && provId) {
+     var estMargen = provMargenAvg[provId] || 25; // fallback 25% si proveedor sin productos
+     var estRevenue = estMargen < 100 ? amount / (1 - estMargen / 100) : amount * 2;
+     var estProfit = estRevenue - amount;
+
+     newPedidos.push({
+      id: 'ped_bb_' + id.replace('bb_', ''),
+      fecha: fecha,
+      provId: provId,
+      items: [{
+       prodId: 'bb_agg_' + provId,
+       nombre: 'Compra histórica ' + (r.labels || r.payee || ''),
+       qty: 1,
+       precio: amount,
+       udscaja: 1,
+       pvp: 0,
+       iva: 10
+      }],
+      total: amount,
+      estado: 'recibido',
+      origen: 'budgetbakers',
+      sourceHistorical: true,
+      estimatedMargin: estMargen,
+      estimatedRevenue: Math.round(estRevenue * 100) / 100,
+      estimatedProfit: Math.round(estProfit * 100) / 100,
+     });
     }
    });
 
-   // 5. Persistir
+   // 6. Persistir
    if (newProvs.length > 0) {
     var allProvs = (State.get.proveedores() || []).concat(newProvs);
     State.set.proveedores(allProvs);
    }
    State.set.setGastos(gastosKeep.concat(newGastos));
-   State.set.setIngresos(ingresosKeep.concat(newIngresos));
 
-   // 6. Recalcular saldos cuentas desde 0 (solo movimientos budgetbakers + manuales no-historicos)
+   // Pedidos sintéticos → historialPedidos (mantener pedidos previos sin origen=budgetbakers)
+   var pedidosPrev = (State.get.historialPedidos ? State.get.historialPedidos() : []) || [];
+   var pedidosKeep = pedidosPrev.filter(function(p){ return p.origen !== 'budgetbakers'; });
+   State.set.historialPedidos(pedidosKeep.concat(newPedidos));
+
+   // 7. Recalcular saldos (ingresos previos intactos, solo resta gastos)
    _bbRecalcSaldos();
 
    DashweyBus.emit('gasto');
-   DashweyBus.emit('ingreso');
+   DashweyBus.emit('pedido_stock');
    DashweyBus.emit('cuenta');
    try { App.dash.render(); } catch(_) {}
-   showToast('✅ ' + (newGastos.length + newIngresos.length) + ' movimientos importados · ' + newProvs.length + ' proveedores nuevos');
+   showToast('✅ ' + newGastos.length + ' gastos · ' + newPedidos.length + ' pedidos sintéticos · ' + newProvs.length + ' proveedores nuevos');
   } catch(e) {
    console.error('[Dashwey] _bbCommit:', e);
    showToast('⚠️ Error commit: ' + (e.message||e));
   }
+ }
+
+ // Calcular margen medio por proveedor desde productos existentes
+ // { provId: margenPromedio% }
+ function _bbCalcProvMargenAvg(productos) {
+  var acc = {};
+  productos.forEach(function(p) {
+   if (!p || !p.prov || !p.precioCompra || !p.pvp || !p.udscaja) return;
+   var iva = parseFloat(String(p.iva||'10').replace('%','')) || 10;
+   var cu = p.precioCompra / p.udscaja;
+   var pvpNeto = p.pvp / (1 + iva / 100);
+   if (pvpNeto <= 0 || cu <= 0 || pvpNeto <= cu) return;
+   var mg = ((pvpNeto - cu) / pvpNeto) * 100;
+   if (!acc[p.prov]) acc[p.prov] = { sum: 0, n: 0 };
+   acc[p.prov].sum += mg;
+   acc[p.prov].n += 1;
+  });
+  var out = {};
+  Object.keys(acc).forEach(function(provId) {
+   out[provId] = Math.round((acc[provId].sum / acc[provId].n) * 10) / 10;
+  });
+  return out;
  }
 
  // Recalcular saldo de cada cuenta = sum(ingresos) - sum(gastos)
@@ -14745,12 +14804,59 @@ const ui = (() => {
    var cuentas = State.get.cuentas() || [];
    cuentas.forEach(function(c) {
     var saldoCalc = 0;
-    ingresos.forEach(function(i){ if (i.cuentaId === c.id) saldoCalc += (parseFloat(i.monto)||0); });
-    gastos.forEach(function(g){ if (g.cuentaId === c.id) saldoCalc -= (parseFloat(g.monto)||0); });
+    ingresos.forEach(function(i){ if (i.cuentaId === c.id) saldoCalc += (parseFloat(i.importe)||0); });
+    gastos.forEach(function(g){ if (g.cuentaId === c.id) saldoCalc -= (parseFloat(g.importe)||0); });
     saldoCalc = Math.round(saldoCalc * 100) / 100;
     State.set.updateCuenta(c.id, { saldo: saldoCalc });
    });
   } catch(e) { console.warn('[BB] recalc saldos:', e); }
+ }
+
+ // ── v1.3.1018: Revertir import BudgetBakers ────────────────────
+ // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
+ // NO toca productos, proveedores, ventas Loyverse.
+ function _revertBudgetBakersImport() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  var gastosPrev = (State.get.gastosOp ? State.get.gastosOp() : []) || [];
+  var ingresosPrev = (State.get.ingresosFin ? State.get.ingresosFin() : []) || [];
+  var pedidosPrev = (State.get.historialPedidos ? State.get.historialPedidos() : []) || [];
+  var provsPrev = (State.get.proveedores ? State.get.proveedores() : []) || [];
+  var nGastos = gastosPrev.filter(function(g){ return g.origen === 'budgetbakers'; }).length;
+  var nIngresos = ingresosPrev.filter(function(i){ return i.origen === 'budgetbakers'; }).length;
+  var nPedidos = pedidosPrev.filter(function(p){ return p.origen === 'budgetbakers'; }).length;
+  var nProvsBB = provsPrev.filter(function(p){ return p.id && p.id.indexOf('prov_bb_') === 0; }).length;
+  if (nGastos + nIngresos + nPedidos + nProvsBB === 0) {
+   showToast('ℹ️ Sin datos BudgetBakers');
+   return;
+  }
+  window._showDestructiveConfirm({
+   title: 'Revertir BudgetBakers',
+   message: '⚠️ Se eliminarán:\n• ' + nGastos + ' gastos\n• ' + nIngresos + ' ingresos\n• ' + nPedidos + ' pedidos sintéticos\n• ' + nProvsBB + ' proveedores BB\n• Saldos cuentas → 0€\n\nSe conservan: productos, proveedores Loyverse, ventas Loyverse, movimientos manuales.\n\n¿Continuar?',
+   confirmText: 'Revertir',
+   onConfirm: function() {
+    try {
+     var gastosKeep = gastosPrev.filter(function(g){ return g.origen !== 'budgetbakers'; });
+     var ingresosKeep = ingresosPrev.filter(function(i){ return i.origen !== 'budgetbakers'; });
+     var pedidosKeep = pedidosPrev.filter(function(p){ return p.origen !== 'budgetbakers'; });
+     var provsKeep = provsPrev.filter(function(p){ return !(p.id && p.id.indexOf('prov_bb_') === 0); });
+     State.set.setGastos(gastosKeep);
+     State.set.setIngresos(ingresosKeep);
+     State.set.historialPedidos(pedidosKeep);
+     State.set.proveedores(provsKeep);
+     var cuentas = State.get.cuentas() || [];
+     cuentas.forEach(function(c){ State.set.updateCuenta(c.id, { saldo: 0 }); });
+     DashweyBus.emit('gasto');
+     DashweyBus.emit('ingreso');
+     DashweyBus.emit('pedido_stock');
+     DashweyBus.emit('cuenta');
+     try { App.dash.render(); } catch(_) {}
+     showToast('✅ ' + (nGastos + nIngresos + nPedidos) + ' movimientos + ' + nProvsBB + ' proveedores eliminados · saldos reseteados');
+    } catch(e) {
+     console.error('[Dashwey] _revertBudgetBakersImport:', e);
+     showToast('⚠️ Error: ' + (e.message||e));
+    }
+   }
+  });
  }
 
  // Parse "2026-04-17 10:05:22" → ISO string
@@ -14903,7 +15009,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _revertBudgetBakersImport };
 })();
 
 // ══════════════════════════════════════════
