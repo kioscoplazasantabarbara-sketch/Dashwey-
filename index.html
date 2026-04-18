@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1001-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1002-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1001-dev</title>
+<title>Dashwey v1.3.1002-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12361,7 +12361,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1001-dev';
+ const _APP_VERSION = 'v1.3.1002-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17276,7 +17276,10 @@ function _openEditMovimientoSheet(id, src) {
    '<input class="fi" id="edit-mov-fecha" type="date" value="' + fecha + '">' +
    '</div>' +
    '<div style="display:flex;gap:8px;padding:4px 16px 0">' +
-   '<button class="mov-submit-btn" id="edit-mov-save" style="flex:2">Guardar</button>' +
+   // v1.3.1002 Fase 3 LOTE 3: botón "Confirmar pago" solo si movement está pendiente
+   (registro.estado === 'pendiente'
+    ? '<button id="edit-mov-confirm" style="flex:2;height:50px;border-radius:13px;background:#16A34A;color:#fff;border:none;font-size:var(--fs-base);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">✅ Confirmar pago</button>'
+    : '<button class="mov-submit-btn" id="edit-mov-save" style="flex:2">Guardar</button>') +
    '<button class="mov-submit-btn" id="edit-mov-del" style="flex:1;background:rgba(139,26,47,0.12);color:var(--red)">Eliminar</button>' +
    '</div>' +
    '</div>';
@@ -17319,7 +17322,8 @@ function _openEditMovimientoSheet(id, src) {
   });
 
   // Guardar — v1.3.982 cascade: si transferId existe, sincroniza importe+fecha al gemelo
-  document.getElementById('edit-mov-save').addEventListener('click', function() {
+  var _saveBtn = document.getElementById('edit-mov-save');
+  if (_saveBtn) _saveBtn.addEventListener('click', function() {
    var nuevoImporte = parseFloat((document.getElementById('edit-mov-input').value||'').replace(',','.')) || 0;
    var nuevoNombre = document.getElementById('edit-mov-nombre').value.trim();
    var nuevaFecha = document.getElementById('edit-mov-fecha').value;
@@ -17374,6 +17378,49 @@ function _openEditMovimientoSheet(id, src) {
    sheet.classList.remove('open');
    setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
    showToast(_transferId ? '✅ Transferencia actualizada' : '✅ Movimiento actualizado');
+  }, { once: true });
+
+  // v1.3.1002 Fase 3 LOTE 3: Confirmar pago (solo si movement es pendiente)
+  var _confirmBtn = document.getElementById('edit-mov-confirm');
+  if (_confirmBtn) _confirmBtn.addEventListener('click', function() {
+   window._showDestructiveConfirm({
+    title: 'Confirmar pago',
+    message: '¿Confirmar "' + (nombre || 'movimiento') + '" por ' + _feur(importe) + '? Se aplicará al saldo de la cuenta.',
+    confirmText: 'Confirmar',
+    onConfirm: function() {
+     var hoy = new Date().toISOString().slice(0,10);
+     if (src === 'gasto') {
+      var gastos = State.get.gastosOp().map(function(g) {
+       if (g.id !== id) return g;
+       return Object.assign({}, g, { estado: 'confirmado', fechaPago: hoy });
+      });
+      State.set.setGastos(gastos);
+      // Aplicar saldo ahora
+      var cId = registro.cuentaId;
+      if (cId) {
+       var c = State.get.cuentas().find(function(x){ return x.id === cId; });
+       if (c) State.set.updateCuenta(cId, { saldo: (c.saldo||0) - importe });
+      }
+      DashweyBus.emit('gasto');
+     } else if (src === 'ingreso') {
+      var ingresos = State.get.ingresosFin().map(function(i) {
+       if (i.id !== id) return i;
+       return Object.assign({}, i, { estado: 'confirmado', fechaPago: hoy });
+      });
+      State.set.setIngresos(ingresos);
+      var cId2 = registro.cuentaId;
+      if (cId2) {
+       var c2 = State.get.cuentas().find(function(x){ return x.id === cId2; });
+       if (c2) State.set.updateCuenta(cId2, { saldo: (c2.saldo||0) + importe });
+      }
+      DashweyBus.emit('ingreso');
+     }
+     sheet.classList.remove('open');
+     setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+     try { dash.render(); } catch(_) {}
+     showToast('✅ Pago confirmado — saldo actualizado');
+    }
+   });
   }, { once: true });
 
   // Eliminar — v1.3.982 cascade: si transferId existe, borra también el gemelo
