@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1019-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1020-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1019-dev</title>
+<title>Dashwey v1.3.1020-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8781,6 +8781,12 @@ function _authTabSafe(tab) {
  <div class="sd-info"><div class="sd-title">Revertir BudgetBakers</div><div class="sd-sub">Borra solo movimientos origen=budgetbakers + resetea saldos cuentas a 0</div></div>
  <div class="sd-chev">›</div>
  </div>
+ <!-- v1.3.1020: Revertir SOLO ingresos BB (tras sync Loyverse) -->
+ <div class="sd-row" onclick="App.ui._revertBudgetBakersIngresos()">
+ <div class="sd-icon" style="background:#FED7AA">📤</div>
+ <div class="sd-info"><div class="sd-title">Revertir solo ingresos BB</div><div class="sd-sub">Usar tras sync Loyverse · mantiene gastos + pedidos sintéticos</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  </div>
 
  <div class="sd-footer">
@@ -12448,7 +12454,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1019-dev';
+ const _APP_VERSION = 'v1.3.1020-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14607,8 +14613,8 @@ const ui = (() => {
    title: 'Importar CSV BudgetBakers',
    message: rows.length + ' movimientos · ' + nGastos + ' gastos · ' + nIngresos + ' ingresos\n' +
             'Cuentas: ' + cuentasTxt + '\n\n' +
-            '✅ Solo gastos: ' + nGastos + '\n' +
-            '❌ Ingresos por ventas: ignorados (esperamos Loyverse)\n' +
+            '✅ Gastos: ' + nGastos + ' (con provId por labels)\n' +
+            '✅ Ingresos: ' + nIngresos + ' (sourceHistorical → revertibles al llegar Loyverse)\n' +
             '📦 Mercancía → pedidos sintéticos con margen estimado por proveedor\n' +
             '⚠️ Idempotente: reemplaza movimientos con origen=budgetbakers previos.\n\n' +
             '¿Continuar?',
@@ -14663,13 +14669,11 @@ const ui = (() => {
    var productos = State.get.productos() || [];
    var provMargenAvg = _bbCalcProvMargenAvg(productos);
 
-   // 5. Generar gastos + pedidos sintéticos (NO ingresos por ventas — esperamos Loyverse)
-   var newGastos = [], newPedidos = [];
+   // 5. Generar gastos + pedidos sintéticos + ingresos (con sourceHistorical)
+   //    Ingresos se marcan sourceHistorical para poder revertirlos cuando Loyverse sync.
+   var newGastos = [], newPedidos = [], newIngresos = [];
    var newProvs = [];
    rows.forEach(function(r) {
-    // Ingresos — IGNORAR (esperan Loyverse Lote P3)
-    if (r.type === 'Ingresos') return;
-
     var cuentaId = cuentaIdByName[(r.account||'').toLowerCase()];
     if (!cuentaId) return;
     var amountRaw = (r.amount||'0').replace(/\./g,'').replace(',','.');
@@ -14678,7 +14682,25 @@ const ui = (() => {
     var fecha = _bbParseDate(r.date);
     var id = _bbHashId(r);
 
-    // Resolver proveedor por label
+    // INGRESOS → marcados sourceHistorical para revert futuro cuando Loyverse sync
+    if (r.type === 'Ingresos') {
+     newIngresos.push({
+      id: id,
+      fecha: fecha,
+      importe: amount,
+      cuentaId: cuentaId,
+      categoria: r.category || '',
+      concepto: r.note || r.payee || r.labels || r.category || 'Ingreso',
+      metodo: r.payment_type || '',
+      scope: 'negocio',
+      estado: 'confirmado',
+      origen: 'budgetbakers',
+      sourceHistorical: true,
+     });
+     return;
+    }
+
+    // GASTOS → resolver proveedor por label
     var provId = '';
     if (r.labels) {
      var lblKey = r.labels.toLowerCase();
@@ -14698,7 +14720,7 @@ const ui = (() => {
      }
     }
 
-    // GASTO (siempre) — entrada contable
+    // GASTO (entrada contable)
     var gasto = {
      id: id,
      fecha: fecha,
@@ -14720,7 +14742,7 @@ const ui = (() => {
     var isMercancia = (r.category||'').toLowerCase().indexOf('mercancía') >= 0 ||
                       (r.category||'').toLowerCase().indexOf('mercancia') >= 0;
     if (isMercancia && provId) {
-     var estMargen = provMargenAvg[provId] || 25; // fallback 25% si proveedor sin productos
+     var estMargen = provMargenAvg[provId] || 25;
      var estRevenue = estMargen < 100 ? amount / (1 - estMargen / 100) : amount * 2;
      var estProfit = estRevenue - amount;
 
@@ -14755,19 +14777,25 @@ const ui = (() => {
    }
    State.set.setGastos(gastosKeep.concat(newGastos));
 
-   // Pedidos sintéticos → historialPedidos (mantener pedidos previos sin origen=budgetbakers)
+   // Ingresos previos sin origen=budgetbakers + nuevos ingresos BB
+   var ingresosPrev2 = (State.get.ingresosFin ? State.get.ingresosFin() : []) || [];
+   var ingresosKeep2 = ingresosPrev2.filter(function(i){ return i.origen !== 'budgetbakers'; });
+   State.set.setIngresos(ingresosKeep2.concat(newIngresos));
+
+   // Pedidos sintéticos → historialPedidos
    var pedidosPrev = (State.get.historialPedidos ? State.get.historialPedidos() : []) || [];
    var pedidosKeep = pedidosPrev.filter(function(p){ return p.origen !== 'budgetbakers'; });
    State.set.historialPedidos(pedidosKeep.concat(newPedidos));
 
-   // 7. Recalcular saldos (ingresos previos intactos, solo resta gastos)
+   // 7. Recalcular saldos
    _bbRecalcSaldos();
 
    DashweyBus.emit('gasto');
+   DashweyBus.emit('ingreso');
    DashweyBus.emit('pedido_stock');
    DashweyBus.emit('cuenta');
    try { App.dash.render(); } catch(_) {}
-   showToast('✅ ' + newGastos.length + ' gastos · ' + newPedidos.length + ' pedidos sintéticos · ' + newProvs.length + ' proveedores nuevos');
+   showToast('✅ ' + newGastos.length + ' gastos · ' + newIngresos.length + ' ingresos · ' + newPedidos.length + ' pedidos · ' + newProvs.length + ' proveedores');
   } catch(e) {
    console.error('[Dashwey] _bbCommit:', e);
    showToast('⚠️ Error commit: ' + (e.message||e));
@@ -14853,6 +14881,37 @@ const ui = (() => {
      showToast('✅ ' + (nGastos + nIngresos + nPedidos) + ' movimientos + ' + nProvsBB + ' proveedores eliminados · saldos reseteados');
     } catch(e) {
      console.error('[Dashwey] _revertBudgetBakersImport:', e);
+     showToast('⚠️ Error: ' + (e.message||e));
+    }
+   }
+  });
+ }
+
+ // ── v1.3.1020: Revertir SOLO ingresos BB ────────────────────────
+ // Para usar cuando Loyverse Lote P3 está listo.
+ // Mantiene gastos BB + pedidos sintéticos. Solo borra ingresos + recalcula saldos.
+ function _revertBudgetBakersIngresos() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  var ingresosPrev = (State.get.ingresosFin ? State.get.ingresosFin() : []) || [];
+  var nIngresos = ingresosPrev.filter(function(i){ return i.origen === 'budgetbakers'; }).length;
+  if (nIngresos === 0) { showToast('ℹ️ Sin ingresos BudgetBakers'); return; }
+  window._showDestructiveConfirm({
+   title: 'Revertir SOLO ingresos BB',
+   message: '📤 Se eliminarán ' + nIngresos + ' ingresos con origen=budgetbakers.\n\n' +
+            '✅ Se conservan:\n• Gastos BB\n• Pedidos sintéticos BB\n• Proveedores\n\n' +
+            '⚠️ Usar tras sincronizar ventas Loyverse.\n\n¿Continuar?',
+   confirmText: 'Revertir ingresos',
+   onConfirm: function() {
+    try {
+     var ingresosKeep = ingresosPrev.filter(function(i){ return i.origen !== 'budgetbakers'; });
+     State.set.setIngresos(ingresosKeep);
+     _bbRecalcSaldos();
+     DashweyBus.emit('ingreso');
+     DashweyBus.emit('cuenta');
+     try { App.dash.render(); } catch(_) {}
+     showToast('✅ ' + nIngresos + ' ingresos BB eliminados · saldos recalculados');
+    } catch(e) {
+     console.error('[Dashwey] _revertBudgetBakersIngresos:', e);
      showToast('⚠️ Error: ' + (e.message||e));
     }
    }
@@ -15009,7 +15068,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _revertBudgetBakersImport };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _revertBudgetBakersImport, _revertBudgetBakersIngresos };
 })();
 
 // ══════════════════════════════════════════
