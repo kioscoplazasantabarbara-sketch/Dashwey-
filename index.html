@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1015-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1016-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1015-dev</title>
+<title>Dashwey v1.3.1016-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8769,6 +8769,12 @@ function _authTabSafe(tab) {
  <div class="sd-info"><div class="sd-title">Limpiar transacciones</div><div class="sd-sub">Borra ventas/pedidos · Mantiene catálogo</div></div>
  <div class="sd-chev">›</div>
  </div>
+ <!-- v1.3.1016: Import BudgetBakers CSV -->
+ <div class="sd-row" onclick="App.ui._importBudgetBakersCsv()">
+ <div class="sd-icon" style="background:#DBEAFE">📥</div>
+ <div class="sd-info"><div class="sd-title">Importar BudgetBakers</div><div class="sd-sub">CSV histórico · reemplaza movimientos marcados</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  </div>
 
  <div class="sd-footer">
@@ -12436,7 +12442,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1015-dev';
+ const _APP_VERSION = 'v1.3.1016-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14528,6 +14534,236 @@ const ui = (() => {
   });
  }
 
+ // ── v1.3.1016: Import BudgetBakers CSV ─────────────────────────
+ // Idempotente: IDs deterministas. Reemplaza movimientos con origen='budgetbakers'.
+ // Unifica proveedores por label. Marca ingresos por ventas con sourceHistorical:true.
+ function _importBudgetBakersCsv() {
+  var inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.csv,text/csv';
+  inp.style.display = 'none';
+  inp.onchange = function(e) {
+   var file = e.target.files && e.target.files[0];
+   if (!file) return;
+   var reader = new FileReader();
+   reader.onload = function(ev) {
+    try { _bbParseAndPreview(ev.target.result); }
+    catch(err) { showToast('⚠️ Error lectura CSV: ' + (err.message||err)); console.error('[BB]', err); }
+   };
+   reader.onerror = function() { showToast('⚠️ Error leyendo archivo'); };
+   reader.readAsText(file, 'UTF-8');
+  };
+  document.body.appendChild(inp);
+  inp.click();
+  setTimeout(function(){ try { inp.remove(); } catch(_) {} }, 1000);
+ }
+
+ // Parse CSV + preview antes de import
+ function _bbParseAndPreview(csvText) {
+  var lines = csvText.split(/\r?\n/).filter(function(l){ return l.trim().length > 0; });
+  if (lines.length < 2) { showToast('⚠️ CSV vacío'); return; }
+  var header = lines[0].split(';');
+  var rows = [];
+  for (var i = 1; i < lines.length; i++) {
+   var cols = _bbSplitCsvLine(lines[i]);
+   if (cols.length < header.length) continue;
+   var row = {};
+   for (var j = 0; j < header.length; j++) row[header[j]] = (cols[j] || '').trim();
+   rows.push(row);
+  }
+  if (!rows.length) { showToast('⚠️ Sin filas válidas'); return; }
+
+  // Resumen
+  var nGastos = 0, nIngresos = 0;
+  var cuentasCsv = {};
+  rows.forEach(function(r) {
+   if (r.type === 'Gastos') nGastos++;
+   else if (r.type === 'Ingresos') nIngresos++;
+   cuentasCsv[r.account] = (cuentasCsv[r.account] || 0) + 1;
+  });
+  var cuentasTxt = Object.keys(cuentasCsv).map(function(k){ return k + ': ' + cuentasCsv[k]; }).join(' · ');
+
+  // Verificar cuentas Dashwey existen
+  var cuentasDashwey = State.get.cuentas() || [];
+  var missingCuentas = [];
+  Object.keys(cuentasCsv).forEach(function(nm) {
+   if (!cuentasDashwey.find(function(c){ return (c.nombre||'').toLowerCase() === nm.toLowerCase(); })) {
+    missingCuentas.push(nm);
+   }
+  });
+  if (missingCuentas.length > 0) {
+   showToast('⚠️ Crea primero las cuentas: ' + missingCuentas.join(', '));
+   return;
+  }
+
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  window._showDestructiveConfirm({
+   title: 'Importar CSV BudgetBakers',
+   message: rows.length + ' movimientos · ' + nGastos + ' gastos · ' + nIngresos + ' ingresos\n' +
+            'Cuentas: ' + cuentasTxt + '\n\n' +
+            '⚠️ Se eliminarán movimientos previos con origen=budgetbakers (idempotente).\n' +
+            'Ingresos por ventas se marcarán como sourceHistorical.\n' +
+            '¿Continuar?',
+   confirmText: 'Importar',
+   onConfirm: function() { _bbCommit(rows); }
+  });
+ }
+
+ // Split CSV line respetando comillas (por si algún campo tiene ; dentro)
+ function _bbSplitCsvLine(line) {
+  var out = [], cur = '', inQ = false;
+  for (var i = 0; i < line.length; i++) {
+   var ch = line[i];
+   if (ch === '"') { inQ = !inQ; continue; }
+   if (ch === ';' && !inQ) { out.push(cur); cur = ''; continue; }
+   cur += ch;
+  }
+  out.push(cur);
+  return out;
+ }
+
+ // Hash determinista para id idempotente
+ function _bbHashId(row) {
+  var key = (row.date||'') + '|' + (row.account||'') + '|' + (row.amount||'') + '|' + (row.payee||'') + '|' + (row.category||'');
+  var h = 0;
+  for (var i = 0; i < key.length; i++) { h = ((h << 5) - h + key.charCodeAt(i)) | 0; }
+  return 'bb_' + Math.abs(h).toString(36) + '_' + (row.date||'').replace(/\D/g,'').slice(0,12);
+ }
+
+ // Commit: borra previos origen=budgetbakers + inserta nuevos
+ function _bbCommit(rows) {
+  try {
+   // 1. Borrar movimientos previos con origen='budgetbakers' (idempotencia)
+   var gastosPrev = (State.get.gastosOp ? State.get.gastosOp() : []) || [];
+   var ingresosPrev = (State.get.ingresosFin ? State.get.ingresosFin() : []) || [];
+   var gastosKeep = gastosPrev.filter(function(g){ return g.origen !== 'budgetbakers'; });
+   var ingresosKeep = ingresosPrev.filter(function(i){ return i.origen !== 'budgetbakers'; });
+
+   // 2. Crear mapping nombre cuenta → cuentaId
+   var cuentasDashwey = State.get.cuentas() || [];
+   var cuentaIdByName = {};
+   cuentasDashwey.forEach(function(c){ cuentaIdByName[(c.nombre||'').toLowerCase()] = c.id; });
+
+   // 3. Mapping label → proveedorId (reusa Loyverse o crea manual)
+   var provsDashwey = State.get.proveedores() || [];
+   var provIdByLabel = {};
+   provsDashwey.forEach(function(p){
+    if (p.nombre) provIdByLabel[p.nombre.toLowerCase()] = p.id;
+   });
+
+   // 4. Generar gastos e ingresos nuevos
+   var newGastos = [], newIngresos = [];
+   var newProvs = [];
+   rows.forEach(function(r) {
+    var cuentaId = cuentaIdByName[(r.account||'').toLowerCase()];
+    if (!cuentaId) return; // skip si cuenta no existe (no debería pasar, ya verificamos)
+    var amountRaw = (r.amount||'0').replace(/\./g,'').replace(',','.');
+    var amount = Math.abs(parseFloat(amountRaw) || 0);
+    if (amount <= 0) return;
+    var fecha = _bbParseDate(r.date);
+    var id = _bbHashId(r);
+
+    // Resolver proveedor por label (solo para gastos)
+    var provId = '';
+    if (r.type === 'Gastos' && r.labels) {
+     var lblKey = r.labels.toLowerCase();
+     if (provIdByLabel[lblKey]) {
+      provId = provIdByLabel[lblKey];
+     } else if (r.labels && r.labels !== 'Recaudación del día' && r.payee) {
+      // Crear proveedor manual solo si label es proveedor real
+      var newProvId = 'prov_bb_' + r.labels.toLowerCase().replace(/[^a-z0-9]/g,'');
+      if (!provIdByLabel[lblKey]) {
+       newProvs.push({
+        id: newProvId,
+        nombre: r.labels,
+        agente: '',
+        tel: '',
+        email: '',
+        diasPedido: [],
+        origen: 'manual',
+        createdAt: new Date().toISOString(),
+       });
+       provIdByLabel[lblKey] = newProvId;
+       provId = newProvId;
+      }
+     }
+    }
+
+    var base = {
+     id: id,
+     fecha: fecha,
+     monto: amount,
+     cuentaId: cuentaId,
+     categoria: r.category || '',
+     concepto: r.note || r.payee || r.labels || '',
+     metodo: r.payment_type || '',
+     scope: 'negocio',
+     estado: 'confirmado',
+     origen: 'budgetbakers',
+    };
+
+    if (r.type === 'Gastos') {
+     base.proveedor = r.payee || '';
+     if (provId) base.provId = provId;
+     newGastos.push(base);
+    } else if (r.type === 'Ingresos') {
+     // Marcar ingresos por ventas para no duplicar con Loyverse futuro
+     if ((r.category||'').toLowerCase().indexOf('ingresos por ventas') >= 0) {
+      base.sourceHistorical = true;
+     }
+     newIngresos.push(base);
+    }
+   });
+
+   // 5. Persistir
+   if (newProvs.length > 0) {
+    var allProvs = (State.get.proveedores() || []).concat(newProvs);
+    State.set.proveedores(allProvs);
+   }
+   State.set.setGastos(gastosKeep.concat(newGastos));
+   State.set.setIngresos(ingresosKeep.concat(newIngresos));
+
+   // 6. Recalcular saldos cuentas desde 0 (solo movimientos budgetbakers + manuales no-historicos)
+   _bbRecalcSaldos();
+
+   DashweyBus.emit('gasto');
+   DashweyBus.emit('ingreso');
+   DashweyBus.emit('cuenta');
+   try { App.dash.render(); } catch(_) {}
+   showToast('✅ ' + (newGastos.length + newIngresos.length) + ' movimientos importados · ' + newProvs.length + ' proveedores nuevos');
+  } catch(e) {
+   console.error('[Dashwey] _bbCommit:', e);
+   showToast('⚠️ Error commit: ' + (e.message||e));
+  }
+ }
+
+ // Recalcular saldo de cada cuenta = sum(ingresos) - sum(gastos)
+ function _bbRecalcSaldos() {
+  try {
+   var gastos = State.get.gastosOp ? State.get.gastosOp() : [];
+   var ingresos = State.get.ingresosFin ? State.get.ingresosFin() : [];
+   var cuentas = State.get.cuentas() || [];
+   cuentas.forEach(function(c) {
+    var saldoCalc = 0;
+    ingresos.forEach(function(i){ if (i.cuentaId === c.id) saldoCalc += (parseFloat(i.monto)||0); });
+    gastos.forEach(function(g){ if (g.cuentaId === c.id) saldoCalc -= (parseFloat(g.monto)||0); });
+    saldoCalc = Math.round(saldoCalc * 100) / 100;
+    State.set.updateCuenta(c.id, { saldo: saldoCalc });
+   });
+  } catch(e) { console.warn('[BB] recalc saldos:', e); }
+ }
+
+ // Parse "2026-04-17 10:05:22" → ISO string
+ function _bbParseDate(s) {
+  if (!s) return new Date().toISOString();
+  // Board usa "YYYY-MM-DD HH:MM:SS"
+  var parts = s.split(' ');
+  if (parts.length === 2) {
+   return new Date(parts[0] + 'T' + parts[1] + 'Z').toISOString();
+  }
+  try { return new Date(s).toISOString(); } catch(_) { return new Date().toISOString(); }
+ }
+
  // ── v1.3.999 L3 — UI mapping Loyverse → cuentas ─────────────────
  // Sheet bottom con 3 dropdowns (CASH/CARD/OTHER). "(Auto)" = cuenta primaria.
  function _openLoyverseMapping() {
@@ -14667,7 +14903,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv };
 })();
 
 // ══════════════════════════════════════════
