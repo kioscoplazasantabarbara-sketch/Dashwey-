@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.999-dev
+**Versión:** v1.3.1005-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -216,6 +216,98 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | # | Área | Pendiente | Prioridad |
 |---|------|-----------|-----------|
 | 1 | Seguridad | Firestore Rules: schema estricto por tipo (validar `is list` / `is map` en cada clave). Diseñado y listo — aplicar antes de publicar en Play Store | 🟡 Mejora pre-publicación |
+
+### Cambios sesión v1.3.1005
+- **Proxy Cloud Function activo:**
+  - URL: `https://europe-west1-dashwey-project.cloudfunctions.net/loyverseProxy`
+  - Constante `_LV_PROXY` en módulo `ui`
+  - Helper `_lvProxyFetch(endpoint, token, params)` — reutilizable para todos los endpoints Loyverse (items, receipts, inventory, etc.)
+  - `_testLoyverseConnection()` usa el proxy real — ya no llama `api.loyverse.com` directamente
+- **Lote P2 siguiente:** import catálogo Loyverse (items → productos Dashwey con `loyverseItemId`) + import receipts con detalle de items → alimenta ventas[], "Más vendidos", "Ticket medio"
+
+### Cambios sesión v1.3.1004
+- **Lote P1 — Preparación Loyverse-first:**
+  - **TPV standby:** botón `#bt-0` en navbar oculto (`display:none`). Módulo TPV activo internamente — solo invisible en UI. `_modeTabMap.pos` → 1 (Dashboard). Deep link `tpv` → redirige a Dashboard.
+  - **Settings Integraciones:** nueva sección "API Token Loyverse" con campo `input[type=password]` + botones "Guardar token" y "Probar conexión". Token guardado en `localStorage['dashwey_lv_token']` — nunca en Firebase.
+  - **`_saveLoyverseToken()`:** guarda token en localStorage. Muestra confirmación visual en campo, no expone el valor.
+  - **`_testLoyverseConnection()`:** llama `api.loyverse.com/v1.0/merchant` con Bearer token. Fallará con CORS hasta que Lote P2 deploye el proxy Cloud Function — mensaje diferenciado "CORS bloqueado — normal hasta activar proxy".
+  - **`_initLoyverseTokenField()`:** al abrir settings, si hay token guardado muestra placeholder enmascarado + confirmación visual. No re-expone el token.
+- **Siguiente: Lote P2** — Cloud Function proxy CORS + import catálogo Loyverse (items → productos Dashwey con `loyverseItemId`).
+
+### Cambios sesión v1.3.1003
+- **FASE 5 LOTE 1 — Scope personal (motor + toggle UI + filtros):**
+  - **State:** `settings.activeScope = 'negocio'` (default). Persiste en Firebase.
+  - **Helpers FinEngine:** `_matchesScope(x)` lee `settings.activeScope` en tiempo real. `_isKpiVisible(x) = _isAggregable(x) && _matchesScope(x)` — filtro unificado scope+transfer+pendiente.
+  - **Motor KPIs:** batch replace `_isAggregable` → `_isKpiVisible` en 10+ puntos (FinEngine internos + dashboard + insights + snap cards). `revenue()`, `gastoMensualEq`, `gastoBruto`, `comprometido`, `saldoCuentas()` — todos filtran por scope.
+  - **Toggle UI:** botón `🏪 Negocio / 🏠 Personal` en header Dashboard junto al selector de periodo. Tap cambia scope + re-renderiza todo. Visual: border+texto violeta en personal, gris en negocio.
+  - **Herencia scope:** `addGasto`/`addIngreso`/`addCuenta` defaults heredan `settings.activeScope` (no hardcoded 'negocio').
+  - **Cuentas filtradas:** `renderFlujoCaja` + `_snapRenderFCDist` solo muestran cuentas del scope activo. Hash dirty-check incluye `activeScope`.
+  - **Scope btn init:** `_updateScopeBtn` llamado en `render()` para sincronizar visual al arrancar.
+- **Resultado:** Dashboard aislado por contexto. Crear cuenta "Nómina" con scope personal → invisible en modo negocio. Cambiar a 🏠 Personal → solo ves finanzas personales.
+- **Pendiente LOTE 2:** UI para cambiar scope de cuenta/gasto/ingreso existente. Filtrar movimientos en extracto de cuenta por scope. Card Rendimiento/Compras (ventas TPV no tienen scope — siempre negocio por naturaleza).
+
+### Cambios sesión v1.3.1002
+- **FASE 3 LOTE 3 — Confirmar pago pendiente:**
+  - Editor `_openEditMovimientoSheet`: si `registro.estado === 'pendiente'`, el botón "Guardar" se reemplaza por **"✅ Confirmar pago"** (verde `#16A34A`). Si confirmado, se muestra "Guardar" normal.
+  - **Acción "Confirmar pago":** destructive confirm → `estado:'confirmado'` + `fechaPago: hoy` + actualiza saldo de cuenta (gasto descuenta, ingreso suma) + `dash.render()` refresca Dashboard + toast "✅ Pago confirmado — saldo actualizado".
+  - Guard null en `edit-mov-save` wire (ya no existe si movement es pendiente → evita error).
+  - Botón "Eliminar" siempre disponible (independiente del estado).
+- **Fase 3 COMPLETA:**
+  - LOTE 1 (v1.3.1000): motor + exclusión KPIs + badges ⏳
+  - LOTE 2 (v1.3.1001): toggle creación pendientes + guards saldo
+  - LOTE 3 (v1.3.1002): confirmar pago + cascade saldo
+
+### Cambios sesión v1.3.1001
+- **FASE 3 LOTE 2 — UI creación pendientes:**
+  - **Toggle "⏳ Registrar como pendiente"** añadido en ambos puntos de entrada de nuevo movimiento:
+    - `_openMovimientoSheet` (bottom sheet móvil) — wrap con id `mov-pend-wrap`
+    - `_openMovimientoFullscreen` (modal fullscreen) — wrap con id `mov-pend-wrap-fs`
+    - Mismo id del botón `mov-pend-toggle` en ambos → `_confirmarMovimiento` lee indistintamente
+  - **Estado visual:** aria-pressed binario, knob animado (translateX), color fondo `#F59E0B` cuando on, haptic light al tap
+  - **Ocultación automática** del wrap en modo `transferencia` (transferencias siempre confirmadas — no pueden ser pendientes)
+  - **Lógica en `_confirmarMovimiento`:**
+    - Lee toggle → `_esPendiente` + `_estadoMov` (`'pendiente'` o `'confirmado'`)
+    - Guards `if (!_esPendiente)` envuelven `updateCuenta(saldo)` en rama gasto e ingreso — pendientes NO tocan saldo
+    - Campo `estado` añadido al payload de `addGasto` + `addIngreso` (normal + reembolso)
+    - Toast diferenciado: "⏳ Gasto pendiente registrado" vs "✅ Gasto registrado"
+  - **Transferencias protegidas:** `if (_movTipo === 'transferencia') _esPendiente = false` — no pueden crearse como pendientes aunque el toggle estuviera on
+
+- **LIMPIEZA código muerto post-unificación selector global:**
+  - Eliminadas funciones `_openGastosPeriodPicker`, `_applyGastosPeriod`, `_clearGastosPeriod` (68 líneas, 0 callers UI)
+  - Eliminados los 3 exports correspondientes del return del módulo `dash`
+  - `gastosCustomPeriod` eliminado de `DEFAULTS`, getter y setter
+  - **NO eliminado:** `_openVisitasPeriodPicker`, `_applyVisitasPeriod*`, `_getVisitasPeriod`, `_saveVisitasPeriod` — dependencia activa detectada en `renderAgenda()` legacy (L16087 + L18885) que lee `#dash-agenda-list` existente en HTML. Requiere sesión dedicada para auditar si el render legacy está realmente vivo o es dead code coexistiendo con la snap card nueva.
+
+- **Flujo end-to-end Fase 3 operativo:**
+  - Crear pendiente → toggle on → tap Guardar → toast ⏳ → saldo NO se mueve → aparece en listados con badge ⏳ + opacity 0.72 → KPIs financieros lo excluyen
+  - Crear confirmado (toggle off) → comportamiento idéntico a antes
+
+- **Pendiente LOTE 3 Fase 3:**
+  - Snap card "Pendientes" dedicada en Dashboard (solo visible si >0)
+  - Acción "Confirmar pago" → destructive confirm → muta saldo de cuenta + `fechaPago = hoy` + `estado = 'confirmado'`
+  - Editar un movement pendiente existente (hoy solo se puede crear, no editar su estado)
+
+### Cambios sesión v1.3.1000
+- **FASE 3 LOTE 1 — Control de realidad (motor + badges UI):**
+  - **Helpers en FinEngine:**
+    - `_isPendiente(x)` — detecta `x.estado === 'pendiente'`
+    - `_isAggregable(x)` — `!_isTransfer(x) && !_isPendiente(x)` — helper unificado para filtros de KPIs
+    - Ambos expuestos en `window._isPendiente` y `window._isAggregable`
+  - **Exclusión de pendientes en agregados financieros (motor puro):**
+    - `gastoMensualEq` — usa `_isAggregable`
+    - `revenue` — añade `if (_isPendiente(i)) return false`
+    - `gastoBruto` — usa `_isAggregable`
+    - `comprometido` — usa `_isAggregable`
+  - **Batch replace pragmático** en 10 puntos fuera de FinEngine: `!window._isTransfer?.(x)` → `(window._isAggregable ? window._isAggregable(x) : !window._isTransfer?.(x))` — patrón defensivo con fallback si `_isAggregable` no cargó
+  - **Badges visuales "⏳ PENDIENTE" con opacity 0.72 en 3 puntos:**
+    - `renderFlujoCaja` últimos movimientos (Dashboard → Flujo de Caja)
+    - `_openFlujoCajaModal` listado completo (modal expandido)
+    - `_snapRenderFCDist` snap card (distribución + últimos movs)
+  - **KPIs snap card `_snapRenderFCDist`:** `_ingPeriodo` y `_gastoPeriodo` ahora filtran pendientes (antes sumaban sin distinguir)
+- **Regla invariante establecida:** pendientes SÍ aparecen en listados de movimientos (visibilidad), pendientes NO aparecen en agregados financieros (saldo, revenue, gasto total, runway, balance).
+- **LOTE 1 limitación:** no hay forma de crear movements pendientes todavía (UI toggle llega en LOTE 2). La infra está lista para aceptarlos, pero hasta LOTE 2, todo movement se crea `estado:'confirmado'` por default.
+- **Pendiente LOTE 2:** toggle "Registrar como pendiente" en `_openMovimientoSheet` + `_openMovimientoFullscreen`. Callers de `updateCuenta(saldo)` deben envolverse con `if (estado !== 'pendiente')`.
+- **Pendiente LOTE 3:** card snap dedicada "Pendientes" + acción "Confirmar pago" con destructive confirm + `fechaPago = hoy` + actualizar saldo.
 
 ### Cambios sesión v1.3.999
 - **FASE 2 L3 — UI Account Mapping Loyverse:**
