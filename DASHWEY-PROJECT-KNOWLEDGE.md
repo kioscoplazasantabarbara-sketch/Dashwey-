@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.967-dev
+**Versión:** v1.3.999-dev
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -17,12 +17,11 @@
 ## ARQUITECTURA
 
 ```
-index.html (~37.900 líneas) — SPA monolítica completa
+index.html (~35.800 líneas) — SPA monolítica completa
 sw.js          — Service Worker con cache bust por versión
 version.json   — Fuente de verdad de versión
 version.txt    — Mirror de versión
 manifest.json  — PWA manifest
-firestore.rules — Security Rules Firestore (nuevo v1.3.967)
 ```
 
 **Módulos IIFE dentro de App:**
@@ -59,7 +58,6 @@ tpvQG      → Quick Grid TPV
 - **Hogar** — módulo futuro de finanzas personales
 - **Cartera** — módulo futuro de seguimiento de inversiones
 - **Ecosistema Multi-App** — ver sección dedicada abajo
-- **Loyverse POS** — integración futura via Firebase Cloud Functions
 
 ---
 
@@ -81,34 +79,7 @@ Un solo `index.html` en GitHub Pages genera N apps por `?mode=` en `capacitor.co
 | Sync Firebase tiempo real | ✅ |
 | Gestión de equipo | ✅ |
 | `?mode=pos/alm/cfo` | ✅ v1.3.382 |
-| Firestore Security Rules endurecidas | ✅ v1.3.967 — pendiente `firebase deploy` |
-
----
-
-## INTEGRACIÓN LOYVERSE — ARQUITECTURA DISEÑADA
-
-**Flujo:** Loyverse POS → Webhook → Cloud Function → Firestore → Dashwey (onSnapshot)
-
-**Modelo Firestore:**
-```
-productos/{prodId}     → loyverseItemId (FK), ean, nombre, precioCompra, pvp, stockActual...
-ventas/{event_id}      → event_id=loyverseSaleId (idempotencia), event_type, adapterVersion, items[]
-stock_log/{logId}      → event_id, event_type: 'sale'|'order'|'shrinkage'|'adjustment'|'resync'
-config/sync            → adapterVersion, lastWebhookAt, loyverseToken (via Secret Manager)
-sync_errors/{id}       → productos sin mapear (loyverseItemId no encontrado)
-```
-
-**Adapter versionado:** `adapters/v1/LoyverseAdapter.js` — CF lee `config/sync.adapterVersion`
-**Idempotencia:** `ventas/{loyverseSaleId}` — si existe → abort (200 OK)
-**Infra:** Firebase Blaze obligatorio (outbound webhook en CF)
-**Regla:** Dashwey = fuente de verdad (costes, stock, margen). Loyverse = solo TPV.
-
-**Preparativos completados v1.3.967:**
-- ✅ `firestore.rules` — roles admin/staff/viewer, `/ventas/` y `/stock_log/` solo Admin SDK
-- ✅ Campo `loyverseItemId` + `ean` en modelo producto (formulario + `_createArticle`)
-- ✅ `exportarDatos()` completo — incluye `lotesStock`, `facturas`, `pendingOrders`
-- ⏳ Cloud Functions — pendiente implementar
-- ⏳ APK FCM / Gradle 8.7 — pendiente compilar
+| Firestore Security Rules endurecidas | ⏳ CRÍTICO antes de Play Store |
 
 ---
 
@@ -141,7 +112,6 @@ sync_errors/{id}       → productos sin mapear (loyverseItemId no encontrado)
 - Al eliminar bloques JS dentro de `try/finally` → verificar que el `try` exterior sigue válido
 - onclick inline → usar `&apos;` para comillas simples, nunca `''` concatenados
 - Todo guard `_running = true` DEBE tener `finally { _running = false }` — nunca liberar en línea secuencial
-- Python string replace: usar índices de posición para bloques con escapes complejos — `h[:idx] + new + h[idx+len(old):]`
 
 ### Auth y Layout
 - `#auth-screen` SIEMPRE fuera de `<div id="app">` — hermano directo en `body`
@@ -178,25 +148,13 @@ sync_errors/{id}       → productos sin mapear (loyverseItemId no encontrado)
 - **Alertas** (default): `_snapRenderAlertasEnAgenda()` — sin stock, bajo mínimo, caducidades
 - **Entregas**: pedidos programados pendientes
 - **Eventos**: ex-Visitas Comerciales. State: `visitasComerciales` (NO renombrar). UI: "Eventos"
-- **Dot rojo "Insight"**: `.snap-narrative-zone:has(.snap-narrative-text:empty) { display:none }` — oculto cuando sin texto
 
-### FIFO valorStock (v1.3.742)
-- `State.lotesStock[]` — `{ prodId, qty, costeUnit, fecha }`
-- `FinEngine.crearLotesDesdeItems(items, fecha)` — al confirmar pedido
-- `FinEngine.consumirLotesFIFO(prodId, qty)` — al vender en TPV
-- `valorStock()` — suma lotes activos; fallback a precio actual si no hay lotes
-
-### Modelo de producto (campos completos)
-```
-id, nombre, prov, cat, iva, pvp, precioCompra
-udscaja, stockActual, stockMinimo, trackStock
-e (emoji), foto (base64/URL), caducidad
-descuento, descRaw, re (recargo equiv.)
-historialPrecios: [{fecha, precio, pvp}]
-ventas, fmt ('s'|'c')
-ean            ← nuevo v1.3.967 (EAN/código de barras)
-loyverseItemId ← nuevo v1.3.967 (FK a Loyverse POS)
-```
+### FIFO valorStock (✅ v1.3.980)
+- `State.get.lotesStock()` + `State.set.setLotesStock(v)` + `State.set.addLoteStock(l)` con dedup por id
+- Lote: `{ id, prodId, qty, qtyRestante, costeUnit, fecha }`
+- `FinEngine.crearLotesDesdeItems(items, fecha)` — llamado desde `State.set.addPedido`
+- `FinEngine.consumirLotesFIFO(prodId, qty)` — llamado desde `State.set.addVenta` → escribe `v.costeReal`
+- Lotes agotados se filtran del array (compactación automática)
 
 ### Modelo de precios
 - `p.precioCompra` = precio por **BULTO**
@@ -211,39 +169,6 @@ pvpNeto = pvp / (1 + iva%)
 mg = (pvpNeto - cu) / pvpNeto × 100
 ```
 
-### Render items Cesta y Pedido programado (LDC) — formato unificado v1.3.963+
-```
-L1 (bold):   Nombre (Xuds/bulto)
-L2 (gris):   Nbultos · X€+Y%IVA → Z€/bulto
-L3 (mgCol):  Xmg% · Y€/ud · PVP Z€
-Derecha:     Total (gris 2xs) / X€ (xbold)
-```
-- Fuente única de datos — sin recálculo en template
-- `cu = precioConIva / udscaja` (coste por UNIDAD con IVA)
-- `mgCol` semáforo: ≥30% verde · ≥15% naranja · <15% rojo
-- Thumb: `p.foto` → img con `onerror` fallback a emoji
-
-### Render catálogo inline (`_buildCatInlineItem`) — v1.3.965+
-```
-L1: Nombre (Xuds/bulto) — campo alm-cat-name
-L2: X€ +Y%IVA → Z€/bulto — metaLine
-L3: X%mg · Y€/ud · PVP Z€ — marginLine (mgColor semáforo)
-```
-- Hash incluye `po:ids` de pendingOrders → invalidar al borrar pedido
-- `_invalidateCatHash()` expuesto en `App.alm` para forzar rebuild
-
-### Long press en pedido programado (v1.3.964)
-- `.ldc-ped-row` → 600ms → haptic warning → `_showDestructiveConfirm` → `removePendingOrder`
-- `touchmove` cancela timer — sin conflicto con scroll
-- `onConfirm`: `renderOrden()` + `_invalidateCatHash()` + `renderCatInline()`
-
-### Historial de pedidos (`openHistorialPedidos`)
-- Acepta `provId` opcional → filtra por proveedor
-- Hash incluye nombre proveedor en subtítulo
-- `openFs('full')` — full screen
-- Detalle pedido: `setFs(html)` sin `openFs()` (FS ya abierto) → botón ← Volver
-- `_imprimirPedido(id)` → `window.open` + `window.print()` — sin librerías
-
 ### SAC Dropdown
 - `#sac-global-dd` → `position: fixed` — no cambiar a `absolute`
 - `_sacPositionDd` usa `getBoundingClientRect()` + `visualViewport`
@@ -251,15 +176,7 @@ L3: X%mg · Y€/ud · PVP Z€ — marginLine (mgColor semáforo)
 ### FCM Push Notifications
 - VAPID key: `BDck5vcqwviHaMHXNeGoLTouXCKeZEd4dD39a0wVFmhfTTR70DjpZLfSGNTmRcFX3ABG9ssodnNzOHcRpRsRbHs`
 - `window._DashweyFCM.sendToOthers(title, body, data)` — envía a todos menos el dispositivo actual
-- APK: pendiente compilar — Gradle 8.2 incompatible con JVM 21 → subir a Gradle 8.7
-
-### exportarDatos() — campos completos v1.3.967
-```
-perfil, proveedores, productos, historialPedidos, mermas, ventas
-gastosOp, ingresosFin, cuentas, cierresCaja, eventos
-hotPins, qgCells, notifPrefs, settings, teamMembers
-lotesStock, facturas, pendingOrders   ← añadidos v1.3.967
-```
+- APK: ✅ compilada con Gradle 8.7 — push notifications nativas activas
 
 ---
 
@@ -298,9 +215,269 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 
 | # | Área | Pendiente | Prioridad |
 |---|------|-----------|-----------|
-| 1 | Infra | `firebase deploy --only firestore:rules` — aplicar `firestore.rules` v1.3.967 | ⚠️ CRÍTICO antes de Play Store |
-| 2 | Push | APK FCM — Gradle 8.7 pendiente compilar (Gradle 8.2 incompatible con JVM 21) | 🔵 WIP |
-| 3 | Loyverse | Cloud Functions — `onSaleWebhook`, adapter v1, stock_log writer | 🟢 Próximo bloque |
+| 1 | Seguridad | Firestore Rules: schema estricto por tipo (validar `is list` / `is map` en cada clave). Diseñado y listo — aplicar antes de publicar en Play Store | 🟡 Mejora pre-publicación |
+
+### Cambios sesión v1.3.999
+- **FASE 2 L3 — UI Account Mapping Loyverse:**
+  - **State:** `DEFAULTS.settings.loyverse.paymentMap = { CASH:'', CARD:'', OTHER:'' }` (vacío = usar cuenta primaria automáticamente)
+  - **Drawer:** nueva sección "Integraciones" antes de "Cuenta" con row "🧾 Loyverse POS"
+  - **Sheet modal `_openLoyverseMapping`:** 3 dropdowns (Efectivo / Tarjeta / Otros) con lista de cuentas + opción "(Auto — cuenta primaria)". Guarda en `settings.loyverse.paymentMap` vía `State.set.settings()`.
+  - **Adapter hookup:** `Loyverse.mapSaleToIngresos(receipt, paymentMap=null)` — si no se pasa `paymentMap`, lee `State.get.settings().loyverse.paymentMap`. Defensivo: si la cuenta mapeada fue borrada, cae a cuenta primaria.
+  - **Simulador:** `Loyverse.simulate()` ahora pasa `paymentMap=null` → usa mapping configurado por el usuario o cuenta primaria si no hay config.
+  - **Exports:** `App.ui._openLoyverseMapping` añadido.
+- **Resultado:** los movements importados van a la cuenta que el usuario eligió por cada método de pago. Sin configuración, todo va a primaria (sin regresión vs v1.3.998).
+- **Pendiente:** L2 (CSV import) · L4 (API HTTP con proxy CORS).
+
+### Cambios sesión v1.3.998
+- **Herramientas dev temporales — Testing Loyverse L1 sin DevTools USB:**
+  - Sección nueva "Desarrollador" en settings drawer con 3 acciones:
+    - 🧪 **Simular 5 ventas Loyverse** → `Loyverse.simulate(5)` + toast `N created, M skipped`
+    - 🔍 **Ver ingresos Loyverse** → `alert()` con contador ingresos/refunds/neto + JSON primer ingreso + `console.log` detalle completo
+    - 🧹 **Limpiar datos Loyverse** → `_showDestructiveConfirm` + elimina sólo movements con `origen:'loyverse'` (no toca otros datos)
+  - **Exports añadidos a `App.ui`:** `_devLoyverseSimulate`, `_devLoyverseInspect`, `_devLoyverseClean`
+  - **Guardas defensivos:** verifica existencia de `window.Loyverse`, `State.get.cuentas().length > 0` antes de simular
+- **Pendiente remover en producción:** estas 3 acciones son temporales. Cuando L3 (UI mapping) esté operativa y L2 (CSV) importe datos reales, se quita esta sección.
+- **Uso:** tap en icono ☰ (Ajustes) → scroll hasta "Desarrollador" → tap en opción.
+
+### Cambios sesión v1.3.997
+- **FASE 2 L1 — Módulo `Loyverse` (core adapter + simulación):**
+  - **Arquitectura:** IIFE puro sin estado, insertado tras `FinEngine` (L11428). Expuesto como `window.Loyverse` para debugging.
+  - **API pública:**
+    - `Loyverse.normalize(rawReceipt)` — tolera schema Loyverse API v1.0 (`id`/`receipt_date`/`payments[].payment_type`/`money_amount`) + variantes (`type`/`method`, `importe`/`amount`). Devuelve receipt canónico `{id, fecha, total, payments[{type, importe}]}` o `null` si inválido.
+    - `Loyverse.mapSaleToIngresos(receipt, paymentMap)` — 1 receipt → N movements. `paymentMap = {CASH, CARD, OTHER}` mapea tipo pago → `cuentaId`. Idempotente vía `sourceRefId = receiptId + '_' + idx`. Dedup contra `ingresosFin` + `gastosOp` existentes.
+    - `Loyverse.simulate(n=5)` — genera receipts sintéticos mezclando tickets simples (65%), split cash+card (20%), refunds (15%). Útil para validar modelo sin conectar fuente real.
+  - **Reglas acordadas aplicadas:**
+    - D1 — 1 ingreso por payment (soporte tickets partidos)
+    - D2 — refunds (`importe < 0`) → `addGasto` con `metaTipo:'refund'`, `origen:'loyverse'`
+    - D3 — raw NO persistido, solo movements derivados
+  - **Fields añadidos a movements Loyverse:** `origen:'loyverse'`, `sourceRefId`, `scope:'negocio'`, `estado:'confirmado'`. Para refunds también `metaTipo:'refund'`.
+  - **Normalización payment_type:** `CASH`/`CARD`/`OTHER`. Tolera variantes (`cash`, `Efectivo`, `Tarjeta`, `CREDIT_CARD`, `DEBIT_CARD`, etc.).
+  - **Dedup:** `'i_lv_' + sourceRefId` / `'g_lv_' + sourceRefId` como IDs determinísticos. Re-ejecutar `mapSaleToIngresos` con el mismo receipt no duplica.
+- **Testing desde consola WebView:**
+  - `Loyverse.simulate(10)` — inyecta 10 ventas fake
+  - `Loyverse.simulate(10)` segunda vez → `skipped: 10, created: 0` (idempotencia)
+  - `Loyverse.normalize(raw)` — validar parser con payloads reales
+- **Pendiente:** L2 CSV import UI · L3 Account mapping UI · L4 HTTP client API (bloqueado por CORS, necesita proxy).
+
+### Cambios sesión v1.3.996
+- **UI Transferencias → motor Fase 1B cableado (cierre del círculo):**
+  - **Problema:** el handler UI existente (`_confirmarMovimiento` L17097) creaba el doble movimiento pero con `tipo:'transferencia'` únicamente — sin `metaTipo:'transfer'` ni `transferId`. El motor Fase 1B (cascade editor, exclusión KPIs) no podía reconocerlos como pareja.
+  - **Fix:** generar `transferId` único (`tr_${ts}_${random}`) + inyectar `metaTipo:'transfer'` + mismo `transferId` en ambos movimientos (addGasto + addIngreso). `tipo:'transferencia'` conservado por retrocompat (detección dual `_isTransfer`).
+  - **Mejora adicional:** `DashweyBus.emit('ingreso')` añadido (solo emitía `gasto` + `cuenta`). Fecha ISO calculada una vez en lugar de dos veces.
+  - **ID único del ingreso:** antes `'i'+Date.now()` podía colisionar con el `'g'+Date.now()` del mismo ms. Ahora `Date.now()+1` garantiza distinción.
+  - **Cobertura:** fix cubre ambos puntos de entrada (`_openMovimientoSheet` y `_openMovimientoFullscreen`) porque ambos delegan en `_confirmarMovimiento`.
+- **Fase 1B completa:** ahora todo el flujo funciona end-to-end. Crear transferencia desde UI → motor la reconoce como pareja → editor cascade importe/fecha al gemelo → delete borra ambos → KPIs la excluyen.
+
+### Cambios sesión v1.3.995
+- **CLEANUP DIRIGIDO por el usuario — whitelist proveedores + lista demo productos:**
+  - **`_PROV_WHITELIST_NAMES`** (5 proveedores reales de captura 18 abr): Amazon Prime, Coca Cola Euro Pacific Partners, Distribuciones Goyo S.A, Gluck & Sweet S.L.U, Fiesta Colombina S.L.U. Cualquier proveedor fuera de la whitelist se elimina (proveedor sin nombre también).
+  - **`_DEMO_PROD_NAMES`** (7 productos demo v1 por nombre): Fanta Naranja 33cl, Kinder Joy 36uds, Patatas Lays 40g, Chaskis Maíz 24uds, Mahou 5* 33cl, Coca Cola 33cl, Cruzcampo 33cl.
+  - **`_DEMO_PROD_IDS_EXTRA`** (6 IDs sueltos sin imagen de usuario): `p1774285172407`, `p1774145290031`, `p1774213436469`, `p1774145509338`, `p1774152973986`, `p1774015123630`.
+  - **Cascade automático:** los IDs eliminados por nombre/lista se inyectan en `_orphanProdIds` — el cascade v1.3.994 (ventas.items, pedidos.items, mermas, lotesStock, hotPins, qgCells) los limpia de todas las colecciones dependientes.
+  - **Tombstones Firebase:** IDs añadidos a `localStorage['dashwey_tombstones']` para prevenir reaparición por sync.
+- **Idempotente + defensivo:** las listas se aplican en cada `load()` y `onSnapshot`. Si el proveedor demo vuelve por sync, se filtra otra vez. Si el usuario crea otro proveedor fuera de whitelist, también se borra — por eso en uso real cuando terminen las pruebas hay que eliminar estas listas o mover a ajustes de usuario.
+
+### Cambios sesión v1.3.994
+- **CLEANUP UNIVERSAL — Productos/Proveedores demo + cascade a datos dependientes:**
+  - **Criterio universal:** producto con `prov` vacío o apuntando a proveedor inexistente = huérfano.
+  - **Paso 1 identificación:** `_orphanProdIds` = productos cuyo `p.prov` no existe en `state.proveedores` (los demos de v1 `ccep/mahou/goyo/facundo` ya se eliminan → sus productos quedan huérfanos automáticamente).
+  - **Paso 2 cascade (modo estricto):**
+    - `productos` — borra el huérfano
+    - `ventas.items[]` — filtra items con `prodId` huérfano; venta sin items → eliminada. Legacy `prodId` raíz también
+    - `historialPedidos.items[]` — idem; pedido sin items → eliminado
+    - `pendingOrders.items[]` — idem
+    - `mermas` — elimina entradas con `prodId` huérfano
+    - `lotesStock` — elimina lotes FIFO con `prodId` huérfano
+    - `hotPins` — filtra pins
+    - `qgCells` — filtra celdas Quick Grid (soporta strings o `{prodId}`)
+  - **Paso 3 tombstones:** IDs huérfanos se añaden a `localStorage['dashwey_tombstones']` para prevenir reaparición vía sync Firebase desde otro dispositivo
+  - **Idempotente:** se ejecuta en `_migrateDemoData` en cada `load()` y cada `onSnapshot`. Si no hay huérfanos, no hace nada. Comportamiento previo (`_DEMO_PROV_IDS`, `_DEMO_PROD_IDS`, filter `ped_demo`, `['v1','v2']`) conservado 100%.
+- **Resultado:** en siguiente arranque, todo lo que no esté respaldado por catálogo real de proveedores desaparece. KPIs "Más vendidos"/"Más comprados" quedan con datos limpios.
+- **Aviso:** ventas/pedidos legacy de productos demo se eliminan como acordado en periodo de pruebas. Log `[Dashwey] v1.3.994 cleanup: N productos huérfanos eliminados` visible en consola.
+
+| Productos demo v1 aparecían en Más Vendidos/Comprados pese a `_migrateDemoData` | `_migrateDemoData` solo borraba proveedores demo e IDs fijos `p1..p10`. Productos creados después con `prov` demo quedaban huérfanos: `State.get.prod(prodId)` los encontraba → `.filter(x => x.prod)` no los excluía | Extensión universal: productos con prov inválido → eliminados + cascade a ventas/pedidos/mermas/lotes/hotPins/qgCells + tombstones anti-resync |
+
+### Cambios sesión v1.3.993
+- **LOTE D — UI CRUD Recordatorios + 4 toggles notifPrefs spec:**
+  - **Sheet `_openRecordatorioSheet(recId|null)`:** modal bottom sheet con campos título + fecha + hora. Modo creación (`recId=null`) o edición (pasa id). Botón "Eliminar" solo en modo edición, con confirm destructivo.
+  - **Interacciones en timeline vertical:**
+    - Tap en item existente → abre sheet en modo edición
+    - Botón "+ Nuevo recordatorio" al final de la lista (y en empty state)
+  - **Auto-render:** tras save/delete, llama `dash.render()` para refrescar timeline y contador tab
+  - **Focus automático:** input título recibe focus 120ms tras abrir (teclado emerge solo)
+  - **4 toggles nuevos en `DEFAULTS.notifPrefs` + UI ajustes:**
+    - `proximoPedido` (día de pedido recurrente por proveedor, LOTE B)
+    - `entregaProxima` (ya existía, mantenido)
+    - `alertaStock` (sin stock, bajo mínimo, caducidad — tab Alertas)
+    - `recordatorio` (recordatorios personales — tab Recordatorios)
+  - Visual: iconos 📅🚚⚠️⏰ con backgrounds distintos, toggles binarios persistidos en `settings.notifPrefs`
+- **DoD LOTE A–D cumplido:**
+  - [x] "Evento" → "Próximo Pedido" en UI (key interna `visitasComerciales` conservada por seguridad)
+  - [x] Orden spec: Próximo Pedido · Entregas · Alertas · Recordatorios
+  - [x] Recurrencia por proveedor funcionando (`diasPedido` + `agente`)
+  - [x] Recordatorios en timeline vertical exclusivo
+  - [x] Toggles independientes funcionando
+  - [x] Sin regresión en entregas/alertas existentes
+  - [x] Layouts aislados: horizontal para Pedido/Entregas, vertical para Recordatorios
+
+### Cambios sesión v1.3.992
+- **LOTE C — Recordatorios (entidad libre + timeline vertical + Firebase sync):**
+  - **Modelo:** `{ id, titulo, fecha(ISO con hora), repite: null|'diario'|'semanal'|'mensual', creado }`
+  - **State:** `DEFAULTS.recordatorios=[]`, getter `recordatorios()`, setters `setRecordatorios`/`addRecordatorio`/`updateRecordatorio`/`deleteRecordatorio` con dedup-by-id
+  - **Migración legacy:** `visitasComerciales` con `notas` → `recordatorios` (id `rec_mig_*`, idempotente). Items sin notas se descartan (ya cubiertos por LOTE B auto)
+  - **CSS timeline vertical** (`.snap-tl-v`, estilo TickTick): grupo por día con línea vertical continua + punto rojo, items `hora+título`, past con tachado
+  - **Render `_snapRenderRecordatoriosPanel`:** agrupa por día con labels "Hoy"/"Mañana"/"Miércoles 14"/"Lunes 20 May" según proximidad, ordena asc por fecha
+  - **Contador tab:** nº recordatorios futuros o de hoy
+  - **Firebase sync:** recordatorios añadido a (1) `_buildLocalSnapshot`, (2) dedup `load()`, (3) tombstones filter onSnapshot, (4) `_mKeys2` merge-by-id, (5) `_sm` mapping en PTR + `_doInitialSync` + onSnapshot
+- **Pendiente LOTE D:** UI de creación/edición recordatorios (sheet CRUD) + 4 toggles notifPrefs (`proximoPedido`, `entregaProxima` existe, `alertas`, `recordatorios`).
+
+### Cambios sesión v1.3.991
+- **LOTE B — Recurrencia auto Próximo Pedido:**
+  - **Helper `_nextOrderDate(diasPedido, fromDate)`** — devuelve Date del próximo día de pedido iterando hasta 14 días. Convención `diasPedido`: array de índices 0..6 (Lu=0 … Do=6). Hora fija 9:00 am.
+  - **Helper `_computeProximosPedidos(rangeStart, rangeEnd, hoy)`** — itera `State.get.proveedores()` con `diasPedido.length > 0`, calcula próxima fecha, filtra por período activo, ordena asc. Shape compatible con `_snapRenderVisitasPanel` (`{provId, fecha, agente, auto:true}`).
+  - **Reemplazo en `_snapRenderTimeline`:** `allVisitas` ahora viene del generador auto, no de `State.get.visitasComerciales()`. Items legacy (notas manuales) quedan huérfanos en State — migrarán a "Recordatorios" en LOTE C.
+  - **Labels timeline:** "Oficina/De camino/Fecha" → "Hoy/Preparar/Fecha". Agente comercial se muestra (si existe), si no, nombre del proveedor.
+  - **Contador tab:** número de proveedores con pedido próximo.
+- **Resultado:** Próximo Pedido ahora refleja la realidad operativa del negocio. Sin entidad nueva, solo cálculo derivado. Usuario ajusta `diasPedido`+`agente` en Proveedores → Dashboard refleja automáticamente.
+
+### Cambios sesión v1.3.990
+- **LOTE A — Agenda rediseño (semántico + reorden):**
+  - Tab "Eventos" → **"Próximo Pedido"** (label UI). Key interna `data-tab="visitas"` y `visitasComerciales` en State se mantienen (cirugía mayor si se renombran, ~20 ocurrencias).
+  - Nueva tab **"Recordatorios"** (`data-tab="recordatorios"`) — placeholder "Sin recordatorios" en UI. Datos + timeline vertical en LOTE C.
+  - **Orden definitivo UI:** Próximo Pedido · Entregas · Alertas · Recordatorios
+  - **Default tab:** `visitas` (antes `alertas`)
+  - Router 1 (labels KPI header): añadidas ramas `visitas` ("Próximo pedido") y `recordatorios` ("Recordatorios")
+  - Router 2 (render): añadida rama `recordatorios` con placeholder
+  - Panel visitas: "Sin eventos" → "Sin próximos pedidos programados"; fallback `'Evento'` → `'Pedido'`
+- **Próximos lotes (pendientes):**
+  - **LOTE B** — Recurrencia Próximo Pedido: cálculo derivado de `proveedor.diasPedido` + `proveedor.agente`. Auto-generar próxima fecha sin entidad nueva.
+  - **LOTE C** — Recordatorios: entidad libre (texto+fecha), State setter/getter, timeline **vertical** exclusivo (estilo TickTick), agrupado por día.
+  - **LOTE D** — notifPrefs 4 toggles: `proximoPedido`, `entregaProxima` (existe), `alertas`, `recordatorios`.
+- **Decisión arquitectónica:** no renombrar `visitasComerciales` internamente para evitar regresión en 20+ puntos (setters, export, sync, notifPrefs, WhatsNew). Semántica nueva sobre key vieja.
+
+### Cambios sesión v1.3.989
+- **ROLLBACK — Regresión v1.3.988: máquina 2-fases cerraba teclado+spotlight al instante tras pulsar FAB.**
+  - **Causa de la regresión:** la fase A pretendía absorber flickering descartando resizes con `kbH<100`. Pero la transición A→B se dispara al primer `kbH>100`. En Android WebView, la animación del IME produce un valor que supera 100 **temporalmente** durante la subida, seguido de un pico descendente (kbH flickea arriba→abajo durante la animación). La fase cambiaba a B antes de que el teclado estuviera estable, y un `kbH<50` posterior durante el overshoot cerraba todo.
+  - **Fix:** revertido a contrato lazy v1.3.987 — watcher se arma SOLO en primer `input` event real (`_spotlightSearch`). En ese momento el teclado está 100% estable. Restaurado armado en `_spotlightSearch`, eliminada máquina 2-fases.
+  - **Tradeoff reconocido (aceptado):** si usuario pulsa back Android para cerrar teclado sin escribir, spotlight queda visible hasta cierre manual (dim/Cancelar/Escape). Es preferible a cerrar equivocadamente durante apertura — bug más grave que impedía usar el buscador.
+
+| Máquina 2-fases v1.3.988 cerraba al instante tras FAB | Fase A→B transicionaba en overshoot del IME (kbH flickea arriba del umbral temporalmente durante animación) | Rollback a contrato lazy v1.3.987: watcher armado solo en primer input real del usuario |
+
+### Cambios sesión v1.3.988
+- **BUG FIX — Spotlight queda huérfano si usuario cierra teclado sin escribir (tradeoff de v1.3.985):**
+  - **Causa:** contrato lazy de v1.3.985 armaba el watcher solo en primer `input`. Si usuario abría spotlight → pulsaba back de Android (cierra teclado sin tecla) → overlay quedaba visible sin vía de cierre automático.
+  - **Fix arquitectónico — máquina de estados 2-fases:** watcher único armado en `_spotlightOpen` (vuelve a estar acoplado a la apertura, pero ahora **inmune al flickering**). Dos fases:
+    - **Fase A "waiting-up":** descarta todos los resizes hasta detectar `kbH > 100` (teclado realmente arriba). Absorbe el flickering del ciclo de apertura (display change + focus + animación IME).
+    - **Fase B "watching-down":** transición A→B cuando se confirma `kbH>100`. SOLO entonces se habilita la detección de cierre `kbH<50 → _spotlightClose`.
+  - **Un solo handler, dos estados**, armado sincrónico con la apertura. Revertido armado lazy de `_spotlightSearch`.
+  - **Resultado:** cierre automático funciona tanto si el usuario escribe como si cierra el teclado directamente. Sin parches de timing, sin acoplamiento circular.
+
+| Spotlight huérfano tras cerrar teclado sin escribir | Watcher lazy v1.3.985 no se armaba sin input → overlay sin cierre automático | Máquina 2-fases: arma en open, fase A absorbe flicker hasta kbH>100, fase B vigila kbH<50 → close |
+
+### Cambios sesión v1.3.987
+- **BUG FIX — Solape estructural labels Y/X en origen de gráficos snap (re-audit, fix definitivo):**
+  - **Contexto:** v1.3.986 suprimió "0€" pero usuario reportó que persiste solape estructural entre gridlines horizontales y labels X en el origen (0,0).
+  - **Causa raíz arquitectónica:** `padL=0, padR=0` hacía que las gridlines arrancaran en `x=0` invadiendo la columna de labels Y. Labels Y pegados a `x=2` con `text-anchor="start"` vivían en el mismo espacio que la gridline y solapaban con el primer bucket X (centrado en `slot/2 ≈ 7px`).
+  - **Fix arquitectónico:** `padL=28, padR=8, padB=24` — crea gutter real izquierda para labels Y y margen derecho simétrico. Gridlines restringidas a `[padL, W-padR]`. Labels Y con `text-anchor="end"` a `x=padL-4`, centradas verticalmente con su gridline (`y=gy+3`). Barras y labels X arrancan desde `padL` — área del gráfico aislada del área de labels.
+  - **Resultado:** ejes físicamente separados. Origen (0,0) del área del gráfico está en `(padL, padT+chartH)`, NO en `(0, H)`. Imposible solape estructural.
+
+| Labels Y/X solapan en origen (re-audit) | `padL=0` hacía gridlines invadir columna de labels Y. v1.3.986 solo ocultó "0€" — no arregló el coupling estructural | padL=28, padR=8, padB=24 + gridlines acotadas [padL, W-padR] + labels Y text-anchor=end en columna propia. Ejes físicamente separados |
+
+### Cambios sesión v1.3.986
+- **BUG FIX — Labels Y y X solapados en esquina inferior izquierda de gráficos snap (rendimiento + compras):**
+  - **Causa:** `_snapRenderChart` L20967 dibujaba label Y "0€" en `x=2, y=gy-3`. El label X del primer bucket (`0h`, `1`, `Lu`, `Ene`) se pinta centrado sobre la barra i=0 en `x ≈ slot/2`, también cerca del borde izquierdo. Al compartir la base del gráfico ambos textos se solapan visualmente.
+  - **Fix:** suprimir el label Y "0€" (redundante — el eje X implica 0). Gridline sí se mantiene. Los demás labels Y (25%, 50%, 75%, 100%) siguen dibujándose.
+
+| Labels Y/X solapados en origen de gráficos snap | "0€" de eje Y y "0h"/"1"/"Lu"/"Ene" del primer bucket X pintados en coordenadas casi coincidentes | Suprimir label Y en pct=0. El eje X visualiza el 0 implícitamente |
+
+### Cambios sesión v1.3.985
+- **BUG FIX — Spotlight pierde foco (causa raíz arquitectónica, definitivo):**
+  - **Causa raíz real:** acoplamiento circular entre `_startVVWatch` y el propio ciclo de apertura. El watcher se instalaba en `_spotlightOpen` ANTES de `inp.focus()`, observando los reflows del display change + focus + animación IME. Valores `kbH` flickeando durante la animación del teclado causaban false positives en la condición `kbH<50 → close`.
+  - **Fixes de timing acumulados (v1.3.983 `_kbSeenOpen`, v1.3.984 `pointer-events`, `rAF+setTimeout` focus, anti-blur guard) REVERTIDOS** — eran parches de síntomas, no arreglaban el acoplamiento.
+  - **Fix arquitectónico (contrato lazy):** `_startVVWatch` ya NO se llama en `_spotlightOpen`. Se llama on-demand en el PRIMER `input` event del usuario (dentro de `_spotlightSearch`). En ese momento el teclado está estable — cualquier `resize` con `kbH<50` posterior es un cierre legítimo.
+  - **Resultado:** apertura limpia, focus síncrono, sin guards defensivos, sin timers de mitigación. Deuda técnica eliminada.
+
+| Spotlight pierde foco tras v1.3.983-984 | Acoplamiento circular: watcher vigila reflows de su propia apertura. Parches de timing no resuelven el contrato | Watcher lazy: instalar SOLO en primer `input` real del usuario. Focus síncrono sin hacks |
+
+### Cambios sesión v1.3.984
+- **BUG FIX — Spotlight pierde foco al abrir (persistente tras v1.3.983):**
+  - **Causa real (multicapa):** 
+    1. Click sintético del FAB cae sobre `#alm-spotlight-dim` recién visible → `onclick="_spotlightClose()"`
+    2. `inp.focus()` dentro del `touchend` puede ser descartado por Android WebView (focus durante evento touch activo)
+    3. Recomposición al abrir teclado puede disparar `blur` transitorio
+  - **Fix en `_spotlightOpen` (L37093):**
+    1. `dim.pointerEvents='none'` durante 400ms — absorbe clicks sintéticos
+    2. Focus diferido a `requestAnimationFrame + setTimeout(0)` — corre en frame siguiente al touch
+    3. Anti-blur defensivo: si input pierde foco en primeros 500ms, refocus UNA vez; pasado ese tiempo blur real se respeta
+
+| Spotlight perdía foco al abrir con FAB | 3 causas combinadas: click sintético en dim, focus descartado por WebView, blur transitorio por recomposición | pointer-events:none en dim 400ms + focus diferido via rAF+setTimeout + refocus guard 500ms (one-shot) |
+
+### Cambios sesión v1.3.983
+- **BUG FIX — Scroll bloqueado en sheet edición tras long-press:**
+  - **Causa:** long-press producto abría menú ctx flotante que "robaba" el `touchend` del track de swipe tabs. `_drag` quedaba colgado en `true`. Listener non-passive L13763 hacía `preventDefault()` indefinido en `touchmove`, bloqueando scroll del sheet posterior.
+  - **Fix (L13763):** guard `!_isAnySheetOpen()` añadido — el `preventDefault` solo actúa si no hay sheet abierto. Defensivo sin tocar estado global del IIFE nav.
+- **BUG FIX — FAB `+` catálogo abría/cerraba teclado al instante:**
+  - **Causa:** `_startVVWatch` (L37040) monitoreaba `visualViewport.resize` con condición `kbH<50 → _spotlightClose()`. En Android WebView el primer `resize` dispara ANTES de que el teclado suba → `kbH=0` → close inmediato → blur mata el teclado recién abierto.
+  - **Fix (L37040):** estado `_kbSeenOpen` — watcher ignora eventos hasta confirmar `kbH>100` (teclado realmente abierto). Solo entonces vigila el cierre.
+
+| Scroll bloqueado en sheet tras long-press producto | Menú ctx robaba el touchend del swipe track → `_drag` colgado en true → listener non-passive prevenía scroll en sheet abierto | Guard `!_isAnySheetOpen()` en touchmove non-passive del track |
+| FAB catálogo abría/cerraba teclado al instante | `visualViewport.resize` dispara con kbH=0 antes de subir teclado → close inmediato → blur | Estado `_kbSeenOpen` en VVWatch — esperar kbH>100 antes de vigilar cierre |
+
+### Cambios sesión v1.3.982
+- **FASE 1B — Transferencias como doble movimiento (ingestion-first):**
+  - **Lote 1 — Mapeo legacy:** `tipo:'transferencia'` → `metaTipo:'transfer'` aplicado en `load()` (L9673) y `onSnapshot` (L33593). One-shot al hidratar + datos entrantes. Sin migración masiva Firebase.
+  - **Lote 2 — Helper dual + 13 exclusiones:** `FinEngine._isTransfer(x)` = `metaTipo==='transfer' || tipo==='transferencia'` (expuesto en `window._isTransfer`). Exclusión aplicada en: `gastoMensualEq`, `revenue`, `gastoBruto`, `comprometido`, `renderGastos` top4+IA, `renderFlujoCaja` lista, `_openFlujoCajaModal`, `_openGastosModal` byCat+listado, `_buildInsights`, `_buildInsightPhrases`, `_snapRenderFCDist` donut+movs. Icono `⇄` en extracto cuenta actualizado a detección dual — transfer SÍ se muestra con su icono.
+  - **Lote 3 — Cascade editor:** `_openEditMovimientoSheet` detecta `registro.transferId`:
+    - **Save**: sincroniza `importe` + `fecha` al gemelo (concepto libre)
+    - **Delete**: borra ambos lados (confirmación dedicada)
+    - **Fallback**: `console.warn('[Dashwey] transferId huérfano')` si gemelo no existe — no bloquea UI
+- **Regla de oro cumplida:** Fase 1B NO añade features visibles. Solo protege integridad — transferencias no duplican KPIs ni rompen dashboards.
+- **Decisión legacy:** mapeo unidireccional a `metaTipo`. Detección dual como cinturón+tirantes durante transición. Eliminar soporte `tipo:'transferencia'` en versión futura cuando todo esté estabilizado.
+- **Pendiente Fase 2:** UI de creación de transferencias (`metaTipo:'transfer'` + `transferId` al submit) — panel "TRANSFERENCIA" ya existe en `_openMovimientoFullscreen` (L16419) pero aún no cablea doble movimiento. Se abordará en fase aparte.
+
+### Cambios sesión v1.3.981
+- **FASE 1A — Extensión semántica (ingestion-first):**
+  - `addCuenta` → defaults `tipo: 'cash'`, `scope: 'negocio'`
+  - `addGasto` → defaults `scope`, `metaTipo: 'normal'`, `estado: 'confirmado'`, `origen: 'manual'`
+  - `addIngreso` → mismos defaults semánticos
+- **Estrategia:** defaults aplicados SOLO en setters de inserción — NO en getters (evita mutación parásita que dispararía `save()` en render)
+- **Datos existentes:** intactos. Campos nuevos se leerán en Fase 1B con fallback `x.scope || 'negocio'` donde se necesite
+- **Impacto funcional:** 0 — KPIs, dashboards, TPV, sync sin cambios (regla de oro Fase 1A respetada)
+- **Preparación para:** Fase 1B (transferencias con `metaTipo: 'transfer'` + `transferId`), Fase 2 (Loyverse import con `origen: 'loyverse'`), Fase 5 (scope `personal`)
+
+### Cambios sesión v1.3.980
+- **LOTE D — FIFO completo:**
+  - `State.get.lotesStock` + `setLotesStock` + `addLoteStock` (con dedup por id)
+  - `FinEngine.crearLotesDesdeItems(items, fecha)` — crea lotes con `costeUnit = precio/udscaja`
+  - `FinEngine.consumirLotesFIFO(prodId, qty)` — consume FIFO ordenado por fecha, devuelve `{costeConsumido, qtyConsumida}`, compacta lotes agotados
+  - Hook en `addPedido`: alimenta lotes desde `p.items` al confirmar
+  - Hook en `addVenta`: consume lotes y escribe `v.costeReal` con coste histórico real
+- **LOTE E — Integridad contable:**
+  - Merma al registrarse genera `gastoOp` con categoria `Mermas` y descuenta cuenta primaria (`coste = qty × precioCompra/udscaja`)
+  - `cuentaId` opción B: fallback a cuenta primaria si vacío → nunca gasto/ingreso huérfano
+- **Bump:** CURRENT_CACHE sincronizado (estaba en v1.3.953, ahora v1.3.980)
+
+### Cambios sesión v1.3.979
+- **LOTE A — Integridad de datos:**
+  - `lotesStock: []` añadido a `DEFAULTS` (fix: persistía como undefined)
+  - Dedup-by-id en `addGasto` / `addIngreso` / `addMerma` (patrón `addVenta`/`addPedido`)
+  - Dedup one-shot en `load()` sobre ventas, historialPedidos, mermas, facturas, cierresCaja, gastosOp, ingresosFin
+- **LOTE B — Tombstones robustos:**
+  - `_DashweyLocalDeletedIds` persistente en `localStorage['dashwey_tombstones']` con TTL 90 días (API Set-compatible)
+  - Filtro de tombstones extendido a TODOS los arrays con id en onSnapshot (antes solo `productos`)
+  - `facturas` añadido a `_mKeys2` del merge
+- **LOTE C — Firestore rules hardening:**
+  - `isValidSize()` rechaza escritura > 1024000 bytes
+  - `isValidState()` exige ≥1 clave reconocida + `user` como map
+  - Split `create/update/delete` — delete sin validación de tamaño
+- **UI:**
+  - Dot rojo fantasma Agenda — ✅ RESUELTO
+
+### Cambios sesión v1.3.860–v1.3.862
+- **v1.3.860** — Últimos Movimientos (Flujo de Caja): fecha `dd mmm` a la izquierda de cada fila. Nueva clase CSS `.snap-fc-mov-date`.
+- **v1.3.861** — `render()` llama `_snapDoRenderAll()` con guard `body[data-tab="1"]`. Todas las snap cards se actualizan en tiempo real tras pedido, gasto, ingreso, venta, transferencia.
+- **v1.3.862** — Gráfico Inversión en Mercancía corregido: usaba `ventasEnPeriodo`, ahora usa `historialPedidos` + `pedidoCoste()`. Cubre todos los tipos de período.
+- **v1.3.863** — FIX CRÍTICO: botón "Pedido recibido" (flujo LDC `_ldcAbrirDetallePedido`) no llamaba `addPedido()` — el pedido se eliminaba de `pendingOrders` sin pasar a `historialPedidos`. Fix: guardar en historial + emitir `pedido_stock` antes de `removePendingOrder`.
 
 ---
 
@@ -323,15 +500,22 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 | Botón "Resetear datos" no funciona en WebView | `confirmReset` usaba `setFs` + `onclick` inline — bloqueado silenciosamente en Android WebView | Reemplazado por `_showDestructiveConfirm` con `onConfirm: doReset` |
 | Botón "+ Movimiento" desaparece sin movimientos | `renderFlujoCaja` hacía `return` prematuro al no haber movimientos — el bloque de creación del botón nunca se ejecutaba | Eliminar `return` — mensaje "Sin movimientos" se muestra y el botón se crea siempre |
 | Cuentas/gastos borrados vuelven | `cuentas`, `gastosOp`, `ingresosFin` en `_MERGE_KEYS` — `_mergeById` los restauraba | Solo arrays acumulativos en `_MERGE_KEYS` |
-| Barras gráfica Compras/Rendimiento invisibles | `@keyframes snapBarGrow { scaleY(0→1) }` congela en WebView en estado inicial | NUNCA `@keyframes` con `transform:scale` en SVG — WebView las congela en frame inicial |
 | Guards sin finally | `_running=true` sin `finally` bloqueaba formularios permanentemente | TODO guard DEBE liberarse en `finally` |
 | Renders crasheaban con item corrupto | forEach sin try/catch interno — un item malo borraba toda la lista | try/catch interno en cada item de render |
 | `confirm()` nativo | Bloqueado en WebView | `window._showDestructiveConfirm()` |
 | SAC dropdown fuera de lugar | `position:absolute` dentro de SideSheet | `position:fixed` + `getBoundingClientRect()` |
 | onclick inline falla | `\'id\'` backslash-escaped en WebView | Usar `data-*` attrs + `addEventListener` |
-| `setPrimaryCuenta` no existe | Llamada en try/catch silenciaba TypeError — cuenta nunca se marcaba principal | Definir SIEMPRE la función antes de exponerla en return{} |
-| Hash guard bloquea render tras mutación | `_catInlineHash` no incluía `pendingOrders` → rebuild no disparado al borrar pedido | Incluir `po:ids` en hash + `_invalidateCatHash()` antes de `renderCatInline()` |
-| `openFs()` silencioso si FS ya abierto | Guard `if (overlay.classList.contains('open')) return` — detalle pedido no abría desde historial abierto | Solo llamar `setFs(html)` dentro de FS activo — sin `openFs()` |
+| `lotesStock` no persistía | Faltaba en `DEFAULTS` aunque se leía en snapshot archive | Añadir a DEFAULTS en cada nueva clave de State |
+| Tombstones perdidos tras reload | `_DashweyLocalDeletedIds` era Set en memoria | Persistir en localStorage con TTL |
+| Gastos/ingresos/mermas duplicados | Sin dedup-by-id en setters mutables | Aplicar patrón `addVenta` a todos los setters con id |
+| Facturas borradas reaparecían | No estaban en `_mKeys2` del merge onSnapshot | Incluir todo array acumulativo con id |
+| Rules sin límite de tamaño | Cliente comprometido podía saturar `/state/{uid}` | `request.resource.size() < 1024000` |
+| FIFO vaporware: lotes declarados pero nadie los alimentaba | Comentarios sin implementación; valor stock histórico = precio actual | `crearLotesDesdeItems` en `addPedido` + `consumirLotesFIFO` en `addVenta` |
+| Merma invisible en contabilidad | `addMerma` calculaba coste pero no impactaba cuentas | Merma crea `gastoOp` categoria `Mermas` + descuento de cuenta primaria |
+| Gasto/ingreso sin cuenta huérfano | `cuentaId = \'\'` + `if (cuentaId)` → saldo no se movía | Fallback opción B: cuenta primaria si usuario no elige |
+| CURRENT_CACHE desincronizado con CACHE_NAME | Bump histórico olvidaba `CURRENT_CACHE` en index.html (L153) | Añadir a lista de bump — 5 puntos, no 4 |
+| Transferencias duplicaban KPIs | `revenue`/`gastoBruto`/snap cards sumaban ambos lados del doble movimiento | `FinEngine._isTransfer` dual (metaTipo + tipo legacy) + exclusión en 13 agregaciones. Extracto cuenta NO excluye (muestra con icono ⇄) |
+| Editar 1 lado de transfer dejaba desbalance | `_openEditMovimientoSheet` editaba/borraba solo el registro activo | Cascade por `transferId`: save sincroniza importe+fecha al gemelo; delete borra ambos. Concepto libre. Fallback warn si huérfano |
 
 ---
 

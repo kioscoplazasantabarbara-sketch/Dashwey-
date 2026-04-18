@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-998-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-999-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.998-dev</title>
+<title>Dashwey v1.3.999-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8667,6 +8667,16 @@ function _authTabSafe(tab) {
  </div>
  </div>
 
+ <!-- ── INTEGRACIONES (v1.3.999 L3) ── -->
+ <div class="sd-section-lbl">Integraciones</div>
+ <div class="sd-group">
+ <div class="sd-row" onclick="App.ui._openLoyverseMapping()">
+ <div class="sd-icon" style="background:#DBEAFE">🧾</div>
+ <div class="sd-info"><div class="sd-title">Loyverse POS</div><div class="sd-sub">Mapea métodos de pago a cuentas</div></div>
+ <div class="sd-chev">›</div>
+ </div>
+ </div>
+
  <!-- ── CUENTA ── -->
  <div class="sd-section-lbl">Cuenta</div>
  <div class="sd-group">
@@ -9520,6 +9530,10 @@ const State = (() => {
  entregaDias: 2, // avisar N días antes de entrega
  visitaDias: 2, // avisar N días antes de visita
  caducidadDias: 14, // avisar si caduca en N días
+ },
+ // v1.3.999 LOTE L3 — Integración Loyverse: mapeo método-pago → cuenta
+ loyverse: {
+ paymentMap: { CASH: '', CARD: '', OTHER: '' } // vacío = usar cuenta primaria
  },
  },
  perfil: {
@@ -11517,7 +11531,14 @@ const Loyverse = (() => {
   if (!canonical || !canonical.id || !Array.isArray(canonical.payments)) {
    return { created: 0, skipped: 0, error: 'invalid_receipt' };
   }
-  const map = paymentMap || {};
+  // v1.3.999 L3: si no se pasa paymentMap, usar el configurado en settings
+  let map = paymentMap;
+  if (!map) {
+   try {
+    const _s = State.get.settings ? State.get.settings() : {};
+    map = (_s && _s.loyverse && _s.loyverse.paymentMap) ? _s.loyverse.paymentMap : {};
+   } catch(_) { map = {}; }
+  }
   // Cuenta fallback: primera cuenta de negocio, o primera cualquiera
   const cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
   const _fallbackCuenta = (cuentas.find((c) => c.scope === 'negocio') || cuentas[0] || {}).id || null;
@@ -11536,7 +11557,9 @@ const Loyverse = (() => {
   canonical.payments.forEach((p, idx) => {
    const srcRef = canonical.id + '_' + idx;
    if (_existingIngSrc.has(srcRef) || _existingGasSrc.has(srcRef)) { skipped++; return; }
-   const cuentaId = map[p.type] || _fallbackCuenta;
+   // v1.3.999 L3: si la cuenta mapeada no existe (borrada), caer a fallback
+   let cuentaId = map[p.type] || _fallbackCuenta;
+   if (cuentaId && !cuentas.find((c) => c.id === cuentaId)) cuentaId = _fallbackCuenta;
    const isRefund = p.importe < 0;
    if (isRefund) {
     State.set.addGasto({
@@ -11583,9 +11606,9 @@ const Loyverse = (() => {
   const count = Math.max(1, Math.min(50, parseInt(n) || 5));
   const cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
   if (!cuentas.length) return { created: 0, skipped: 0, error: 'no_cuentas' };
-  // paymentMap default: primera cuenta negocio para CASH/CARD/OTHER
-  const primaryId = (cuentas.find((c) => c.scope === 'negocio') || cuentas[0]).id;
-  const paymentMap = { CASH: primaryId, CARD: primaryId, OTHER: primaryId };
+  // v1.3.999 L3: pasar null → mapSaleToIngresos leerá settings.loyverse.paymentMap
+  // (si está configurado) o caerá a cuenta primaria (comportamiento anterior).
+  const paymentMap = null;
 
   let totalCreated = 0, totalSkipped = 0;
   const now = Date.now();
@@ -12320,7 +12343,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.998-dev';
+ const _APP_VERSION = 'v1.3.999-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14185,7 +14208,65 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean };
+ // ── v1.3.999 L3 — UI mapping Loyverse → cuentas ─────────────────
+ // Sheet bottom con 3 dropdowns (CASH/CARD/OTHER). "(Auto)" = cuenta primaria.
+ function _openLoyverseMapping() {
+  try {
+   var cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+   if (cuentas.length === 0) { showToast('⚠️ Crea una cuenta primero'); return; }
+   var settings = State.get.settings ? State.get.settings() : {};
+   var currentMap = (settings.loyverse && settings.loyverse.paymentMap) || {};
+
+   var optsFor = function(selected) {
+    var html = '<option value="">(Auto — cuenta primaria)</option>';
+    cuentas.forEach(function(c) {
+     var sel = selected === c.id ? ' selected' : '';
+     html += '<option value="' + c.id + '"' + sel + '>' + esc(c.nombre || 'Cuenta') + '</option>';
+    });
+    return html;
+   };
+
+   var modal = document.createElement('div');
+   modal.style.cssText = 'position:fixed;inset:0;z-index:10103;background:rgba(0,0,0,0.32);display:flex;align-items:flex-end';
+   modal.innerHTML = '<div style="width:100%;background:var(--surface);border-radius:28px 28px 0 0;'
+    + 'padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));font-family:var(--font)">'
+    + '<div style="width:32px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 16px"></div>'
+    + '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:4px">🧾 Loyverse POS</div>'
+    + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);margin-bottom:18px">Cuando importes ventas de Loyverse, cada método de pago irá a la cuenta que asignes.</div>'
+    + '<div style="display:flex;flex-direction:column;gap:14px">'
+    + '<div><label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:5px">💶 Efectivo (CASH)</label>'
+    + '<select class="fi" id="lv-map-cash">' + optsFor(currentMap.CASH || '') + '</select></div>'
+    + '<div><label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:5px">💳 Tarjeta (CARD)</label>'
+    + '<select class="fi" id="lv-map-card">' + optsFor(currentMap.CARD || '') + '</select></div>'
+    + '<div><label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:5px">🔀 Otros (OTHER)</label>'
+    + '<select class="fi" id="lv-map-other">' + optsFor(currentMap.OTHER || '') + '</select></div>'
+    + '<button id="lv-map-save" style="height:50px;border-radius:13px;background:var(--red);color:#fff;border:none;font-size:var(--fs-lg);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;margin-top:6px">Guardar</button>'
+    + '</div>'
+    + '</div>';
+
+   modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
+
+   modal.querySelector('#lv-map-save').addEventListener('click', function(){
+    var newMap = {
+     CASH: modal.querySelector('#lv-map-cash').value || '',
+     CARD: modal.querySelector('#lv-map-card').value || '',
+     OTHER: modal.querySelector('#lv-map-other').value || ''
+    };
+    var s = State.get.settings ? Object.assign({}, State.get.settings()) : {};
+    s.loyverse = Object.assign({}, s.loyverse || {}, { paymentMap: newMap });
+    State.set.settings(s);
+    modal.remove();
+    showToast('✅ Mapeo guardado');
+   });
+
+   document.body.appendChild(modal);
+  } catch(e) {
+   console.error('[Dashwey] _openLoyverseMapping:', e);
+   showToast('⚠️ Fallo: ' + (e.message||e));
+  }
+ }
+
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping };
 })();
 
 // ══════════════════════════════════════════
