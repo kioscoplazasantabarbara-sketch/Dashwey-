@@ -150,7 +150,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-999-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1000-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -169,7 +169,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.999-dev</title>
+<title>Dashwey v1.3.1000-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10941,6 +10941,23 @@ const FinEngine = (() => {
  // Expuesta globalmente para uso fuera de FinEngine (dashboard, snap cards)
  if (typeof window !== 'undefined') window._isTransfer = _isTransfer;
 
+ // v1.3.1000 Fase 3: detector de movements en estado pendiente.
+ // Un pendiente aún no impacta saldo real ni agregados financieros.
+ // Al confirmar, se promueve a 'confirmado' + se actualiza saldo de cuenta.
+ function _isPendiente(x) {
+  return !!(x && x.estado === 'pendiente');
+ }
+ if (typeof window !== 'undefined') window._isPendiente = _isPendiente;
+
+ // v1.3.1000: helper combinado — un movement es "agregable" (cuenta en KPIs)
+ // SI no es transfer Y no está pendiente. Simplifica filtros en toda la app.
+ // NO excluye el movement del extracto de cuenta ni de listas de auditoría —
+ // solo de agregaciones financieras (revenue, gasto neto, runway, insights, etc.)
+ function _isAggregable(x) {
+  return !_isTransfer(x) && !_isPendiente(x);
+ }
+ if (typeof window !== 'undefined') window._isAggregable = _isAggregable;
+
  // ── Utilidad: calcular ingresos de una venta (cualquier schema) ─
  // Venta puede ser { total } o { items: [{qty, pvp}] } o { qty, pvp }
  function ventaIngresos(v) {
@@ -10989,7 +11006,7 @@ const FinEngine = (() => {
  // ── Utilidad: gastoMensual equivalente (respeta periodicidad) ────
  function gastoMensualEq(gastos) {
  return (gastos || []).reduce((s, g) => {
- if (_isTransfer(g)) return s; // v1.3.982: excluir transferencias (legacy + metaTipo)
+ if (!_isAggregable(g)) return s; // v1.3.1000: excluir transfer + pendiente
  const eq = g.mensualEq !== undefined ? g.mensualEq : (g.importe || 0);
  return s + eq;
  }, 0);
@@ -11030,6 +11047,7 @@ const FinEngine = (() => {
  .filter(i => {
   if (i.tipo === 'reembolso_proveedor') return false;
   if (_isTransfer(i) || i.tipo === 'ajuste') return false; // v1.3.982: detección dual
+  if (_isPendiente(i)) return false; // v1.3.1000: excluir pendientes de KPIs
   const d = new Date(i.fecha); return d >= range.start && d < range.end;
  })
  .reduce((s, i) => s + (i.importe || 0), 0);
@@ -11117,7 +11135,7 @@ const FinEngine = (() => {
 
  // gastoBruto(): suma de importes reales (no equivalentes) — para cash flow
  function gastoBruto() {
- return money((State.get.gastosOp() || []).filter(g => !_isTransfer(g)).reduce((s, g) => s + (g.importe || 0), 0));
+ return money((State.get.gastosOp() || []).filter(g => _isAggregable(g)).reduce((s, g) => s + (g.importe || 0), 0));
  }
 
  // ── 5. BENEFICIO ─────────────────────────────────────────────────
@@ -11319,7 +11337,7 @@ const FinEngine = (() => {
  function comprometido() {
  return money(
  (State.get.gastosOp() || [])
- .filter(g => g.recurrente && !_isTransfer(g)) // v1.3.982: excluir transfer defensivo
+ .filter(g => g.recurrente && _isAggregable(g)) // v1.3.1000: excluir transfer + pendiente
  .reduce((s, g) => s + (g.importe || 0), 0)
  );
  }
@@ -12343,7 +12361,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.999-dev';
+ const _APP_VERSION = 'v1.3.1000-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15638,7 +15656,7 @@ function _toggleCardFromManager(id, btn) {
  const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
  const listEl = el('fin-gastos-list');
  if (listEl) {
- const sorted = [...gastos].filter(g => !window._isTransfer?.(g)).sort((a,b)=>(b.importe||0)-(a.importe||0)).slice(0,4);
+ const sorted = [...gastos].filter(g => (window._isAggregable ? window._isAggregable(g) : !window._isTransfer?.(g))).sort((a,b)=>(b.importe||0)-(a.importe||0)).slice(0,4);
  listEl.innerHTML = sorted.map(g => `
  <div class="fin-expense-row">
  <div class="fin-expense-icon" style="background:var(--bg)">${ICONS[g.categoria]||'📦'}</div>
@@ -15660,7 +15678,7 @@ function _toggleCardFromManager(id, btn) {
  const sugs = [];
  if (fijos/total > 0.8) sugs.push('⚠️ El '+Math.round(fijos/total*100)+'% son gastos fijos. Alta exposición al riesgo.');
  if (saldo > 0 && total > saldo*0.5) sugs.push('💡 Los gastos mensuales son el '+Math.round(total/saldo*100)+'% del saldo disponible.');
- const mayor = gastos.length ? gastos.filter(g => !window._isTransfer?.(g)).reduce((a,b)=>(a?.importe||0)>(b?.importe||0)?a:b, null) : null;
+ const mayor = gastos.length ? gastos.filter(g => (window._isAggregable ? window._isAggregable(g) : !window._isTransfer?.(g))).reduce((a,b)=>(a?.importe||0)>(b?.importe||0)?a:b, null) : null;
  if (mayor) sugs.push('📊 Mayor gasto: "'+mayor.nombre+'" ('+_feur(mayor.importe)+'/mes). Revisa si es optimizable.');
  if (sugs.length) { iaText.textContent = sugs[0]; iaBox.style.display = ''; }
  else iaBox.style.display = 'none';
@@ -16558,10 +16576,12 @@ function _toggleCardFromManager(id, btn) {
  const moves = [];
 
  // Ingresos manuales → income (editables) — v1.3.982 excluir transfers
+ // v1.3.1000 Fase 3: incluir pendientes (excluir solo transfers) con flag para badge
  ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({
   type: 'income', nombre: i.concepto || 'Ingreso manual',
   importe: +(i.importe || 0), fecha: i.fecha || '',
   id: i.id || '', src: 'ingreso',
+  pendiente: !!window._isPendiente?.(i),
  }));
 
  // Gastos operativos → expense (editables) — v1.3.982 excluir transfers
@@ -16569,6 +16589,7 @@ function _toggleCardFromManager(id, btn) {
   type: 'expense', nombre: g.nombre || 'Gasto',
   importe: +(g.importe || 0), fecha: g.fecha || '',
   id: g.id || '', src: 'gasto',
+  pendiente: !!window._isPendiente?.(g),
  }));
 
  // v1.3.623: Compras Almacén → expense
@@ -16619,10 +16640,13 @@ function _toggleCardFromManager(id, btn) {
   const sign = m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '';
   const editable = !!(m.id && m.src);
   const editAttrs = editable ? ` data-mov-id="${m.id}" data-mov-src="${m.src}"` : '';
-  return `<div class="fc-move-row${editable?' fc-move-editable':''}"${editAttrs}>
+  // v1.3.1000 Fase 3: badge visual para movements pendientes
+  const _pendBadge = m.pendiente ? '<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;background:rgba(245,158,11,0.15);color:#B45309;font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.3px;vertical-align:1px">⏳ PENDIENTE</span>' : '';
+  const _rowOpacity = m.pendiente ? 'opacity:0.72;' : '';
+  return `<div class="fc-move-row${editable?' fc-move-editable':''}"${editAttrs} style="${_rowOpacity}">
   <div class="fc-move-icon ${m.type}">${ICONS[m.type] || '·'}</div>
   <div class="fc-move-info">
-  <div class="fc-move-name">${esc(m.nombre)}</div>
+  <div class="fc-move-name">${esc(m.nombre)}${_pendBadge}</div>
   <div class="fc-move-date">${fmtD(m.fecha)}</div>
   </div>
   <div class="fc-move-amount ${m.type}">${sign}${_feur(m.importe)}</div>
@@ -17842,10 +17866,10 @@ function _openEditMovimientoSheet(id, src) {
  const runway = FinEngine.runway();
  const gastoM = FinEngine.gastoMensualTotal();
 
- // Todos los movimientos mezclados, fecha desc — v1.3.982 excluir transfers
+ // Todos los movimientos mezclados, fecha desc — v1.3.1000 Fase 3: incluir pendientes con flag
  const moves = [];
- ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'' }));
- gastos.filter(g => !window._isTransfer?.(g)).forEach(g => moves.push({ type:'expense', nombre: g.nombre||'Gasto', importe: +(g.importe||0), fecha: g.fecha||'' }));
+ ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'', pendiente: !!window._isPendiente?.(i) }));
+ gastos.filter(g => !window._isTransfer?.(g)).forEach(g => moves.push({ type:'expense', nombre: g.nombre||'Gasto', importe: +(g.importe||0), fecha: g.fecha||'', pendiente: !!window._isPendiente?.(g) }));
  moves.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
  const fmtD = iso => { try { const d=new Date(iso); const p=n=>String(n).padStart(2,'0'); return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear(); } catch(_){ return iso||'—'; } };
@@ -17867,16 +17891,18 @@ function _openEditMovimientoSheet(id, src) {
  </div>`;
  }).join('') || '<div style="font-size:var(--fs-md);color:var(--ink-soft);padding:8px 0">Sin cuentas registradas</div>';
 
- const movesHtml = moves.slice(0,20).map(m =>
- `<div class="fc-move-row">
+ const movesHtml = moves.slice(0,20).map(m => {
+ const _pendBadge = m.pendiente ? '<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;background:rgba(245,158,11,0.15);color:#B45309;font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.3px;vertical-align:1px">⏳ PENDIENTE</span>' : '';
+ const _rowStyle = m.pendiente ? 'opacity:0.72' : '';
+ return `<div class="fc-move-row" style="${_rowStyle}">
  <div class="fc-move-icon ${m.type}">${ICONS[m.type]||'·'}</div>
  <div class="fc-move-info">
- <div class="fc-move-name">${esc(m.nombre)}</div>
+ <div class="fc-move-name">${esc(m.nombre)}${_pendBadge}</div>
  <div class="fc-move-date">${fmtD(m.fecha)}</div>
  </div>
  <div class="fc-move-amount ${m.type}">${SIGNS[m.type]}${_feur(m.importe)}</div>
- </div>`
- ).join('') || '<div style="font-size:var(--fs-md);color:var(--ink-soft);padding:8px 0">Sin movimientos</div>';
+ </div>`;
+ }).join('') || '<div style="font-size:var(--fs-md);color:var(--ink-soft);padding:8px 0">Sin movimientos</div>';
 
  const html = `
  <div class="modal-header-dark"><div class="mhd-row"><div>
@@ -18226,7 +18252,7 @@ function _confirmBorrarCuenta(id) {
  const ICONS = { Fijos:'🏠', Servicios:'⚡', Marketing:'📢', Personal:'👤', Otros:'📦' };
  const PLABELS = { mensual:'Mensual', trimestral:'Trimestral', anual:'Anual', unico:'Único' };
  const byCat = {};
- CATS.forEach(c => { byCat[c] = gastos.filter(g=>g.categoria===c && !window._isTransfer?.(g)).reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0); });
+ CATS.forEach(c => { byCat[c] = gastos.filter(g=>g.categoria===c && (window._isAggregable ? window._isAggregable(g) : !window._isTransfer?.(g))).reduce((s,g)=>s+(g.mensualEq!==undefined?g.mensualEq:(g.importe||0)),0); });
 
  // Subtítulo: periodo activo
  const _per = State.get.period();
@@ -18275,7 +18301,7 @@ function _confirmBorrarCuenta(id) {
  </div>
  <div class="fin-modal-section">
  <div class="fin-modal-section-title">Todos los gastos</div>
- ${(() => { const _gFilt = gastos.filter(g => !window._isTransfer?.(g)); return _gFilt.length ? _gFilt.map(g => {
+ ${(() => { const _gFilt = gastos.filter(g => (window._isAggregable ? window._isAggregable(g) : !window._isTransfer?.(g))); return _gFilt.length ? _gFilt.map(g => {
  const meq = g.mensualEq !== undefined ? g.mensualEq : g.importe;
  const per = g.frecuencia || 'unico';
  const plbl = PLABELS[per] || per;
@@ -19648,9 +19674,9 @@ function _confirmBorrarCuenta(id) {
  const _fcRangeIns = (() => { try { return KPI.getRange(p); } catch(_) { return null; } })();
  const _gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangeIns) : 0;
- const _gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(g => !window._isTransfer?.(g)) : [];
+ const _gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(g => (window._isAggregable ? window._isAggregable(g) : !window._isTransfer?.(g))) : [];
  const _gasMax = [..._gastos].sort((a,b)=>(b.importe||0)-(a.importe||0))[0] || null;
- const _ingresos= (State.get.ingresosFin?.() || []).filter(i => !window._isTransfer?.(i));
+ const _ingresos= (State.get.ingresosFin?.() || []).filter(i => (window._isAggregable ? window._isAggregable(i) : !window._isTransfer?.(i)));
  const _ingTotal= _ingresos.reduce((s,i) => s + (i.importe||0), 0);
  const _flujNet = _ingTotal - _gasTotal;
 
@@ -20117,9 +20143,9 @@ function _confirmBorrarCuenta(id) {
  var _fcRangePhr = (function(){ try { return KPI.getRange(period); } catch(_){ return null; } })();
  var gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangePhr) : 0;
- var gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return !window._isTransfer || !window._isTransfer(g); }) : [];
+ var gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return window._isAggregable ? window._isAggregable(g) : (!window._isTransfer || !window._isTransfer(g)); }) : [];
  var gasMax = gastos.slice().sort(function(a,b){return (b.importe||0)-(a.importe||0);})[0]||null;
- var ingresos= (State.get.ingresosFin&&State.get.ingresosFin()||[]).filter(function(i){ return !window._isTransfer || !window._isTransfer(i); });
+ var ingresos= (State.get.ingresosFin&&State.get.ingresosFin()||[]).filter(function(i){ return window._isAggregable ? window._isAggregable(i) : (!window._isTransfer || !window._isTransfer(i)); });
  var ingTotal= ingresos.reduce(function(s,i){return s+(i.importe||0);},0);
  var flujNet = ingTotal - gasTotal;
 
@@ -21937,6 +21963,7 @@ function _confirmBorrarCuenta(id) {
  if (!cuentasEl || !movsEl) return;
 
  var cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+ // v1.3.1000 Fase 3: incluir pendientes (solo excluir transfers) con flag
  var gastosOp = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return !window._isTransfer || !window._isTransfer(g); }) : [];
  var ingresos = State.get.ingresosFin ? (State.get.ingresosFin() || []).filter(function(i){ return !window._isTransfer || !window._isTransfer(i); }) : [];
 
@@ -21955,10 +21982,13 @@ function _confirmBorrarCuenta(id) {
  // Ingresos y gastos del período
  var _ingPeriodo = 0, _gastoPeriodo = 0;
  if (_range) {
+  // v1.3.1000 Fase 3: excluir pendientes de agregados (no inflan KPIs periodo)
   ingresos.forEach(function(i) {
+   if (window._isPendiente && window._isPendiente(i)) return;
    var d = new Date(i.fecha); if (d >= _range.start && d < _range.end) _ingPeriodo += (i.importe||0);
   });
   gastosOp.forEach(function(g) {
+   if (window._isPendiente && window._isPendiente(g)) return;
    var d = new Date(g.fecha||g.fechaPago||''); if (d >= _range.start && d < _range.end) _gastoPeriodo += (g.importe||0);
   });
   // Añadir pedidos (compras) al gasto
@@ -22058,10 +22088,10 @@ function _confirmBorrarCuenta(id) {
  var ventasSnap = State.get.ventas ? State.get.ventas() : [];
  var movs = [];
  gastosOp.forEach(function(g) {
-  movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)', sign: '−' });
+  movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)', sign: '−', pendiente: !!window._isPendiente?.(g) });
  });
  ingresos.forEach(function(i) {
-  movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: 'var(--ink)', sign: '+' });
+  movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: 'var(--ink)', sign: '+', pendiente: !!window._isPendiente?.(i) });
  });
  pedidosSnap.forEach(function(p) {
   var prov = State.get.prov ? State.get.prov(p.provId) : null;
@@ -22085,9 +22115,12 @@ function _confirmBorrarCuenta(id) {
  var _sign = m.sign || '';
  var _fd = '';
  if (m.fecha) { var _md = new Date(m.fecha); var _mns = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; _fd = _md.getDate() + ' ' + _mns[_md.getMonth()]; }
- return '<div class="snap-fc-mov-row">' +
+ // v1.3.1000 Fase 3: badge pendiente + opacity
+ var _pendBadge = m.pendiente ? ' <span style="padding:0 4px;border-radius:6px;background:rgba(245,158,11,0.15);color:#B45309;font-size:9px;font-weight:var(--fw-bold);letter-spacing:.3px">⏳</span>' : '';
+ var _rowStyle = m.pendiente ? 'opacity:0.72' : '';
+ return '<div class="snap-fc-mov-row" style="' + _rowStyle + '">' +
  (_fd ? '<div class="snap-fc-mov-date">' + _fd + '</div>' : '') +
- '<div class="snap-fc-mov-name">' + esc2(m.nombre) + '</div>' +
+ '<div class="snap-fc-mov-name">' + esc2(m.nombre) + _pendBadge + '</div>' +
  '<div class="snap-fc-mov-amt" style="color:' + m.color + '">' + _sign + feur(m.importe) + '</div>' +
  '</div>';
  }).join('');
