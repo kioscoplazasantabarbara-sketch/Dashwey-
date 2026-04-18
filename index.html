@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1011-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1013-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1011-dev</title>
+<title>Dashwey v1.3.1013-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7637,7 +7637,7 @@ html { will-change: auto; }
 
 <!-- iOS PWA SPLASH v9.5.43 — assets/apple/ -->
 </head>
-<body style="background:#F7F2F2">
+<body data-tab="1" style="background:#F7F2F2">
 <!-- ── APP SPLASH v1.0.1 ──────────────────────────────────────────
  Primer elemento del body — pintado en el primer frame por el browser
  JS lo oculta con fade cuando la app está lista (_hideSplash)
@@ -9868,6 +9868,9 @@ const State = (() => {
  if (Array.isArray(state.productos)) {
   state.productos.forEach(function(p){
    if (!p || !p.id) return;
+   // v1.3.1013: NO considerar huérfanos los productos importados de Loyverse
+   // Loyverse es fuente de verdad — proveedores pueden llegar en otro snapshot
+   if (p.origen === 'loyverse') return;
    if (!p.prov || !_provIdsVivos[p.prov]) _orphanProdIds[p.id] = 1;
   });
   // Borrar productos huérfanos
@@ -12423,7 +12426,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1011-dev';
+ const _APP_VERSION = 'v1.3.1013-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14396,7 +14399,16 @@ const ui = (() => {
    lvItems.forEach(function(it) {
     if (!it || !it.id) return;
     var variant = (it.variants && it.variants[0]) || {};
+    // v1.3.1012: fallback pvp desde stores[].price si default_price está vacío
+    // Loyverse items VARIABLE o con pricing por tienda guardan precio en stores[]
     var pvp = parseFloat(variant.default_price || 0) || 0;
+    if (!pvp && variant.stores && variant.stores.length > 0) {
+     // Primer store con precio válido
+     for (var _si = 0; _si < variant.stores.length; _si++) {
+      var _sp = parseFloat(variant.stores[_si].price || 0) || 0;
+      if (_sp > 0) { pvp = _sp; break; }
+     }
+    }
     var costeBulto = parseFloat(variant.cost || 0) || 0;
     var provId = (it.category_id && catIdToProvId[it.category_id]) || fallbackProvId;
     var prod = {
@@ -14415,11 +14427,25 @@ const ui = (() => {
     };
     newProds.push(prod);
    });
+   // v1.3.1013: guard pre-save — si initial sync no terminó, abortar import
+   // para evitar que _doInitialSync sobrescriba con datos vacíos de Firebase
+   if (!window._DashweyInitialSyncDone) {
+    if (st) { st.textContent = '⚠️ Espera unos segundos a que termine la sincronización inicial y reintenta.'; st.style.color = 'var(--red)'; }
+    showToast('⚠️ Sincronización inicial no completa — reintenta en 3s');
+    return;
+   }
    State.set.productos(newProds);
    // v1.3.1011: auto-seleccionar primer proveedor para que Almacén muestre datos directos
    if (newProvs.length > 0) {
     State.set.selectedProv(newProvs[0].id);
    }
+   // v1.3.1013: forzar timestamp remoto nuevo para que onSnapshot no sobrescriba
+   try {
+    var _u = State.get.user() || {};
+    _u.lastSyncAt = Date.now();
+    _u.lastDeviceId = window._DashweyDeviceId || _u.lastDeviceId;
+    State.set.user(_u);
+   } catch(_) {}
    DashweyBus.emit('producto');
    DashweyBus.emit('proveedor');
    if (st) { st.textContent = '✅ ' + newProds.length + ' productos en ' + newProvs.length + ' proveedores'; st.style.color = '#16A34A'; }
