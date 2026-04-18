@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1006-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1007-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1006-dev</title>
+<title>Dashwey v1.3.1007-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8751,6 +8751,12 @@ function _authTabSafe(tab) {
  <div class="sd-info"><div class="sd-title">Limpiar datos Loyverse</div><div class="sd-sub">Elimina solo movements origen:loyverse</div></div>
  <div class="sd-chev">›</div>
  </div>
+ <!-- v1.3.1006 Lote P2: Import catálogo Loyverse (destructivo) -->
+ <div class="sd-row" onclick="App.ui._importLoyverseCatalog()">
+ <div class="sd-icon" style="background:#DBEAFE">📦</div>
+ <div class="sd-info"><div class="sd-title">Importar catálogo Loyverse</div><div class="sd-sub">⚠️ Borra productos actuales · Fresh start</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  </div>
 
  <div class="sd-footer">
@@ -12405,7 +12411,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1006-dev';
+ const _APP_VERSION = 'v1.3.1007-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14272,6 +14278,89 @@ const ui = (() => {
   }
  }
 
+ // v1.3.1006 Lote P2: Importar catálogo Loyverse (destructivo, fresh start)
+ // Pagina todos los items, crea productos Dashwey con loyverseItemId.
+ function _importLoyverseCatalog() {
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) { showToast('⚠️ Configura el token Loyverse primero'); return; }
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+
+  window._showDestructiveConfirm({
+   title: 'Importar catálogo Loyverse',
+   message: '⚠️ FRESH START: se eliminarán TODOS los productos actuales de Dashwey y se importarán desde Loyverse. Los pedidos/ventas/stock existentes que referencien productos borrados quedarán huérfanos. ¿Continuar?',
+   confirmText: 'Importar (destructivo)',
+   onConfirm: function() {
+    _lvImportItemsPaginated(token, [], null);
+   }
+  });
+ }
+
+ // Helper recursivo: pagina items Loyverse con cursor
+ function _lvImportItemsPaginated(token, acc, cursor) {
+  var st = document.getElementById('lv-token-status');
+  if (st) { st.textContent = '⏳ Descargando items… (' + acc.length + ' hasta ahora)'; st.style.color = 'var(--ink-soft)'; }
+  var params = { limit: 250 };
+  if (cursor) params.cursor = cursor;
+  _lvProxyFetch('/items', token, params)
+   .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+   })
+   .then(function(data) {
+    var items = data.items || [];
+    var all = acc.concat(items);
+    if (data.cursor) {
+     // Hay más páginas
+     _lvImportItemsPaginated(token, all, data.cursor);
+    } else {
+     // Fin paginación → crear productos
+     _lvCommitCatalog(all);
+    }
+   })
+   .catch(function(e) {
+    if (st) { st.textContent = '❌ Error import: ' + (e.message||e); st.style.color = 'var(--red)'; }
+    showToast('⚠️ Error al importar: ' + (e.message||e));
+   });
+ }
+
+ // Commit: mapea items Loyverse → productos Dashwey y sustituye catálogo completo
+ function _lvCommitCatalog(lvItems) {
+  var st = document.getElementById('lv-token-status');
+  try {
+   var newProds = [];
+   lvItems.forEach(function(it) {
+    if (!it || !it.id) return;
+    // Primera variante = precio base
+    var variant = (it.variants && it.variants[0]) || {};
+    var pvp = parseFloat(variant.default_price || 0) || 0;
+    var costeBulto = parseFloat(variant.cost || 0) || 0;
+    var prod = {
+     id: 'p_lv_' + it.id,
+     nombre: it.item_name || it.name || 'Sin nombre',
+     loyverseItemId: it.id,
+     categoria: it.category_id || '',
+     pvp: pvp,
+     precioCompra: costeBulto, // Loyverse cost = coste unitario (asumimos 1 unidad)
+     udscaja: 1,
+     iva: 21, // default, se puede editar en Dashwey
+     stock: 0, // stock espejado desde Loyverse más tarde (Lote P3)
+     barcode: variant.barcode || '',
+     origen: 'loyverse',
+     prov: '', // proveedor se asigna manualmente en Dashwey
+    };
+    newProds.push(prod);
+   });
+   // Fresh start: reemplaza catálogo entero
+   State.set.productos(newProds);
+   DashweyBus.emit('producto');
+   if (st) { st.textContent = '✅ Catálogo importado: ' + newProds.length + ' productos'; st.style.color = '#16A34A'; }
+   showToast('✅ ' + newProds.length + ' productos importados desde Loyverse');
+  } catch(e) {
+   if (st) { st.textContent = '❌ Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
+   console.error('[Dashwey] _lvCommitCatalog:', e);
+  }
+ }
+
  // ── v1.3.999 L3 — UI mapping Loyverse → cuentas ─────────────────
  // Sheet bottom con 3 dropdowns (CASH/CARD/OTHER). "(Auto)" = cuenta primaria.
  function _openLoyverseMapping() {
@@ -14404,7 +14493,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog };
 })();
 
 // ══════════════════════════════════════════
