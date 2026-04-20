@@ -1,5 +1,5 @@
 rules_version = '2';
-// v1.3.979 — hardening: size limit + schema validation
+// v1.3.1038 — strict schema: todas las claves conocidas tipadas
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -11,22 +11,69 @@ service cloud.firestore {
       return isAuth() && request.auth.uid == uid;
     }
 
-    // Firestore limite por doc = 1 MiB (1048576 bytes)
-    // Dejamos margen de 24KB -> 1024000 bytes máx permitido en cliente
+    // Firestore límite 1 MiB — margen 24 KB
     function isValidSize() {
       return request.resource.size() < 1024000;
     }
 
-    // Schema mínimo de /state/{uid}: al menos una clave reconocida
-    function isValidState() {
-      return request.resource.data.keys().hasAny(['user','productos','proveedores','ventas','historialPedidos','cuentas'])
-        && (!('user' in request.resource.data) || request.resource.data.user is map);
+    // Claves de tipo list (arrays)
+    function listsValid(d) {
+      return (!('proveedores'        in d) || d.proveedores        is list)
+          && (!('productos'          in d) || d.productos          is list)
+          && (!('historialPedidos'   in d) || d.historialPedidos   is list)
+          && (!('facturas'           in d) || d.facturas           is list)
+          && (!('mermas'             in d) || d.mermas             is list)
+          && (!('ventas'             in d) || d.ventas             is list)
+          && (!('ingresosFin'        in d) || d.ingresosFin        is list)
+          && (!('gastosOp'           in d) || d.gastosOp           is list)
+          && (!('cuentas'            in d) || d.cuentas            is list)
+          && (!('ticketsAbiertos'    in d) || d.ticketsAbiertos    is list)
+          && (!('ordenItems'         in d) || d.ordenItems         is list)
+          && (!('pendingOrders'      in d) || d.pendingOrders      is list)
+          && (!('hotPins'            in d) || d.hotPins            is list)
+          && (!('qgCells'            in d) || d.qgCells            is list)
+          && (!('hiddenCards'        in d) || d.hiddenCards        is list)
+          && (!('baseCats'           in d) || d.baseCats           is list)
+          && (!('chatMessages'       in d) || d.chatMessages       is list)
+          && (!('chatUsers'          in d) || d.chatUsers          is list)
+          && (!('teamMembers'        in d) || d.teamMembers        is list)
+          && (!('notifsRead'         in d) || d.notifsRead         is list)
+          && (!('visitasComerciales' in d) || d.visitasComerciales is list)
+          && (!('recordatorios'      in d) || d.recordatorios      is list)
+          && (!('cierresCaja'        in d) || d.cierresCaja        is list)
+          && (!('lotesStock'         in d) || d.lotesStock         is list);
     }
 
-    // -- /state/{uid} -- doc principal Dashwey -----------------
+    // Claves de tipo map (objetos)
+    function mapsValid(d) {
+      return (!('user'        in d) || d.user        is map)
+          && (!('syncStatus'  in d) || d.syncStatus  is map)
+          && (!('settings'    in d) || d.settings    is map)
+          && (!('perfil'      in d) || d.perfil      is map)
+          && (!('lastVals'    in d) || d.lastVals    is map)
+          && (!('catLabels'   in d) || d.catLabels   is map)
+          && (!('period'      in d) || d.period      is map);
+    }
+
+    // Al menos una clave reconocida presente
+    function hasKnownKey(d) {
+      return d.keys().hasAny([
+        'user','productos','proveedores','ventas','historialPedidos',
+        'cuentas','gastosOp','ingresosFin','settings','perfil',
+        'pendingOrders','mermas','facturas','lotesStock','recordatorios'
+      ]);
+    }
+
+    function isValidState() {
+      return hasKnownKey(request.resource.data)
+          && listsValid(request.resource.data)
+          && mapsValid(request.resource.data);
+    }
+
+    // -- /state/{uid} -- FCM legacy (solo campos FCM) -----------
     match /state/{uid} {
       allow read: if isOwner(uid);
-      allow create, update: if isOwner(uid) && isValidSize() && isValidState();
+      allow create, update: if isOwner(uid) && request.resource.size() < 10000;
       allow delete: if isOwner(uid);
     }
 
@@ -37,11 +84,13 @@ service cloud.firestore {
       allow create, update: if isOwner(uid) && request.resource.size() < 10000;
     }
 
-    // -- /usuarios/{uid}/** -- contextos y datos ---------------
+    // -- /usuarios/{uid}/** -- datos principales ---------------
     match /usuarios/{uid}/{document=**} {
       allow read: if isOwner(uid);
       allow delete: if isOwner(uid);
-      allow create, update: if isOwner(uid) && request.resource.size() < 1024000;
+      allow create, update: if isOwner(uid)
+                            && isValidSize()
+                            && isValidState();
     }
 
     // -- Deny all else -----------------------------------------

@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1038-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1039-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1038-dev</title>
+<title>Dashwey v1.3.1039-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8752,6 +8752,10 @@ function _authTabSafe(tab) {
  <div class="sd-chev">›</div>
  </div>
  <!-- v1.3.1006 Lote P2: Import catálogo Loyverse (destructivo) -->
+ <div class="sd-row" onclick="App.ui._importLoyverseReceipts()">
+   <div class="sd-icon">🧾</div>
+   <div class="sd-info"><div class="sd-title">Importar ventas Loyverse</div><div class="sd-sub">Receipts históricos → ingresos Dashwey · idempotente</div></div>
+  </div>
  <div class="sd-row" onclick="App.ui._importLoyverseCatalog()">
  <div class="sd-icon" style="background:#DBEAFE">📦</div>
  <div class="sd-info"><div class="sd-title">Importar catálogo Loyverse</div><div class="sd-sub">⚠️ Borra productos actuales · Fresh start</div></div>
@@ -12477,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1038-dev';
+ const _APP_VERSION = 'v1.3.1039-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15062,7 +15066,82 @@ const ui = (() => {
   });
  }
 
- function _testLoyverseConnection() {
+ // ── v1.3.1039: Lote P3 — Import receipts Loyverse ──────────────
+  function _importLoyverseReceipts() {
+   var token = localStorage.getItem('dashwey_lv_token') || '';
+   if (!token) { showToast('\u26a0\ufe0f Configura el token Loyverse primero'); return; }
+   // Fecha de inicio configurable — por defecto 2 a\u00f1os atr\u00e1s
+   var _defaultFrom = new Date();
+   _defaultFrom.setFullYear(_defaultFrom.getFullYear() - 2);
+   var _fromISO = _defaultFrom.toISOString().slice(0, 10);
+   window._showDestructiveConfirm({
+    title: 'Importar ventas Loyverse',
+    message: 'Se importar\u00e1n todos los receipts desde ' + _fromISO + ' hasta hoy como ingresos en Dashwey.\n\nIdempotente: tickets ya importados se omiten.\n\n\u00bfContinuar?',
+    confirmText: 'Importar',
+    onConfirm: function() {
+     var st = document.getElementById('lv-token-status');
+     if (st) { st.textContent = '\u23f3 Descargando ventas\u2026'; st.style.color = 'var(--ink-soft)'; }
+     _lvImportReceiptsPaginated(token, [], null, _fromISO, 0, 0);
+    }
+   });
+  }
+
+  // Paginaci\u00f3n recursiva de receipts
+  function _lvImportReceiptsPaginated(token, acc, cursor, fromDate, totalCreated, totalSkipped) {
+   var st = document.getElementById('lv-token-status');
+   var params = { limit: 250, created_at_min: fromDate + 'T00:00:00.000Z' };
+   if (cursor) params.cursor = cursor;
+   if (st) { st.textContent = '\u23f3 Descargando ventas\u2026 (' + acc.length + ' hasta ahora)'; st.style.color = 'var(--ink-soft)'; }
+   _lvProxyFetch('/receipts', token, params)
+    .then(function(r) {
+     if (!r.ok) throw new Error('HTTP ' + r.status);
+     return r.json();
+    })
+    .then(function(data) {
+     var receipts = data.receipts || [];
+     var all = acc.concat(receipts);
+     if (data.cursor && receipts.length > 0) {
+      // Continuar paginaci\u00f3n
+      _lvImportReceiptsPaginated(token, all, data.cursor, fromDate, totalCreated, totalSkipped);
+     } else {
+      // Commit todos los receipts
+      _lvCommitReceipts(all, st);
+     }
+    })
+    .catch(function(e) {
+     if (st) { st.textContent = '\u274c Error: ' + (e.message||e); st.style.color = 'var(--red)'; }
+     showToast('\u26a0\ufe0f Error al importar ventas: ' + (e.message||e));
+    });
+  }
+
+  // Commit: procesa todos los receipts descargados
+  function _lvCommitReceipts(receipts, st) {
+   try {
+    var totalCreated = 0, totalSkipped = 0, totalErrors = 0;
+    receipts.forEach(function(raw) {
+     try {
+      var result = Loyverse.mapSaleToIngresos(raw);
+      totalCreated += result.created || 0;
+      totalSkipped += result.skipped || 0;
+      if (result.error) totalErrors++;
+     } catch(_e) { totalErrors++; }
+    });
+    // Disparar eventos para actualizar Dashboard
+    DashweyBus.emit('ingreso');
+    DashweyBus.emit('gasto');
+    try { App.dash.render(); } catch(_) {}
+    var msg = '\u2705 ' + receipts.length + ' tickets \u2192 ' + totalCreated + ' movimientos nuevos';
+    if (totalSkipped > 0) msg += ' \u00b7 ' + totalSkipped + ' ya exist\u00edan';
+    if (totalErrors > 0) msg += ' \u00b7 ' + totalErrors + ' errores';
+    if (st) { st.textContent = msg; st.style.color = '#16A34A'; }
+    showToast(msg);
+   } catch(e) {
+    if (st) { st.textContent = '\u274c Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
+    showToast('\u26a0\ufe0f Error: ' + (e.message||e));
+   }
+  }
+
+  function _testLoyverseConnection() {
   var token = localStorage.getItem('dashwey_lv_token') || '';
   var inp = document.getElementById('lv-token-input');
   if (!token && inp) token = inp.value.trim();
@@ -15105,7 +15184,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _revertBudgetBakersImport, _revertBudgetBakersIngresos };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _revertBudgetBakersImport, _revertBudgetBakersIngresos };
 })();
 
 // ══════════════════════════════════════════
@@ -15542,43 +15621,38 @@ const dash = (() => {
    if (btn) btn.style.color = _fcScope === 'todos' ? 'var(--ink-soft)' : 'var(--red)';
   }
   function _openFcScopeMenu() {
-   var existing = document.getElementById('fc-scope-dd');
+   var existing = document.getElementById('fc-scope-wrap');
    if (existing) { existing.remove(); return; }
    var btn = document.getElementById('fc-scope-btn');
    if (!btn) return;
    var rect = btn.getBoundingClientRect();
+   // Wrapper: backdrop invisible para cerrar + dropdown encima
+   var wrap = document.createElement('div');
+   wrap.id = 'fc-scope-wrap';
+   wrap.style.cssText = 'position:fixed;inset:0;z-index:9998;';
+   // Backdrop — toque fuera cierra
+   wrap.ontouchend = function(e){ if(e.target===wrap){ wrap.remove(); } };
+   wrap.onclick = function(e){ if(e.target===wrap){ wrap.remove(); } };
    var dd = document.createElement('div');
-   dd.id = 'fc-scope-dd';
-   dd.style.cssText = 'position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.15);overflow:hidden;min-width:140px;font-family:var(--font)';
+   dd.style.cssText = 'position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.18);overflow:hidden;min-width:150px;font-family:var(--font)';
    dd.style.top = (rect.bottom + 6) + 'px';
    dd.style.right = (window.innerWidth - rect.right) + 'px';
-   // Bloquear propagación de touch dentro del dropdown para evitar cierre prematuro
-   dd.addEventListener('touchstart', function(e){ e.stopPropagation(); }, { passive: true });
    [['todos','Todos'],['negocio','Negocio'],['personal','Personal']].forEach(function(opt) {
     var item = document.createElement('button');
-    item.style.cssText = 'display:block;width:100%;padding:12px 16px;border:none;background:none;font-size:var(--fs-sm);font-weight:var(--fw-med);color:var(--ink);font-family:var(--font);text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent';
-    if (opt[0] === _fcScope) item.style.color = 'var(--red)';
+    item.style.cssText = 'display:block;width:100%;padding:13px 18px;border:none;background:none;font-size:var(--fs-base);font-weight:var(--fw-med);color:' + (opt[0]===_fcScope ? 'var(--red)' : 'var(--ink)') + ';font-family:var(--font);text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
     item.textContent = opt[1];
-    item.addEventListener('touchend', (function(v){ return function(e){
-     e.preventDefault(); e.stopPropagation();
-     _fcScope = v; dd.remove(); _refreshFcScopeBtn();
+    var _apply = (function(v){ return function(){
+     _fcScope = v; wrap.remove(); _refreshFcScopeBtn();
      try { _snapRenderFCDist(); } catch(_) {}
      try { _snapDoRenderAll(); } catch(_) {}
      try { Utils.triggerHaptic('light'); } catch(_) {}
-    }; })(opt[0]));
-    item.addEventListener('click', (function(v){ return function(e){
-     if (e.pointerType === 'touch') return;
-     _fcScope = v; dd.remove(); _refreshFcScopeBtn();
-     try { _snapRenderFCDist(); } catch(_) {}
-     try { _snapDoRenderAll(); } catch(_) {}
-    }; })(opt[0]));
+    }; })(opt[0]);
+    item.ontouchend = function(e){ e.preventDefault(); _apply(); };
+    item.onclick = function(e){ if(e.pointerType!=='touch') _apply(); };
     dd.appendChild(item);
    });
-   document.body.appendChild(dd);
-   // Cierre al tocar fuera — el stopPropagation del dd evita falso positivo
-   setTimeout(function(){
-    document.addEventListener('touchstart', function _rm(){ dd.remove(); document.removeEventListener('touchstart',_rm); }, { once: true, passive: true });
-   }, 200);
+   wrap.appendChild(dd);
+   document.body.appendChild(wrap);
   }
 
  // v1.3.1003 Fase 5: toggle scope negocio/personal
