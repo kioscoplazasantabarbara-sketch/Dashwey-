@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1039-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1040-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1039-dev</title>
+<title>Dashwey v1.3.1040-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12481,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1039-dev';
+ const _APP_VERSION = 'v1.3.1040-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15115,23 +15115,95 @@ const ui = (() => {
   }
 
   // Commit: procesa todos los receipts descargados
+  // v1.3.1040: crea ingresos (movimientos caja) + ventas detalladas (items por producto)
   function _lvCommitReceipts(receipts, st) {
    try {
-    var totalCreated = 0, totalSkipped = 0, totalErrors = 0;
+    var totalIngresosCreated = 0, totalIngresosSkipped = 0;
+    var totalVentasCreated = 0, totalVentasSkipped = 0, totalErrors = 0;
+    // Mapping loyverseItemId -> producto Dashwey (para ventas detalladas)
+    var productos = State.get.productos ? (State.get.productos() || []) : [];
+    var prodByLvId = {};
+    productos.forEach(function(p){ if (p && p.loyverseItemId) prodByLvId[p.loyverseItemId] = p; });
+    // Set de ventas existentes para dedup (por id determinista basado en receipt_id)
+    var ventasExistentes = new Set();
+    (State.get.ventas ? State.get.ventas() : []).forEach(function(v){ if (v && v.id) ventasExistentes.add(v.id); });
+
     receipts.forEach(function(raw) {
      try {
+      // 1. Ingresos (movimientos caja) — ya idempotente via sourceRefId
       var result = Loyverse.mapSaleToIngresos(raw);
-      totalCreated += result.created || 0;
-      totalSkipped += result.skipped || 0;
-      if (result.error) totalErrors++;
+      totalIngresosCreated += result.created || 0;
+      totalIngresosSkipped += result.skipped || 0;
+      if (result.error) { totalErrors++; return; }
+
+      // 2. Venta detallada con items (habilita 'M\u00e1s vendidos' + FIFO costeReal)
+      var receiptId = raw.id || raw.receipt_number;
+      if (!receiptId) return;
+      var ventaId = 'v_lv_' + receiptId;
+      if (ventasExistentes.has(ventaId)) { totalVentasSkipped++; return; }
+
+      var fechaRaw = raw.receipt_date || raw.created_at;
+      var fecha = fechaRaw ? new Date(fechaRaw).toISOString() : new Date().toISOString();
+      var lineItems = raw.line_items || raw.items || [];
+      if (!Array.isArray(lineItems) || lineItems.length === 0) return;
+
+      // Total del ticket (sum de payments — ya normalizado)
+      var canonical = Loyverse.normalize(raw);
+      var total = canonical ? canonical.total : 0;
+
+      // M\u00e9todo dominante (primer payment)
+      var metodo = 'efectivo';
+      if (canonical && canonical.payments.length > 0) {
+       var p0 = canonical.payments[0].type;
+       metodo = p0 === 'CASH' ? 'efectivo' : p0 === 'CARD' ? 'tarjeta' : 'otro';
+      }
+
+      // Items: uno por cada line_item — resolver prodId por loyverseItemId
+      var items = lineItems.map(function(li) {
+       var lvItemId = li.item_id || li.variant_id || li.id;
+       var prod = lvItemId ? prodByLvId[lvItemId] : null;
+       var qty = typeof li.quantity === 'number' ? li.quantity
+                : typeof li.qty === 'number' ? li.qty
+                : parseFloat(li.quantity || li.qty || 1) || 1;
+       var pvp = typeof li.price === 'number' ? li.price
+                : typeof li.pvp === 'number' ? li.pvp
+                : parseFloat(li.price || li.pvp || li.total_money || 0) || 0;
+       return {
+        prodId: prod ? prod.id : '_lv_' + (lvItemId || 'unknown'),
+        nombre: (prod && prod.nombre) || li.item_name || li.name || 'Item',
+        qty: qty,
+        pvp: pvp,
+        coste: (prod && prod.precioCompra && prod.udscaja)
+               ? (prod.precioCompra / prod.udscaja) * qty
+               : 0,
+        margen: 0
+       };
+      });
+
+      // Crear venta — addVenta consumir\u00e1 FIFO autom\u00e1ticamente si hay lotes
+      State.set.addVenta({
+       id: ventaId,
+       ticketId: receiptId,
+       fecha: fecha,
+       metodo: metodo,
+       total: total,
+       items: items,
+       origen: 'loyverse',
+       sourceRefId: receiptId,
+      });
+      totalVentasCreated++;
      } catch(_e) { totalErrors++; }
     });
+
     // Disparar eventos para actualizar Dashboard
     DashweyBus.emit('ingreso');
     DashweyBus.emit('gasto');
+    DashweyBus.emit('venta');
     try { App.dash.render(); } catch(_) {}
-    var msg = '\u2705 ' + receipts.length + ' tickets \u2192 ' + totalCreated + ' movimientos nuevos';
-    if (totalSkipped > 0) msg += ' \u00b7 ' + totalSkipped + ' ya exist\u00edan';
+    var msg = '\u2705 ' + receipts.length + ' tickets \u2192 ' + totalVentasCreated + ' ventas + ' + totalIngresosCreated + ' mov.';
+    if (totalVentasSkipped > 0 || totalIngresosSkipped > 0) {
+     msg += ' \u00b7 ' + (totalVentasSkipped + totalIngresosSkipped) + ' ya exist\u00edan';
+    }
     if (totalErrors > 0) msg += ' \u00b7 ' + totalErrors + ' errores';
     if (st) { st.textContent = msg; st.style.color = '#16A34A'; }
     showToast(msg);
