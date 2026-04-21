@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1042-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1043-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1042-dev</title>
+<title>Dashwey v1.3.1043-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12489,7 +12489,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1042-dev';
+ const _APP_VERSION = 'v1.3.1043-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15074,28 +15074,34 @@ const ui = (() => {
   });
  }
 
- // ── v1.3.1039: Lote P3 — Import receipts Loyverse ──────────────
+ // ── v1.3.1043: Lote P3 — Import receipts Loyverse (sin filtro fecha API) ──
+  // Loyverse Free NO acepta created_at_min → siempre 402 Payment Required.
+  // Estrategia: paginar por cursor desde el más reciente hacia atrás,
+  // cortar en cliente cuando ticket.receipt_date < rango configurable.
   function _importLoyverseReceipts() {
    var token = localStorage.getItem('dashwey_lv_token') || '';
    if (!token) { showToast('⚠️ Configura el token Loyverse primero'); return; }
-   var _defaultFrom = new Date();
-   _defaultFrom.setFullYear(_defaultFrom.getFullYear() - 2);
-   var _fromISO = _defaultFrom.toISOString().slice(0, 10);
+   // Corte por defecto: 6 meses. Si ticket es anterior → parar paginación.
+   var _MESES_ATRAS = 6;
+   var _cutoff = new Date();
+   _cutoff.setMonth(_cutoff.getMonth() - _MESES_ATRAS);
+   var _cutoffISO = _cutoff.toISOString().slice(0, 10);
    window._showDestructiveConfirm({
     title: 'Importar ventas Loyverse',
-    message: 'Se importarán todos los receipts desde ' + _fromISO + ' hasta hoy.\n\nIdempotente: tickets ya importados se omiten.\n\n¿Continuar?',
+    message: 'Se importarán receipts desde hoy hacia atrás hasta ' + _cutoffISO + ' (últimos ' + _MESES_ATRAS + ' meses).\n\nIdempotente: tickets ya importados se omiten.\n\n¿Continuar?',
     confirmText: 'Importar',
     onConfirm: function() {
      var st = document.getElementById('lv-token-status');
      if (st) { st.textContent = '⏳ Descargando ventas…'; st.style.color = 'var(--ink-soft)'; }
-     _lvImportReceiptsPaginated(token, [], null, _fromISO);
+     _lvImportReceiptsPaginated(token, [], null, _cutoff);
     }
    });
   }
 
-  function _lvImportReceiptsPaginated(token, acc, cursor, fromDate) {
+  function _lvImportReceiptsPaginated(token, acc, cursor, cutoffDate) {
    var st = document.getElementById('lv-token-status');
-   var params = { limit: 250, created_at_min: fromDate + 'T00:00:00.000Z' };
+   // SIN created_at_min — Loyverse Free lo rechaza con 402
+   var params = { limit: 250 };
    if (cursor) params.cursor = cursor;
    if (st) { st.textContent = '⏳ Descargando ventas… (' + acc.length + ' hasta ahora)'; st.style.color = 'var(--ink-soft)'; }
    _lvProxyFetch('/receipts', token, params)
@@ -15105,9 +15111,16 @@ const ui = (() => {
     })
     .then(function(data) {
      var receipts = data.receipts || [];
-     var all = acc.concat(receipts);
-     if (data.cursor && receipts.length > 0) {
-      _lvImportReceiptsPaginated(token, all, data.cursor, fromDate);
+     // Filtrar por corte en cliente: solo tickets >= cutoffDate
+     var enRango = receipts.filter(function(rc) {
+      var d = new Date(rc.receipt_date || rc.created_at);
+      return d >= cutoffDate;
+     });
+     var all = acc.concat(enRango);
+     // Parar si: hay tickets fuera de rango OR no hay cursor OR página vacía
+     var hayFueraRango = enRango.length < receipts.length;
+     if (data.cursor && receipts.length > 0 && !hayFueraRango) {
+      _lvImportReceiptsPaginated(token, all, data.cursor, cutoffDate);
      } else {
       _lvCommitReceipts(all, st);
      }
