@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1056-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1057-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1056-dev</title>
+<title>Dashwey v1.3.1057-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12481,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1056-dev';
+ const _APP_VERSION = 'v1.3.1057-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15424,6 +15424,38 @@ const ui = (() => {
      } catch(_e) { totalErrors++; }
     });
 
+    // v1.3.1057: Limpieza automática de ingresos BB solapados con Loyverse
+    // Loyverse Free no tiene histórico > ~30-45 días, pero BB sí.
+    // Si el usuario importó BB · Todo con ingresos, hay solape en el rango Loyverse.
+    // Solución: borrar ingresos BB cuya fecha sea >= fecha mínima de tickets Loyverse descargados.
+    var ingresosBBEliminados = 0;
+    try {
+     if (receipts.length > 0) {
+      // Calcular fecha mínima de receipts (es la más antigua, corte del solape)
+      var minLvDate = null;
+      receipts.forEach(function(rc){
+       var d = new Date(rc.receipt_date || rc.created_at);
+       if (!isNaN(d) && (!minLvDate || d < minLvDate)) minLvDate = d;
+      });
+      if (minLvDate) {
+       var ingresosAll = State.get.ingresosFin ? (State.get.ingresosFin()||[]) : [];
+       var ingresosKeep = ingresosAll.filter(function(i){
+        // Solo borrar BB, no tocar manuales/loyverse/otros
+        if (i.origen !== 'budgetbakers') return true;
+        var d = new Date(i.fecha);
+        if (isNaN(d)) return true;
+        // Mantener si fecha < minLvDate (antes del rango Loyverse)
+        return d < minLvDate;
+       });
+       ingresosBBEliminados = ingresosAll.length - ingresosKeep.length;
+       if (ingresosBBEliminados > 0) {
+        State.set.setIngresos(ingresosKeep);
+        console.log('[Loyverse] Limpieza solape: ' + ingresosBBEliminados + ' ingresos BB eliminados (fecha >= ' + minLvDate.toISOString().slice(0,10) + ')');
+       }
+      }
+     }
+    } catch(eClean) { console.warn('[Loyverse] Error cleanup BB:', eClean); }
+
     // v1.3.1046: Recalcular saldos tras import (expuesto globalmente)
     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     DashweyBus.emit('ingreso');
@@ -15435,6 +15467,7 @@ const ui = (() => {
      msg += ' · ' + (totalVentasSkipped + totalIngresosSkipped) + ' ya existían';
     }
     if (totalErrors > 0) msg += ' · ' + totalErrors + ' errores';
+    if (ingresosBBEliminados > 0) msg += ' · 🧹 ' + ingresosBBEliminados + ' ingresos BB solapados limpiados';
     if (limitePlan) msg += ' · ⚠️ Límite plan Loyverse Free alcanzado';
     if (st) { st.textContent = msg; st.style.color = '#16A34A'; }
     showToast(msg);
