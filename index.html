@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1044-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1045-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1044-dev</title>
+<title>Dashwey v1.3.1045-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11152,14 +11152,19 @@ const FinEngine = (() => {
  const vtaTotal = ventas
  .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
  .reduce((s, v) => s + ventaIngresos(v), 0);
- // Ingresos financieros (excluye reembolso_proveedor: no es ingreso comercial)
+ // v1.3.1045: FIX CRÍTICO doble conteo
+ // Ingresos financieros: EXCLUIR los que ya están cubiertos por ventas (mismo dinero, dos registros)
+ // - origen=loyverse: cada venta Loyverse crea 1 ingreso + 1 venta → solo contar la venta
+ // - origen=tpv: ventas TPV manuales también pueden crear ingreso paralelo
+ // Los ingresos manuales, BB, recurrentes, etc. NO se filtran (son ingresos reales extras)
  const ingFin = (State.get.ingresosFin ? State.get.ingresosFin() : [])
  .filter(i => {
   if (i.tipo === 'reembolso_proveedor') return false;
   if (_isTransfer(i) || i.tipo === 'ajuste') return false; // v1.3.982: detección dual
   if (_isPendiente(i)) return false; // v1.3.1000: excluir pendientes de KPIs
   if (!_matchesScope(i)) return false; // v1.3.1003 Fase 5: scope activo
-  if (!_matchesScope(i)) return false; // v1.3.1003 Fase 5: filtro scope
+  // v1.3.1045: excluir ingresos que son contrapartida de ventas (doble conteo)
+  if (i.origen === 'loyverse' || i.origen === 'tpv') return false;
   const d = new Date(i.fecha); return d >= range.start && d < range.end;
  })
  .reduce((s, i) => s + (i.importe || 0), 0);
@@ -12489,7 +12494,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1044-dev';
+ const _APP_VERSION = 'v1.3.1045-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15208,6 +15213,8 @@ const ui = (() => {
      } catch(_e) { totalErrors++; }
     });
 
+    // v1.3.1045: Recalcular saldos de cuentas tras import (bug histórico: saldo quedaba en 0)
+    try { _bbRecalcSaldos(); } catch(_) {}
     DashweyBus.emit('ingreso');
     DashweyBus.emit('gasto');
     DashweyBus.emit('venta');
@@ -23133,12 +23140,20 @@ function _confirmBorrarCuenta(id) {
  try { _range = KPI.getRange(_period); } catch(_) {}
 
  // Ingresos y gastos del período
+ // v1.3.1045: FIX doble conteo — ingresos origen=loyverse/tpv están ya como ventas
  var _ingPeriodo = 0, _gastoPeriodo = 0;
  if (_range) {
   // v1.3.1003 Fase 5: excluir por scope + pendiente (usar _isKpiVisible)
   ingresos.forEach(function(i) {
    if (!_fcMatchScope(i)) return; if (window._isAggregable && !window._isAggregable(i)) return;
+   if (i.origen === 'loyverse' || i.origen === 'tpv') return; // evitar duplicar con ventas
    var d = new Date(i.fecha); if (d >= _range.start && d < _range.end) _ingPeriodo += (i.importe||0);
+  });
+  // Sumar VENTAS TPV/Loyverse como ingresos reales
+  var _vtas = State.get.ventas ? (State.get.ventas() || []) : [];
+  _vtas.forEach(function(v) {
+   var d = new Date(v.fecha); if (d < _range.start || d >= _range.end) return;
+   _ingPeriodo += (v.total || 0);
   });
   gastosOp.forEach(function(g) {
    if (!_fcMatchScope(g)) return; if (window._isAggregable && !window._isAggregable(g)) return;
@@ -23255,9 +23270,20 @@ function _confirmBorrarCuenta(id) {
   var prod = State.get.prod ? State.get.prod(m.prodId) : null;
   if (m.coste > 0) movs.push({ nombre: '📉 ' + (prod ? prod.nombre : 'Merma'), importe: m.coste||0, fecha: m.fecha||'', color: '#F97316', sign: '−' });
  });
+ // v1.3.1045: FIX lista movimientos duplicados
+ // - Si hay ingreso con mismo sourceRefId (Loyverse), NO añadir venta ni ingreso duplicado
+ // - Ventas manuales (sin origen) siempre se muestran como 'Venta TPV'
+ var _ingSrcRefs = new Set((ingresos||[]).map(function(i){ return i.sourceRefId; }).filter(Boolean));
+ // Filtrar ingresos Loyverse de la lista (se mostrará la venta en su lugar)
+ // Ya pusheamos todos los ingresos arriba — hay que remover los que son contraparte de venta
+ movs = movs.filter(function(m) {
+  return !(m.nombre && m.nombre.indexOf('Venta Loyverse') === 0);
+ });
  ventasSnap.forEach(function(v) {
   var tot = (v.items||[]).reduce(function(s,it){ return s+(it.pvp||0)*(it.qty||0); }, 0) || (v.total||0);
-  if (tot > 0) movs.push({ nombre: '🧾 Venta TPV', importe: tot, fecha: v.fecha||'', color: 'var(--ink)', sign: '+' });
+  if (tot <= 0) return;
+  var _label = v.origen === 'loyverse' ? '🧾 Venta Loyverse' : '🧾 Venta TPV';
+  movs.push({ nombre: _label, importe: tot, fecha: v.fecha||'', color: 'var(--ink)', sign: '+' });
  });
  movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
  var recientes = movs.slice(0, 8);
