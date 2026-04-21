@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1064-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1065-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1064-dev</title>
+<title>Dashwey v1.3.1065-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12479,7 +12479,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1064-dev';
+ const _APP_VERSION = 'v1.3.1065-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14760,7 +14760,9 @@ const ui = (() => {
   var bbDiarios = [], otros = [];
   ing.forEach(function(i){
    var cat = (i.categoria||'').toLowerCase();
-   var esBBVenta = i.origen === 'budgetbakers' && cat.indexOf('ingresos por ventas') >= 0 && !i.sourceHistorical;
+   // Excluir agregados ya creados (id empieza por i_bb_agg_) para no re-procesar
+   var yaAgregado = i.id && i.id.indexOf('i_bb_agg_') === 0;
+   var esBBVenta = i.origen === 'budgetbakers' && cat.indexOf('ingresos por ventas') >= 0 && !yaAgregado;
    if (esBBVenta) bbDiarios.push(i); else otros.push(i);
   });
   if (bbDiarios.length === 0) return 0;
@@ -14841,6 +14843,79 @@ const ui = (() => {
   return viejas.length - Object.keys(agg).length;
  }
 
+ // Capa 4: Agregar ventas-por-día ya existentes en ventas-por-mes (compresión extra)
+ function _compactLayer4_VentasMensuales(diasConservar) {
+  var ven = State.get.ventas ? (State.get.ventas()||[]).slice() : [];
+  var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - diasConservar);
+  var viejas = [], frescas = [];
+  ven.forEach(function(v){
+   var d = new Date(v.fecha);
+   if (isNaN(d) || d >= cutoff || v._monthAgg) { frescas.push(v); return; }
+   // Solo procesar ventas ya compactadas o agregadas por día (sin items)
+   if (Array.isArray(v.items) && v.items.length > 0) { frescas.push(v); return; }
+   viejas.push(v);
+  });
+  if (viejas.length === 0) return 0;
+  var agg = {};
+  viejas.forEach(function(v){
+   var d = new Date(v.fecha);
+   var mes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+   var cId = v.cuentaId || '_sin';
+   var key = mes + '_' + cId;
+   if (!agg[key]) {
+    agg[key] = {
+     id: 'v_magg_' + key, ticketId: 'magg_' + key,
+     fecha: new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59).toISOString(),
+     metodo: 'otro', total: 0, items: [],
+     origen: 'loyverse', cuentaId: v.cuentaId || '',
+     _monthAgg: true, _ticketCount: 0,
+    };
+   }
+   agg[key].total += +v.total || 0;
+   agg[key]._ticketCount += (+v._ticketCount || 1);
+  });
+  State.set.ventas(frescas.concat(Object.values(agg)));
+  return viejas.length - Object.keys(agg).length;
+ }
+
+ // Capa 5: Comprimir historialPedidos viejos (mantener por proveedor×mes)
+ function _compactLayer5_PedidosMensuales(diasConservar) {
+  var ped = State.get.historialPedidos ? (State.get.historialPedidos()||[]).slice() : [];
+  var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - diasConservar);
+  var viejos = [], recientes = [];
+  ped.forEach(function(p){
+   var d = new Date(p.fecha);
+   if (isNaN(d) || d >= cutoff || p._monthAgg) { recientes.push(p); return; }
+   viejos.push(p);
+  });
+  if (viejos.length === 0) return 0;
+  var agg = {};
+  viejos.forEach(function(p){
+   var d = new Date(p.fecha);
+   var mes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+   var provId = p.prov || '_sin';
+   var key = mes + '_' + provId;
+   if (!agg[key]) {
+    agg[key] = {
+     id: 'p_magg_' + key, prov: p.prov || '',
+     fecha: new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59).toISOString(),
+     items: [], total: 0, estado: 'recibido',
+     cuentaId: p.cuentaId || '',
+     _monthAgg: true, _pedidoCount: 0,
+    };
+   }
+   // Conservar coste aproximado sin items
+   var costeEstimado = 0;
+   if (Array.isArray(p.items)) {
+    p.items.forEach(function(it){ costeEstimado += (+it.precioCompra||0) * (+it.qty||0); });
+   }
+   agg[key].total += costeEstimado || (+p.total||0);
+   agg[key]._pedidoCount++;
+  });
+  State.set.historialPedidos(recientes.concat(Object.values(agg)));
+  return viejos.length - Object.keys(agg).length;
+ }
+
  // Motor dinámico: aplica capas hasta llegar a TARGET_KB o agotar capas
  // Retorna {startKB, endKB, capas: [{nombre, reduccion, items}]}
  function _compactAuto(targetKB) {
@@ -14861,11 +14936,25 @@ const ui = (() => {
    if (r2 > 0) log.push({ nombre: 'Ventas items purgados >'+dias[i]+'d', items: r2 });
    if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
   }
-  // Capa 3: agregar ventas viejas por día (máxima compresión)
+  // Capa 3: agregar ventas viejas por día
   var diasAgg = [365, 180, 90, 30];
   for (var j = 0; j < diasAgg.length; j++) {
    var r3 = _compactLayer3_VentasAgregadas(diasAgg[j]);
    if (r3 > 0) log.push({ nombre: 'Ventas agregadas día >'+diasAgg[j]+'d', items: r3 });
+   if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
+  }
+  // Capa 4: agregación mensual (máxima compresión de ventas)
+  var diasMes = [180, 90, 60, 30];
+  for (var k = 0; k < diasMes.length; k++) {
+   var r4 = _compactLayer4_VentasMensuales(diasMes[k]);
+   if (r4 > 0) log.push({ nombre: 'Ventas agregadas mes >'+diasMes[k]+'d', items: r4 });
+   if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
+  }
+  // Capa 5: agregar historialPedidos por mes×proveedor
+  var diasPed = [180, 90, 60, 30];
+  for (var l = 0; l < diasPed.length; l++) {
+   var r5 = _compactLayer5_PedidosMensuales(diasPed[l]);
+   if (r5 > 0) log.push({ nombre: 'Pedidos agregados mes >'+diasPed[l]+'d', items: r5 });
    if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
   }
   return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log, warning: 'No se pudo reducir por debajo del target' };
