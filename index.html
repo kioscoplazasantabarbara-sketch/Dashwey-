@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1051-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1052-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1051-dev</title>
+<title>Dashwey v1.3.1052-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12479,7 +12479,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1051-dev';
+ const _APP_VERSION = 'v1.3.1052-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23735,33 +23735,40 @@ function _confirmBorrarCuenta(id) {
  }).length
  : historial.length;
 
- // v1.3.284: DASH-09 — margenMedio filtrado por productos vendidos en el periodo
+ // v1.3.1052: margenMedio SOLO si hay actividad real (ventas o recepciones en periodo)
+ // Antes: mostraba margen teórico del catálogo incluso sin ventas/pedidos → confundía al usuario
  var prods = State.get.productos ? (State.get.productos() || []) : [];
  var margenMedio = 0;
+ var margenValido = false; // flag para decidir si mostrar número o '—'
  try {
  var ventasPeriodo = KPI.ventasEnPeriodo ? KPI.ventasEnPeriodo(period) : [];
- // IDs de productos vendidos en el período
- var prodIdsVendidos = {};
- ventasPeriodo.forEach(function(v) {
- (v.items || []).forEach(function(it) { prodIdsVendidos[it.prodId] = true; });
- });
- // v1.3.562: _calcMargenProd prorratea precioCompra/udsCaja + IVA correctamente
- var prodsBase = Object.keys(prodIdsVendidos).length > 0
- ? prods.filter(function(p) { return prodIdsVendidos[p.id]; })
- : prods;
- var prodsConMargen = prodsBase.map(function(p) { return _calcMargenProd(p); })
- .filter(function(r) { return r.valid; });
- if (prodsConMargen.length > 0) {
- margenMedio = prodsConMargen.reduce(function(s, r) { return s + r.mg; }, 0) / prodsConMargen.length;
+ // Sin ventas NI recepciones → no hay base para calcular margen del periodo
+ if (ventasPeriodo.length === 0 && recepciones === 0) {
+  margenValido = false;
+ } else {
+  // IDs de productos vendidos en el período
+  var prodIdsVendidos = {};
+  ventasPeriodo.forEach(function(v) {
+   (v.items || []).forEach(function(it) { prodIdsVendidos[it.prodId] = true; });
+  });
+  // Si hay ventas, usar productos vendidos; si solo hay recepciones, usar productos comprados
+  var prodIdsActividad = Object.keys(prodIdsVendidos);
+  if (prodIdsActividad.length === 0 && recepciones > 0) {
+   // Solo pedidos: tomar productos comprados en el periodo
+   var prodIdsComprados = {};
+   historial.filter(function(p){ var d = new Date(p.fecha); return range2 && d >= range2.start && d < range2.end; })
+    .forEach(function(p){ (p.items||[]).forEach(function(it){ if (it.prodId) prodIdsComprados[it.prodId] = true; }); });
+   prodIdsActividad = Object.keys(prodIdsComprados);
+  }
+  var prodsBase = prodIdsActividad.length > 0 ? prods.filter(function(p){ return prodIdsActividad.indexOf(p.id) >= 0; }) : [];
+  var prodsConMargen = prodsBase.map(function(p) { return _calcMargenProd(p); })
+   .filter(function(r) { return r.valid; });
+  if (prodsConMargen.length > 0) {
+   margenMedio = prodsConMargen.reduce(function(s, r) { return s + r.mg; }, 0) / prodsConMargen.length;
+   margenValido = true;
+  }
  }
- } catch(_) {
- // Fallback: todos los productos con margen calculable
- var _fb = (prods || []).map(function(p){ return _calcMargenProd(p); })
- .filter(function(r){ return r.valid; });
- if (_fb.length) margenMedio = _fb.reduce(function(s,p){
- return s + (p.pvp-(p.precioCompra||0))/p.pvp*100;
- }, 0) / _fb.length;
- }
+ } catch(_) { margenValido = false; }
 
  // Variación costes = comparar compras periodo actual vs anterior (v1.3.107)
  var variacionCostes = null;
@@ -23810,7 +23817,7 @@ function _confirmBorrarCuenta(id) {
 
  var margenEl = document.getElementById('snap-margen-compras');
  if (margenEl) {
- if (prodsConMargen.length > 0) {
+ if (margenValido) {
   _snapCounterUp(margenEl, margenMedio, 'pct', 400);
   clearTimeout(margenEl._colorTimer);
   margenEl._colorTimer = setTimeout(function() {
