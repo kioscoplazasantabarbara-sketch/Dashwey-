@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1045-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1046-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1045-dev</title>
+<title>Dashwey v1.3.1046-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12494,7 +12494,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1045-dev';
+ const _APP_VERSION = 'v1.3.1046-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14878,21 +14878,46 @@ const ui = (() => {
   return out;
  }
 
- // Recalcular saldo de cada cuenta = sum(ingresos) - sum(gastos)
+ // v1.3.1046: Recalcular saldo cuenta = ingresos + ventas - gastos - pedidos
+ // Incluye ventas (contrapartida de tickets TPV/Loyverse) y pedidos (compras reales).
+ // Excluye ingresos con origen=loyverse/tpv (contrapartida de venta — evita doble conteo)
  function _bbRecalcSaldos() {
   try {
-   var gastos = State.get.gastosOp ? State.get.gastosOp() : [];
-   var ingresos = State.get.ingresosFin ? State.get.ingresosFin() : [];
+   var gastos = State.get.gastosOp ? (State.get.gastosOp()||[]) : [];
+   var ingresos = State.get.ingresosFin ? (State.get.ingresosFin()||[]) : [];
+   var ventas = State.get.ventas ? (State.get.ventas()||[]) : [];
+   var pedidos = State.get.historialPedidos ? (State.get.historialPedidos()||[]) : [];
    var cuentas = State.get.cuentas() || [];
    cuentas.forEach(function(c) {
     var saldoCalc = 0;
-    ingresos.forEach(function(i){ if (i.cuentaId === c.id) saldoCalc += (parseFloat(i.importe)||0); });
+    // Ingresos manuales (excluir contrapartida de ventas)
+    ingresos.forEach(function(i){
+     if (i.cuentaId !== c.id) return;
+     if (i.origen === 'loyverse' || i.origen === 'tpv') return;
+     saldoCalc += (parseFloat(i.importe)||0);
+    });
+    // Ventas: todas las de esta cuenta (cuentaId puede estar vacío → cuenta primaria)
+    ventas.forEach(function(v){
+     var cid = v.cuentaId || (c.isPrimary ? c.id : null);
+     if (cid !== c.id) return;
+     saldoCalc += (parseFloat(v.total)||0);
+    });
+    // Gastos
     gastos.forEach(function(g){ if (g.cuentaId === c.id) saldoCalc -= (parseFloat(g.importe)||0); });
+    // Pedidos: coste via FinEngine (si existe cuentaId o cuenta primaria)
+    pedidos.forEach(function(p){
+     var cid = p.cuentaId || (c.isPrimary ? c.id : null);
+     if (cid !== c.id) return;
+     var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+     saldoCalc -= (parseFloat(coste)||0);
+    });
     saldoCalc = Math.round(saldoCalc * 100) / 100;
     State.set.updateCuenta(c.id, { saldo: saldoCalc });
    });
-  } catch(e) { console.warn('[BB] recalc saldos:', e); }
+  } catch(e) { console.warn('[Dashwey] recalc saldos:', e); }
  }
+ // Exposición pública para llamadas desde cualquier módulo
+ window._recalcSaldosCuentas = _bbRecalcSaldos;
 
  // ── v1.3.1018: Revertir import BudgetBakers ────────────────────
  // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
@@ -15213,8 +15238,8 @@ const ui = (() => {
      } catch(_e) { totalErrors++; }
     });
 
-    // v1.3.1045: Recalcular saldos de cuentas tras import (bug histórico: saldo quedaba en 0)
-    try { _bbRecalcSaldos(); } catch(_) {}
+    // v1.3.1046: Recalcular saldos tras import (expuesto globalmente)
+    try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     DashweyBus.emit('ingreso');
     DashweyBus.emit('gasto');
     DashweyBus.emit('venta');
@@ -36068,6 +36093,16 @@ window._DashweyDeviceId = (() => {
  DashweyBus.on('ingreso', () => {
  try { dash.renderFinanciero && dash.renderFinanciero(); } catch(e) {}
  });
+
+ // v1.3.1046: Recalcular saldos de cuentas automáticamente en cualquier movimiento monetario
+ const _recalcSaldosListener = () => {
+  try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(e) {}
+ };
+ DashweyBus.on('venta', _recalcSaldosListener);
+ DashweyBus.on('gasto', _recalcSaldosListener);
+ DashweyBus.on('ingreso', _recalcSaldosListener);
+ DashweyBus.on('pedido', _recalcSaldosListener);
+ DashweyBus.on('cuenta', _recalcSaldosListener);
 
  // visita: only the agenda card
  DashweyBus.on('visita', () => {
