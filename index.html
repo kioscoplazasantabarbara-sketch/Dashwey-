@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1058-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1060-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1058-dev</title>
+<title>Dashwey v1.3.1060-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12481,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1058-dev';
+ const _APP_VERSION = 'v1.3.1060-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14913,10 +14913,27 @@ const ui = (() => {
    var gastosPrev = (State.get.gastosOp ? State.get.gastosOp() : []) || [];
    var gastosKeep = gastosPrev.filter(function(g){ return g.origen !== 'budgetbakers'; });
 
-   // 2. Crear mapping nombre cuenta → cuentaId
+   // 2. Crear mapping nombre cuenta → cuentaId (v1.3.1059: matching robusto)
+   // BB exporta nombres como "Santander - Cuenta Principal" o "Caja Kiosco"
+   // Usamos match exacto + substring (bidireccional) para tolerar variantes
    var cuentasDashwey = State.get.cuentas() || [];
    var cuentaIdByName = {};
    cuentasDashwey.forEach(function(c){ cuentaIdByName[(c.nombre||'').toLowerCase()] = c.id; });
+   // Helper: busca cuenta por nombre exacto → substring → fallback a primary
+   function _matchCuenta(accountName) {
+    var k = (accountName||'').toLowerCase().trim();
+    if (!k) return null;
+    if (cuentaIdByName[k]) return cuentaIdByName[k];
+    // Substring bidireccional: CSV "Santander - Caja" ↔ cuenta "Santander"
+    for (var i = 0; i < cuentasDashwey.length; i++) {
+     var cn = (cuentasDashwey[i].nombre||'').toLowerCase().trim();
+     if (!cn) continue;
+     if (k.indexOf(cn) >= 0 || cn.indexOf(k) >= 0) return cuentasDashwey[i].id;
+    }
+    // Fallback: cuenta primaria
+    var primary = cuentasDashwey.find(function(c){ return c.isPrimary; });
+    return primary ? primary.id : (cuentasDashwey[0] ? cuentasDashwey[0].id : null);
+   }
 
    // 3. Mapping label → proveedorId (reusa Loyverse o crea manual)
    var provsDashwey = State.get.proveedores() || [];
@@ -14935,7 +14952,7 @@ const ui = (() => {
    var newGastos = [], newPedidos = [], newIngresos = [];
    var newProvs = [];
    rows.forEach(function(r) {
-    var cuentaId = cuentaIdByName[(r.account||'').toLowerCase()];
+    var cuentaId = _matchCuenta(r.account);
     if (!cuentaId) return;
     var amountRaw = (r.amount||'0').replace(/\./g,'').replace(',','.');
     var amount = Math.abs(parseFloat(amountRaw) || 0);
@@ -15411,9 +15428,21 @@ const ui = (() => {
       var canonical = Loyverse.normalize(raw);
       var total = canonical ? canonical.total : 0;
       var metodo = 'efectivo';
+      var ventaCuentaId = null;
       if (canonical && canonical.payments.length > 0) {
        var p0 = canonical.payments[0].type;
        metodo = p0 === 'CASH' ? 'efectivo' : p0 === 'CARD' ? 'tarjeta' : 'otro';
+       // v1.3.1059: asignar cuentaId según método pago usando paymentMap
+       try {
+        var _lvSettings = State.get.settings ? State.get.settings() : {};
+        var _pm = (_lvSettings && _lvSettings.loyverse && _lvSettings.loyverse.paymentMap) ? _lvSettings.loyverse.paymentMap : {};
+        ventaCuentaId = _pm[p0] || null;
+        // Validar que la cuenta existe, si no fallback a primaria
+        if (ventaCuentaId) {
+         var _cts = State.get.cuentas ? (State.get.cuentas()||[]) : [];
+         if (!_cts.find(function(c){return c.id === ventaCuentaId;})) ventaCuentaId = null;
+        }
+       } catch(_) { ventaCuentaId = null; }
       }
 
       var items = lineItems.map(function(li) {
@@ -15441,6 +15470,7 @@ const ui = (() => {
        fecha: fecha,
        metodo: metodo,
        total: total,
+       cuentaId: ventaCuentaId, // v1.3.1059: asignar según método pago (CASH→Kiosco, CARD→Santander)
        items: items,
        origen: 'loyverse',
        sourceRefId: receiptId,
@@ -15464,18 +15494,25 @@ const ui = (() => {
       });
       if (minLvDate) {
        var ingresosAll = State.get.ingresosFin ? (State.get.ingresosFin()||[]) : [];
+       // v1.3.1060: cleanup preciso — solo borrar ingresos BB que representan VENTAS diarias.
+       // Categorías a limpiar (BB las marca como categoría "Ingresos por ventas"):
+       // - "Recaudación del día" (concepto)
+       // - "Ingresos por ventas" (concepto genérico)
+       // Respetar: reembolsos, devoluciones Hacienda, inyecciones capital, etc.
        var ingresosKeep = ingresosAll.filter(function(i){
-        // Solo borrar BB, no tocar manuales/loyverse/otros
         if (i.origen !== 'budgetbakers') return true;
         var d = new Date(i.fecha);
         if (isNaN(d)) return true;
-        // Mantener si fecha < minLvDate (antes del rango Loyverse)
-        return d < minLvDate;
+        if (d < minLvDate) return true; // antes del rango Loyverse
+        // Solo borrar si es categoría "Ingresos por ventas" (contrapartida de tickets)
+        var cat = (i.categoria || '').toLowerCase();
+        var esVentaDiaria = cat.indexOf('ingresos por ventas') >= 0 || cat === 'ventas';
+        return !esVentaDiaria; // mantener si NO es venta diaria
        });
        ingresosBBEliminados = ingresosAll.length - ingresosKeep.length;
        if (ingresosBBEliminados > 0) {
         State.set.setIngresos(ingresosKeep);
-        console.log('[Loyverse] Limpieza solape: ' + ingresosBBEliminados + ' ingresos BB eliminados (fecha >= ' + minLvDate.toISOString().slice(0,10) + ')');
+        console.log('[Loyverse] Limpieza solape: ' + ingresosBBEliminados + ' ingresos BB categoría "Ingresos por ventas" eliminados (fecha >= ' + minLvDate.toISOString().slice(0,10) + ')');
        }
       }
      }
