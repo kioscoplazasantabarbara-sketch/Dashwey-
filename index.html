@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1057-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1058-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1057-dev</title>
+<title>Dashwey v1.3.1058-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12481,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1057-dev';
+ const _APP_VERSION = 'v1.3.1058-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14523,14 +14523,39 @@ const ui = (() => {
     mergedProds.push(prod);
    });
    var newProds = mergedProds; // mantener variable para refs posteriores
-   // v1.3.1013: guard pre-save — si initial sync no terminó, abortar import
-   // para evitar que _doInitialSync sobrescriba con datos vacíos de Firebase
+
+   // v1.3.1058: Espera activa del sync inicial (antes: abortaba inmediatamente)
+   // Poll cada 500ms hasta 15s. Si expira, continuar igual (mejor importar que bloquear).
+   var _doCommit = function(){
+    State.set.productos(newProds);
+    _lvFinishImportCatalog(newProvs, newProds, st);
+   };
    if (!window._DashweyInitialSyncDone) {
-    if (st) { st.textContent = '⚠️ Espera unos segundos a que termine la sincronización inicial y reintenta.'; st.style.color = 'var(--red)'; }
-    showToast('⚠️ Sincronización inicial no completa — reintenta en 3s');
+    if (st) { st.textContent = '⏳ Esperando sincronización inicial…'; st.style.color = 'var(--ink-soft)'; }
+    var _waitStart = Date.now();
+    var _waitTimer = setInterval(function(){
+     if (window._DashweyInitialSyncDone) {
+      clearInterval(_waitTimer);
+      _doCommit();
+     } else if (Date.now() - _waitStart > 15000) {
+      clearInterval(_waitTimer);
+      console.warn('[Loyverse] Sync inicial no completó en 15s — continuando igual');
+      _doCommit();
+     }
+    }, 500);
     return;
    }
-   State.set.productos(newProds);
+   _doCommit();
+   return;
+  } catch(e) {
+   if (st) { st.textContent = '❌ Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
+   console.error('[Dashwey] _lvCommitCatalog:', e);
+  }
+ }
+
+ // v1.3.1058: Continuación del commit extraído para soportar espera activa
+ function _lvFinishImportCatalog(newProvs, newProds, st) {
+  try {
    // v1.3.1011: auto-seleccionar primer proveedor para que Almacén muestre datos directos
    if (newProvs.length > 0) {
     State.set.selectedProv(newProvs[0].id);
@@ -14548,7 +14573,7 @@ const ui = (() => {
    showToast('✅ ' + newProds.length + ' productos importados · ' + newProvs.length + ' proveedores');
   } catch(e) {
    if (st) { st.textContent = '❌ Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
-   console.error('[Dashwey] _lvCommitCatalog:', e);
+   console.error('[Dashwey] _lvFinishImportCatalog:', e);
   }
  }
 
