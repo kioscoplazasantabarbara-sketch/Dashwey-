@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1055-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1056-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1055-dev</title>
+<title>Dashwey v1.3.1056-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8741,7 +8741,7 @@ function _authTabSafe(tab) {
  <div class="sd-group">
  <div class="sd-row" onclick="App.ui._importLoyverseCatalog()">
  <div class="sd-icon" style="background:#DBEAFE">📦</div>
- <div class="sd-info"><div class="sd-title">Importar catálogo</div><div class="sd-sub">Productos + proveedores · Fresh start (destructivo)</div></div>
+ <div class="sd-info"><div class="sd-title">Importar catálogo</div><div class="sd-sub">Productos + proveedores · Merge seguro (conserva ediciones)</div></div>
  <div class="sd-chev">›</div>
  </div>
  <div class="sd-row" onclick="App.ui._importLoyverseReceipts()">
@@ -12481,7 +12481,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1055-dev';
+ const _APP_VERSION = 'v1.3.1056-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14357,8 +14357,8 @@ const ui = (() => {
 
   window._showDestructiveConfirm({
    title: 'Importar catálogo Loyverse',
-   message: '⚠️ FRESH START: se eliminarán TODOS los productos y proveedores actuales de Dashwey. Se importarán desde Loyverse organizados por categorías (proveedores). ¿Continuar?',
-   confirmText: 'Importar (destructivo)',
+   message: 'Se sincronizará el catálogo con Loyverse:\n• Productos/proveedores Loyverse: actualizar nombre, PVP y barcode\n• Ediciones manuales (precioCompra, udscaja, IVA, stock): CONSERVADAS\n• Productos/proveedores manuales: intactos\n• Placeholders BB (bb_agg_*, prov_bb_*): eliminados\n\n¿Continuar?',
+   confirmText: 'Sincronizar catálogo',
    onConfirm: function() {
     // v1.3.1009: primero categorías, luego items
     _lvImportCategories(token);
@@ -14417,20 +14417,34 @@ const ui = (() => {
  function _lvCommitCatalog(lvItems, lvCats) {
   var st = document.getElementById('lv-token-status');
   try {
-   // v1.3.1009: crear proveedor por cada categoría Loyverse
-   // Fresh start: reemplaza proveedores enteros
-   var newProvs = [];
+   // v1.3.1056: MERGE inteligente — proveedores
+   // - Proveedores Loyverse existentes: actualizar nombre (si cambió en LV)
+   //   pero CONSERVAR agente/tel/email/diasPedido (ediciones del usuario)
+   // - Proveedores manuales (no loyverse): NUNCA tocar
+   // - Proveedores prov_bb_* sintéticos: eliminar (BB placeholders ya no son necesarios)
+   var prevProvs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+   var prevProvById = {};
+   prevProvs.forEach(function(p){ if (p && p.id) prevProvById[p.id] = p; });
+   var mergedProvs = [];
+   // Conservar proveedores manuales (origen != loyverse Y no bb_*)
+   prevProvs.forEach(function(p){
+    if (!p || !p.id) return;
+    if (p.origen === 'loyverse') return; // lo recreamos abajo
+    if (p.id.indexOf('prov_bb_') === 0) return; // placeholders BB → descartar
+    mergedProvs.push(p);
+   });
    var catIdToProvId = {}; // mapping lvCategoryId → dashweyProvId
    (lvCats || []).forEach(function(c) {
     if (!c || !c.id) return;
     var provId = 'prov_lv_' + c.id;
-    newProvs.push({
+    var existing = prevProvById[provId];
+    mergedProvs.push({
      id: provId,
-     nombre: c.name || 'Sin nombre',
-     agente: '',
-     tel: '',
-     email: '',
-     diasPedido: [],
+     nombre: c.name || (existing && existing.nombre) || 'Sin nombre', // LV gana si trae nombre, else preservar
+     agente: (existing && existing.agente) || '',
+     tel:    (existing && existing.tel) || '',
+     email:  (existing && existing.email) || '',
+     diasPedido: (existing && existing.diasPedido) || [],
      origen: 'loyverse',
      loyverseCategoryId: c.id,
     });
@@ -14438,27 +14452,41 @@ const ui = (() => {
    });
    // Proveedor fallback para items sin categoría
    var fallbackProvId = 'prov_lv_nocat';
-   newProvs.push({
+   var fbExisting = prevProvById[fallbackProvId];
+   mergedProvs.push({
     id: fallbackProvId,
     nombre: 'Sin categoría',
-    agente: '',
-    tel: '',
-    email: '',
-    diasPedido: [],
+    agente: (fbExisting && fbExisting.agente) || '',
+    tel:    (fbExisting && fbExisting.tel) || '',
+    email:  (fbExisting && fbExisting.email) || '',
+    diasPedido: (fbExisting && fbExisting.diasPedido) || [],
     origen: 'loyverse',
    });
+   var newProvs = mergedProvs; // mantener variable para refs posteriores
    State.set.proveedores(newProvs);
 
-   // Crear productos asignados a proveedor según categoría
-   var newProds = [];
+   // v1.3.1056: MERGE inteligente — productos
+   // - Producto Loyverse existente: actualizar nombre/pvp desde LV, CONSERVAR
+   //   ediciones manuales (precioCompra, udscaja, iva, categoria, stock, barcode)
+   // - Producto manual (origen != loyverse): NUNCA tocar
+   // - Producto bb_agg_*: eliminar (placeholders ya no necesarios con Loyverse)
+   var prevProds = State.get.productos ? (State.get.productos() || []) : [];
+   var prevProdById = {};
+   prevProds.forEach(function(p){ if (p && p.id) prevProdById[p.id] = p; });
+   var mergedProds = [];
+   // Conservar productos manuales (origen != loyverse Y no bb_agg_*)
+   prevProds.forEach(function(p){
+    if (!p || !p.id) return;
+    if (p.origen === 'loyverse') return; // lo recreamos abajo
+    if (p.id.indexOf('bb_agg_') === 0) return; // placeholders BB → descartar
+    mergedProds.push(p);
+   });
    lvItems.forEach(function(it) {
     if (!it || !it.id) return;
     var variant = (it.variants && it.variants[0]) || {};
     // v1.3.1012: fallback pvp desde stores[].price si default_price está vacío
-    // Loyverse items VARIABLE o con pricing por tienda guardan precio en stores[]
     var pvp = parseFloat(variant.default_price || 0) || 0;
     if (!pvp && variant.stores && variant.stores.length > 0) {
-     // Primer store con precio válido
      for (var _si = 0; _si < variant.stores.length; _si++) {
       var _sp = parseFloat(variant.stores[_si].price || 0) || 0;
       if (_sp > 0) { pvp = _sp; break; }
@@ -14466,22 +14494,35 @@ const ui = (() => {
     }
     var costeBulto = parseFloat(variant.cost || 0) || 0;
     var provId = (it.category_id && catIdToProvId[it.category_id]) || fallbackProvId;
+    var prodId = 'p_lv_' + it.id;
+    var existing = prevProdById[prodId];
     var prod = {
-     id: 'p_lv_' + it.id,
-     nombre: it.item_name || it.name || 'Sin nombre',
+     id: prodId,
      loyverseItemId: it.id,
-     categoria: it.category_id || '',
-     pvp: pvp,
-     precioCompra: costeBulto,
-     udscaja: 1,
-     iva: 10,
-     stock: 0,
-     barcode: variant.barcode || '',
      origen: 'loyverse',
+     // Datos que vienen de Loyverse (siempre refrescar)
+     nombre: it.item_name || it.name || (existing && existing.nombre) || 'Sin nombre',
+     pvp: pvp || (existing && existing.pvp) || 0,
+     barcode: variant.barcode || (existing && existing.barcode) || '',
+     categoria: it.category_id || (existing && existing.categoria) || '',
      prov: provId,
+     // Campos editables por usuario: CONSERVAR si ya existían
+     precioCompra: (existing && existing.precioCompra !== undefined && existing.precioCompra !== null)
+                   ? existing.precioCompra
+                   : costeBulto,
+     udscaja: (existing && existing.udscaja) || 1,
+     iva: (existing && existing.iva !== undefined) ? existing.iva : 10,
+     stock: (existing && existing.stock) || 0,
+     // Preservar campos extra que el usuario pueda haber añadido
+     e: (existing && existing.e) || undefined,
+     foto: (existing && existing.foto) || undefined,
+     minimo: (existing && existing.minimo) || undefined,
     };
-    newProds.push(prod);
+    // Limpiar undefined para no contaminar Firestore
+    Object.keys(prod).forEach(function(k){ if (prod[k] === undefined) delete prod[k]; });
+    mergedProds.push(prod);
    });
+   var newProds = mergedProds; // mantener variable para refs posteriores
    // v1.3.1013: guard pre-save — si initial sync no terminó, abortar import
    // para evitar que _doInitialSync sobrescriba con datos vacíos de Firebase
    if (!window._DashweyInitialSyncDone) {
