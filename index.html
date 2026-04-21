@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1062-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1063-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1062-dev</title>
+<title>Dashwey v1.3.1063-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12479,7 +12479,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1062-dev';
+ const _APP_VERSION = 'v1.3.1063-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14740,6 +14740,103 @@ const ui = (() => {
   }
  }
 
+ // ── v1.3.1063: Compactar datos para Firebase (<1MB) ────
+ // Problema: con BB + Loyverse el state supera 1MB (Firestore doc limit)
+ // Estrategia:
+ //  A) Consolidar ingresos BB categoria "Ingresos por ventas" → 1 agregado/mes×cuenta
+ //  B) Purgar items[] de ventas Loyverse > 30 días (mantiene total/fecha/cuentaId)
+ function _compactDatos() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  window._showDestructiveConfirm({
+   title: 'Compactar datos',
+   message: 'Esta acción reducirá el tamaño del state para que pueda sincronizarse con Firebase:\n\n• Agrega ingresos BB diarios en totales mensuales por cuenta (conserva totales)\n• Elimina desglose de productos en ventas Loyverse >30 días (conserva total y cuenta)\n\nLos saldos y KPIs NO se verán afectados. ¿Continuar?',
+   onConfirm: function() {
+    try {
+     var ing = State.get.ingresosFin ? (State.get.ingresosFin()||[]).slice() : [];
+     var ven = State.get.ventas ? (State.get.ventas()||[]).slice() : [];
+
+     // ── A) Consolidar ingresos BB "Ingresos por ventas" por mes × cuenta ──
+     var bbDiarios = [];
+     var otros = [];
+     ing.forEach(function(i){
+      var cat = (i.categoria||'').toLowerCase();
+      var esBBVenta = i.origen === 'budgetbakers' && cat.indexOf('ingresos por ventas') >= 0;
+      if (esBBVenta) bbDiarios.push(i); else otros.push(i);
+     });
+     // Agrupar por mes-cuenta
+     var agregado = {};
+     bbDiarios.forEach(function(i){
+      var d = new Date(i.fecha);
+      if (isNaN(d)) return;
+      var mes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      var cId = i.cuentaId || '_sin';
+      var key = mes + '_' + cId;
+      if (!agregado[key]) {
+       agregado[key] = {
+        id: 'i_bb_agg_' + key,
+        nombre: 'Ventas ' + mes + ' (agregado BB)',
+        categoria: 'Ingresos por ventas',
+        concepto: 'Agregado mensual BudgetBakers',
+        importe: 0,
+        fecha: new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59).toISOString(), // último día del mes
+        cuentaId: i.cuentaId || '',
+        origen: 'budgetbakers',
+        metaTipo: 'normal',
+        scope: 'negocio',
+        estado: 'confirmado',
+        sourceHistorical: true,
+       };
+      }
+      agregado[key].importe += +i.importe || 0;
+     });
+     var newIng = otros.concat(Object.values(agregado));
+     var ingReducidos = bbDiarios.length - Object.keys(agregado).length;
+
+     // ── B) Purgar items[] de ventas Loyverse > 30 días ──
+     var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+     var ventasPurgadas = 0;
+     var newVen = ven.map(function(v){
+      if (v.origen !== 'loyverse') return v;
+      if (!Array.isArray(v.items) || v.items.length === 0) return v;
+      var d = new Date(v.fecha);
+      if (isNaN(d) || d >= cutoff) return v;
+      // Venta antigua: quitar items pero conservar resumen
+      ventasPurgadas++;
+      var clon = {};
+      Object.keys(v).forEach(function(k){ if (k !== 'items') clon[k] = v[k]; });
+      clon._itemsCount = v.items.length;
+      clon._compacted = true;
+      return clon;
+     });
+
+     // ── Aplicar cambios ──
+     State.set.setIngresos(newIng);
+     State.set.ventas(newVen);
+
+     // Recalcular saldos (el total no cambia, pero por si acaso)
+     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
+     try { App.dash.render(); } catch(_) {}
+
+     // Calcular nuevo tamaño
+     try {
+      var sn2 = {};
+      Object.keys(State.get).forEach(function(k){
+       try { var vv = State.get[k](); if (vv !== undefined && typeof vv !== 'function') sn2[k] = vv; } catch(_) {}
+      });
+      var kb = (JSON.stringify(sn2).length / 1024).toFixed(0);
+      showToast('✅ Compactado · ' + ingReducidos + ' ingresos agregados · ' + ventasPurgadas + ' ventas desglose eliminado · ~' + kb + ' KB');
+      console.log('[Dashwey/Compact] Reducción completada. Nuevo tamaño:', kb, 'KB');
+     } catch(_) {
+      showToast('✅ Compactado · ' + ingReducidos + ' ingresos + ' + ventasPurgadas + ' ventas');
+     }
+    } catch(e) {
+     console.error('[Dashwey/Compact] Error:', e);
+     showToast('⚠️ Error: ' + (e.message||e));
+    }
+   }
+  });
+ }
+
  // ── v1.3.1050: Menu unificado Reset/Limpieza como subpágina de Settings ─
  // Usa sdSubOpen (patrón interno de settings drawer) para renderizar.
  function _openResetMenu() {
@@ -14748,6 +14845,7 @@ const ui = (() => {
    { grp:'💾 BudgetBakers', icon:'📦', iconBg:'#EDE9FE', title:'Limpiar placeholders BB', sub:'Borra productos bb_agg_* y proveedores prov_bb_*', fn:'_cleanBBPlaceholders' },
    { grp:'🧾 Loyverse', icon:'🧹', iconBg:'#DBEAFE', title:'Limpiar datos Loyverse', sub:'Elimina solo movements con origen=loyverse', fn:'_devLoyverseClean' },
    { grp:'🔧 Utilidades', icon:'♻️', iconBg:'#D1FAE5', title:'Recalcular saldos', sub:'Reconstruye saldo cuentas sin borrar datos', fn:'_recalcSaldosManual' },
+   { grp:'🔧 Utilidades', icon:'🗜️', iconBg:'#DBEAFE', title:'Compactar datos', sub:'Reduce tamaño para sync Firebase · agrega BB mensual · purga items Loyverse >30d', fn:'_compactDatos' },
    { grp:'🔧 Utilidades', icon:'📊', iconBg:'#FEF3C7', title:'Limpiar lotes FIFO', sub:'Reconstruye valorStock desde 0', fn:'_cleanLotesStock' },
    { grp:'🔧 Utilidades', icon:'📤', iconBg:'#F5F3FF', title:'Backup técnico (JSON)', sub:'Exporta todos los datos · no destructivo', fn:'exportarDatos' },
    { grp:'🧨 Reset completos', icon:'🧽', iconBg:'#FEE2E2', title:'Limpiar transacciones', sub:'Borra ventas/pedidos · mantiene catálogo + cuentas', fn:'_cleanTransactionsDashwey' },
@@ -15582,7 +15680,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _openResetMenu, _resetMenuDispatch };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _openResetMenu, _resetMenuDispatch };
 })();
 
 // ══════════════════════════════════════════
