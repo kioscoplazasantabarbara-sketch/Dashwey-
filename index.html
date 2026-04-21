@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1063-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1064-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1063-dev</title>
+<title>Dashwey v1.3.1064-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12479,7 +12479,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1063-dev';
+ const _APP_VERSION = 'v1.3.1064-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14740,95 +14740,167 @@ const ui = (() => {
   }
  }
 
- // ── v1.3.1063: Compactar datos para Firebase (<1MB) ────
- // Problema: con BB + Loyverse el state supera 1MB (Firestore doc limit)
- // Estrategia:
- //  A) Consolidar ingresos BB categoria "Ingresos por ventas" → 1 agregado/mes×cuenta
- //  B) Purgar items[] de ventas Loyverse > 30 días (mantiene total/fecha/cuentaId)
+ // ── v1.3.1064: Engine de compactación dinámica por capas ────
+ // Reduce el state hasta <900KB aplicando transformaciones progresivas.
+ // Usado automáticamente tras imports y al arrancar, también manual desde menú.
+ // TARGET_KB = 900 deja margen de 124KB bajo el límite 1024KB Firestore.
+ function _calcStateSize() {
+  try {
+   var sn = {};
+   Object.keys(State.get).forEach(function(k){
+    try { var v = State.get[k](); if (v !== undefined && typeof v !== 'function') sn[k] = v; } catch(_) {}
+   });
+   return JSON.stringify(sn).length;
+  } catch(_) { return 0; }
+ }
+
+ // Capa 1: Agregar ingresos BB 'Ingresos por ventas' en mensuales × cuenta
+ function _compactLayer1_BBIngresos() {
+  var ing = State.get.ingresosFin ? (State.get.ingresosFin()||[]).slice() : [];
+  var bbDiarios = [], otros = [];
+  ing.forEach(function(i){
+   var cat = (i.categoria||'').toLowerCase();
+   var esBBVenta = i.origen === 'budgetbakers' && cat.indexOf('ingresos por ventas') >= 0 && !i.sourceHistorical;
+   if (esBBVenta) bbDiarios.push(i); else otros.push(i);
+  });
+  if (bbDiarios.length === 0) return 0;
+  var agregado = {};
+  bbDiarios.forEach(function(i){
+   var d = new Date(i.fecha);
+   if (isNaN(d)) return;
+   var mes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+   var cId = i.cuentaId || '_sin';
+   var key = mes + '_' + cId;
+   if (!agregado[key]) {
+    agregado[key] = {
+     id: 'i_bb_agg_' + key, nombre: 'Ventas ' + mes + ' (agregado BB)',
+     categoria: 'Ingresos por ventas', concepto: 'Agregado mensual BudgetBakers',
+     importe: 0, fecha: new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59).toISOString(),
+     cuentaId: i.cuentaId || '', origen: 'budgetbakers',
+     metaTipo: 'normal', scope: 'negocio', estado: 'confirmado', sourceHistorical: true,
+    };
+   }
+   agregado[key].importe += +i.importe || 0;
+  });
+  State.set.setIngresos(otros.concat(Object.values(agregado)));
+  return bbDiarios.length - Object.keys(agregado).length;
+ }
+
+ // Capa 2: Purgar items[] de ventas Loyverse > N días (parametrizado)
+ function _compactLayer2_VentasItems(diasConservar) {
+  var ven = State.get.ventas ? (State.get.ventas()||[]).slice() : [];
+  var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - diasConservar);
+  var purgadas = 0;
+  var newVen = ven.map(function(v){
+   if (v.origen !== 'loyverse') return v;
+   if (!Array.isArray(v.items) || v.items.length === 0) return v;
+   var d = new Date(v.fecha);
+   if (isNaN(d) || d >= cutoff) return v;
+   purgadas++;
+   var clon = {};
+   Object.keys(v).forEach(function(k){ if (k !== 'items') clon[k] = v[k]; });
+   clon._itemsCount = v.items.length;
+   clon._compacted = true;
+   return clon;
+  });
+  if (purgadas > 0) State.set.ventas(newVen);
+  return purgadas;
+ }
+
+ // Capa 3: Agregar ventas sin items > N días en resumen día×cuenta
+ function _compactLayer3_VentasAgregadas(diasConservar) {
+  var ven = State.get.ventas ? (State.get.ventas()||[]).slice() : [];
+  var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - diasConservar);
+  var viejas = [], frescas = [];
+  ven.forEach(function(v){
+   var d = new Date(v.fecha);
+   if (isNaN(d) || d >= cutoff || v._dayAgg) { frescas.push(v); return; }
+   if (Array.isArray(v.items) && v.items.length > 0) { frescas.push(v); return; } // capa 2 no corrió, no tocar
+   viejas.push(v);
+  });
+  if (viejas.length === 0) return 0;
+  var agg = {};
+  viejas.forEach(function(v){
+   var d = new Date(v.fecha);
+   var dia = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+   var cId = v.cuentaId || '_sin';
+   var key = dia + '_' + cId;
+   if (!agg[key]) {
+    agg[key] = {
+     id: 'v_agg_' + key, ticketId: 'agg_' + key,
+     fecha: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).toISOString(),
+     metodo: 'otro', total: 0, items: [],
+     origen: 'loyverse', cuentaId: v.cuentaId || '',
+     _dayAgg: true, _ticketCount: 0,
+    };
+   }
+   agg[key].total += +v.total || 0;
+   agg[key]._ticketCount++;
+  });
+  State.set.ventas(frescas.concat(Object.values(agg)));
+  return viejas.length - Object.keys(agg).length;
+ }
+
+ // Motor dinámico: aplica capas hasta llegar a TARGET_KB o agotar capas
+ // Retorna {startKB, endKB, capas: [{nombre, reduccion, items}]}
+ function _compactAuto(targetKB) {
+  targetKB = targetKB || 900;
+  var start = _calcStateSize();
+  var log = [];
+  if (start <= targetKB * 1024) {
+   return { startKB: (start/1024).toFixed(0), endKB: (start/1024).toFixed(0), capas: log, skipped: true };
+  }
+  // Capa 1: ingresos BB mensuales (barato, sin pérdida real)
+  var r1 = _compactLayer1_BBIngresos();
+  if (r1 > 0) log.push({ nombre: 'BB ingresos→mensual', items: r1 });
+  if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
+  // Capa 2: purgar items progresivamente — intentar preservar el mayor detalle posible
+  var dias = [365, 180, 90, 60, 30, 14, 7];
+  for (var i = 0; i < dias.length; i++) {
+   var r2 = _compactLayer2_VentasItems(dias[i]);
+   if (r2 > 0) log.push({ nombre: 'Ventas items purgados >'+dias[i]+'d', items: r2 });
+   if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
+  }
+  // Capa 3: agregar ventas viejas por día (máxima compresión)
+  var diasAgg = [365, 180, 90, 30];
+  for (var j = 0; j < diasAgg.length; j++) {
+   var r3 = _compactLayer3_VentasAgregadas(diasAgg[j]);
+   if (r3 > 0) log.push({ nombre: 'Ventas agregadas día >'+diasAgg[j]+'d', items: r3 });
+   if (_calcStateSize() <= targetKB * 1024) return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log };
+  }
+  return { startKB: (start/1024).toFixed(0), endKB: (_calcStateSize()/1024).toFixed(0), capas: log, warning: 'No se pudo reducir por debajo del target' };
+ }
+
+ // Wrapper silencioso para uso automático (sin toasts, sin confirmación)
+ function _compactSilent() {
+  try {
+   var result = _compactAuto(900);
+   if (!result.skipped && result.capas.length > 0) {
+    console.log('[Dashwey/Compact auto]', result.startKB + 'KB → ' + result.endKB + 'KB', result.capas);
+    try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
+    try { App.dash.render(); } catch(_) {}
+   }
+   return result;
+  } catch(e) { console.error('[Dashwey/Compact auto] Error:', e); return null; }
+ }
+
+ // Manual con confirmación (debug / safety net)
  function _compactDatos() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  var preview = _calcStateSize();
   window._showDestructiveConfirm({
    title: 'Compactar datos',
-   message: 'Esta acción reducirá el tamaño del state para que pueda sincronizarse con Firebase:\n\n• Agrega ingresos BB diarios en totales mensuales por cuenta (conserva totales)\n• Elimina desglose de productos en ventas Loyverse >30 días (conserva total y cuenta)\n\nLos saldos y KPIs NO se verán afectados. ¿Continuar?',
+   message: 'State actual: ' + (preview/1024).toFixed(0) + ' KB · Target: 900 KB\n\nEsta acción aplicará compactación progresiva hasta bajar del target:\n• Agrega ingresos BB diarios en mensuales\n• Purga detalle items[] de ventas Loyverse antiguas\n• Agrega ventas muy antiguas por día\n\nLos totales y saldos NO se verán afectados. ¿Continuar?',
    onConfirm: function() {
     try {
-     var ing = State.get.ingresosFin ? (State.get.ingresosFin()||[]).slice() : [];
-     var ven = State.get.ventas ? (State.get.ventas()||[]).slice() : [];
-
-     // ── A) Consolidar ingresos BB "Ingresos por ventas" por mes × cuenta ──
-     var bbDiarios = [];
-     var otros = [];
-     ing.forEach(function(i){
-      var cat = (i.categoria||'').toLowerCase();
-      var esBBVenta = i.origen === 'budgetbakers' && cat.indexOf('ingresos por ventas') >= 0;
-      if (esBBVenta) bbDiarios.push(i); else otros.push(i);
-     });
-     // Agrupar por mes-cuenta
-     var agregado = {};
-     bbDiarios.forEach(function(i){
-      var d = new Date(i.fecha);
-      if (isNaN(d)) return;
-      var mes = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
-      var cId = i.cuentaId || '_sin';
-      var key = mes + '_' + cId;
-      if (!agregado[key]) {
-       agregado[key] = {
-        id: 'i_bb_agg_' + key,
-        nombre: 'Ventas ' + mes + ' (agregado BB)',
-        categoria: 'Ingresos por ventas',
-        concepto: 'Agregado mensual BudgetBakers',
-        importe: 0,
-        fecha: new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59).toISOString(), // último día del mes
-        cuentaId: i.cuentaId || '',
-        origen: 'budgetbakers',
-        metaTipo: 'normal',
-        scope: 'negocio',
-        estado: 'confirmado',
-        sourceHistorical: true,
-       };
-      }
-      agregado[key].importe += +i.importe || 0;
-     });
-     var newIng = otros.concat(Object.values(agregado));
-     var ingReducidos = bbDiarios.length - Object.keys(agregado).length;
-
-     // ── B) Purgar items[] de ventas Loyverse > 30 días ──
-     var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-     var ventasPurgadas = 0;
-     var newVen = ven.map(function(v){
-      if (v.origen !== 'loyverse') return v;
-      if (!Array.isArray(v.items) || v.items.length === 0) return v;
-      var d = new Date(v.fecha);
-      if (isNaN(d) || d >= cutoff) return v;
-      // Venta antigua: quitar items pero conservar resumen
-      ventasPurgadas++;
-      var clon = {};
-      Object.keys(v).forEach(function(k){ if (k !== 'items') clon[k] = v[k]; });
-      clon._itemsCount = v.items.length;
-      clon._compacted = true;
-      return clon;
-     });
-
-     // ── Aplicar cambios ──
-     State.set.setIngresos(newIng);
-     State.set.ventas(newVen);
-
-     // Recalcular saldos (el total no cambia, pero por si acaso)
+     var r = _compactAuto(900);
      try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
      try { App.dash.render(); } catch(_) {}
-
-     // Calcular nuevo tamaño
-     try {
-      var sn2 = {};
-      Object.keys(State.get).forEach(function(k){
-       try { var vv = State.get[k](); if (vv !== undefined && typeof vv !== 'function') sn2[k] = vv; } catch(_) {}
-      });
-      var kb = (JSON.stringify(sn2).length / 1024).toFixed(0);
-      showToast('✅ Compactado · ' + ingReducidos + ' ingresos agregados · ' + ventasPurgadas + ' ventas desglose eliminado · ~' + kb + ' KB');
-      console.log('[Dashwey/Compact] Reducción completada. Nuevo tamaño:', kb, 'KB');
-     } catch(_) {
-      showToast('✅ Compactado · ' + ingReducidos + ' ingresos + ' + ventasPurgadas + ' ventas');
-     }
+     var msg = '✅ ' + r.startKB + ' KB → ' + r.endKB + ' KB';
+     if (r.skipped) msg = 'ℹ️ State ya <900KB (' + r.startKB + ' KB), nada que hacer';
+     if (r.warning) msg += ' ⚠️ ' + r.warning;
+     showToast(msg);
+     console.log('[Dashwey/Compact manual]', r);
     } catch(e) {
      console.error('[Dashwey/Compact] Error:', e);
      showToast('⚠️ Error: ' + (e.message||e));
@@ -14845,7 +14917,7 @@ const ui = (() => {
    { grp:'💾 BudgetBakers', icon:'📦', iconBg:'#EDE9FE', title:'Limpiar placeholders BB', sub:'Borra productos bb_agg_* y proveedores prov_bb_*', fn:'_cleanBBPlaceholders' },
    { grp:'🧾 Loyverse', icon:'🧹', iconBg:'#DBEAFE', title:'Limpiar datos Loyverse', sub:'Elimina solo movements con origen=loyverse', fn:'_devLoyverseClean' },
    { grp:'🔧 Utilidades', icon:'♻️', iconBg:'#D1FAE5', title:'Recalcular saldos', sub:'Reconstruye saldo cuentas sin borrar datos', fn:'_recalcSaldosManual' },
-   { grp:'🔧 Utilidades', icon:'🗜️', iconBg:'#DBEAFE', title:'Compactar datos', sub:'Reduce tamaño para sync Firebase · agrega BB mensual · purga items Loyverse >30d', fn:'_compactDatos' },
+   { grp:'🔧 Utilidades', icon:'🗜️', iconBg:'#DBEAFE', title:'Forzar compactación', sub:'Normalmente automático · usar si Firebase no sincroniza', fn:'_compactDatos' },
    { grp:'🔧 Utilidades', icon:'📊', iconBg:'#FEF3C7', title:'Limpiar lotes FIFO', sub:'Reconstruye valorStock desde 0', fn:'_cleanLotesStock' },
    { grp:'🔧 Utilidades', icon:'📤', iconBg:'#F5F3FF', title:'Backup técnico (JSON)', sub:'Exporta todos los datos · no destructivo', fn:'exportarDatos' },
    { grp:'🧨 Reset completos', icon:'🧽', iconBg:'#FEE2E2', title:'Limpiar transacciones', sub:'Borra ventas/pedidos · mantiene catálogo + cuentas', fn:'_cleanTransactionsDashwey' },
@@ -15169,12 +15241,22 @@ const ui = (() => {
    // 7. Recalcular saldos
    _bbRecalcSaldos();
 
+   // v1.3.1064: Compactación automática tras import BB (si state >900KB)
+   var _bbAutoCompact = null;
+   try {
+    if (typeof _compactSilent === 'function') _bbAutoCompact = _compactSilent();
+   } catch(eC) { console.warn('[BB] Error auto-compact:', eC); }
+
    DashweyBus.emit('gasto');
    DashweyBus.emit('ingreso');
    DashweyBus.emit('pedido_stock');
    DashweyBus.emit('cuenta');
    try { App.dash.render(); } catch(_) {}
-   showToast('✅ ' + newGastos.length + ' gastos · ' + newIngresos.length + ' ingresos · ' + newPedidos.length + ' pedidos · ' + newProvs.length + ' proveedores');
+   var _bbMsg = '✅ ' + newGastos.length + ' gastos · ' + newIngresos.length + ' ingresos · ' + newPedidos.length + ' pedidos · ' + newProvs.length + ' proveedores';
+   if (_bbAutoCompact && !_bbAutoCompact.skipped && _bbAutoCompact.capas.length > 0) {
+    _bbMsg += ' · 🗜️ ' + _bbAutoCompact.startKB + '→' + _bbAutoCompact.endKB + ' KB';
+   }
+   showToast(_bbMsg);
   } catch(e) {
    console.error('[Dashwey] _bbCommit:', e);
    showToast('⚠️ Error commit: ' + (e.message||e));
@@ -15616,6 +15698,14 @@ const ui = (() => {
      }
     } catch(eClean) { console.warn('[Loyverse] Error cleanup BB:', eClean); }
 
+    // v1.3.1064: Compactación automática tras import (si state >900KB)
+    var _autoCompactInfo = null;
+    try {
+     if (typeof _compactSilent === 'function') {
+      _autoCompactInfo = _compactSilent();
+     }
+    } catch(eC) { console.warn('[Loyverse] Error auto-compact:', eC); }
+
     // v1.3.1046: Recalcular saldos tras import (expuesto globalmente)
     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     DashweyBus.emit('ingreso');
@@ -15628,6 +15718,9 @@ const ui = (() => {
     }
     if (totalErrors > 0) msg += ' · ' + totalErrors + ' errores';
     if (ingresosBBEliminados > 0) msg += ' · 🧹 ' + ingresosBBEliminados + ' ingresos BB solapados limpiados';
+    if (_autoCompactInfo && !_autoCompactInfo.skipped && _autoCompactInfo.capas.length > 0) {
+     msg += ' · 🗜️ ' + _autoCompactInfo.startKB + '→' + _autoCompactInfo.endKB + ' KB';
+    }
     if (limitePlan) msg += ' · ⚠️ Límite plan Loyverse Free alcanzado';
     if (st) { st.textContent = msg; st.style.color = '#16A34A'; }
     showToast(msg);
@@ -15680,7 +15773,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _openResetMenu, _resetMenuDispatch };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _openResetMenu, _resetMenuDispatch };
 })();
 
 // ══════════════════════════════════════════
@@ -36237,6 +36330,24 @@ _eaRecalc();
  window._DashweyOnLocalWrite = () => {};
  // Marcar sync inicial completado (permite writes a Firebase)
  window._DashweyInitialSyncDone = true;
+ // v1.3.1064: Safety net — si state >900KB tras sync inicial, compactar silenciosamente
+ try {
+  if (App.ui && typeof App.ui._compactDatos === 'function') {
+   // usar referencia al motor silencioso dentro del módulo ui
+   setTimeout(function(){
+    try {
+     // Calcular tamaño y compactar si necesario — accediendo al silent wrapper
+     var _cs = App.ui && App.ui._compactSilent;
+     if (typeof _cs === 'function') {
+      var r = _cs();
+      if (r && !r.skipped && r.capas && r.capas.length > 0) {
+       console.log('[Dashwey/Startup] Auto-compact: ' + r.startKB + 'KB → ' + r.endKB + 'KB');
+      }
+     }
+    } catch(_) {}
+   }, 1500);
+  }
+ } catch(_) {}
  try { window._checkCuentaOnboarding?.(); } catch(_) {}
 
  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { _syncRunning = false; }
