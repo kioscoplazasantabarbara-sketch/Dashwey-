@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1069-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1070-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1069-dev</title>
+<title>Dashwey v1.3.1070-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10260,7 +10260,7 @@ const State = (() => {
  }
  }, // no save: solo en memoria
  lastVal: (id, vals) => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
- addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); } _state.cuentas.push(c); save(); },
+ addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); } _state.cuentas.push(c); save(); },
  setLotesStock: (v) => { _state.lotesStock = Array.isArray(v) ? v : []; save(); },
  addLoteStock: (l) => { if (!_state.lotesStock) _state.lotesStock = []; if (l?.id && _state.lotesStock.some(x => x.id === l.id)) return; _state.lotesStock.push(l); save(); },
  hiddenCards: (v) => { _state.hiddenCards = v; save(); },
@@ -12470,7 +12470,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1069-dev';
+ const _APP_VERSION = 'v1.3.1070-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15394,7 +15394,8 @@ const ui = (() => {
    var pedidos = State.get.historialPedidos ? (State.get.historialPedidos()||[]) : [];
    var cuentas = State.get.cuentas() || [];
    cuentas.forEach(function(c) {
-    var saldoCalc = 0;
+    // v1.3.1070: saldoInicial (modelo BudgetBakers). Cuentas viejas sin campo = 0 (compat).
+    var saldoCalc = parseFloat(c.saldoInicial) || 0;
     // Ingresos manuales (excluir contrapartida de ventas)
     ingresos.forEach(function(i){
      if (i.cuentaId !== c.id) return;
@@ -19387,6 +19388,119 @@ function _openEditMovimientoSheet(id, src) {
    sheet.classList.remove('open');
    setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
    showToast('✅ Saldo ajustado a ' + _feur(nuevoSaldo));
+  }, { once: true });
+ }
+
+ // ── v1.3.1070: Chooser ajuste saldo (modelo BudgetBakers) ──────
+ // Dialog con 2 opciones: Ajustar por registro (movimiento) | Cambiar saldo inicial (sin movimiento)
+ function _openAjusteSaldoChooser(cuentaIdPref) {
+  var cuentas = State.get.cuentas() || [];
+  if (!cuentas.length) { showToast('\u26a0\ufe0f Sin cuentas registradas'); return; }
+  var overlay = document.createElement('div');
+  overlay.className = 'mov-sheet-overlay';
+  overlay.innerHTML =
+   '<div class="mov-sheet-panel">' +
+   '<div class="mov-sheet-handle"></div>' +
+   '<div style="padding:14px 16px 4px;display:flex;align-items:center;justify-content:space-between">' +
+   '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink)">\u2696\ufe0f Ajustar saldo</div>' +
+   '<button id="chooser-close" style="background:none;border:none;font-size:var(--fs-h2);color:var(--ink-soft);cursor:pointer;padding:4px">\u00d7</button>' +
+   '</div>' +
+   '<div style="padding:4px 16px 8px;font-size:var(--fs-sm);color:var(--ink-soft)">Elige c\u00f3mo quieres ajustar el saldo de la cuenta.</div>' +
+   '<div style="padding:8px 16px 16px;display:flex;flex-direction:column;gap:10px">' +
+    '<button id="opt-registro" style="text-align:left;padding:16px;border:1px solid var(--border);background:var(--bg);border-radius:var(--r-md);cursor:pointer">' +
+     '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:4px">\ud83d\udcdd Ajustar por registro</div>' +
+     '<div style="font-size:var(--fs-sm);color:var(--ink-soft);line-height:1.4">Crea un movimiento de ajuste. \u00dasalo si has olvidado incluir alg\u00fan gasto o ingreso.</div>' +
+    '</button>' +
+    '<button id="opt-inicial" style="text-align:left;padding:16px;border:1px solid var(--border);background:var(--bg);border-radius:var(--r-md);cursor:pointer">' +
+     '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:4px">\u2696\ufe0f Cambiar saldo inicial</div>' +
+     '<div style="font-size:var(--fs-sm);color:var(--ink-soft);line-height:1.4">Modifica el punto de partida de la cuenta. \u00dasalo para reconstruir un hist\u00f3rico no registrado.</div>' +
+    '</button>' +
+   '</div>' +
+   '</div>';
+  document.body.appendChild(overlay);
+  requestAnimationFrame(function() { requestAnimationFrame(function() { overlay.classList.add('open'); }); });
+  function _close() { overlay.classList.remove('open'); setTimeout(function(){ if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 320); }
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) _close(); });
+  document.getElementById('chooser-close').addEventListener('click', _close, { once: true });
+  document.getElementById('opt-registro').addEventListener('click', function() {
+   _close();
+   setTimeout(function(){ _openAjusteSaldoSheet(cuentaIdPref); }, Utils.ANIM_DELAY);
+  }, { once: true });
+  document.getElementById('opt-inicial').addEventListener('click', function() {
+   _close();
+   setTimeout(function(){ _openSaldoInicialSheet(cuentaIdPref); }, Utils.ANIM_DELAY);
+  }, { once: true });
+ }
+
+ // Sheet: cambiar saldo inicial (sin crear movimiento)
+ function _openSaldoInicialSheet(cuentaIdPref) {
+  var cuentas = State.get.cuentas() || [];
+  if (!cuentas.length) { showToast('\u26a0\ufe0f Sin cuentas registradas'); return; }
+  var cuentaOpts = cuentas.map(function(c) {
+   var sel = (cuentaIdPref && c.id === cuentaIdPref) ? ' selected' : '';
+   return '<option value="' + c.id + '"' + sel + '>' + esc(c.nombre) + ' \u00b7 Inicial: ' + _feur(parseFloat(c.saldoInicial)||0) + ' \u00b7 Actual: ' + _feur(c.saldo||0) + '</option>';
+  }).join('');
+  var sheet = document.createElement('div');
+  sheet.className = 'mov-sheet-overlay';
+  sheet.innerHTML =
+   '<div class="mov-sheet-panel">' +
+   '<div class="mov-sheet-handle"></div>' +
+   '<div style="padding:14px 16px 4px;display:flex;align-items:center;justify-content:space-between">' +
+   '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink)">\u2696\ufe0f Cambiar saldo inicial</div>' +
+   '<button id="inicial-close" style="background:none;border:none;font-size:var(--fs-h2);color:var(--ink-soft);cursor:pointer;padding:4px">\u00d7</button>' +
+   '</div>' +
+   '<div style="padding:4px 16px 8px;font-size:var(--fs-sm);color:var(--ink-soft)">No se crear\u00e1 ning\u00fan movimiento. El saldo actual se recalcular\u00e1 a partir del nuevo inicial + los movimientos existentes.</div>' +
+   '<div class="mov-amount-wrap"><div class="mov-amount-inner"><input class="mov-amount-input" id="inicial-input" type="text" inputmode="decimal" pattern="[0-9.,-]*" autocomplete="off" placeholder="0"><span class="mov-amount-euro">\u20ac</span></div></div>' +
+   '<div class="mov-fields">' +
+   '<select class="fi" id="inicial-cuenta" style="width:100%">' + cuentaOpts + '</select>' +
+   '<div id="inicial-preview" style="font-size:var(--fs-sm);color:var(--ink-soft);padding:4px 2px"></div>' +
+   '</div>' +
+   '<button class="mov-submit-btn" id="inicial-save">Cambiar saldo inicial</button>' +
+   '</div>';
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
+  function _close() { sheet.classList.remove('open'); setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320); }
+  sheet.addEventListener('click', function(e) { if (e.target === sheet) _close(); });
+  document.getElementById('inicial-close').addEventListener('click', _close, { once: true });
+  var _inp = document.getElementById('inicial-input');
+  var _sel = document.getElementById('inicial-cuenta');
+  var _prev = document.getElementById('inicial-preview');
+  function _resize() { _inp.style.width = Math.max(2, _inp.value.length || 1) + 'ch'; }
+  _resize();
+  function _updatePreview() {
+   var cid = _sel.value;
+   var c = cuentas.find(function(x){ return x.id === cid; });
+   if (!c) { _prev.textContent = ''; return; }
+   var raw = _inp.value.replace(',', '.');
+   var nuevoIni = parseFloat(raw);
+   if (isNaN(nuevoIni)) { _prev.textContent = ''; return; }
+   var iniActual = parseFloat(c.saldoInicial) || 0;
+   var saldoActual = c.saldo || 0;
+   var diff = nuevoIni - iniActual;
+   var saldoNuevo = saldoActual + diff;
+   _prev.textContent = 'Saldo actual ' + _feur(saldoActual) + ' \u2192 ' + _feur(saldoNuevo) + ' (diff ' + (diff>=0?'+':'') + _feur(diff) + ')';
+  }
+  _inp.addEventListener('input', function() {
+   var pos = _inp.selectionStart;
+   var clean = _inp.value.replace(/[^0-9.,-]/g, '');
+   if (clean !== _inp.value) { _inp.value = clean; _inp.setSelectionRange(pos, pos); }
+   _resize();
+   _updatePreview();
+  });
+  _sel.addEventListener('change', _updatePreview);
+  setTimeout(function() { if(_inp) { _inp.focus(); } }, 350);
+  document.getElementById('inicial-save').addEventListener('click', function() {
+   var raw = _inp.value.replace(',', '.');
+   var nuevoIni = parseFloat(raw);
+   if (isNaN(nuevoIni)) { showToast('Introduce un valor v\u00e1lido'); return; }
+   var cid = _sel.value;
+   var c = State.get.cuentas().find(function(x){ return x.id === cid; });
+   if (!c) { showToast('\u26a0\ufe0f Cuenta no encontrada'); return; }
+   State.set.updateCuenta(cid, { saldoInicial: nuevoIni });
+   try { if (typeof window._recalcSaldosCuentas === 'function') window._recalcSaldosCuentas(); } catch(_) {}
+   DashweyBus.emit('cuenta');
+   _close();
+   showToast('\u2705 Saldo inicial \u2192 ' + _feur(nuevoIni));
   }, { once: true });
  }
 
@@ -25739,11 +25853,8 @@ function _confirmBorrarCuenta(id) {
 
    var _contAjuste =
     '<div style="padding:0 16px 16px">'
-    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:8px">Corrige el saldo sin crear movimiento operativo.</div>'
-    + '<div style="display:flex;gap:8px">'
-    + '<input id="dc-ajuste-input" class="fi" type="number" inputmode="decimal" step="0.01" placeholder="Nuevo saldo" style="flex:1">'
-    + '<button id="dc-ajuste-save" style="height:40px;padding:0 16px;border-radius:var(--r-md);border:none;background:#F97316;color:#fff;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation;white-space:nowrap">Ajustar</button>'
-    + '</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:8px">Elige cómo ajustar el saldo: por registro (crea movimiento) o cambiando el saldo inicial (sin movimiento).</div>'
+    + '<button id="dc-ajuste-save" style="width:100%;height:40px;border-radius:var(--r-md);border:none;background:#F97316;color:#fff;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Abrir opciones de ajuste</button>'
     + '</div>';
 
    var _contEliminar =
@@ -25863,24 +25974,16 @@ function _confirmBorrarCuenta(id) {
      setTimeout(function() { _renderDetalle(); }, 180);
     }, { once: true });
 
-    // ── Ajustar saldo ──
+    // ── Ajustar saldo (v1.3.1070: chooser BB-style) ──
     var ajusteEl = document.getElementById('dc-ajuste-save');
     if (ajusteEl) ajusteEl.addEventListener('click', function() {
-     var raw = (document.getElementById('dc-ajuste-input').value || '').replace(',', '.');
-     var nuevoSaldo = parseFloat(raw);
-     if (isNaN(nuevoSaldo)) { try { showToast('\u26a0\ufe0f Introduce un saldo v\u00e1lido'); } catch(_) {} return; }
-     var hoy = new Date().toISOString().slice(0,10);
-     var diff = nuevoSaldo - (cuenta.saldo || 0);
-     if (Math.abs(diff) > 0.001) {
-      var ajReg = { id: 'aj_' + Date.now(), concepto: 'Ajuste de saldo', importe: diff,
-       cuentaId: cuentaId, fecha: hoy, tipo: 'ajuste', recurrente: false };
-      if (diff > 0) { State.set.addIngreso && State.set.addIngreso(ajReg); }
-      else { State.set.addGasto && State.set.addGasto(Object.assign({}, ajReg, { nombre: 'Ajuste de saldo', importe: Math.abs(diff), tipo: 'ajuste' })); }
-     }
-     State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo });
-     DashweyBus.emit('cuenta');
-     try { showToast('\u2705 Saldo ajustado a ' + _feur(nuevoSaldo)); } catch(_) {}
-     setTimeout(function() { _renderDetalle(); }, 180);
+     // Cerrar el menu-llave y abrir el chooser con la cuenta preseleccionada
+     try { var ml = document.getElementById('dc-menu-llave'); if (ml) ml.style.display='none'; } catch(_) {}
+     setTimeout(function() {
+      try { _openAjusteSaldoChooser(cuentaId); } catch(_) {
+       try { _openAjusteSaldoSheet(); } catch(__) {}
+      }
+     }, 120);
     }, { once: true });
 
     // ── Eliminar ──
@@ -25915,7 +26018,7 @@ function _confirmBorrarCuenta(id) {
   _renderDetalle();
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openCierreCajaSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope};
 })();
 
 // ══════════════════════════════════════════
