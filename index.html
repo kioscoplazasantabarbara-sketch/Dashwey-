@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1070-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1071-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1070-dev</title>
+<title>Dashwey v1.3.1071-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9074,6 +9074,20 @@ window._DashweyFirebase = {
  currentEmail() {
  return _auth?.currentUser?.email || null;
  },
+
+ // v1.3.1071: Purge completo del documento state — usado por Reset TOTAL
+ // Borra físicamente el doc de Firestore (no merge). Devuelve true/false.
+ async purge() {
+  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
+  try {
+   const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+   await mod.deleteDoc(this._ref(_uid, 'state'));
+   return true;
+  } catch(e) {
+   console.warn('[Dashwey/FB] purge error:', e);
+   return false;
+  }
+ },
 };
 
 // ── FCM Token — guardar en Firestore para push server-side ──────
@@ -12470,7 +12484,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1070-dev';
+ const _APP_VERSION = 'v1.3.1071-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14567,14 +14581,39 @@ const ui = (() => {
  }
 
  // v1.3.1008: Reset TOTAL Dashwey — borra todo menos cuentas, settings, perfil, notifPrefs, auth
+ // v1.3.1071: Reset TOTAL REAL — borra datos locales + Firebase + cuentas + tombstones
+ // Conserva SOLO: perfil, settings, login activo
  function _resetTotalDashwey() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
   window._showDestructiveConfirm({
-   title: 'Reset TOTAL Dashwey',
-   message: '⚠️ Se borrarán: productos, ventas, pedidos, mermas, gastos, ingresos, proveedores, lotes, recordatorios, visitas, cierres caja, facturas, hotPins. Se conservan SOLO: cuentas, settings, perfil. No toca Loyverse. ¿Continuar?',
+   title: '🧨 Reset TOTAL Dashwey',
+   message: '⚠️ BORRADO IRREVERSIBLE\n\nSe borrarán LOCAL + FIREBASE:\n• Cuentas bancarias\n• Productos y catálogo\n• Proveedores\n• Ventas, pedidos, mermas\n• Gastos, ingresos, transferencias\n• Lotes, recordatorios, eventos\n• Cierres de caja, facturas\n• Hot Grid, Quick Grid, tombstones\n\nSe conservan: perfil, settings, login.\n\n¿Continuar?',
    confirmText: 'BORRAR TODO',
-   onConfirm: function() {
+   onConfirm: async function() {
     try {
+     showToast('⏳ Reset en curso...');
+     // 1. Bloquear writes durante el proceso
+     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
+     // 2. Cancelar listeners Firebase actuales (si existen) — evitar re-sync durante reset
+     try {
+      var _fbx = (typeof fb !== 'undefined') ? fb : (window._DashweyFirebase || null);
+      if (_fbx && _fbx._unsubscribers) {
+       Object.keys(_fbx._unsubscribers).forEach(function(k){
+        try { if (typeof _fbx._unsubscribers[k] === 'function') _fbx._unsubscribers[k](); } catch(_) {}
+        delete _fbx._unsubscribers[k];
+       });
+      }
+     } catch(_) {}
+     // 3. Borrar documento Firestore (purge real, no merge)
+     try {
+      var _fbref = (typeof fb !== 'undefined') ? fb : (window._DashweyFirebase || null);
+      if (_fbref && _fbref.ready && typeof _fbref.purge === 'function') {
+       var _purgeOk = await _fbref.purge();
+       if (!_purgeOk) console.warn('[Reset] Firebase purge devolvió false');
+      }
+     } catch(eFb) { console.warn('[Reset] Firebase purge:', eFb); }
+     // 4. Limpiar TODO en local (incluye cuentas)
+     State.set.setCuentas([]);
      State.set.productos([]);
      State.set.ventas([]);
      State.set.historialPedidos([]);
@@ -14589,12 +14628,22 @@ const ui = (() => {
      State.set.visitasComerciales([]);
      try { State.set.hotPins([]); } catch(_) {}
      try { State.set.qgCells([]); } catch(_) {}
+     // 5. Limpiar tombstones (ya no son relevantes)
+     try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.clear && window._DashweyLocalDeletedIds.clear(); } catch(_) {}
+     try { localStorage.removeItem('dashwey_tombstones'); } catch(_) {}
+     // 6. Reabrir writes y forzar baseline vacío a Firebase
+     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
+     try { window._DashweySavingCtrl && window._DashweySavingCtrl.resetHash && window._DashweySavingCtrl.resetHash(); } catch(_) {}
+     // 7. Reinstalar listeners de sync (suscribir de nuevo a onSnapshot)
+     try { if (typeof _doInitialSync === 'function') { await _doInitialSync(); } } catch(_) {}
      DashweyBus.emit('reset');
-     showToast('🧨 Reset total completado — listo para import Loyverse');
-     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
+     DashweyBus.emit('cuenta');
+     showToast('🧨 Reset TOTAL completado — local + Firebase');
+     setTimeout(function(){ try { App.dash.render(); } catch(_) {} try { App.tpv.render(); } catch(_) {} try { App.alm.renderOrden?.(); } catch(_) {} }, 300);
     } catch(e) {
+     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
      console.error('[Dashwey] _resetTotalDashwey:', e);
-     showToast('⚠️ Error: ' + (e.message||e));
+     showToast('⚠️ Error en reset: ' + (e.message||e));
     }
    }
   });
@@ -15009,19 +15058,26 @@ const ui = (() => {
 
  // ── v1.3.1050: Menu unificado Reset/Limpieza como subpágina de Settings ─
  // Usa sdSubOpen (patrón interno de settings drawer) para renderizar.
+ // v1.3.1071: Menú refactorizado — jerarquía clara por destructividad
  function _openResetMenu() {
   var _opts = [
-   { grp:'💾 BudgetBakers', icon:'🗑️', iconBg:'#FECACA', title:'Revertir import BB completo', sub:'Borra todo origen=budgetbakers + resetea saldos', fn:'_revertBudgetBakersImport' },
-   { grp:'💾 BudgetBakers', icon:'📦', iconBg:'#EDE9FE', title:'Limpiar placeholders BB', sub:'Borra productos bb_agg_* y proveedores prov_bb_*', fn:'_cleanBBPlaceholders' },
-   { grp:'🧾 Loyverse', icon:'🧹', iconBg:'#DBEAFE', title:'Limpiar datos Loyverse', sub:'Elimina solo movements con origen=loyverse', fn:'_devLoyverseClean' },
-   { grp:'🔧 Utilidades', icon:'♻️', iconBg:'#D1FAE5', title:'Recalcular saldos', sub:'Reconstruye saldo cuentas sin borrar datos', fn:'_recalcSaldosManual' },
-   { grp:'🔧 Utilidades', icon:'💾', iconBg:'#FEF3C7', title:'Exportar snapshot (emergencia)', sub:'Descarga JSON completo del state actual · backup ante cualquier operación destructiva', fn:'_exportSnapshotEmergency' },
-   { grp:'🔧 Utilidades', icon:'📊', iconBg:'#FEF3C7', title:'Limpiar lotes FIFO', sub:'Reconstruye valorStock desde 0', fn:'_cleanLotesStock' },
-   { grp:'🔧 Utilidades', icon:'📤', iconBg:'#F5F3FF', title:'Backup técnico (JSON)', sub:'Exporta todos los datos · no destructivo', fn:'exportarDatos' },
-   { grp:'🧨 Reset completos', icon:'🧽', iconBg:'#FEE2E2', title:'Limpiar transacciones', sub:'Borra ventas/pedidos · mantiene catálogo + cuentas', fn:'_cleanTransactionsDashwey' },
-   { grp:'🧨 Reset completos', icon:'🧹', iconBg:'#FECACA', title:'Limpiar todo menos catálogo', sub:'Borra transacciones + saldos · mantiene productos/proveedores', fn:'_cleanExceptCatalog' },
-   { grp:'🧨 Reset completos', icon:'🗑️', iconBg:'#FEF2F2', title:'Resetear base local', sub:'Limpiar localStorage · ideal si app corrompida', fn:'confirmReset' },
-   { grp:'🧨 Reset completos', icon:'🧨', iconBg:'#FECACA', title:'Reset TOTAL Dashwey', sub:'Borra TODO · mantiene solo cuentas/perfil/settings', fn:'_resetTotalDashwey' }
+   // ═══ BACKUPS (no destructivos) ═══
+   { grp:'💾 Backups', icon:'💾', iconBg:'#FEF3C7', title:'Exportar snapshot (emergencia)', sub:'Descarga JSON completo · haz esto ANTES de cualquier reset', fn:'_exportSnapshotEmergency' },
+   { grp:'💾 Backups', icon:'📤', iconBg:'#F5F3FF', title:'Backup técnico (JSON)', sub:'Exporta todos los datos · no destructivo', fn:'exportarDatos' },
+
+   // ═══ UTILIDADES (no destructivas, recalcula o limpia subsets) ═══
+   { grp:'🔧 Utilidades', icon:'♻️', iconBg:'#D1FAE5', title:'Recalcular saldos', sub:'Reconstruye saldo cuentas desde movimientos · seguro', fn:'_recalcSaldosManual' },
+   { grp:'🔧 Utilidades', icon:'📊', iconBg:'#E0F2FE', title:'Limpiar lotes FIFO', sub:'Reconstruye valorStock desde 0 · no afecta ventas', fn:'_cleanLotesStock' },
+
+   // ═══ LIMPIEZAS ESPECÍFICAS (por fuente) ═══
+   { grp:'🎯 Limpiezas específicas', icon:'🗑️', iconBg:'#FECACA', title:'Revertir import BB', sub:'Borra todo origen=budgetbakers + resetea saldos', fn:'_revertBudgetBakersImport' },
+   { grp:'🎯 Limpiezas específicas', icon:'📦', iconBg:'#EDE9FE', title:'Limpiar placeholders BB', sub:'Borra productos bb_agg_* y proveedores prov_bb_*', fn:'_cleanBBPlaceholders' },
+   { grp:'🎯 Limpiezas específicas', icon:'🧹', iconBg:'#DBEAFE', title:'Limpiar datos Loyverse', sub:'Elimina solo movimientos con origen=loyverse', fn:'_devLoyverseClean' },
+
+   // ═══ RESETS GRADUALES (destructivos, jerarquía clara) ═══
+   { grp:'🧨 Resets', icon:'🧽', iconBg:'#FEE2E2', title:'Limpiar transacciones', sub:'Borra ventas/pedidos/mermas · CONSERVA catálogo + cuentas + saldos', fn:'_cleanTransactionsDashwey' },
+   { grp:'🧨 Resets', icon:'🧹', iconBg:'#FECACA', title:'Limpiar todo menos catálogo', sub:'Borra transacciones + saldos · CONSERVA productos + proveedores + cuentas', fn:'_cleanExceptCatalog' },
+   { grp:'🧨 Resets', icon:'🧨', iconBg:'#FCA5A5', title:'Reset TOTAL (local + Firebase)', sub:'⚠️ Borra TODO · incluye cuentas y Firebase · CONSERVA solo perfil/settings/login', fn:'_resetTotalDashwey' }
   ];
   var _grupos = {};
   _opts.forEach(function(o){ if (!_grupos[o.grp]) _grupos[o.grp]=[]; _grupos[o.grp].push(o); });
@@ -19101,14 +19157,21 @@ function _openEditMovimientoSheet(id, src) {
     onConfirm: function() {
      if (_transferId2) {
       // Borrar ambos lados por transferId
+      // v1.3.1071: tombstones para delete en cascada de transferencia
+      try {
+       State.get.gastosOp().forEach(function(g){ if (g.transferId === _transferId2 || g.id === id) window._DashweyLocalDeletedIds.add(g.id); });
+       State.get.ingresosFin().forEach(function(i){ if (i.transferId === _transferId2 || i.id === id) window._DashweyLocalDeletedIds.add(i.id); });
+      } catch(_) {}
       State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.transferId !== _transferId2 && g.id !== id; }));
       State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.transferId !== _transferId2 && i.id !== id; }));
       DashweyBus.emit('gasto');
       DashweyBus.emit('ingreso');
      } else if (src === 'gasto') {
+      try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
       State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.id !== id; }));
       DashweyBus.emit('gasto');
      } else if (src === 'ingreso') {
+      try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
       State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.id !== id; }));
       DashweyBus.emit('ingreso');
      }
@@ -20018,6 +20081,7 @@ function _confirmBorrarCuenta(id) {
  }
 
  function _borrarCuenta(id) {
+ try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
  State.set.setCuentas(State.get.cuentas().filter(c => c.id !== id));
  renderFinanciero();
  App.ui.closeModal();
@@ -20297,6 +20361,7 @@ function _confirmBorrarCuenta(id) {
  }
 
  function _deleteGasto(id) {
+ try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
  State.set.setGastos(State.get.gastosOp().filter(g => g.id !== id));
  renderFinanciero();
  App.ui.closeFs();
@@ -30563,6 +30628,7 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  }
 
  function borrarProv(id) {
+ try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
  // 1. Remove from provider list
  State.set.proveedores(State.get.proveedores().filter(p => p.id !== id));
  // 2. ordenItems vacio desde v8.9.0 -- filtro eliminado v1.3.427
