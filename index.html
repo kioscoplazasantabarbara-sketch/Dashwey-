@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1079-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1080-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1079-dev</title>
+<title>Dashwey v1.3.1080-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12516,7 +12516,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1079-dev';
+ const _APP_VERSION = 'v1.3.1080-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15444,6 +15444,9 @@ const ui = (() => {
  // v1.3.1046: Recalcular saldo cuenta = ingresos + ventas - gastos - pedidos
  // Incluye ventas (contrapartida de tickets TPV/Loyverse) y pedidos (compras reales).
  // Excluye ingresos con origen=loyverse/tpv (contrapartida de venta — evita doble conteo)
+ // v1.3.1080: Modelo BudgetBakers — saldoInicial asociado a saldoInicialFecha.
+ // Solo movimientos POSTERIORES o IGUALES a esa fecha afectan al saldo actual.
+ // Cuentas sin fecha (legacy) → fallback epoch 0 (comportamiento anterior preservado).
  function _bbRecalcSaldos() {
   try {
    var gastos = State.get.gastosOp ? (State.get.gastosOp()||[]) : [];
@@ -15451,28 +15454,41 @@ const ui = (() => {
    var ventas = State.get.ventas ? (State.get.ventas()||[]) : [];
    var pedidos = State.get.historialPedidos ? (State.get.historialPedidos()||[]) : [];
    var cuentas = State.get.cuentas() || [];
+   // Helper: convierte a ms; soporta ISO strings y números. Items sin fecha → 0 (siempre afectan).
+   var _toMs = function(v) {
+    if (!v) return 0;
+    if (typeof v === 'number') return v;
+    var d = new Date(v);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+   };
    cuentas.forEach(function(c) {
-    // v1.3.1070: saldoInicial (modelo BudgetBakers). Cuentas viejas sin campo = 0 (compat).
     var saldoCalc = parseFloat(c.saldoInicial) || 0;
+    // v1.3.1080: fecha del saldoInicial. Sin ella → epoch 0 (todos los movs cuentan).
+    var iniMs = _toMs(c.saldoInicialFecha);
     // Ingresos manuales (excluir contrapartida de ventas)
     ingresos.forEach(function(i){
      if (i.cuentaId !== c.id) return;
      if (i.origen === 'loyverse' || i.origen === 'tpv') return;
+     if (_toMs(i.fecha) < iniMs) return; // v1.3.1080: anterior al saldoInicial → no afecta
      saldoCalc += (parseFloat(i.importe)||0);
     });
     // Ventas: todas las de esta cuenta (cuentaId puede estar vacío → cuenta primaria)
     ventas.forEach(function(v){
      var cid = v.cuentaId || (c.isPrimary ? c.id : null);
      if (cid !== c.id) return;
+     if (_toMs(v.fecha) < iniMs) return;
      saldoCalc += (parseFloat(v.total)||0);
     });
     // Gastos
-    gastos.forEach(function(g){ if (g.cuentaId === c.id) saldoCalc -= (parseFloat(g.importe)||0); });
+    gastos.forEach(function(g){
+     if (g.cuentaId !== c.id) return;
+     if (_toMs(g.fecha) < iniMs) return;
+     saldoCalc -= (parseFloat(g.importe)||0);
+    });
     // v1.3.1047: Pedidos SOLO con cuentaId explícito — sintéticos BB no afectan saldo
-    // Los pedidos budgetbakers son reconstrucciones históricas mensuales (ya pagadas hace meses)
-    // Los pedidos reales con cuenta asignada sí descuentan del saldo actual
     pedidos.forEach(function(p){
      if (!p.cuentaId || p.cuentaId !== c.id) return;
+     if (_toMs(p.fecha) < iniMs) return;
      var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
      saldoCalc -= (parseFloat(coste)||0);
     });
@@ -19578,7 +19594,7 @@ function _openEditMovimientoSheet(id, src) {
    '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink)">\u2696\ufe0f Cambiar saldo inicial</div>' +
    '<button id="inicial-close" style="background:none;border:none;font-size:var(--fs-h2);color:var(--ink-soft);cursor:pointer;padding:4px">\u00d7</button>' +
    '</div>' +
-   '<div style="padding:4px 16px 8px;font-size:var(--fs-sm);color:var(--ink-soft)">No se crear\u00e1 ning\u00fan movimiento. El saldo actual se recalcular\u00e1 a partir del nuevo inicial + los movimientos existentes.</div>' +
+   '<div style="padding:4px 16px 8px;font-size:var(--fs-sm);color:var(--ink-soft)">El saldo que introduzcas ser\u00e1 tu saldo actual. Los movimientos anteriores a este momento quedan en el historial pero no afectan al saldo.</div>' +
    '<div class="mov-amount-wrap"><div class="mov-amount-inner"><input class="mov-amount-input" id="inicial-input" type="text" inputmode="decimal" pattern="[0-9.,-]*" autocomplete="off" placeholder="0"><span class="mov-amount-euro">\u20ac</span></div></div>' +
    '<div class="mov-fields">' +
    '<select class="fi" id="inicial-cuenta" style="width:100%">' + cuentaOpts + '</select>' +
@@ -19603,11 +19619,9 @@ function _openEditMovimientoSheet(id, src) {
    var raw = _inp.value.replace(',', '.');
    var nuevoIni = parseFloat(raw);
    if (isNaN(nuevoIni)) { _prev.textContent = ''; return; }
-   var iniActual = parseFloat(c.saldoInicial) || 0;
+   // v1.3.1080: al estampar fecha=ahora el saldo mostrado SERA exactamente nuevoIni
    var saldoActual = c.saldo || 0;
-   var diff = nuevoIni - iniActual;
-   var saldoNuevo = saldoActual + diff;
-   _prev.textContent = 'Saldo actual ' + _feur(saldoActual) + ' \u2192 ' + _feur(saldoNuevo) + ' (diff ' + (diff>=0?'+':'') + _feur(diff) + ')';
+   _prev.textContent = 'Saldo actual ' + _feur(saldoActual) + ' \u2192 ' + _feur(nuevoIni);
   }
   _inp.addEventListener('input', function() {
    var pos = _inp.selectionStart;
@@ -19625,11 +19639,15 @@ function _openEditMovimientoSheet(id, src) {
    var cid = _sel.value;
    var c = State.get.cuentas().find(function(x){ return x.id === cid; });
    if (!c) { showToast('\u26a0\ufe0f Cuenta no encontrada'); return; }
-   State.set.updateCuenta(cid, { saldoInicial: nuevoIni });
+   // v1.3.1080: estampar fecha — el saldoInicial es el saldo ACTUAL a partir de este momento
+   State.set.updateCuenta(cid, {
+    saldoInicial: nuevoIni,
+    saldoInicialFecha: new Date().toISOString()
+   });
    try { if (typeof window._recalcSaldosCuentas === 'function') window._recalcSaldosCuentas(); } catch(_) {}
    DashweyBus.emit('cuenta');
    _close();
-   showToast('\u2705 Saldo inicial \u2192 ' + _feur(nuevoIni));
+   showToast('\u2705 Saldo actual \u2192 ' + _feur(nuevoIni));
   }, { once: true });
  }
 
