@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1073-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1074-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1073-dev</title>
+<title>Dashwey v1.3.1074-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10090,7 +10090,9 @@ const State = (() => {
  let _lastSavedHash = ''; // fingerprint del ultimo estado guardado en Firebase
 
  // -- save: escribe local siempre, Firebase con guards anti-loop
+ // v1.3.1074: marca dirty en cada invocación — se limpia tras write exitoso
  function save() {
+ window._DashweyDirty = true;
  clearTimeout(_saveTimer);
  _saveTimer = setTimeout(() => { if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
  const _t0Sync = Date.now();
@@ -10121,27 +10123,11 @@ const State = (() => {
  }
  // Guard de concurrencia: no escribir si ya hay un write en curso
  if (_isSaving) { _dirtyDuringSave = true; return; } // v1.3.613: marcar cambio pendiente
- // Guard de duplicados: no escribir si el estado no ha cambiado
- // v1.3.294: FIX — pendingOrders e ingresosFin incluidos para evitar sync silenciosa fallida
- // v1.3.431: hash ampliado -- incluye settings, historialPedidos, mermas, tickets, visitas
- // v1.3.513: ventas usa fingerprint length|lastId en lugar del array completo
- // Ventas son append-only → length+lastId detecta todos los cambios posibles
- // Evita JSON.stringify de hasta 15MB en negocios con historial largo
- const _vt = _state.ventas || [];
- const _vtFP = _vt.length + '|' + (_vt[_vt.length - 1]?.id || '');
- const _hashable = JSON.stringify({
- p: _state.productos, v: _state.proveedores, vt: _vtFP,
- c: _state.cuentas, g: _state.gastosOp, pf: _state.perfil?.nombre,
- po: _state.pendingOrders, ig: _state.ingresosFin,
- st: _state.settings, hp: _state.historialPedidos||[],
- mr: _state.mermas||[], vc: _state.visitasComerciales||[],
- tk: _state.ticketsAbiertos||[],
- // v1.3.582: incluir datos de UI que también sincronizan entre dispositivos
- pins: _state.hotPins||[], qg: _state.qgCells||[],
- cl: _state.catLabels||{}, hc: _state.hiddenCards||[]
- });
- if (_hashable === _lastSavedHash) return;
- _lastSavedHash = _hashable;
+ // v1.3.1074: KILL hash-guard destructivo — usar dirty-flag incremental
+ // Problema previo: hash igual tras recibir onSnapshot bloqueaba siguiente write legítimo.
+ // Nuevo modelo: cada setter marca _dirty=true, save() solo sube si _dirty, lo limpia tras OK.
+ if (!window._DashweyDirty) return; // nada que subir
+ window._DashweyDirty = false; // optimista — si write falla, se re-marca en catch
  _isSaving = true;
      _dirtyDuringSave = false; // v1.3.613: resetear — nuevo write cubre el estado actual
  // v1.3.377: estampar timestamp ANTES de _writeLocal
@@ -10174,7 +10160,8 @@ const State = (() => {
  })
  .catch((err) => {
  _isSaving = false;
- _lastSavedHash = ''; // reset hash on error — fuerza re-sync en próximo save()
+ _lastSavedHash = ''; // legacy — ya no se usa pero limpio por seguridad
+ window._DashweyDirty = true; // v1.3.1074: re-marcar para reintentar en próximo save()
  console.warn('[Dashwey sync] ✗ firebase write failed:', err?.message || err);
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
  // v1.3.613: re-disparar save() tras error solo si hay cambios pendientes
@@ -10187,29 +10174,40 @@ const State = (() => {
  }
 
  // Getters
+ // v1.3.1074: helper de filtrado soft-delete — transparente para items viejos sin flag
+ const _nd = (arr) => Array.isArray(arr) ? arr.filter(x => !x || !x.deleted) : [];
+ // v1.3.1074: helper que preserva items con deleted:true al reemplazar array
+ // Si el código pasa un array filtrado (sin deleted), los items eliminados del raw se reinjectan
+ const _preserveDeleted = (rawKey, newArr) => {
+  const raw = Array.isArray(_state[rawKey]) ? _state[rawKey] : [];
+  if (!Array.isArray(newArr)) return newArr;
+  const newIds = new Set(newArr.map(x => x && x.id).filter(Boolean));
+  const preserved = raw.filter(x => x && x.deleted && x.id && !newIds.has(x.id));
+  return preserved.length ? newArr.concat(preserved) : newArr;
+ };
  const get = {
  baseCats: () => _state.baseCats || DEFAULTS.baseCats,
  user: () => _state.user || DEFAULTS.user,
  syncStatus: () => _state.syncStatus || DEFAULTS.syncStatus,
  ticketsAbiertos: () => _state.ticketsAbiertos || [],
- proveedores: () => _state.proveedores || [],
- productos: () => _state.productos || [],
- historialPedidos: () => _state.historialPedidos || [],
- facturas: () => _state.facturas || [],
- mermas: () => _state.mermas || [],
- ventas: () => _state.ventas || [],
+ proveedores: () => _nd(_state.proveedores),
+ productos: () => _nd(_state.productos),
+ historialPedidos: () => _nd(_state.historialPedidos),
+ facturas: () => _nd(_state.facturas),
+ mermas: () => _nd(_state.mermas),
+ ventas: () => _nd(_state.ventas),
  ordenItems: () => _state.ordenItems || [],
  lastVals: () => _state.lastVals,
  selectedProv: () => _state.selectedProv,
- pendingOrders: () => _state.pendingOrders || [],
+ pendingOrders: () => _nd(_state.pendingOrders),
  period: () => _state.period,
  settings: () => _state.settings,
  perfil: () => _state.perfil || DEFAULTS.perfil,
  // activeContext — llave maestra para separar Negocio / Hogar / Inversión
  activeContext: () => (_state.user?.activeContext) || 'business',
- cuentas: () => _state.cuentas || [],
- gastosOp: () => _state.gastosOp || [],
-  cierresCaja: () => _state.cierresCaja || [],
+ cuentas: () => _nd(_state.cuentas),
+ gastosOp: () => _nd(_state.gastosOp),
+  cierresCaja: () => _nd(_state.cierresCaja),
  lotesStock: () => _state.lotesStock || [],
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
@@ -10221,9 +10219,9 @@ const State = (() => {
  chatUsers: () => _state.chatUsers || [],
  teamMembers: () => _state.teamMembers || [],
  notifsRead: () => _state.notifsRead || [],
- visitasComerciales: () => _state.visitasComerciales || [],
- recordatorios: () => _state.recordatorios || [], // v1.3.992 LOTE C
- ingresosFin: () => _state.ingresosFin || [], // v9.5.73: ingresos manuales
+ visitasComerciales: () => _nd(_state.visitasComerciales),
+ recordatorios: () => _nd(_state.recordatorios), // v1.3.992 LOTE C · v1.3.1074: soft delete
+ ingresosFin: () => _nd(_state.ingresosFin), // v9.5.73: ingresos manuales · v1.3.1074: soft delete
  notifPrefs: () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
  prov: (id) => _state.proveedores.find(p => p.id === id),
  prod: (id) => _state.productos.find(p => p.id === id),
@@ -10231,16 +10229,16 @@ const State = (() => {
 
  // Setters — siempre guardan
  const set = {
- proveedores: (v) => { _state.proveedores = v; save(); },
- productos: (v) => { _state.productos = v; save(); },
- historialPedidos: (v) => { _state.historialPedidos = v; save(); },
- facturas: (v) => { _state.facturas = v; save(); },
+ proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); save(); },
+ productos: (v) => { _state.productos = _preserveDeleted('productos', v); save(); },
+ historialPedidos: (v) => { _state.historialPedidos = _preserveDeleted('historialPedidos', v); save(); },
+ facturas: (v) => { _state.facturas = _preserveDeleted('facturas', v); save(); },
  addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); save(); },
- mermas: (v) => { _state.mermas = v; save(); },
- ventas: (v) => { _state.ventas = v; save(); },
+ mermas: (v) => { _state.mermas = _preserveDeleted('mermas', v); save(); },
+ ventas: (v) => { _state.ventas = _preserveDeleted('ventas', v); save(); },
  ordenItems: (v) => { _state.ordenItems = v; save(); },
  selectedProv: (v) => { _state.selectedProv = v; save(); },
- pendingOrders: (v) => { _state.pendingOrders = v; save(); },
+ pendingOrders: (v) => { _state.pendingOrders = _preserveDeleted('pendingOrders', v); save(); },
  // addPendingOrder: añade un pedido pendiente SIN actualizar stock
  addPendingOrder: (p) => {
  if (!_state.pendingOrders) _state.pendingOrders = [];
@@ -10294,7 +10292,7 @@ const State = (() => {
  teamMembers: (v) => { _state.teamMembers = v; save(); },
  markNotifRead: (id) => { if (!_state.notifsRead) _state.notifsRead = []; if (!_state.notifsRead.includes(id)) { _state.notifsRead.push(id); save(); } },
  clearNotifsRead: () => { _state.notifsRead = []; save(); },
- visitasComerciales: (v) => { _state.visitasComerciales = v; save(); },
+ visitasComerciales: (v) => { _state.visitasComerciales = _preserveDeleted('visitasComerciales', v); save(); },
  // v1.3.992 LOTE C — Recordatorios (entidades libres)
  setRecordatorios: (v) => { _state.recordatorios = Array.isArray(v) ? v : []; save(); },
  addRecordatorio: (r) => { if (!_state.recordatorios) _state.recordatorios = []; if (r?.id && _state.recordatorios.some(x => x.id === r.id)) return; _state.recordatorios.push(r); save(); },
@@ -10304,12 +10302,12 @@ const State = (() => {
  updateVisita: (id, data) => { const v = (_state.visitasComerciales||[]).find(x=>x.id===id); if(v) { Object.assign(v,data); save(); } },
  deleteVisita: (id) => { _state.visitasComerciales = (_state.visitasComerciales||[]).filter(x=>x.id!==id); save(); },
  notifPrefs: (v) => { if (!_state.settings) _state.settings = {}; _state.settings.notifPrefs = Object.assign({}, _state.settings.notifPrefs||{}, v); save(); },
- setCuentas: (v) => { _state.cuentas = v; save(); },
+ setCuentas: (v) => { _state.cuentas = _preserveDeleted('cuentas', v); save(); },
  updateCuenta: (id, v) => { const c = _state.cuentas.find(x=>x.id===id); if(c) Object.assign(c,v); save(); },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
  addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); save(); },
   addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
- setGastos: (v) => { _state.gastosOp = v; save(); },
+ setGastos: (v) => { _state.gastosOp = _preserveDeleted('gastosOp', v); save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
@@ -10317,7 +10315,7 @@ const State = (() => {
  updateProv: (id, vals) => { const p = get.prov(id); if(p) Object.assign(p, vals); save(); },
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); save(); },
  addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); save(); },
- setIngresos: (v) => { _state.ingresosFin = v; save(); },
+ setIngresos: (v) => { _state.ingresosFin = _preserveDeleted('ingresosFin', v); save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
@@ -12484,7 +12482,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1073-dev';
+ const _APP_VERSION = 'v1.3.1074-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16516,21 +16514,19 @@ try { renderTopArticulos(period); } catch(e) {}
      JSON.parse(JSON.stringify(remote)),
      { settings: State.get.settings() }
     );
-    // v1.3.1073: mergear tombstones REMOTOS antes de filtrar (sync multi-dispositivo)
+    // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
     try {
      if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
       window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
      }
     } catch(_) {}
-    // Filtrar tombstones — evitar restauración de IDs borrados localmente
-    const _deleted = window._DashweyLocalDeletedIds;
-    if (_deleted && _deleted.size) {
-     ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
-      if (Array.isArray(merged[k])) {
-       merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deleted.has(x.id); });
-      }
-     });
-    }
+    var _ALL_IDS_R = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales'];
+    _ALL_IDS_R.forEach(function(k) {
+     var _localR = null; try { _localR = State.get[k] ? State.get[k]() : null; } catch(_) {}
+     if (Array.isArray(merged[k]) && Array.isArray(_localR)) {
+      merged[k] = _mergeById(_localR, merged[k]);
+     }
+    });
     var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
      visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
      hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
@@ -20122,28 +20118,30 @@ function _confirmBorrarCuenta(id) {
  }, 50);
  }
 
- // v1.3.1073: cascade al borrar cuenta — gastos/ingresos con cuentaId huérfano también se borran
+ // v1.3.1074: soft delete — marca deleted:true + cascade (antes filter destructivo)
  function _borrarCuenta(id) {
   try {
-   var _gastos = (State.get.gastosOp() || []).filter(function(g){ return g.cuentaId === id; });
-   var _ingresos = (State.get.ingresosFin() || []).filter(function(i){ return i.cuentaId === id; });
-   // Tombstones de todos los huérfanos
-   try {
-    _gastos.forEach(function(g){ if (g && g.id) window._DashweyLocalDeletedIds.add(g.id); });
-    _ingresos.forEach(function(i){ if (i && i.id) window._DashweyLocalDeletedIds.add(i.id); });
-    window._DashweyLocalDeletedIds.add(id);
-   } catch(_) {}
-   // Borrar cuenta + movimientos huérfanos
-   State.set.setCuentas(State.get.cuentas().filter(function(c){ return c.id !== id; }));
-   if (_gastos.length) State.set.setGastos((State.get.gastosOp()||[]).filter(function(g){ return g.cuentaId !== id; }));
-   if (_ingresos.length) State.set.setIngresos((State.get.ingresosFin()||[]).filter(function(i){ return i.cuentaId !== id; }));
+   var _now = Date.now();
+   // Acceso directo a arrays raw (sin filtro getter) para modificar in-place
+   var _cuentas = State.get.cuentas().slice();
+   var _gastosRaw = State.get.gastosOp().slice();
+   var _ingresosRaw = State.get.ingresosFin().slice();
+   var _gCount = 0, _iCount = 0;
+   // Marcar cuenta como deleted
+   _cuentas.forEach(function(c){ if (c.id === id) { c.deleted = true; c.deletedAt = _now; } });
+   // Cascade: marcar gastos/ingresos huérfanos
+   _gastosRaw.forEach(function(g){ if (g.cuentaId === id && !g.deleted) { g.deleted = true; g.deletedAt = _now; _gCount++; } });
+   _ingresosRaw.forEach(function(i){ if (i.cuentaId === id && !i.deleted) { i.deleted = true; i.deletedAt = _now; _iCount++; } });
+   State.set.setCuentas(_cuentas);
+   State.set.setGastos(_gastosRaw);
+   State.set.setIngresos(_ingresosRaw);
    DashweyBus.emit('cuenta');
-   if (_gastos.length) DashweyBus.emit('gasto');
-   if (_ingresos.length) DashweyBus.emit('ingreso');
+   if (_gCount) DashweyBus.emit('gasto');
+   if (_iCount) DashweyBus.emit('ingreso');
    renderFinanciero();
    App.ui.closeModal();
    App.ui.closeFs();
-   var _n = _gastos.length + _ingresos.length;
+   var _n = _gCount + _iCount;
    showToast(_n > 0 ? ('🗑️ Cuenta eliminada · ' + _n + ' movimientos borrados') : '🗑️ Cuenta eliminada');
    setTimeout(function(){ openFinModal('cuentas'); }, Utils.ANIM_DELAY);
   } catch(e) {
@@ -33422,20 +33420,19 @@ _eaRecalc();
  JSON.parse(JSON.stringify(remote)),
  { settings: State.get.settings(), selectedProv: _localSelProv }
  );
-  // v1.3.1073: mergear tombstones remotos y filtrar arrays (sync multi-dispositivo)
+  // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
   try {
    if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
     window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
    }
   } catch(_) {}
-  var _deletedPT = window._DashweyLocalDeletedIds;
-  if (_deletedPT && _deletedPT.size) {
-   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
-    if (Array.isArray(merged[k])) {
-     merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deletedPT.has(x.id); });
-    }
-   });
-  }
+  var _ALL_IDS_A = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales'];
+  _ALL_IDS_A.forEach(function(k) {
+   var _localA = null; try { _localA = State.get[k] ? State.get[k]() : null; } catch(_) {}
+   if (Array.isArray(merged[k]) && Array.isArray(_localA)) {
+    merged[k] = _mergeById(_localA, merged[k]);
+   }
+  });
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
    hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
@@ -36351,22 +36348,23 @@ _eaRecalc();
    return remoteArr.length >= localArr.length ? remoteArr : localArr;
   }
   var map = {};
-  // Primero indexar el local
+  // v1.3.1074: helper timestamp — PRIORIDAD deletedAt, luego updatedAt, luego fecha/createdAt
+  var _ts = function(x) {
+   if (!x) return 0;
+   var f = x.deletedAt || x.updatedAt || x.fecha || x.createdAt || 0;
+   if (!f) return 0;
+   if (typeof f === 'number') return f;
+   var d = new Date(f); return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+  // Indexar local
   localArr.forEach(function(item) {
    if (item && item.id) map[item.id] = item;
   });
-  // Luego el remoto — si hay conflicto de id, gana el más reciente por fecha
+  // Mergear remoto — gana el más reciente. deletedAt pesa como updatedAt.
   remoteArr.forEach(function(item) {
    if (!item || !item.id) return;
    var existing = map[item.id];
    if (!existing) { map[item.id] = item; return; }
-   // Comparar por fecha — soporta ISO string y timestamp ms
-   var _ts = function(x) {
-    var f = x.fecha || x.updatedAt || x.createdAt || 0;
-    if (!f) return 0;
-    if (typeof f === 'number') return f;
-    var d = new Date(f); return isNaN(d.getTime()) ? 0 : d.getTime();
-   };
    if (_ts(item) >= _ts(existing)) map[item.id] = item;
   });
   return Object.values(map);
@@ -36611,31 +36609,26 @@ _eaRecalc();
  // lo que acabamos de bajar. Los setters escriben solo en localStorage.
   // Limpiar datos demo del snapshot remoto antes de aplicar al State
   if (typeof _migrateDemoData === 'function') { try { _migrateDemoData(merged); } catch(_) {} }
-  // v1.3.1073: mergear tombstones REMOTOS al set local antes de filtrar
-  // Esto permite que un delete en dispositivo A se propague a dispositivo B
+  // v1.3.1074: sistema tombstones OBSOLETO — soft delete hace el trabajo
+  // (mantenido por retrocompatibilidad con items viejos sin deleted:true)
   try {
    if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
     window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
    }
   } catch(_) {}
-  // Filtrar IDs borrados (local + remoto ya unificados) — evitar restauración por onSnapshot
-  // v1.3.979: aplicar a TODOS los arrays con id, no solo productos
-  const _deleted = window._DashweyLocalDeletedIds;
-  if (_deleted && _deleted.size) {
-   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
-    if (Array.isArray(merged[k])) {
-     merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deleted.has(x.id); });
-    }
-   });
-  }
- // v1.3.730: merge por ID para arrays acumulativos (onSnapshot)
- // v1.3.979: incluir facturas
- // v1.3.992: incluir recordatorios (LOTE C)
- var _mKeys2 = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','facturas','recordatorios'];
- _mKeys2.forEach(function(k) {
-  var _localArr2 = typeof State.get[k] === 'function' ? State.get[k]() : null;
-  if (Array.isArray(merged[k]) && Array.isArray(_localArr2)) {
-   merged[k] = _mergeById(_localArr2, merged[k]);
+ // v1.3.1074: _mergeById aplicado a TODOS los arrays con id (no solo acumulativos)
+ // Así deletedAt del ítem marca autoridad entre dispositivos
+ var _ALL_ID_KEYS = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales'];
+ _ALL_ID_KEYS.forEach(function(k) {
+  // Acceso raw al _state (por debajo del filtro del getter) para preservar items con deleted:true
+  var _localRaw = null;
+  try {
+   // State.get.X() ahora filtra deleted; usamos el raw del _state si existe el shortcut
+   // Fallback: usar el getter (aceptable porque _preserveDeleted en setter los restaurará)
+   _localRaw = State.get[k] ? State.get[k]() : null;
+  } catch(_) {}
+  if (Array.isArray(merged[k]) && Array.isArray(_localRaw)) {
+   merged[k] = _mergeById(_localRaw, merged[k]);
   }
  });
  // v1.3.982: mapeo legacy tipo:'transferencia' → metaTipo:'transfer' en datos entrantes
