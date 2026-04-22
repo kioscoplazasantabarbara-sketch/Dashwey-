@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1074-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1075-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1074-dev</title>
+<title>Dashwey v1.3.1075-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10225,6 +10225,8 @@ const State = (() => {
  notifPrefs: () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
  prov: (id) => _state.proveedores.find(p => p.id === id),
  prod: (id) => _state.productos.find(p => p.id === id),
+ // v1.3.1075: syncCommand para acciones globales
+ syncCommand: () => _state.syncCommand || null,
  };
 
  // Setters — siempre guardan
@@ -10332,13 +10334,17 @@ const State = (() => {
  },
  removeHistorialPedido: (id) => {
   if (!_state.historialPedidos) return;
-  _state.historialPedidos = _state.historialPedidos.filter(p => p.id !== id);
-  try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  // v1.3.1074: soft delete — mantiene el ítem con flag para sync multi-dispositivo
+  var _h = _state.historialPedidos.find(p => p.id === id);
+  if (_h) { _h.deleted = true; _h.deletedAt = Date.now(); }
+  try { window._DashweyLocalDeletedIds.add(id); } catch(_) {} // fallback compat
   save();
  },
  removeFactura: (id) => {
   if (!_state.facturas) return;
-  _state.facturas = _state.facturas.filter(f => f.id !== id);
+  // v1.3.1074: soft delete
+  var _f = _state.facturas.find(f => f.id === id);
+  if (_f) { _f.deleted = true; _f.deletedAt = Date.now(); }
   try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
   save();
  },
@@ -10357,6 +10363,8 @@ const State = (() => {
  },
  addProd: (p) => { _state.productos.push(p); save(); },
  addProv: (p) => { _state.proveedores.push(p); save(); },
+ // v1.3.1075: syncCommand setter
+ syncCommand: (v) => { _state.syncCommand = v; save(); },
  resetStorage: () => { _state = JSON.parse(JSON.stringify(DEFAULTS)); try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {} save(); },
  };
 
@@ -12482,7 +12490,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1074-dev';
+ const _APP_VERSION = 'v1.3.1075-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14581,63 +14589,45 @@ const ui = (() => {
  // v1.3.1008: Reset TOTAL Dashwey — borra todo menos cuentas, settings, perfil, notifPrefs, auth
  // v1.3.1071: Reset TOTAL REAL — borra datos locales + Firebase + cuentas + tombstones
  // Conserva SOLO: perfil, settings, login activo
+ // v1.3.1075: Reset TOTAL GLOBAL via command channel
+ // Flujo: emite comando → aplica local → espera propagación (3s) → purga Firebase
  function _resetTotalDashwey() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
   window._showDestructiveConfirm({
    title: '🧨 Reset TOTAL Dashwey',
-   message: '⚠️ BORRADO IRREVERSIBLE\n\nSe borrarán LOCAL + FIREBASE:\n• Cuentas bancarias\n• Productos y catálogo\n• Proveedores\n• Ventas, pedidos, mermas\n• Gastos, ingresos, transferencias\n• Lotes, recordatorios, eventos\n• Cierres de caja, facturas\n• Hot Grid, Quick Grid, tombstones\n\nSe conservan: perfil, settings, login.\n\n¿Continuar?',
+   message: '⚠️ BORRADO IRREVERSIBLE\n\nSe borrarán en LOCAL + FIREBASE + TODOS LOS DISPOSITIVOS:\n• Cuentas bancarias\n• Productos y catálogo\n• Proveedores\n• Ventas, pedidos, mermas\n• Gastos, ingresos, transferencias\n• Lotes, recordatorios, eventos\n• Cierres de caja, facturas\n• Hot Grid, Quick Grid, tombstones\n\nSe conservan: perfil, settings, login.\n\n🌐 Los demás dispositivos recibirán el reset automáticamente en segundos.\n\n¿Continuar?',
    confirmText: 'BORRAR TODO',
    onConfirm: async function() {
     try {
-     showToast('⏳ Reset en curso...');
-     // 1. Bloquear writes durante el proceso
-     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
-     // 2. Cancelar listeners Firebase actuales (si existen) — evitar re-sync durante reset
-     try {
-      var _fbx = (typeof fb !== 'undefined') ? fb : (window._DashweyFirebase || null);
-      if (_fbx && _fbx._unsubscribers) {
-       Object.keys(_fbx._unsubscribers).forEach(function(k){
-        try { if (typeof _fbx._unsubscribers[k] === 'function') _fbx._unsubscribers[k](); } catch(_) {}
-        delete _fbx._unsubscribers[k];
-       });
-      }
-     } catch(_) {}
-     // 3. Borrar documento Firestore (purge real, no merge)
+     showToast('⏳ Emitiendo reset global...');
+     // 1. Emitir comando global — esto YA aplica el reset local vía _applySyncCommand('local')
+     //    y marca dirty para que save() suba el syncCommand a Firebase
+     if (typeof window._DashweyEmitSyncCommand === 'function') {
+      window._DashweyEmitSyncCommand('total');
+     } else {
+      showToast('⚠️ Sistema de sync no disponible');
+      return;
+     }
+     // 2. Esperar 3s a que el syncCommand se haya propagado a otros dispositivos vía onSnapshot
+     //    (los otros lo reciben, ejecutan el reset local y marcan _lastSyncCommandSeen)
+     showToast('🌐 Propagando a otros dispositivos (3s)...');
+     await new Promise(function(r){ setTimeout(r, 3000); });
+     // 3. Ahora sí, purgar el documento Firebase
+     //    Para este punto los otros dispositivos ya aplicaron el reset y tienen _lastSyncCommandSeen
+     //    Cuando re-sincronicen tras la purga, su save() subirá state vacío (sin hacer nada destructivo)
      try {
       var _fbref = (typeof fb !== 'undefined') ? fb : (window._DashweyFirebase || null);
       if (_fbref && _fbref.ready && typeof _fbref.purge === 'function') {
        var _purgeOk = await _fbref.purge();
-       if (!_purgeOk) console.warn('[Reset] Firebase purge devolvió false');
+       if (_purgeOk) console.log('[Reset] Firebase document purged');
       }
      } catch(eFb) { console.warn('[Reset] Firebase purge:', eFb); }
-     // 4. Limpiar TODO en local (incluye cuentas)
-     State.set.setCuentas([]);
-     State.set.productos([]);
-     State.set.ventas([]);
-     State.set.historialPedidos([]);
-     State.set.pendingOrders([]);
-     State.set.mermas([]);
-     State.set.setGastos([]);
-     State.set.setIngresos([]);
-     State.set.proveedores([]);
-     State.set.facturas([]);
-     State.set.setLotesStock([]);
-     State.set.setRecordatorios([]);
-     State.set.visitasComerciales([]);
-     try { State.set.hotPins([]); } catch(_) {}
-     try { State.set.qgCells([]); } catch(_) {}
-     // 5. Limpiar tombstones (ya no son relevantes)
+     // 4. Limpiar tombstones del dispositivo emisor
      try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.clear && window._DashweyLocalDeletedIds.clear(); } catch(_) {}
      try { localStorage.removeItem('dashwey_tombstones'); } catch(_) {}
-     // 6. Reabrir writes y forzar baseline vacío a Firebase
-     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
+     // 5. Limpiar hash de save (forzar nuevo write en próximo cambio)
      try { window._DashweySavingCtrl && window._DashweySavingCtrl.resetHash && window._DashweySavingCtrl.resetHash(); } catch(_) {}
-     // 7. Reinstalar listeners de sync (suscribir de nuevo a onSnapshot)
-     try { if (typeof _doInitialSync === 'function') { await _doInitialSync(); } } catch(_) {}
-     DashweyBus.emit('reset');
-     DashweyBus.emit('cuenta');
-     showToast('🧨 Reset TOTAL completado — local + Firebase');
-     setTimeout(function(){ try { App.dash.render(); } catch(_) {} try { App.tpv.render(); } catch(_) {} try { App.alm.renderOrden?.(); } catch(_) {} }, 300);
+     showToast('🧨 Reset TOTAL completado en todos los dispositivos');
     } catch(e) {
      if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
      console.error('[Dashwey] _resetTotalDashwey:', e);
@@ -14648,25 +14638,21 @@ const ui = (() => {
  }
 
  // v1.3.1009: Limpiar solo transacciones — mantiene productos, proveedores, cuentas
+ // v1.3.1075: emite comando global — se sincroniza a todos los dispositivos
  function _cleanTransactionsDashwey() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
   window._showDestructiveConfirm({
    title: 'Limpiar transacciones',
-   message: '⚠️ Se borrarán: ventas, pedidos, mermas, gastos, ingresos, lotes, facturas. Se mantienen: productos, proveedores, cuentas, settings. No toca Loyverse. ¿Continuar?',
+   message: '⚠️ Se borrarán: ventas, pedidos, mermas, gastos, ingresos, lotes, facturas. Se mantienen: productos, proveedores, cuentas, settings.\n\n🌐 Se aplicará en TODOS los dispositivos.\n\n¿Continuar?',
    confirmText: 'Limpiar transacciones',
    onConfirm: function() {
     try {
-     State.set.ventas([]);
-     State.set.historialPedidos([]);
-     State.set.pendingOrders([]);
-     State.set.mermas([]);
-     State.set.setGastos([]);
-     State.set.setIngresos([]);
-     State.set.facturas([]);
-     State.set.setLotesStock([]);
-     DashweyBus.emit('reset');
-     showToast('🧹 Transacciones limpiadas — productos intactos');
-     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
+     if (typeof window._DashweyEmitSyncCommand === 'function') {
+      window._DashweyEmitSyncCommand('clean-trans');
+      showToast('🧹 Transacciones limpiadas — sincronizando a otros dispositivos...');
+     } else {
+      showToast('⚠️ Sistema de sync no disponible');
+     }
     } catch(e) {
      console.error('[Dashwey] _cleanTransactionsDashwey:', e);
      showToast('⚠️ Error: ' + (e.message||e));
@@ -14710,29 +14696,21 @@ const ui = (() => {
  // ── v1.3.1049: Limpiar todo menos catálogo ───────────────────
  // Borra TODAS las transacciones + saldos. Mantiene productos, proveedores, cuentas, perfil.
  // Ideal para reimportar ventas Loyverse sin perder catálogo configurado.
+ // v1.3.1075: emite comando global — se sincroniza a todos los dispositivos
  function _cleanExceptCatalog() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
   window._showDestructiveConfirm({
    title: 'Limpiar todo menos catálogo',
-   message: '⚠️ Se borrarán TODAS las transacciones:\n• Ventas\n• Pedidos (historial + pendientes)\n• Gastos\n• Ingresos\n• Mermas, facturas, lotes, cierres\n• Saldos → 0€\n\nSe MANTIENEN: productos, proveedores, cuentas, perfil, settings.\n\n¿Continuar?',
+   message: '⚠️ Se borrarán TODAS las transacciones:\n• Ventas\n• Pedidos (historial + pendientes)\n• Gastos\n• Ingresos\n• Mermas, facturas, lotes, cierres\n• Saldos → 0€\n\nSe MANTIENEN: productos, proveedores, cuentas, perfil, settings.\n\n🌐 Se aplicará en TODOS los dispositivos.\n\n¿Continuar?',
    confirmText: 'Limpiar (mantener catálogo)',
    onConfirm: function() {
     try {
-     State.set.ventas([]);
-     State.set.historialPedidos([]);
-     State.set.pendingOrders([]);
-     State.set.mermas([]);
-     State.set.setGastos([]);
-     State.set.setIngresos([]);
-     State.set.facturas([]);
-     State.set.setLotesStock([]);
-     try { State.set.cierresCaja && State.set.cierresCaja([]); } catch(_) {}
-     // Resetear saldos a 0
-     var cuentas = State.get.cuentas() || [];
-     cuentas.forEach(function(c){ State.set.updateCuenta(c.id, { saldo: 0 }); });
-     DashweyBus.emit('reset');
-     showToast('🧹 Todo limpio — catálogo intacto');
-     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
+     if (typeof window._DashweyEmitSyncCommand === 'function') {
+      window._DashweyEmitSyncCommand('clean-catalog');
+      showToast('🧹 Todo limpio — sincronizando a otros dispositivos...');
+     } else {
+      showToast('⚠️ Sistema de sync no disponible');
+     }
     } catch(e) {
      console.error('[Dashwey] _cleanExceptCatalog:', e);
      showToast('⚠️ Error: ' + (e.message||e));
@@ -16514,6 +16492,13 @@ try { renderTopArticulos(period); } catch(e) {}
      JSON.parse(JSON.stringify(remote)),
      { settings: State.get.settings() }
     );
+    // v1.3.1075: detectar syncCommand remoto ANTES del merge
+    try {
+     if (merged && merged.syncCommand && typeof window._DashweyApplySyncCommand === 'function') {
+      var _appliedR = window._DashweyApplySyncCommand(merged.syncCommand, 'remote-ptr');
+      if (_appliedR) { console.log('[Dashwey/PTR] Reset remoto aplicado en refresh dashboard'); return; }
+     }
+    } catch(_) {}
     // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
     try {
      if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
@@ -19193,24 +19178,29 @@ function _openEditMovimientoSheet(id, src) {
     message: _msg,
     confirmText: 'Eliminar',
     onConfirm: function() {
+     // v1.3.1074: soft delete — marca deleted:true + deletedAt en lugar de filtrar
+     var _now = Date.now();
      if (_transferId2) {
       // Borrar ambos lados por transferId
-      // v1.3.1071: tombstones para delete en cascada de transferencia
-      try {
-       State.get.gastosOp().forEach(function(g){ if (g.transferId === _transferId2 || g.id === id) window._DashweyLocalDeletedIds.add(g.id); });
-       State.get.ingresosFin().forEach(function(i){ if (i.transferId === _transferId2 || i.id === id) window._DashweyLocalDeletedIds.add(i.id); });
-      } catch(_) {}
-      State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.transferId !== _transferId2 && g.id !== id; }));
-      State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.transferId !== _transferId2 && i.id !== id; }));
+      var _gArr = State.get.gastosOp().slice();
+      var _iArr = State.get.ingresosFin().slice();
+      _gArr.forEach(function(g){ if (g.transferId === _transferId2 || g.id === id) { g.deleted = true; g.deletedAt = _now; } });
+      _iArr.forEach(function(i){ if (i.transferId === _transferId2 || i.id === id) { i.deleted = true; i.deletedAt = _now; } });
+      State.set.setGastos(_gArr);
+      State.set.setIngresos(_iArr);
       DashweyBus.emit('gasto');
       DashweyBus.emit('ingreso');
      } else if (src === 'gasto') {
-      try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
-      State.set.setGastos(State.get.gastosOp().filter(function(g){ return g.id !== id; }));
+      var _gArr2 = State.get.gastosOp().slice();
+      var _g = _gArr2.find(function(x){ return x.id === id; });
+      if (_g) { _g.deleted = true; _g.deletedAt = _now; }
+      State.set.setGastos(_gArr2);
       DashweyBus.emit('gasto');
      } else if (src === 'ingreso') {
-      try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
-      State.set.setIngresos(State.get.ingresosFin().filter(function(i){ return i.id !== id; }));
+      var _iArr2 = State.get.ingresosFin().slice();
+      var _i = _iArr2.find(function(x){ return x.id === id; });
+      if (_i) { _i.deleted = true; _i.deletedAt = _now; }
+      State.set.setIngresos(_iArr2);
       DashweyBus.emit('ingreso');
      }
      sheet.classList.remove('open');
@@ -20421,8 +20411,11 @@ function _confirmBorrarCuenta(id) {
  }
 
  function _deleteGasto(id) {
- try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
- State.set.setGastos(State.get.gastosOp().filter(g => g.id !== id));
+ // v1.3.1074: soft delete
+ var _arr = State.get.gastosOp().slice();
+ var _g = _arr.find(g => g.id === id);
+ if (_g) { _g.deleted = true; _g.deletedAt = Date.now(); }
+ State.set.setGastos(_arr);
  renderFinanciero();
  App.ui.closeFs();
  showToast('🗑️ Gasto eliminado');
@@ -29971,9 +29964,11 @@ const marginLine = mg === null ? '' :
  }
  function _eaDelete(id) {
  // v1.3.584: confirmación ya realizada por _eaConfirmDelete — ejecutar directamente
- // El segundo _showDestructiveConfirm causaba doble confirmación al usuario
- try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
- State.set.productos(State.get.productos().filter(function(p) { return p.id !== id; }));
+ // v1.3.1074: soft delete — marca deleted:true + deletedAt
+ var _arr = State.get.productos().slice();
+ var _p = _arr.find(function(p) { return p.id === id; });
+ if (_p) { _p.deleted = true; _p.deletedAt = Date.now(); }
+ State.set.productos(_arr);
  // v1.3.648: ordenItems legacy — no requiere limpieza (siempre [])
  _editPhoto = null;
  ui.closeModal(); ui.closeFs();
@@ -30688,9 +30683,11 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
  }
 
  function borrarProv(id) {
- try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
- // 1. Remove from provider list
- State.set.proveedores(State.get.proveedores().filter(p => p.id !== id));
+ // v1.3.1074: soft delete
+ var _arr = State.get.proveedores().slice();
+ var _pv = _arr.find(function(p) { return p.id === id; });
+ if (_pv) { _pv.deleted = true; _pv.deletedAt = Date.now(); }
+ State.set.proveedores(_arr);
  // 2. ordenItems vacio desde v8.9.0 -- filtro eliminado v1.3.427
  // 2b. v1.3.594: cascade delete pedidos programados huérfanos del proveedor eliminado
  try {
@@ -33420,6 +33417,13 @@ _eaRecalc();
  JSON.parse(JSON.stringify(remote)),
  { settings: State.get.settings(), selectedProv: _localSelProv }
  );
+  // v1.3.1075: detectar syncCommand remoto ANTES del merge
+  try {
+   if (merged && merged.syncCommand && typeof window._DashweyApplySyncCommand === 'function') {
+    var _appliedA = window._DashweyApplySyncCommand(merged.syncCommand, 'remote-alm');
+    if (_appliedA) { console.log('[Dashwey/PTR] Reset remoto aplicado en almRefresh'); return; }
+   }
+  } catch(_) {}
   // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
   try {
    if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
@@ -34447,9 +34451,11 @@ _eaRecalc();
  }
 
  const _doDelete = () => {
- // 1. Eliminar del catálogo
- try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
- State.set.productos(State.get.productos().filter(pr => pr.id !== id));
+ // 1. Eliminar del catálogo (soft delete v1.3.1074)
+ var _arrPr = State.get.productos().slice();
+ var _pr = _arrPr.find(pr => pr.id === id);
+ if (_pr) { _pr.deleted = true; _pr.deletedAt = Date.now(); }
+ State.set.productos(_arrPr);
  // ordenItems eliminado del flujo en v8.8.x — filtro era código muerto
 
  // 2. Limpiar del carrito activo si estaba
@@ -36370,6 +36376,115 @@ _eaRecalc();
   return Object.values(map);
  }
 
+ // ─────────────────────────────────────────────────────────────
+ // v1.3.1075: Command Channel para acciones globales (resets)
+ // Flujo: dispositivo A escribe syncCommand en el state → viaja vía save()
+ // → onSnapshot en B/C lo detecta → _applySyncCommand lo ejecuta localmente
+ // → _lastSyncCommandSeen evita re-ejecución (idempotente)
+ // ─────────────────────────────────────────────────────────────
+ var _LAST_CMD_KEY = 'dashwey_last_sync_cmd';
+ function _getLastCommandSeen() {
+  try { return parseInt(localStorage.getItem(_LAST_CMD_KEY), 10) || 0; } catch(_) { return 0; }
+ }
+ function _setLastCommandSeen(at) {
+  try { localStorage.setItem(_LAST_CMD_KEY, String(at)); } catch(_) {}
+ }
+ // Ejecuta el reset localmente (NO toca Firebase — solo estado local)
+ function _applySyncCommand(cmd, origin) {
+  if (!cmd || !cmd.at || !cmd.kind) return false;
+  var seen = _getLastCommandSeen();
+  if (cmd.at <= seen) return false; // ya aplicado
+  origin = origin || 'remote';
+  console.log('[Dashwey/SyncCmd] Ejecutando', cmd.kind, 'origen=' + origin + ' at=' + cmd.at);
+  // Bloquear writes durante el proceso para que los sets no generen save spam
+  if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
+  try {
+   if (cmd.kind === 'clean-trans') {
+    State.set.ventas([]);
+    State.set.historialPedidos([]);
+    State.set.pendingOrders([]);
+    State.set.mermas([]);
+    State.set.setGastos([]);
+    State.set.setIngresos([]);
+    State.set.facturas([]);
+    try { State.set.setLotesStock([]); } catch(_) {}
+   } else if (cmd.kind === 'clean-catalog') {
+    State.set.ventas([]);
+    State.set.historialPedidos([]);
+    State.set.pendingOrders([]);
+    State.set.mermas([]);
+    State.set.setGastos([]);
+    State.set.setIngresos([]);
+    State.set.facturas([]);
+    try { State.set.setLotesStock([]); } catch(_) {}
+    try { State.set.cierresCaja && State.set.cierresCaja([]); } catch(_) {}
+    // Saldos a 0 en TODAS las cuentas (sin cascade — el usuario lo pidió)
+    (State.get.cuentas() || []).forEach(function(c){
+     try { State.set.updateCuenta(c.id, { saldo: 0, saldoInicial: 0 }); } catch(_) {}
+    });
+   } else if (cmd.kind === 'total') {
+    State.set.setCuentas([]);
+    State.set.productos([]);
+    State.set.ventas([]);
+    State.set.historialPedidos([]);
+    State.set.pendingOrders([]);
+    State.set.mermas([]);
+    State.set.setGastos([]);
+    State.set.setIngresos([]);
+    State.set.proveedores([]);
+    State.set.facturas([]);
+    try { State.set.setLotesStock([]); } catch(_) {}
+    try { State.set.setRecordatorios([]); } catch(_) {}
+    try { State.set.visitasComerciales([]); } catch(_) {}
+    try { State.set.hotPins([]); } catch(_) {}
+    try { State.set.qgCells([]); } catch(_) {}
+    // Limpiar tombstones (ya no relevantes tras reset total)
+    try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.clear && window._DashweyLocalDeletedIds.clear(); } catch(_) {}
+   }
+  } catch(e) {
+   console.error('[Dashwey/SyncCmd] Error:', e);
+  } finally {
+   if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
+  }
+  _setLastCommandSeen(cmd.at);
+  // Emitir eventos para re-render
+  try { DashweyBus.emit('reset'); } catch(_) {}
+  try { DashweyBus.emit('cuenta'); } catch(_) {}
+  try { DashweyBus.emit('gasto'); } catch(_) {}
+  try { DashweyBus.emit('ingreso'); } catch(_) {}
+  setTimeout(function(){
+   try { App.dash.render(); } catch(_) {}
+   try { App.tpv.render(); } catch(_) {}
+   try { App.alm.renderOrden?.(); } catch(_) {}
+  }, 300);
+  return true;
+ }
+ // Expuesta globalmente para onSnapshot y debug
+ window._DashweyApplySyncCommand = _applySyncCommand;
+
+ // Emite un comando: guarda en el state + fuerza save → llega a Firebase → onSnapshot en otros
+ function _emitSyncCommand(kind) {
+  var cmd = { kind: kind, at: Date.now(), by: window._DashweyDeviceId || 'unknown' };
+  // Guardar en el _state interno directamente (sin pasar por setter para que lo incluya _buildLocalSnapshot)
+  // Usamos un setter especial si existe, si no, directamente
+  try {
+   // Aplicar LOCAL primero (dispositivo emisor también ejecuta)
+   _applySyncCommand(cmd, 'local');
+   // Marcar dirty para que save() lo suba
+   window._DashweyDirty = true;
+   // Guardar comando en state para que _buildLocalSnapshot lo incluya
+   if (State.set.syncCommand) State.set.syncCommand(cmd);
+   else {
+    // Fallback: usar user
+    var _u = State.get.user() || {};
+    State.set.user(Object.assign({}, _u, { syncCommand: cmd }));
+   }
+  } catch(e) {
+   console.error('[Dashwey/SyncCmd] emit error:', e);
+  }
+ }
+ window._DashweyEmitSyncCommand = _emitSyncCommand;
+
  function _buildLocalSnapshot() {
  // Estampar deviceId+ts directamente en snapshot (sin State.set para no disparar save)
  const now = Date.now();
@@ -36404,6 +36519,8 @@ _eaRecalc();
  recordatorios: State.get.recordatorios ? State.get.recordatorios() : [], // v1.3.992 LOTE C
  // v1.3.1073: tombstones sincronizados entre dispositivos
  _deletedIds: (function(){ try { return window._DashweyLocalDeletedIds.toArray ? window._DashweyLocalDeletedIds.toArray() : []; } catch(_) { return []; } })(),
+ // v1.3.1075: syncCommand para acciones globales (resets multi-dispositivo)
+ syncCommand: _state.syncCommand || null,
  };
  }
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
@@ -36607,6 +36724,20 @@ _eaRecalc();
  );
  // FIX: bloquear save()->Firebase durante el merge para no re-subir
  // lo que acabamos de bajar. Los setters escriben solo en localStorage.
+  // v1.3.1075: Detectar syncCommand remoto — aplicar reset global ANTES del merge
+  // Si otro dispositivo emitió un reset, hay que aplicarlo AQUÍ y continuar con merged=vacío
+  try {
+   if (merged && merged.syncCommand && typeof window._DashweyApplySyncCommand === 'function') {
+    var _applied = window._DashweyApplySyncCommand(merged.syncCommand, 'remote');
+    if (_applied) {
+     // Reset aplicado — descartar el resto del merge (el state remoto ya no es relevante,
+     // porque _applySyncCommand ya limpió nuestro local). Salir del onSnapshot handler.
+     console.log('[Dashwey/SyncCmd] Reset remoto aplicado — saltando merge de este snapshot');
+     window._DashweySavingCtrl.isSaving = false;
+     return;
+    }
+   }
+  } catch(_) {}
   // Limpiar datos demo del snapshot remoto antes de aplicar al State
   if (typeof _migrateDemoData === 'function') { try { _migrateDemoData(merged); } catch(_) {} }
   // v1.3.1074: sistema tombstones OBSOLETO — soft delete hace el trabajo
@@ -36770,6 +36901,32 @@ _eaRecalc();
  };
  window._DashweyLocalDeletedIds = api;
 })();
+// v1.3.1074: BACKFILL — convertir tombstones locales en flags deleted:true en items actuales
+// Esto sincroniza el soft delete a Firebase para dispositivos que ya habían borrado con v1.3.1073
+try {
+ var _tomb = window._DashweyLocalDeletedIds;
+ if (_tomb && _tomb.size > 0 && typeof State !== 'undefined' && State.get) {
+  var _bfKeys = ['cuentas','productos','proveedores','historialPedidos','facturas','mermas','ventas','pendingOrders','gastosOp','ingresosFin','visitasComerciales','cierresCaja','recordatorios'];
+  var _bfCount = 0;
+  _bfKeys.forEach(function(k){
+   try {
+    var arr = State.get[k] && State.get[k]();
+    if (!Array.isArray(arr)) return;
+    arr.forEach(function(x){
+     if (x && x.id && !x.deleted && _tomb.has(x.id)) {
+      x.deleted = true;
+      x.deletedAt = Date.now();
+      _bfCount++;
+     }
+    });
+   } catch(_) {}
+  });
+  if (_bfCount > 0) {
+   console.log('[Dashwey/Backfill] Marcados ' + _bfCount + ' items con deleted:true desde tombstones locales');
+   try { window._DashweyDirty = true; } catch(_) {} // forzar sync próximo save
+  }
+ }
+} catch(eBF) { console.warn('[Dashwey/Backfill]', eBF); }
 // Flag de sync inicial (evita writes prematuros tras limpiar almacenamiento)
 window._DashweyInitialSyncDone = false;
 
