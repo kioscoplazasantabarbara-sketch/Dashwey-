@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1077-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1078-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1077-dev</title>
+<title>Dashwey v1.3.1078-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12516,7 +12516,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1077-dev';
+ const _APP_VERSION = 'v1.3.1078-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -36417,12 +36417,30 @@ _eaRecalc();
  function _setLastCommandSeen(at) {
   try { localStorage.setItem(_LAST_CMD_KEY, String(at)); } catch(_) {}
  }
+ // v1.3.1078: TTL del syncCommand — comandos de reset mayores a 24h son stale
+ var _SYNC_CMD_TTL_MS = 24 * 60 * 60 * 1000;
  // Ejecuta el reset localmente (NO toca Firebase — solo estado local)
  function _applySyncCommand(cmd, origin) {
   if (!cmd || !cmd.at || !cmd.kind) return false;
   var seen = _getLastCommandSeen();
   if (cmd.at <= seen) return false; // ya aplicado
   origin = origin || 'remote';
+  // v1.3.1078: ignorar comandos expirados — un dispositivo nuevo NO debe re-ejecutar
+  // un reset histórico; el estado actual de Firebase ya refleja el resultado
+  if ((Date.now() - cmd.at) > _SYNC_CMD_TTL_MS) {
+   console.log('[Dashwey/SyncCmd] Comando expirado (>24h), ignorando:', cmd.kind, 'at=' + cmd.at);
+   _setLastCommandSeen(cmd.at); // marcar como visto para no re-evaluar
+   return false;
+  }
+  // v1.3.1078: guard "primera vez" — si este dispositivo nunca ha visto ningún comando
+  // (seen === 0) y el comando es de 'total'/'clean-catalog', significa que es un login
+  // nuevo en una cuenta existente. NO ejecutar — solo marcar como visto.
+  // El snapshot remoto ya refleja el estado post-reset, aplicarlo otra vez borraría datos.
+  if (seen === 0 && origin === 'remote' && (cmd.kind === 'total' || cmd.kind === 'clean-catalog' || cmd.kind === 'clean-trans')) {
+   console.log('[Dashwey/SyncCmd] Primera conexión de este dispositivo — marcando comando histórico como visto sin re-ejecutar:', cmd.kind);
+   _setLastCommandSeen(cmd.at);
+   return false;
+  }
   console.log('[Dashwey/SyncCmd] Ejecutando', cmd.kind, 'origen=' + origin + ' at=' + cmd.at);
   // Bloquear writes durante el proceso para que los sets no generen save spam
   if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
@@ -36849,48 +36867,117 @@ _eaRecalc();
 
  } catch(e) { console.warn('[Sync] _doInitialSync error:', e); } finally { _syncRunning = false; }
 }
- // ── Onboarding: guard cuenta principal — v1.3.945 ──────────────────────────
+ // ── Onboarding: guard cuenta principal — v1.3.945 · v1.3.1078: guard primer sync ──
+ var _onboardingCheckAttempts = 0;
  function _checkCuentaOnboarding() {
   try {
+   // v1.3.1078 GUARD A: Firebase activo pero sync inicial NO completado → esperar
+   var fb = window._DashweyFirebase;
+   if (fb?.enabled && fb.isRegistered?.() && !window._DashweyInitialSyncDone) {
+    if (_onboardingCheckAttempts < 10) { // máx 10 intentos × 1s = 10s
+     _onboardingCheckAttempts++;
+     setTimeout(_checkCuentaOnboarding, 1000);
+     return;
+    }
+    console.warn('[Onboarding] Sync inicial tardó >10s, procediendo con estado local');
+   }
+
    // Migración: si hay cuentas pero ninguna isPrimary → marcar la primera
    var cs = State.get.cuentas();
    if (cs.length > 0 && !cs.find(function(c){ return c.isPrimary; })) {
     State.set.updateCuenta(cs[0].id, { isPrimary: true });
    }
-   // Guard: sin cuentas → mostrar onboarding
-   if (State.get.cuentas().length === 0) {
-    var el = document.getElementById('cuenta-onboarding');
-    if (el) el.classList.add('visible');
-    // Wire CTA
-    var btn = document.getElementById('ob-cta-btn');
-    if (btn && !btn._obWired) {
-     btn._obWired = true;
-     btn.addEventListener('click', function() {
-      var nombre = (document.getElementById('ob-nombre')?.value || '').trim();
-      if (!nombre) { try { Utils.showToast('⚠️ Escribe un nombre para la cuenta'); } catch(_){} return; }
-      var saldoRaw = parseFloat(document.getElementById('ob-saldo')?.value || '0');
-      if (isNaN(saldoRaw) || saldoRaw < 0) { try { Utils.showToast('⚠️ Saldo no válido'); } catch(_){} return; }
-      var saldo = Math.round(saldoRaw * 100) / 100;
-      var COLORS = ['#2563EB','#16A34A','#F97316','#8B5CF6','#EC4899','#14B8A6'];
-      State.set.addCuenta({
-       id: 'c' + Date.now(),
-       nombre: nombre,
-       banco: 'Banco',
-       saldo: saldo,
-       color: COLORS[0],
-       iban: '',
-       isPrimary: true,
-       createdAt: new Date().toISOString()
-      });
-      DashweyBus.emit('cuenta');
-      var el = document.getElementById('cuenta-onboarding');
-      if (el) el.classList.remove('visible');
-      try { App.nav.goTab(1); } catch(_) {}
-      try { Utils.showToast('✅ Cuenta creada'); } catch(_) {}
+
+   // v1.3.1078 GUARD B: si usuario autenticado y cuentas locales vacías, verificar remoto
+   // antes de mostrar onboarding. Previene flash del onboarding durante sync inicial.
+   if (State.get.cuentas().length === 0 && fb?.enabled && fb.isRegistered?.()) {
+    var _u = State.get.user();
+    if (_u && _u.uid) {
+     // Lectura explícita del remoto — si hay cuentas ahí, aplicarlas y NO mostrar onboarding
+     console.log('[Onboarding] Usuario autenticado sin cuentas locales — verificando remoto...');
+     fb.read('state').then(function(remote) {
+      try {
+       if (remote && Array.isArray(remote.cuentas)) {
+        var cuentasActivas = remote.cuentas.filter(function(c){ return c && !c.deleted; });
+        if (cuentasActivas.length > 0) {
+         console.log('[Onboarding] Cuentas encontradas en remoto (' + cuentasActivas.length + ') — aplicando, NO mostrar onboarding');
+         // Aplicar TODO el snapshot remoto (no solo cuentas) para consistencia
+         if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
+         try {
+          var _arraysCriticos = ['cuentas','productos','proveedores','historialPedidos','facturas','mermas','ventas','pendingOrders','gastosOp','ingresosFin','cierresCaja','recordatorios','lotesStock','visitasComerciales'];
+          _arraysCriticos.forEach(function(k){
+           if (Array.isArray(remote[k])) {
+            var setterKey = k;
+            if (k === 'cuentas') setterKey = 'setCuentas';
+            else if (k === 'gastosOp') setterKey = 'setGastos';
+            else if (k === 'ingresosFin') setterKey = 'setIngresos';
+            else if (k === 'recordatorios') setterKey = 'setRecordatorios';
+            else if (k === 'lotesStock') setterKey = 'setLotesStock';
+            try { if (typeof State.set[setterKey] === 'function') State.set[setterKey](remote[k]); } catch(_){}
+           }
+          });
+         } finally {
+          if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
+         }
+         DashweyBus.emit('cuenta');
+         try { App.dash.render(); } catch(_) {}
+         try { App.tpv.render(); } catch(_) {}
+         try { App.alm.renderOrden?.(); } catch(_) {}
+         return; // NO mostrar onboarding
+        }
+       }
+       // Confirmado: remoto también vacío → mostrar onboarding
+       _showOnboardingUI();
+      } catch(eR) {
+       console.warn('[Onboarding] Error verificando remoto, mostrando onboarding por defecto:', eR);
+       _showOnboardingUI();
+      }
+     }).catch(function(eRead){
+      console.warn('[Onboarding] Error fb.read, mostrando onboarding por defecto:', eRead);
+      _showOnboardingUI();
      });
+     return;
     }
    }
+
+   // Sin Firebase o con cuentas locales → decisión inmediata
+   if (State.get.cuentas().length === 0) {
+    _showOnboardingUI();
+   }
   } catch(e) { console.warn('[Onboarding] error:', e); }
+ }
+
+ // Función extraída — muestra UI onboarding y wire del botón
+ function _showOnboardingUI() {
+  var el = document.getElementById('cuenta-onboarding');
+  if (el) el.classList.add('visible');
+  var btn = document.getElementById('ob-cta-btn');
+  if (btn && !btn._obWired) {
+   btn._obWired = true;
+   btn.addEventListener('click', function() {
+    var nombre = (document.getElementById('ob-nombre')?.value || '').trim();
+    if (!nombre) { try { Utils.showToast('⚠️ Escribe un nombre para la cuenta'); } catch(_){} return; }
+    var saldoRaw = parseFloat(document.getElementById('ob-saldo')?.value || '0');
+    if (isNaN(saldoRaw) || saldoRaw < 0) { try { Utils.showToast('⚠️ Saldo no válido'); } catch(_){} return; }
+    var saldo = Math.round(saldoRaw * 100) / 100;
+    var COLORS = ['#2563EB','#16A34A','#F97316','#8B5CF6','#EC4899','#14B8A6'];
+    State.set.addCuenta({
+     id: 'c' + Date.now(),
+     nombre: nombre,
+     banco: 'Banco',
+     saldo: saldo,
+     color: COLORS[0],
+     iban: '',
+     isPrimary: true,
+     createdAt: new Date().toISOString()
+    });
+    DashweyBus.emit('cuenta');
+    var el2 = document.getElementById('cuenta-onboarding');
+    if (el2) el2.classList.remove('visible');
+    try { App.nav.goTab(1); } catch(_) {}
+    try { Utils.showToast('✅ Cuenta creada'); } catch(_) {}
+   });
+  }
  }
  window._checkCuentaOnboarding = _checkCuentaOnboarding;
 
