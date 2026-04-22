@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1071-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1073-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1071-dev</title>
+<title>Dashwey v1.3.1073-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12484,7 +12484,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1071-dev';
+ const _APP_VERSION = 'v1.3.1073-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16502,8 +16502,48 @@ try { renderTopArticulos(period); } catch(e) {}
  }
 
 
- function refresh() {
+ // v1.3.1072: refresh ahora SÍ sincroniza con Firebase (antes solo re-renderizaba)
+ // Simetría con almRefresh: fb.read() + aplicar remoto + render
+ async function refresh() {
  _shimmerAllCards(280);
+ try {
+  const fb = window._DashweyFirebase;
+  if (fb?.enabled && fb.ready) {
+   const remote = await fb.read('state');
+   if (remote) {
+    // Preservar settings locales (period, theme, etc.) — no dejar que remoto los pise
+    const merged = Object.assign(
+     JSON.parse(JSON.stringify(remote)),
+     { settings: State.get.settings() }
+    );
+    // v1.3.1073: mergear tombstones REMOTOS antes de filtrar (sync multi-dispositivo)
+    try {
+     if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
+      window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
+     }
+    } catch(_) {}
+    // Filtrar tombstones — evitar restauración de IDs borrados localmente
+    const _deleted = window._DashweyLocalDeletedIds;
+    if (_deleted && _deleted.size) {
+     ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
+      if (Array.isArray(merged[k])) {
+       merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deleted.has(x.id); });
+      }
+     });
+    }
+    var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
+     visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
+     hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
+     qgCells:'qgCells', qgSizeIdx:'qgSizeIdx', chatMessages:'chatMessages',
+     chatUsers:'chatUsers', notifsRead:'notifsRead',
+     recordatorios:'setRecordatorios' };
+    Object.keys(merged).forEach(function(k) {
+     var sk = (_sm[k] !== undefined) ? _sm[k] : k;
+     if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
+    });
+   }
+  }
+ } catch(e) { /* silencioso — datos locales siguen disponibles */ }
  render(); // _applyDashMode llamado al final de render()
  // v1.3.565: re-renderizar TODAS las snap cards con animación de contadores
  try { _snapLastRenderedCardId = null; _snapDoRenderAll(); } catch(_) {}
@@ -17051,12 +17091,14 @@ try { renderTopArticulos(period); } catch(e) {}
  _ptDashBusy = true;
  ind.style.opacity = '1';
  ind.style.transform = 'translateX(-50%) translateY(0px)';
- refresh();
- setTimeout(() => {
- ind.style.transform = 'translateX(-50%) translateY(-52px)';
- ind.style.opacity = '0';
- _ptDashBusy = false;
- }, 700);
+ // v1.3.1072: refresh ahora es async (sync con Firebase) — esperar promise real + safety
+ var _ptSafety = setTimeout(function(){ ind.style.transform = 'translateX(-50%) translateY(-52px)'; ind.style.opacity='0'; _ptDashBusy = false; }, 8000);
+ var _done = function(){ clearTimeout(_ptSafety); ind.style.transform = 'translateX(-50%) translateY(-52px)'; ind.style.opacity='0'; _ptDashBusy = false; };
+ try {
+  var _p = refresh();
+  if (_p && typeof _p.then === 'function') _p.then(_done).catch(_done);
+  else setTimeout(_done, 700);
+ } catch(_) { setTimeout(_done, 700); }
  } else {
  ind.style.transform = 'translateX(-50%) translateY(-52px)';
  ind.style.opacity = '0';
@@ -20080,14 +20122,34 @@ function _confirmBorrarCuenta(id) {
  }, 50);
  }
 
+ // v1.3.1073: cascade al borrar cuenta — gastos/ingresos con cuentaId huérfano también se borran
  function _borrarCuenta(id) {
- try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
- State.set.setCuentas(State.get.cuentas().filter(c => c.id !== id));
- renderFinanciero();
- App.ui.closeModal();
- App.ui.closeFs();
- showToast('🗑️ Cuenta eliminada');
- setTimeout(() => openFinModal('cuentas'), Utils.ANIM_DELAY);
+  try {
+   var _gastos = (State.get.gastosOp() || []).filter(function(g){ return g.cuentaId === id; });
+   var _ingresos = (State.get.ingresosFin() || []).filter(function(i){ return i.cuentaId === id; });
+   // Tombstones de todos los huérfanos
+   try {
+    _gastos.forEach(function(g){ if (g && g.id) window._DashweyLocalDeletedIds.add(g.id); });
+    _ingresos.forEach(function(i){ if (i && i.id) window._DashweyLocalDeletedIds.add(i.id); });
+    window._DashweyLocalDeletedIds.add(id);
+   } catch(_) {}
+   // Borrar cuenta + movimientos huérfanos
+   State.set.setCuentas(State.get.cuentas().filter(function(c){ return c.id !== id; }));
+   if (_gastos.length) State.set.setGastos((State.get.gastosOp()||[]).filter(function(g){ return g.cuentaId !== id; }));
+   if (_ingresos.length) State.set.setIngresos((State.get.ingresosFin()||[]).filter(function(i){ return i.cuentaId !== id; }));
+   DashweyBus.emit('cuenta');
+   if (_gastos.length) DashweyBus.emit('gasto');
+   if (_ingresos.length) DashweyBus.emit('ingreso');
+   renderFinanciero();
+   App.ui.closeModal();
+   App.ui.closeFs();
+   var _n = _gastos.length + _ingresos.length;
+   showToast(_n > 0 ? ('🗑️ Cuenta eliminada · ' + _n + ' movimientos borrados') : '🗑️ Cuenta eliminada');
+   setTimeout(function(){ openFinModal('cuentas'); }, Utils.ANIM_DELAY);
+  } catch(e) {
+   console.error('[Dashwey] _borrarCuenta:', e);
+   showToast('⚠️ Error: ' + (e.message||e));
+  }
  }
 
  // Los listeners se registran con rAF post-render en lugar de setTimeout(50)
@@ -33360,6 +33422,20 @@ _eaRecalc();
  JSON.parse(JSON.stringify(remote)),
  { settings: State.get.settings(), selectedProv: _localSelProv }
  );
+  // v1.3.1073: mergear tombstones remotos y filtrar arrays (sync multi-dispositivo)
+  try {
+   if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
+    window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
+   }
+  } catch(_) {}
+  var _deletedPT = window._DashweyLocalDeletedIds;
+  if (_deletedPT && _deletedPT.size) {
+   ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
+    if (Array.isArray(merged[k])) {
+     merged[k] = merged[k].filter(function(x){ return !x || !x.id || !_deletedPT.has(x.id); });
+    }
+   });
+  }
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
    hotPins:'hotPins', catLabels:'catLabels', hiddenCards:'hiddenCards',
@@ -36328,6 +36404,8 @@ _eaRecalc();
  hiddenCards: State.get.hiddenCards ? State.get.hiddenCards() : [],
  qgCells: State.get.qgCells ? State.get.qgCells() : [],
  recordatorios: State.get.recordatorios ? State.get.recordatorios() : [], // v1.3.992 LOTE C
+ // v1.3.1073: tombstones sincronizados entre dispositivos
+ _deletedIds: (function(){ try { return window._DashweyLocalDeletedIds.toArray ? window._DashweyLocalDeletedIds.toArray() : []; } catch(_) { return []; } })(),
  };
  }
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
@@ -36533,7 +36611,14 @@ _eaRecalc();
  // lo que acabamos de bajar. Los setters escriben solo en localStorage.
   // Limpiar datos demo del snapshot remoto antes de aplicar al State
   if (typeof _migrateDemoData === 'function') { try { _migrateDemoData(merged); } catch(_) {} }
-  // Filtrar IDs borrados localmente — evitar restauración por onSnapshot
+  // v1.3.1073: mergear tombstones REMOTOS al set local antes de filtrar
+  // Esto permite que un delete en dispositivo A se propague a dispositivo B
+  try {
+   if (Array.isArray(merged._deletedIds) && window._DashweyLocalDeletedIds?.mergeArray) {
+    window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
+   }
+  } catch(_) {}
+  // Filtrar IDs borrados (local + remoto ya unificados) — evitar restauración por onSnapshot
   // v1.3.979: aplicar a TODOS los arrays con id, no solo productos
   const _deleted = window._DashweyLocalDeletedIds;
   if (_deleted && _deleted.size) {
@@ -36675,7 +36760,20 @@ _eaRecalc();
   delete: function(id){ if(_map[id]){ delete _map[id]; _persist(); return true;} return false; },
   clear: function(){ _map = {}; _persist(); },
   get size(){ return Object.keys(_map).length; },
-  forEach: function(cb){ Object.keys(_map).forEach(function(id){ cb(id, id, api); }); }
+  forEach: function(cb){ Object.keys(_map).forEach(function(id){ cb(id, id, api); }); },
+  // v1.3.1073: serialización para sincronizar entre dispositivos via Firebase
+  toArray: function(){ return Object.keys(_map).map(function(id){ return {id: id, ts: _map[id]}; }); },
+  mergeArray: function(arr){
+   if (!Array.isArray(arr)) return;
+   var changed = false;
+   arr.forEach(function(e){
+    if (!e || !e.id) return;
+    var ts = parseInt(e.ts, 10) || Date.now();
+    if ((Date.now() - ts) > TTL) return; // respetar TTL remoto
+    if (!_map[e.id] || _map[e.id] < ts) { _map[e.id] = ts; changed = true; }
+   });
+   if (changed) _persist();
+  }
  };
  window._DashweyLocalDeletedIds = api;
 })();
