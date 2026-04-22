@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1076-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1077-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1076-dev</title>
+<title>Dashwey v1.3.1077-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10142,7 +10142,14 @@ const State = (() => {
  if (_badge) _badge.style.opacity = '1';
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing');
  }
- _writeFirebase(_archivePayload(_state))
+ // v1.3.1077: usar snapshot completo con facturas/lotesStock/syncCommand/deletedIds/etc.
+ // Caps de archivePayload solo aplican al snapshot — resto de campos viajan completos
+ const _fbPayload = (typeof window._DashweyBuildSnapshot === 'function')
+  ? window._DashweyBuildSnapshot()
+  : _archivePayload(_state);
+ // Aplicar caps de archive (ventas/mermas/pedidos/facturas/chat) al payload FB
+ const _fbPayloadCapped = _archivePayload(_fbPayload);
+ _writeFirebase(_fbPayloadCapped)
  .then(() => {
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
@@ -10227,6 +10234,25 @@ const State = (() => {
  prod: (id) => _state.productos.find(p => p.id === id),
  // v1.3.1075: syncCommand para acciones globales
  syncCommand: () => _state.syncCommand || null,
+ };
+
+ // v1.3.1077: acceso raw (sin filtro deleted) para el snapshot que va a Firebase
+ // Los ítems con deleted:true DEBEN viajar para que otros dispositivos los marquen también
+ const raw = {
+  cuentas: () => _state.cuentas || [],
+  productos: () => _state.productos || [],
+  proveedores: () => _state.proveedores || [],
+  historialPedidos: () => _state.historialPedidos || [],
+  facturas: () => _state.facturas || [],
+  mermas: () => _state.mermas || [],
+  ventas: () => _state.ventas || [],
+  pendingOrders: () => _state.pendingOrders || [],
+  gastosOp: () => _state.gastosOp || [],
+  ingresosFin: () => _state.ingresosFin || [],
+  cierresCaja: () => _state.cierresCaja || [],
+  visitasComerciales: () => _state.visitasComerciales || [],
+  recordatorios: () => _state.recordatorios || [],
+  lotesStock: () => _state.lotesStock || [],
  };
 
  // Setters — siempre guardan
@@ -10374,7 +10400,7 @@ const State = (() => {
  set isSaving(v) { _isSaving = v; },
  resetHash() { _lastSavedHash = ''; },
  };
- return { get, set };
+ return { get, set, raw };
 })();
 
 // ══════════════════════════════════════════════════════════════════
@@ -12490,7 +12516,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1076-dev';
+ const _APP_VERSION = 'v1.3.1077-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16507,7 +16533,7 @@ try { renderTopArticulos(period); } catch(e) {}
     } catch(_) {}
     var _ALL_IDS_R = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
     _ALL_IDS_R.forEach(function(k) {
-     var _localR = null; try { _localR = State.get[k] ? State.get[k]() : null; } catch(_) {}
+     var _localR = null; try { _localR = (State.raw && State.raw[k]) ? State.raw[k]() : (State.get[k] ? State.get[k]() : null); } catch(_) {}
      if (Array.isArray(merged[k]) && Array.isArray(_localR)) {
       merged[k] = _mergeById(_localR, merged[k]);
      }
@@ -33432,7 +33458,7 @@ _eaRecalc();
   } catch(_) {}
   var _ALL_IDS_A = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
   _ALL_IDS_A.forEach(function(k) {
-   var _localA = null; try { _localA = State.get[k] ? State.get[k]() : null; } catch(_) {}
+   var _localA = null; try { _localA = (State.raw && State.raw[k]) ? State.raw[k]() : (State.get[k] ? State.get[k]() : null); } catch(_) {}
    if (Array.isArray(merged[k]) && Array.isArray(_localA)) {
     merged[k] = _mergeById(_localA, merged[k]);
    }
@@ -36487,24 +36513,31 @@ _eaRecalc();
  }
  window._DashweyEmitSyncCommand = _emitSyncCommand;
 
+ // v1.3.1077: _buildLocalSnapshot usa State.raw para arrays con soft-delete
+ // Así los ítems deleted:true viajan a Firebase y otros dispositivos los detectan
  function _buildLocalSnapshot() {
- // Estampar deviceId+ts directamente en snapshot (sin State.set para no disparar save)
  const now = Date.now();
  const deviceId = window._DashweyDeviceId || 'unknown';
+ const R = State.raw || {}; // fallback por si no está expuesto
+ const _r = (k) => (R[k] ? R[k]() : (State.get[k] ? State.get[k]() : []));
  return {
  user: { ...State.get.user(), lastSyncAt: now, lastDeviceId: deviceId },
- proveedores: State.get.proveedores(),
- productos: State.get.productos(),
- historialPedidos: State.get.historialPedidos(),
- mermas: State.get.mermas(),
- ventas: State.get.ventas(),
- // ordenItems: legacy -- excluido del sync (no se usa en UI desde v8.9.0)
- pendingOrders: State.get.pendingOrders(),
- visitasComerciales: State.get.visitasComerciales(),
- // v1.3.431: datos financieros y tickets -- ausentes causaban perdida de datos en otro dispositivo
- cuentas: State.get.cuentas(),
- gastosOp: State.get.gastosOp(),
- ingresosFin: State.get.ingresosFin(),
+ // Arrays CON soft-delete → usar raw para incluir items con deleted:true
+ proveedores: _r('proveedores'),
+ productos: _r('productos'),
+ historialPedidos: _r('historialPedidos'),
+ mermas: _r('mermas'),
+ ventas: _r('ventas'),
+ pendingOrders: _r('pendingOrders'),
+ visitasComerciales: _r('visitasComerciales'),
+ cuentas: _r('cuentas'),
+ gastosOp: _r('gastosOp'),
+ ingresosFin: _r('ingresosFin'),
+ cierresCaja: _r('cierresCaja'),
+ recordatorios: _r('recordatorios'),
+ facturas: _r('facturas'),
+ lotesStock: _r('lotesStock'),
+ // Arrays/objetos sin id → getter normal
  ticketsAbiertos: State.get.ticketsAbiertos(),
  chatMessages: State.get.chatMessages(),
  teamMembers: State.get.teamMembers(),
@@ -36512,25 +36545,19 @@ _eaRecalc();
  period: State.get.period(),
  settings: State.get.settings(),
  perfil: State.get.perfil(),
- // v1.3.730: campos faltantes
- cierresCaja: State.get.cierresCaja ? State.get.cierresCaja() : [],
  hotPins: State.get.hotPins ? State.get.hotPins() : [],
  catLabels: State.get.catLabels ? State.get.catLabels() : {},
  hiddenCards: State.get.hiddenCards ? State.get.hiddenCards() : [],
  qgCells: State.get.qgCells ? State.get.qgCells() : [],
- recordatorios: State.get.recordatorios ? State.get.recordatorios() : [], // v1.3.992 LOTE C
- // v1.3.1076: arrays faltantes — sincronización total
- facturas: State.get.facturas ? State.get.facturas() : [],
- lotesStock: State.get.lotesStock ? State.get.lotesStock() : [],
  notifsRead: State.get.notifsRead ? State.get.notifsRead() : [],
  chatUsers: State.get.chatUsers ? State.get.chatUsers() : [],
  qgSizeIdx: State.get.qgSizeIdx ? State.get.qgSizeIdx() : 2,
- // v1.3.1073: tombstones sincronizados entre dispositivos
  _deletedIds: (function(){ try { return window._DashweyLocalDeletedIds.toArray ? window._DashweyLocalDeletedIds.toArray() : []; } catch(_) { return []; } })(),
- // v1.3.1075: syncCommand para acciones globales (resets multi-dispositivo)
- syncCommand: _state.syncCommand || null,
+ syncCommand: (State.get.syncCommand ? State.get.syncCommand() : null),
  };
  }
+ // Exponer globalmente para que save() (otro scope) pueda usarlo
+ window._DashweyBuildSnapshot = _buildLocalSnapshot;
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
  function _renderAll() {
  try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
@@ -36749,12 +36776,10 @@ _eaRecalc();
  // Así deletedAt del ítem marca autoridad entre dispositivos
  var _ALL_ID_KEYS = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
  _ALL_ID_KEYS.forEach(function(k) {
-  // Acceso raw al _state (por debajo del filtro del getter) para preservar items con deleted:true
+  // v1.3.1077: usar State.raw (sin filtro deleted) para que merge por deletedAt funcione
   var _localRaw = null;
   try {
-   // State.get.X() ahora filtra deleted; usamos el raw del _state si existe el shortcut
-   // Fallback: usar el getter (aceptable porque _preserveDeleted en setter los restaurará)
-   _localRaw = State.get[k] ? State.get[k]() : null;
+   _localRaw = (State.raw && State.raw[k]) ? State.raw[k]() : (State.get[k] ? State.get[k]() : null);
   } catch(_) {}
   if (Array.isArray(merged[k]) && Array.isArray(_localRaw)) {
    merged[k] = _mergeById(_localRaw, merged[k]);
