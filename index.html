@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1083-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1084-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1083-dev</title>
+<title>Dashwey v1.3.1084-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12532,7 +12532,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1083-dev';
+ const _APP_VERSION = 'v1.3.1084-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14468,20 +14468,28 @@ const ui = (() => {
  function _lvCommitCatalog(lvItems, lvCats) {
   var st = document.getElementById('lv-token-status');
   try {
+   // v1.3.1084: uso State.raw para acceder a proveedores/productos CON deleted:true preservados
+   // (importante: necesitamos ver los ya marcados deleted para no re-crearlos)
+   var _rawProvs = (State.raw && State.raw.proveedores) ? State.raw.proveedores() : (State.get.proveedores() || []);
+   var _rawProds = (State.raw && State.raw.productos) ? State.raw.productos() : (State.get.productos() || []);
+   var _now = Date.now();
    // v1.3.1056: MERGE inteligente — proveedores
-   // - Proveedores Loyverse existentes: actualizar nombre (si cambió en LV)
-   //   pero CONSERVAR agente/tel/email/diasPedido (ediciones del usuario)
-   // - Proveedores manuales (no loyverse): NUNCA tocar
-   // - Proveedores prov_bb_* sintéticos: eliminar (BB placeholders ya no son necesarios)
-   var prevProvs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+   // v1.3.1084: placeholders BB y proveedores Loyverse obsoletos se marcan DELETED,
+   // no solo se omiten. Así el tombstone viaja vía sync y otros dispositivos los borran.
+   var prevProvs = _rawProvs;
    var prevProvById = {};
    prevProvs.forEach(function(p){ if (p && p.id) prevProvById[p.id] = p; });
    var mergedProvs = [];
    // Conservar proveedores manuales (origen != loyverse Y no bb_*)
    prevProvs.forEach(function(p){
     if (!p || !p.id) return;
-    if (p.origen === 'loyverse') return; // lo recreamos abajo
-    if (p.id.indexOf('prov_bb_') === 0) return; // placeholders BB → descartar
+    if (p.deleted) { mergedProvs.push(p); return; } // ya deleted → mantener tombstone
+    if (p.origen === 'loyverse') return; // lo recreamos abajo (pero si no se recrea, se marca deleted luego)
+    if (p.id.indexOf('prov_bb_') === 0) {
+     // v1.3.1084: soft-delete en vez de omitir → sync consistente entre dispositivos
+     mergedProvs.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+     return;
+    }
     mergedProvs.push(p);
    });
    var catIdToProvId = {}; // mapping lvCategoryId → dashweyProvId
@@ -14513,23 +14521,34 @@ const ui = (() => {
     diasPedido: (fbExisting && fbExisting.diasPedido) || [],
     origen: 'loyverse',
    });
+   // v1.3.1084: proveedores Loyverse ANTIGUOS que ya no están en lvCats → soft-delete
+   // (caso: categoría borrada en Loyverse desde la última sync)
+   var _newLvProvIds = {};
+   mergedProvs.forEach(function(p){ if (p && p.id && !p.deleted) _newLvProvIds[p.id] = true; });
+   prevProvs.forEach(function(p){
+    if (!p || !p.id || p.deleted) return;
+    if (p.origen === 'loyverse' && !_newLvProvIds[p.id]) {
+     mergedProvs.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+    }
+   });
    var newProvs = mergedProvs; // mantener variable para refs posteriores
    State.set.proveedores(newProvs);
 
    // v1.3.1056: MERGE inteligente — productos
-   // - Producto Loyverse existente: actualizar nombre/pvp desde LV, CONSERVAR
-   //   ediciones manuales (precioCompra, udscaja, iva, categoria, stock, barcode)
-   // - Producto manual (origen != loyverse): NUNCA tocar
-   // - Producto bb_agg_*: eliminar (placeholders ya no necesarios con Loyverse)
-   var prevProds = State.get.productos ? (State.get.productos() || []) : [];
+   // v1.3.1084: placeholders bb_agg_* y productos Loyverse obsoletos → soft-delete (no omitir)
+   var prevProds = _rawProds;
    var prevProdById = {};
    prevProds.forEach(function(p){ if (p && p.id) prevProdById[p.id] = p; });
    var mergedProds = [];
-   // Conservar productos manuales (origen != loyverse Y no bb_agg_*)
    prevProds.forEach(function(p){
     if (!p || !p.id) return;
+    if (p.deleted) { mergedProds.push(p); return; } // ya deleted → mantener tombstone
     if (p.origen === 'loyverse') return; // lo recreamos abajo
-    if (p.id.indexOf('bb_agg_') === 0) return; // placeholders BB → descartar
+    if (p.id.indexOf('bb_agg_') === 0) {
+     // v1.3.1084: soft-delete en vez de omitir
+     mergedProds.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+     return;
+    }
     mergedProds.push(p);
    });
    lvItems.forEach(function(it) {
@@ -14572,6 +14591,15 @@ const ui = (() => {
     // Limpiar undefined para no contaminar Firestore
     Object.keys(prod).forEach(function(k){ if (prod[k] === undefined) delete prod[k]; });
     mergedProds.push(prod);
+   });
+   // v1.3.1084: productos Loyverse ANTIGUOS que ya no están en lvItems → soft-delete
+   var _newLvProdIds = {};
+   mergedProds.forEach(function(p){ if (p && p.id && !p.deleted) _newLvProdIds[p.id] = true; });
+   prevProds.forEach(function(p){
+    if (!p || !p.id || p.deleted) return;
+    if (p.origen === 'loyverse' && !_newLvProdIds[p.id]) {
+     mergedProds.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+    }
    });
    var newProds = mergedProds; // mantener variable para refs posteriores
 
