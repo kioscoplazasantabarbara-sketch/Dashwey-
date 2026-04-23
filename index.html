@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1084-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1085-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1084-dev</title>
+<title>Dashwey v1.3.1085-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8830,7 +8830,8 @@ import { getAuth, signInAnonymously, onAuthStateChanged,
  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc,
  collection, onSnapshot, serverTimestamp,
- addDoc, query, getDocs, orderBy, limit, where }
+ addDoc, query, getDocs, orderBy, limit, where,
+ writeBatch, deleteDoc }
  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 // ── firebaseConfig ─────────────────────────────────────────────
@@ -9089,6 +9090,101 @@ window._DashweyFirebase = {
   }
  },
 };
+
+// ──────────────────────────────────────────────────────────────────
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1085-dev)
+// Añadido sin activar. Flag maestro OFF por defecto.
+// Todo el código existente sigue operando con doc monolítico.
+// ──────────────────────────────────────────────────────────────────
+
+// Flag maestro: cuando sea true, save() escribirá a subcolecciones
+window._DashweyUseSubcollections = false;
+
+// Tracking granular de cambios por subcolección
+// Estructura: { ventas: Set<id>, gastos: Set<id>, ... }
+// Cada setter (add/update/remove) añadirá el id a la Set correspondiente
+// _writeFirebaseSubcollections() consumirá estas Sets y limpiará tras éxito
+window._DashweyDirtyItems = {
+ ventas:         new Set(),
+ gastosOp:       new Set(),
+ ingresosFin:    new Set(),
+ historialPedidos: new Set(),
+ mermas:         new Set(),
+ facturas:       new Set(),
+};
+
+// Mapa de subcolección → nombre de array en State
+// Las claves coinciden con nombres de colección Firestore
+window._DashweySubcollectionMap = {
+ ventas:           { stateKey: 'ventas',           fbName: 'ventas' },
+ gastosOp:         { stateKey: 'gastosOp',         fbName: 'gastos' },
+ ingresosFin:      { stateKey: 'ingresosFin',      fbName: 'ingresos' },
+ historialPedidos: { stateKey: 'historialPedidos', fbName: 'pedidos' },
+ mermas:           { stateKey: 'mermas',           fbName: 'mermas' },
+ facturas:         { stateKey: 'facturas',         fbName: 'facturas' },
+};
+
+// Helper: marcar un ítem como dirty (llamado por setters en futuras fases)
+window._DashweyMarkDirty = function(stateKey, id) {
+ try {
+  if (!id) return;
+  const dirty = window._DashweyDirtyItems;
+  if (dirty && dirty[stateKey] instanceof Set) {
+   dirty[stateKey].add(id);
+  }
+ } catch(_) {}
+};
+
+// Helper: limpiar dirty tras write exitoso
+window._DashweyClearDirty = function(stateKey) {
+ try {
+  const dirty = window._DashweyDirtyItems;
+  if (dirty && dirty[stateKey] instanceof Set) {
+   dirty[stateKey].clear();
+  }
+ } catch(_) {}
+};
+
+// Helper: batch writer para subcolecciones — NO se invoca todavía
+// En Fase 3 será llamado desde save() cuando el flag esté ON
+window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
+ const fb = window._DashweyFirebase;
+ if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
+ if (!Array.isArray(items) || !items.length) return true;
+ const sub = window._DashweySubcollectionMap[stateKey];
+ if (!sub) { console.warn('[Dashwey/SubB] mapping desconocido:', stateKey); return false; }
+ try {
+  const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  // Firestore limita batches a 500 ops → partir en chunks
+  const CHUNK = 450;
+  for (let i = 0; i < items.length; i += CHUNK) {
+   const slice = items.slice(i, i + CHUNK);
+   const batch = mod.writeBatch(_db);
+   for (const it of slice) {
+    if (!it?.id) continue;
+    const ctx = window._DashweyActiveContext || ACTIVE_CONTEXT;
+    // Ruta: usuarios/{uid}/contextos/{ctx}/datos/state_sub/{stateKey}/{id}
+    // state_sub es un doc contenedor — permite que las subcolecciones vivan bajo state sin colisionar
+    const ref = mod.doc(_db, 'usuarios', _uid, 'contextos', ctx, 'datos', 'state_sub', sub.fbName, it.id);
+    // Si el item está marcado deleted:true → borrar en lugar de escribir
+    if (it.deleted === true) {
+     batch.delete(ref);
+    } else {
+     batch.set(ref, it, { merge: false });
+    }
+   }
+   await batch.commit();
+  }
+  return true;
+ } catch(e) {
+  console.warn('[Dashwey/SubB] batch error:', stateKey, e?.code || e?.message);
+  return false;
+ }
+};
+
+// ──────────────────────────────────────────────────────────────────
+// FIN INFRAESTRUCTURA ESTRATEGIA B
+// ──────────────────────────────────────────────────────────────────
 
 // ── FCM Token — guardar en Firestore para push server-side ──────
 // Se activa solo cuando el usuario concede permiso de notificaciones.
@@ -12532,7 +12628,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1084-dev';
+ const _APP_VERSION = 'v1.3.1085-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
