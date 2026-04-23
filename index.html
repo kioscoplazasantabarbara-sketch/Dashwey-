@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1118-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1119-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1118-dev</title>
+<title>Dashwey v1.3.1119-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8965,28 +8965,8 @@ window._DashweyFirebase = {
  async write(coleccion, data, _attempt = 0) {
  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
  try {
- // v1.3.1118: limpieza recursiva profunda — undefined → null, NaN/Infinity → null,
- // funciones/símbolos → eliminados. Firestore rechaza undefined y NaN con invalid-argument.
- const _deepClean = (v) => {
-  if (v === undefined) return null;
-  if (v === null) return null;
-  if (typeof v === 'function' || typeof v === 'symbol') return null;
-  if (typeof v === 'number') {
-   if (isNaN(v) || !isFinite(v)) return null;
-   return v;
-  }
-  if (typeof v !== 'object') return v;
-  if (Array.isArray(v)) return v.map(_deepClean);
-  const out = {};
-  for (const k of Object.keys(v)) {
-   if (k.startsWith('__') || k.endsWith('__')) continue;
-   const cleaned = _deepClean(v[k]);
-   if (cleaned === undefined) continue;
-   out[k] = cleaned;
-  }
-  return out;
- };
- const clean = _deepClean(data);
+ // v1.3.1119: usar _DashweyDeepClean global (coherencia con batches subcolecciones)
+ const clean = (window._DashweyDeepClean || (v=>v))(data);
  await setDoc(
  this._ref(_uid, coleccion),
  { ...clean, _updatedAt: serverTimestamp() },
@@ -9212,6 +9192,28 @@ window._DashweyClearDirty = function(stateKey) {
  } catch(_) {}
 };
 
+// v1.3.1119: limpieza global reutilizable — undefined/NaN/Infinity → null
+// Usada por batches subcolecciones y fb.write (coherencia total)
+window._DashweyDeepClean = function(v) {
+ if (v === undefined || v === null) return null;
+ if (typeof v === 'function' || typeof v === 'symbol') return null;
+ if (typeof v === 'number') {
+  if (isNaN(v) || !isFinite(v)) return null;
+  return v;
+ }
+ if (typeof v !== 'object') return v;
+ if (v instanceof Date) return v.toISOString();
+ if (Array.isArray(v)) return v.map(window._DashweyDeepClean);
+ const out = {};
+ for (const k of Object.keys(v)) {
+  if (k.startsWith('__') || k.endsWith('__')) continue;
+  const cleaned = window._DashweyDeepClean(v[k]);
+  if (cleaned === undefined) continue;
+  out[k] = cleaned;
+ }
+ return out;
+};
+
 // Helper: batch writer para subcolecciones — NO se invoca todavía
 // En Fase 3 será llamado desde save() cuando el flag esté ON
 window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
@@ -9237,7 +9239,10 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
     if (it.deleted === true) {
      batch.delete(ref);
     } else {
-     batch.set(ref, it, { merge: false });
+     // v1.3.1119: limpiar item antes de batch.set — evita 400 Bad Request
+     // si algún campo tiene undefined/NaN/Infinity
+     var _cleanIt = window._DashweyDeepClean(it);
+     batch.set(ref, _cleanIt, { merge: false });
     }
    }
    await batch.commit();
@@ -13179,7 +13184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1118-dev';
+ const _APP_VERSION = 'v1.3.1119-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
