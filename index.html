@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1120-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1121-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1120-dev</title>
+<title>Dashwey v1.3.1121-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13184,7 +13184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1120-dev';
+ const _APP_VERSION = 'v1.3.1121-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16029,6 +16029,115 @@ const ui = (() => {
  // @param {Object} opts
  //   opts.force: ignorar debounce (para pull-to-refresh)
  //   opts.onDone(n): callback con número de tickets nuevos
+ // v1.3.1121: cache de rangos ya fetched — evita refetch al navegar ←→
+ // Set de strings 'YYYY-MM-DD' que representan días YA consultados a Loyverse API
+ window._DashweyLvRangosFetched = window._DashweyLvRangosFetched || new Set();
+
+ // v1.3.1121: Fetch histórico Loyverse bajo demanda para un rango específico
+ // Usa created_at_min y created_at_max para acotar API (más eficiente que paginar todo).
+ // Idempotente: dedup por v_lv_<id> en _lvCommitReceipts.
+ // Cache: marca día como fetched para no reconsultar.
+ function _lvFetchRangoHistorico(startISO, endISO, onDone) {
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) { if (onDone) onDone(0); return; }
+  if (!navigator.onLine) { if (onDone) onDone(0); return; }
+  if (_lvSyncInFlight) { if (onDone) onDone(0); return; }
+
+  // Clave de cache: 'YYYY-MM-DD' del día de startISO
+  var diaKey = startISO.slice(0, 10);
+  if (window._DashweyLvRangosFetched.has(diaKey)) {
+   console.info('[Dashwey/LVHist] día ya consultado, skip:', diaKey);
+   if (onDone) onDone(0);
+   return;
+  }
+
+  _lvSyncInFlight = true;
+  console.info('[Dashwey/LVHist] fetch rango:', startISO, '→', endISO);
+  var startMs = new Date(startISO).getTime();
+  var endMs = new Date(endISO).getTime();
+  var cutoffStart = new Date(startMs);
+
+  _lvFetchHistPaginated(token, [], null, cutoffStart, endMs, function(receipts, limitePlan, aborted) {
+   try {
+    if (aborted) {
+     console.warn('[Dashwey/LVHist] abortado — plan Free limita parámetros de fecha');
+     if (onDone) onDone(0);
+     return;
+    }
+    var ventasAntes = (State.get.ventas ? State.get.ventas().length : 0);
+    _lvCommitReceipts(receipts, null, limitePlan || false, true); // silent=true
+    var ventasDespues = (State.get.ventas ? State.get.ventas().length : 0);
+    var nuevas = Math.max(0, ventasDespues - ventasAntes);
+    // Marcar día como fetched (aunque no haya traído nada, ya consultamos)
+    window._DashweyLvRangosFetched.add(diaKey);
+    console.info('[Dashwey/LVHist] ✓ día:', diaKey, '| nuevas:', nuevas, '| recibidos:', receipts.length);
+    if (nuevas > 0) {
+     // Forzar re-render tras ingestar
+     try {
+      var _barsEl = document.getElementById('ev-chart-bars');
+      if (_barsEl) _barsEl._evHash = null;
+      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
+     } catch(_) {}
+     try { showToast('✅ ' + nuevas + ' venta' + (nuevas===1?'':'s') + ' de ' + diaKey); } catch(_) {}
+    }
+    if (onDone) onDone(nuevas);
+   } catch(e) {
+    console.warn('[Dashwey/LVHist] commit error:', e && e.message);
+    if (onDone) onDone(0);
+   } finally {
+    _lvSyncInFlight = false;
+   }
+  });
+ }
+
+ // Paginador histórico: acumula tickets >= cutoffStart y <= endMs
+ // Para evitar traer más de lo necesario, para cuando receipt_date < cutoffStart
+ function _lvFetchHistPaginated(token, acc, cursor, cutoffStart, endMs, onDone) {
+  var params = { limit: 250 };
+  if (cursor) params.cursor = cursor;
+  // Acotar por fecha - si Free rechaza (402), paginamos sin filtro y cortamos en cliente
+  params.created_at_min = cutoffStart.toISOString();
+  _lvProxyFetch('/receipts', token, params)
+   .then(function(r) {
+    if (r.status === 402) {
+     // Plan Free: created_at_min no soportado → reintentar sin filtro
+     console.warn('[Dashwey/LVHist] 402 con created_at_min — reintentando sin filtro');
+     var params2 = { limit: 250 };
+     if (cursor) params2.cursor = cursor;
+     return _lvProxyFetch('/receipts', token, params2).then(function(r2) {
+      if (!r2.ok) throw new Error('HTTP ' + r2.status);
+      return r2.json();
+     });
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+   })
+   .then(function(data) {
+    if (data === null) return;
+    var receipts = data.receipts || [];
+    if (!receipts.length) { onDone(acc, false, false); return; }
+    // Filtrar al rango [cutoffStart, endMs]
+    var enRango = receipts.filter(function(rc) {
+     var d = new Date(rc.receipt_date || rc.created_at);
+     return d >= cutoffStart && d.getTime() <= endMs;
+    });
+    var all = acc.concat(enRango);
+    // Cortar paginación cuando ticket más viejo < cutoffStart
+    var ticketMasViejo = receipts[receipts.length - 1];
+    var dMasViejo = new Date(ticketMasViejo.receipt_date || ticketMasViejo.created_at);
+    var fueraRango = dMasViejo < cutoffStart;
+    if (data.cursor && !fueraRango) {
+     _lvFetchHistPaginated(token, all, data.cursor, cutoffStart, endMs, onDone);
+    } else {
+     onDone(all, false, false);
+    }
+   })
+   .catch(function(e) {
+    console.warn('[Dashwey/LVHist] fetch error:', e && e.message);
+    onDone(acc, false, true);
+   });
+ }
+
  function _lvSyncHoy(opts) {
   opts = opts || {};
   // Guards silenciosos: sin token, sin red, o ya en curso
@@ -17008,7 +17117,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
 })();
 
 // ══════════════════════════════════════════
@@ -18117,6 +18226,25 @@ try { renderTopArticulos(period); } catch(e) {}
   _updateGlobalPeriodLabel(newLabel);
   try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
   render();
+
+  // v1.3.1121: auto-fetch histórico Loyverse si rango no tiene datos locales
+  try {
+   var _token = localStorage.getItem('dashwey_lv_token') || '';
+   if (_token && window.App && App.ui && typeof App.ui._lvFetchRangoHistorico === 'function') {
+    // Contar ventas Loyverse en el rango
+    var _ventasLv = (State.get.ventas ? State.get.ventas() : []).filter(function(v) {
+     if (!v || v.origen !== 'loyverse' || !v.fecha) return false;
+     var d = new Date(v.fecha).getTime();
+     return d >= newStart.getTime() && d <= newEnd.getTime();
+    });
+    // Si hay menos de 3 ventas en rango de 24h → probablemente no se ha fetcheado
+    if (_ventasLv.length < 3) {
+     App.ui._lvFetchRangoHistorico(newP.customStart, newP.customEnd, function(nuevas) {
+      if (nuevas > 0) console.info('[Dashwey/Shift] auto-fetch completado:', nuevas, 'ventas');
+     });
+    }
+   }
+  } catch(_) {}
   return;
  }
 
