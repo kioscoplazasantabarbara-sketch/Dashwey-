@@ -9871,6 +9871,78 @@ const State = (() => {
   return ok;
   }
 
+ // ──────────────────────────────────────────────────────────────────
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1085-dev)
+ // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
+ // Flag maestro: window._DashweyUseSubcollections
+ //
+ // Modo OFF (por defecto) → idéntico a _writeFirebase(data). Cero cambio.
+ // Modo ON → escribe doc raíz SIN arrays transaccionales + batches a
+ //           subcolecciones para los items marcados dirty.
+ //
+ // Claves transaccionales movidas a subcolecciones:
+ //   ventas, gastosOp, ingresosFin, historialPedidos, mermas, facturas
+ //
+ // Claves que permanecen en doc raíz:
+ //   settings, cuentas, user, proveedores, productos, lotesStock,
+ //   hotPins, qgCells, qgSizeIdx, syncCommand, tombstones, etc.
+ // ──────────────────────────────────────────────────────────────────
+ async function _writeFirebaseDual(data) {
+  // Flag OFF → comportamiento idéntico al anterior
+  if (!window._DashweyUseSubcollections) {
+   return _writeFirebase(data);
+  }
+  // Flag ON → ruta subcolecciones
+  const fb = window._DashweyFirebase;
+  if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
+  try {
+   // 1. Construir payload de doc raíz: data SIN los 6 arrays transaccionales
+   const transactionalKeys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+   const rootPayload = {};
+   for (const [k, v] of Object.entries(data || {})) {
+    if (transactionalKeys.includes(k)) continue;
+    rootPayload[k] = v;
+   }
+   // Marcar arquitectura en doc raíz (permite a devices antiguos detectar)
+   rootPayload._schemaVersion = 2;
+   // 2. Escribir doc raíz (reutiliza _writeFirebase para limpieza + timestamps)
+   const rootOk = await _writeFirebase(rootPayload);
+   if (!rootOk) {
+    console.warn('[Dashwey/SubB] root write failed — abortando batches');
+    return false;
+   }
+   // 3. Para cada subcolección: extraer items dirty del state y hacer batch
+   const dirty = window._DashweyDirtyItems || {};
+   const rawState = (typeof window._DashweyBuildSnapshot === 'function')
+    ? window._DashweyBuildSnapshot()
+    : _archivePayload(_state);
+   let totalDirty = 0;
+   for (const stateKey of transactionalKeys) {
+    const dirtySet = dirty[stateKey];
+    if (!(dirtySet instanceof Set) || dirtySet.size === 0) continue;
+    const arr = Array.isArray(rawState[stateKey]) ? rawState[stateKey] : [];
+    // Recoger items dirty (presentes) + items con deleted:true (para borrado en subcolección)
+    const byId = {};
+    for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
+    const items = Object.values(byId);
+    totalDirty += items.length;
+    if (!items.length) { dirtySet.clear(); continue; }
+    const batchOk = await window._DashweyWriteSubcollectionBatch(stateKey, items);
+    if (batchOk) {
+     dirtySet.clear();
+    } else {
+     // Fallo: mantener dirty para reintento en próximo save()
+     console.warn('[Dashwey/SubB] batch falló para', stateKey, '— reintentará');
+    }
+   }
+   if (totalDirty > 0) console.info('[Dashwey/SubB] ✓ subcolecciones escritas:', totalDirty, 'items');
+   return true;
+  } catch(e) {
+   console.warn('[Dashwey/SubB] _writeFirebaseDual error:', e?.code || e?.message);
+   return false;
+  }
+ }
+
 
  // ── 3. Cola offline → flush cuando vuelve la red ───────────────
  let _lastFlushAt = 0; // anti-spam: mínimo 5s entre intentos
@@ -10245,7 +10317,8 @@ const State = (() => {
   : _archivePayload(_state);
  // Aplicar caps de archive (ventas/mermas/pedidos/facturas/chat) al payload FB
  const _fbPayloadCapped = _archivePayload(_fbPayload);
- _writeFirebase(_fbPayloadCapped)
+ // v1.3.1085: dispatcher dual — OFF = doc monolítico (actual), ON = subcolecciones
+ _writeFirebaseDual(_fbPayloadCapped)
  .then(() => {
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
@@ -10357,11 +10430,11 @@ const State = (() => {
  const set = {
  proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); save(); },
  productos: (v) => { _state.productos = _preserveDeleted('productos', v); save(); },
- historialPedidos: (v) => { _state.historialPedidos = _preserveDeleted('historialPedidos', v); save(); },
- facturas: (v) => { _state.facturas = _preserveDeleted('facturas', v); save(); },
- addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); window._DashweyUrgentSave = true; save(); },
- mermas: (v) => { _state.mermas = _preserveDeleted('mermas', v); save(); },
- ventas: (v) => { _state.ventas = _preserveDeleted('ventas', v); save(); },
+ historialPedidos: (v) => { _state.historialPedidos = _preserveDeleted('historialPedidos', v); try { (_state.historialPedidos||[]).forEach(x => x?.id && window._DashweyMarkDirty('historialPedidos', x.id)); } catch(_) {} save(); },
+ facturas: (v) => { _state.facturas = _preserveDeleted('facturas', v); try { (_state.facturas||[]).forEach(x => x?.id && window._DashweyMarkDirty('facturas', x.id)); } catch(_) {} save(); },
+ addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); try { if (f?.id) window._DashweyMarkDirty('facturas', f.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
+ mermas: (v) => { _state.mermas = _preserveDeleted('mermas', v); try { (_state.mermas||[]).forEach(x => x?.id && window._DashweyMarkDirty('mermas', x.id)); } catch(_) {} save(); },
+ ventas: (v) => { _state.ventas = _preserveDeleted('ventas', v); try { (_state.ventas||[]).forEach(x => x?.id && window._DashweyMarkDirty('ventas', x.id)); } catch(_) {} save(); },
  ordenItems: (v) => { _state.ordenItems = v; save(); },
  selectedProv: (v) => { _state.selectedProv = v; save(); },
  pendingOrders: (v) => { _state.pendingOrders = _preserveDeleted('pendingOrders', v); save(); },
@@ -10443,23 +10516,25 @@ const State = (() => {
     save();
    },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
- addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); window._DashweyUrgentSave = true; save(); },
+ addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
   addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
- setGastos: (v) => { _state.gastosOp = _preserveDeleted('gastosOp', v); save(); },
+ setGastos: (v) => { _state.gastosOp = _preserveDeleted('gastosOp', v); try { (_state.gastosOp||[]).forEach(x => x?.id && window._DashweyMarkDirty('gastosOp', x.id)); } catch(_) {} save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
  clearTickets: () => { _state.ticketsAbiertos = []; save(); },
  updateProv: (id, vals) => { const p = get.prov(id); if(p) Object.assign(p, vals); save(); },
- addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); window._DashweyUrgentSave = true; save(); },
- addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); window._DashweyUrgentSave = true; save(); },
- setIngresos: (v) => { _state.ingresosFin = _preserveDeleted('ingresosFin', v); save(); },
+ addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
+ addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
+ setIngresos: (v) => { _state.ingresosFin = _preserveDeleted('ingresosFin', v); try { (_state.ingresosFin||[]).forEach(x => x?.id && window._DashweyMarkDirty('ingresosFin', x.id)); } catch(_) {} save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
  addPedido: (p) => { // v1.3.594: deduplicación por ID — consistente con addVenta
  if (p?.id && _state.historialPedidos.some(x => x.id === p.id)) return;
  _state.historialPedidos.push(p);
+ // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
+ try { if (p?.id) window._DashweyMarkDirty('historialPedidos', p.id); } catch(_) {}
  // v1.3.980: FIFO — crear lotes con coste histórico al confirmar pedido
  try {
   if (typeof FinEngine !== 'undefined' && FinEngine.crearLotesDesdeItems && Array.isArray(p?.items)) {
@@ -10474,6 +10549,8 @@ const State = (() => {
   var _h = _state.historialPedidos.find(p => p.id === id);
   if (_h) { _h.deleted = true; _h.deletedAt = Date.now(); }
   try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
+  try { window._DashweyMarkDirty('historialPedidos', id); } catch(_) {}
   window._DashweyUrgentSave = true;
   save();
  },
@@ -10482,6 +10559,8 @@ const State = (() => {
   var _f = _state.facturas.find(f => f.id === id);
   if (_f) { _f.deleted = true; _f.deletedAt = Date.now(); }
   try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
+  try { window._DashweyMarkDirty('facturas', id); } catch(_) {}
   window._DashweyUrgentSave = true;
   save();
  },
@@ -10489,6 +10568,8 @@ const State = (() => {
  addVenta: (v) => {
  if (v?.id && _state.ventas.some(x => x.id === v.id)) return;
  _state.ventas.push(v);
+ // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
+ try { if (v?.id) window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
  // v1.3.980: FIFO — consumir lotes para registrar coste real de esta venta
  try {
   if (typeof FinEngine !== 'undefined' && FinEngine.consumirLotesFIFO && v?.prodId && v?.qty) {
