@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1095-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1096-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1095-dev</title>
+<title>Dashwey v1.3.1096-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9092,7 +9092,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1095-dev)
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1096-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
@@ -9204,7 +9204,7 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
 
 // ──────────────────────────────────────────────────────────────────
 // ESTRATEGIA B — FASE 4: onSnapshot SUBCOLECCIONES + MIGRACIÓN
-// v1.3.1095-dev
+// v1.3.1096-dev
 // Todo está inactivo hasta que alguien llame explícitamente a
 // window._DashweyEnableSubcollections(). Ningún arranque automático.
 // ──────────────────────────────────────────────────────────────────
@@ -9261,6 +9261,66 @@ window._DashweyUnsubscribeAllSubcollections = function() {
   });
   window._DashweySubUnsubs = {};
  } catch(_) {}
+};
+
+// v1.3.1096: helper global — ¿debemos ignorar arrays transaccionales del doc raíz?
+// True cuando Estrategia B está activa: subcolecciones son fuente única de verdad
+// para ventas/gastos/ingresos/pedidos/mermas/facturas. El doc raíz puede tener
+// copias legacy (pre-limpieza) que causan fantasmas si se fusionan.
+window._DashweyShouldSkipTransactionalInRoot = function() {
+ return window._DashweyUseSubcollections === true;
+};
+const _TRANSACTIONAL_KEYS_V2 = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+window._DashweyIsTransactionalKey = function(k) {
+ return _TRANSACTIONAL_KEYS_V2.indexOf(k) !== -1;
+};
+
+// v1.3.1096: limpieza one-shot del doc raíz — borra los arrays transaccionales
+// Solo ejecutar manualmente desde consola tras confirmar que:
+//   1. Todos los devices están en v1.3.1096+
+//   2. Subcolecciones tienen datos íntegros
+//   3. _schemaVersion:2 en doc raíz
+window._DashweyCleanRootDoc = async function(opts) {
+ opts = opts || {};
+ const force = opts.force === true;
+ const fb = window._DashweyFirebase;
+ if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) {
+  console.warn('[Dashwey/Clean] Firebase no disponible');
+  return { ok: false, reason: 'firebase-unavailable' };
+ }
+ // Guard: requiere schemaVersion:2 (migración ejecutada)
+ const snap = await fb.read('state');
+ if (!snap) {
+  console.warn('[Dashwey/Clean] doc raíz no existe');
+  return { ok: false, reason: 'no-doc' };
+ }
+ if (snap._schemaVersion !== 2 && !force) {
+  console.warn('[Dashwey/Clean] _schemaVersion !== 2 (tienes:', snap._schemaVersion, '). Ejecuta migración primero o pasa {force:true}');
+  return { ok: false, reason: 'no-schema2' };
+ }
+ // Reporte antes
+ const before = {};
+ for (const k of _TRANSACTIONAL_KEYS_V2) {
+  before[k] = Array.isArray(snap[k]) ? snap[k].length : 0;
+ }
+ console.info('[Dashwey/Clean] items en doc raíz antes de limpieza:', before);
+ // Escribir arrays vacíos — con merge:true, los arrays existentes se reemplazan por []
+ try {
+  await fb.write('state', {
+   ventas: [],
+   gastosOp: [],
+   ingresosFin: [],
+   historialPedidos: [],
+   mermas: [],
+   facturas: [],
+   _rootCleanedAt: new Date().toISOString()
+  });
+  console.info('[Dashwey/Clean] ✓ doc raíz limpiado — arrays transaccionales vacíos');
+  return { ok: true, before };
+ } catch(e) {
+  console.warn('[Dashwey/Clean] error:', e?.message);
+  return { ok: false, reason: 'write-error', error: e?.message };
+ }
 };
 
 // Handler genérico: merge incremental de items remotos sobre _state[stateKey]
@@ -10107,7 +10167,7 @@ const State = (() => {
   }
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — _writeFirebaseDual (v1.3.1095-dev)
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1096-dev)
  // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
  // Flag maestro: window._DashweyUseSubcollections
  //
@@ -12986,7 +13046,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1095-dev';
+ const _APP_VERSION = 'v1.3.1096-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17058,7 +17118,15 @@ try { renderTopArticulos(period); } catch(e) {}
      }
     } catch(_) {}
     var _ALL_IDS_R = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+    // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
+    // Saltar su merge desde doc raíz para evitar fantasmas de datos legacy.
+    var _skipTrans_17 = window._DashweyShouldSkipTransactionalInRoot?.();
     _ALL_IDS_R.forEach(function(k) {
+     if (_skipTrans_17 && window._DashweyIsTransactionalKey?.(k)) {
+      // Remover del merged para que el setter posterior no procese legacy
+      delete merged[k];
+      return;
+     }
      var _localR = null; try { _localR = (State.raw && State.raw[k]) ? State.raw[k]() : (State.get[k] ? State.get[k]() : null); } catch(_) {}
      if (Array.isArray(merged[k]) && Array.isArray(_localR)) {
       merged[k] = _mergeById(_localR, merged[k]);
@@ -33985,7 +34053,13 @@ _eaRecalc();
    }
   } catch(_) {}
   var _ALL_IDS_A = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+  // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
+  var _skipTrans_34 = window._DashweyShouldSkipTransactionalInRoot?.();
   _ALL_IDS_A.forEach(function(k) {
+   if (_skipTrans_34 && window._DashweyIsTransactionalKey?.(k)) {
+    delete merged[k];
+    return;
+   }
    var _localA = null; try { _localA = (State.raw && State.raw[k]) ? State.raw[k]() : (State.get[k] ? State.get[k]() : null); } catch(_) {}
    if (Array.isArray(merged[k]) && Array.isArray(_localA)) {
     merged[k] = _mergeById(_localA, merged[k]);
@@ -37220,7 +37294,13 @@ _eaRecalc();
  );
  // v1.3.730: merge por ID para arrays acumulativos
  var _mKeys = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja'];
+ // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
+ var _skipTrans_mk = window._DashweyShouldSkipTransactionalInRoot?.();
  _mKeys.forEach(function(k) {
+  if (_skipTrans_mk && window._DashweyIsTransactionalKey?.(k)) {
+   delete merged[k];
+   return;
+  }
   var _localArr = typeof State.get[k] === 'function' ? State.get[k]() : null;
   if (Array.isArray(merged[k]) && Array.isArray(_localArr)) {
    merged[k] = _mergeById(_localArr, merged[k]);
@@ -37344,7 +37424,13 @@ _eaRecalc();
  // v1.3.1074: _mergeById aplicado a TODOS los arrays con id (no solo acumulativos)
  // Así deletedAt del ítem marca autoridad entre dispositivos
  var _ALL_ID_KEYS = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+ // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
+ var _skipTrans_37 = window._DashweyShouldSkipTransactionalInRoot?.();
  _ALL_ID_KEYS.forEach(function(k) {
+  if (_skipTrans_37 && window._DashweyIsTransactionalKey?.(k)) {
+   delete merged[k];
+   return;
+  }
   // v1.3.1077: usar State.raw (sin filtro deleted) para que merge por deletedAt funcione
   var _localRaw = null;
   try {
@@ -37412,7 +37498,7 @@ _eaRecalc();
 });
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1095-dev)
+ // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1096-dev)
  // Escucha evento custom emitido por _DashweyApplySubcollectionSnapshot
  // y aplica merge incremental al _state local. Solo activo cuando flag ON.
  // ──────────────────────────────────────────────────────────────────
