@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1130-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1131-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1130-dev</title>
+<title>Dashwey v1.3.1131-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13355,7 +13355,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1130-dev';
+ const _APP_VERSION = 'v1.3.1131-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18084,10 +18084,13 @@ try { renderTopArticulos(period); } catch(e) {}
      if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
     });
     } finally {
-     window._DashweyApplyingRemote = _prevAppR || false;
+     // v1.3.1131: diferir restore del flag 150ms (ver handler principal)
      if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = _prevSavR || false;
      // Limpiar dirty que setters hayan podido filtrar
      try { window._DashweyDirty = false; } catch(_) {}
+     setTimeout(function() {
+      window._DashweyApplyingRemote = _prevAppR || false;
+     }, 150);
     }
    }
   }
@@ -38665,7 +38668,10 @@ _eaRecalc();
   }
  } catch(_) {}
 
- // v1.3.1076: emit events para que sub-módulos (snap cards, detalle cuenta, etc.) se refresquen
+ // v1.3.1131: emits normales PERO con _DashweyApplyingRemote mantenido durante la cola
+ // El emit usa setTimeout(0) → handlers corren DESPUÉS del finally del handler
+ // → _recalcSaldosListener veía flag=false → updateCuenta → save → LOOP 1613KB
+ // Fix: emitir normal y restaurar flag con un setTimeout posterior (corre después de los handlers)
  try {
   DashweyBus.emit('cuenta');
   DashweyBus.emit('gasto');
@@ -38678,8 +38684,14 @@ _eaRecalc();
   DashweyBus.emit('recordatorio');
  } catch(_) {}
  _renderAll();
- // v1.3.1104: AHORA sí restaurar el flag — cualquier interacción posterior vuelve a funcionar normal
- window._DashweyApplyingRemote = _prevApplying || false;
+ // v1.3.1131: restaurar el flag DESPUÉS del setTimeout(0) del Bus.emit
+ // Los handlers corren en setTimeout(0) → si restauramos aquí síncronamente,
+ // _recalcSaldosListener ve flag=false → save loop.
+ // setTimeout(150) garantiza que los handlers del Bus + sus setTimeouts internos
+ // ya han terminado antes de liberar el flag.
+ setTimeout(function() {
+  window._DashweyApplyingRemote = _prevApplying || false;
+ }, 150);
 
  /* flag de sesión: toast solo 1 vez por sesión — evita spam con reloj adelantado */
 });
@@ -38788,7 +38800,11 @@ _eaRecalc();
        _S.set[setterName](merged);
       } finally {
        if (ctrl) ctrl.isSaving = prevSaving || false;
-       window._DashweyApplyingRemote = prevApplying || false;
+       // v1.3.1131: diferir restore del flag 150ms — cualquier Bus.emit diferido
+       // de los setters (setTimeout 0) verá el flag=true y no disparará save loop
+       setTimeout(function() {
+        window._DashweyApplyingRemote = prevApplying || false;
+       }, 150);
       }
       // v1.3.1126: render eliminado — el State.set ya dispara events (venta/gasto/etc)
       // que el Dashboard escucha. El render forzado con setTimeout causaba parpadeo visual.
