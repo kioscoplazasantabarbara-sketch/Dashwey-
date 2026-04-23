@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1128-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1129-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1128-dev</title>
+<title>Dashwey v1.3.1129-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10769,6 +10769,17 @@ const State = (() => {
  // Los cambios vienen de Firestore, ya están en la nube — subirlos otra vez = loop
  if (window._DashweyApplyingRemote) { return; }
  window._DashweyDirty = true;
+ // v1.3.1129: THROTTLE DURO — no ejecutar save si el anterior terminó hace <10s
+ // Protege contra loops de re-renders y onSnapshot rebotando
+ // El dirty sigue marcado, el próximo save() legítimo lo recoge
+ var _now1129 = Date.now();
+ if (window._DashweyLastSaveEndTs && (_now1129 - window._DashweyLastSaveEndTs) < 10000) {
+  // Agendar save diferido en 10s desde último save, si no hay uno ya agendado
+  clearTimeout(_saveTimer);
+  var _delay = 10000 - (_now1129 - window._DashweyLastSaveEndTs);
+  _saveTimer = setTimeout(save, _delay + 100);
+  return;
+ }
  clearTimeout(_saveTimer);
  _saveTimer = setTimeout(() => { 
   // v1.3.1128: guard extra — si applyingRemote activa durante el delay, skip
@@ -10847,6 +10858,7 @@ const State = (() => {
  .then(() => {
  clearTimeout(_watchdog1127);
  _isSaving = false;
+ window._DashweyLastSaveEndTs = Date.now(); // v1.3.1129: throttle
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  // Auto-fade badge after 3s
@@ -10863,6 +10875,7 @@ const State = (() => {
  .catch((err) => {
  clearTimeout(_watchdog1127);
  _isSaving = false;
+ window._DashweyLastSaveEndTs = Date.now(); // v1.3.1129: throttle también en error
  _lastSavedHash = ''; // legacy — ya no se usa pero limpio por seguridad
  window._DashweyDirty = true; // v1.3.1074: re-marcar para reintentar en próximo save()
  console.warn('[Dashwey sync] ✗ firebase write failed:', err?.message || err);
@@ -13345,7 +13358,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1128-dev';
+ const _APP_VERSION = 'v1.3.1129-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18062,10 +18075,23 @@ try { renderTopArticulos(period); } catch(e) {}
      qgCells:'qgCells', qgSizeIdx:'qgSizeIdx', chatMessages:'chatMessages',
      chatUsers:'chatUsers', notifsRead:'notifsRead',
      recordatorios:'setRecordatorios' };
+    // v1.3.1129: envolver setters con guard applyingRemote — evita loop
+    // save() → upload 1613KB → onSnapshot rebota → refresh → save → ...
+    var _prevAppR = window._DashweyApplyingRemote;
+    var _prevSavR = window._DashweySavingCtrl?.isSaving;
+    window._DashweyApplyingRemote = true;
+    if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
+    try {
     Object.keys(merged).forEach(function(k) {
      var sk = (_sm[k] !== undefined) ? _sm[k] : k;
      if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
     });
+    } finally {
+     window._DashweyApplyingRemote = _prevAppR || false;
+     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = _prevSavR || false;
+     // Limpiar dirty que setters hayan podido filtrar
+     try { window._DashweyDirty = false; } catch(_) {}
+    }
    }
   }
  } catch(e) { /* silencioso — datos locales siguen disponibles */ }
