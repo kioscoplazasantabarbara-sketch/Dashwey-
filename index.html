@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1124-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1125-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1124-dev</title>
+<title>Dashwey v1.3.1125-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9559,6 +9559,96 @@ if (!window._DashweyDrainIntervalSet) {
  }, 5000);
 }
 
+// v1.3.1125: función de emergencia — pull directo + merge + set + render
+// Bypassa el handler del Bus, hace todo desde cero con datos frescos de Firestore
+window._DashweySyncAhora = async function() {
+ try {
+  console.info('[Dashwey/SyncAhora] iniciando pull directo de Firestore...');
+  const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const fbApp = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+  const fbAuth = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+  const db = mod.getFirestore(fbApp.getApps()[0]);
+  const uid = fbAuth.getAuth().currentUser?.uid;
+  if (!uid) { console.warn('[SyncAhora] sin usuario'); return false; }
+  const ctx = window._DashweyActiveContext || 'default';
+
+  const keys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+  const subMap = {
+   ventas:'ventas', gastosOp:'gastosOp', ingresosFin:'ingresosFin',
+   historialPedidos:'historialPedidos', mermas:'mermas', facturas:'facturas'
+  };
+  const setterMap = {
+   ventas:'ventas', gastosOp:'setGastos', ingresosFin:'setIngresos',
+   historialPedidos:'historialPedidos', mermas:'mermas', facturas:'facturas'
+  };
+
+  const App = window.App;
+  if (!App || !App.State) { console.warn('[SyncAhora] App.State no disponible'); return false; }
+
+  // Bloquear writes durante el pull para evitar loop
+  const ctrl = window._DashweySavingCtrl;
+  const prevSaving = ctrl?.isSaving;
+  const prevApplying = window._DashweyApplyingRemote;
+  window._DashweyApplyingRemote = true;
+  if (ctrl) ctrl.isSaving = true;
+
+  try {
+   for (const k of keys) {
+    const ref = mod.collection(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', subMap[k]);
+    const snap = await mod.getDocs(ref);
+    const items = [];
+    snap.forEach(d => items.push(d.data()));
+
+    // Merge con locales
+    const getter = App.State.get[k];
+    const localArr = typeof getter === 'function' ? (getter() || []) : [];
+    const byId = {};
+    localArr.forEach(it => { if (it?.id) byId[it.id] = it; });
+    items.forEach(it => { if (it?.id) byId[it.id] = it; });
+    const merged = Object.values(byId);
+
+    // Aplicar
+    const setterName = setterMap[k];
+    const setter = App.State.set[setterName];
+    if (typeof setter === 'function') {
+     setter(merged);
+     console.info('[Dashwey/SyncAhora] ✓', k, '| firestore:', items.length, '| local antes:', localArr.length, '| tras set:', (typeof getter === 'function' ? getter().length : '?'));
+    }
+   }
+  } finally {
+   if (ctrl) ctrl.isSaving = prevSaving || false;
+   window._DashweyApplyingRemote = prevApplying || false;
+  }
+
+  // Forzar render
+  try {
+   const barsEl = document.getElementById('ev-chart-bars');
+   if (barsEl) barsEl._evHash = null;
+   if (App.dash && App.dash.render) App.dash.render();
+   console.info('[Dashwey/SyncAhora] ✓ render disparado');
+  } catch(e) { console.warn('[SyncAhora] render error:', e.message); }
+
+  return true;
+ } catch(e) {
+  console.error('[SyncAhora] ERROR:', e.message);
+  return false;
+ }
+};
+
+// v1.3.1125: auto-ejecutar SyncAhora 5 segundos tras arranque
+// Asegura que el móvil reciba TODO lo de Firestore al arrancar la app
+if (!window._DashweySyncAhoraScheduled) {
+ window._DashweySyncAhoraScheduled = true;
+ setTimeout(function() {
+  try {
+   if (window._DashweySyncAhora && window._DashweyFirebase?.ready) {
+    console.info('[Dashwey/SyncAhora] auto-ejecución al arrancar');
+    window._DashweySyncAhora();
+   }
+  } catch(_) {}
+ }, 5000);
+}
+
 // ──────────────────────────────────────────────────────────────────
 // FIN INFRAESTRUCTURA ESTRATEGIA B
 // ──────────────────────────────────────────────────────────────────
@@ -13216,7 +13306,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1124-dev';
+ const _APP_VERSION = 'v1.3.1125-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38611,6 +38701,8 @@ _eaRecalc();
       facturas: 'facturas',
      };
      const setterName = setterMap[stateKey];
+     // v1.3.1125: diagnóstico — ver qué está pasando en el handler
+     console.info('[Dashwey/SubB] handler ejecutando:', stateKey, '| locales:', localCount, '| remotos:', remoteCount, '| merged:', merged.length, '| setter:', setterName);
      if (setterName && _S?.set?.[setterName]) {
       // v1.3.1087: guard más limpio — _DashweyApplyingRemote impide que
       // _DashweyMarkDirty registre los items recién recibidos del remoto.
@@ -38623,10 +38715,23 @@ _eaRecalc();
       if (ctrl) ctrl.isSaving = true;
       try {
        _S.set[setterName](merged);
+       // v1.3.1125: verificar que el set aplicó
+       const verifyArr = (typeof rawAccessor === 'function') ? rawAccessor() : [];
+       console.info('[Dashwey/SubB] ✓ set aplicado:', stateKey, '| count tras set:', verifyArr.length);
       } finally {
        if (ctrl) ctrl.isSaving = prevSaving || false;
        window._DashweyApplyingRemote = prevApplying || false;
       }
+      // v1.3.1125: forzar render después del set (el handler no lo hacía)
+      try {
+       var _App = window.App;
+       if (_App && _App.dash && _App.dash.render) {
+        // invalidar caches de chart
+        var _barsEl = document.getElementById('ev-chart-bars');
+        if (_barsEl) _barsEl._evHash = null;
+        setTimeout(function(){ try { _App.dash.render(); } catch(_) {} }, 100);
+       }
+      } catch(_) {}
       // Extra safety: limpiar cualquier dirty que se haya podido filtrar
       try { window._DashweyClearDirty(stateKey); } catch(_) {}
       // v1.3.1094: actualizar snapshot "último sincronizado" con la verdad del remoto.
