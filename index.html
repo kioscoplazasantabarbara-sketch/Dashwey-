@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1085-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1086-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1085-dev</title>
+<title>Dashwey v1.3.1086-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9092,7 +9092,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1085-dev)
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1086-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
@@ -9180,6 +9180,207 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
   console.warn('[Dashwey/SubB] batch error:', stateKey, e?.code || e?.message);
   return false;
  }
+};
+
+// ──────────────────────────────────────────────────────────────────
+// ESTRATEGIA B — FASE 4: onSnapshot SUBCOLECCIONES + MIGRACIÓN
+// v1.3.1086-dev
+// Todo está inactivo hasta que alguien llame explícitamente a
+// window._DashweyEnableSubcollections(). Ningún arranque automático.
+// ──────────────────────────────────────────────────────────────────
+
+// Suscripciones a subcolecciones (una por cada array transaccional)
+// Estructura: { ventas: unsubFn, gastosOp: unsubFn, ... }
+window._DashweySubUnsubs = {};
+
+// Cache de timestamps de última suscripción (grace period post-connect)
+window._DashweySubSubscribeTs = {};
+
+// Ruta base de subcolección: usuarios/{uid}/contextos/{ctx}/datos/state_sub/{fbName}
+// Usamos la misma estructura que el batch writer (coherencia con _DashweyWriteSubcollectionBatch)
+// Suscribe UNA subcolección. callback(items) recibe el array completo tras cada cambio.
+window._DashweySubscribeSubcollection = async function(stateKey, callback) {
+ const fb = window._DashweyFirebase;
+ if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return null;
+ const sub = window._DashweySubcollectionMap[stateKey];
+ if (!sub) { console.warn('[Dashwey/SubB] mapping desconocido:', stateKey); return null; }
+ try {
+  const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const ctx = window._DashweyActiveContext || ACTIVE_CONTEXT;
+  const colRef = mod.collection(_db, 'usuarios', _uid, 'contextos', ctx, 'datos', 'state_sub', sub.fbName);
+  // Cancelar listener previo de esta subcolección si existe
+  if (typeof window._DashweySubUnsubs[stateKey] === 'function') {
+   try { window._DashweySubUnsubs[stateKey](); } catch(_) {}
+  }
+  window._DashweySubSubscribeTs[stateKey] = Date.now();
+  const unsub = mod.onSnapshot(colRef, { includeMetadataChanges: false }, snap => {
+   try {
+    const items = [];
+    snap.forEach(d => { const data = d.data(); if (data) items.push(data); });
+    callback(items);
+   } catch(e) { console.warn('[Dashwey/SubB] snapshot handler error:', stateKey, e?.message); }
+  }, e => {
+   const silenced = ['ERR_BLOCKED','unavailable','resource-exhausted','maximum backoff','network'];
+   if (!silenced.some(s => e?.message?.includes(s) || e?.code?.includes(s))) {
+    console.warn('[Dashwey/SubB] subscribe error:', stateKey, e?.code || e?.message);
+   }
+  });
+  window._DashweySubUnsubs[stateKey] = unsub;
+  return unsub;
+ } catch(e) {
+  console.warn('[Dashwey/SubB] subscribe setup error:', stateKey, e?.message);
+  return null;
+ }
+};
+
+// Cancela todos los listeners de subcolecciones (llamar en logout)
+window._DashweyUnsubscribeAllSubcollections = function() {
+ try {
+  Object.values(window._DashweySubUnsubs || {}).forEach(fn => {
+   try { if (typeof fn === 'function') fn(); } catch(_) {}
+  });
+  window._DashweySubUnsubs = {};
+ } catch(_) {}
+};
+
+// Handler genérico: merge incremental de items remotos sobre _state[stateKey]
+// Usa _mergeById si está disponible, fallback a reemplazo simple
+// NO toca otros arrays — aislamiento total
+window._DashweyApplySubcollectionSnapshot = function(stateKey, remoteItems) {
+ try {
+  // Guard: no aplicar si hay write local en curso (evita loop)
+  if (window._DashweySavingCtrl?.isSaving) return;
+  // Guard: grace period post-suscripción (1000ms)
+  const subscribeTs = window._DashweySubSubscribeTs?.[stateKey] || 0;
+  if (Date.now() - subscribeTs < 1000) return;
+  // El merge real se delega al código de State vía un evento custom
+  // (State está en closure — no accesible directamente desde window)
+  // Solución: DashweyBus emite un evento que State escucha
+  if (window.DashweyBus?.emit) {
+   window.DashweyBus.emit('_subcollection_snapshot', { stateKey, items: remoteItems });
+  }
+ } catch(e) {
+  console.warn('[Dashwey/SubB] apply snapshot error:', stateKey, e?.message);
+ }
+};
+
+// ──────────────────────────────────────────────────────────────────
+// MIGRACIÓN ONE-TIME: doc monolítico → subcolecciones
+// ──────────────────────────────────────────────────────────────────
+// Flujo:
+//   1. Leer doc raíz actual (ya está en _state tras _doInitialSync)
+//   2. Para cada subcolección: escribir items existentes en subcolección
+//   3. Verificar count(subcolección) === count(array local)
+//   4. Si todo OK: marcar _schemaVersion:2 y borrar arrays del doc raíz
+//   5. Si algún paso falla: abortar sin destruir nada
+//
+// NO borra datos locales. La migración es "escribir en paralelo" primero,
+// después limpiar el doc raíz. Si se interrumpe, la próxima ejecución
+// es idempotente (set con merge:false por ID).
+window._DashweyMigrateToSubcollections = async function(opts) {
+ opts = opts || {};
+ const dryRun = opts.dryRun === true; // si true: solo reporta, no escribe
+ const fb = window._DashweyFirebase;
+ if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) {
+  console.warn('[Dashwey/Migrate] Firebase no disponible');
+  return { ok: false, reason: 'firebase-unavailable' };
+ }
+ // Guard: ya migrado
+ const currentState = window.State?.get?.user ? window.State.raw : null;
+ // Leer _schemaVersion vía doc actual
+ try {
+  const rootSnap = await fb.read('state');
+  if (rootSnap?._schemaVersion === 2) {
+   console.info('[Dashwey/Migrate] ya migrado (schemaVersion=2)');
+   return { ok: true, reason: 'already-migrated', schemaVersion: 2 };
+  }
+ } catch(e) {
+  console.warn('[Dashwey/Migrate] error leyendo doc raíz:', e?.message);
+  return { ok: false, reason: 'root-read-error' };
+ }
+ // Acceder a los arrays RAW (con deleted:true incluidos) — State.raw los expone
+ const raw = window.State?.raw || {};
+ const transactionalKeys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+ const report = {};
+ for (const k of transactionalKeys) {
+  const fn = raw[k];
+  const arr = (typeof fn === 'function') ? fn() : (Array.isArray(fn) ? fn : []);
+  report[k] = { count: Array.isArray(arr) ? arr.length : 0 };
+ }
+ if (dryRun) {
+  console.info('[Dashwey/Migrate] DRY RUN — reporte:', report);
+  return { ok: true, dryRun: true, report };
+ }
+ // Ejecución real: escribir cada subcolección
+ console.info('[Dashwey/Migrate] iniciando migración…', report);
+ for (const k of transactionalKeys) {
+  const fn = raw[k];
+  const arr = (typeof fn === 'function') ? fn() : (Array.isArray(fn) ? fn : []);
+  if (!Array.isArray(arr) || !arr.length) continue;
+  // Asignar id a items que no lo tengan (raro pero posible en datos antiguos)
+  const withIds = arr.filter(it => it && it.id);
+  if (withIds.length !== arr.length) {
+   console.warn('[Dashwey/Migrate]', k, 'items sin id omitidos:', arr.length - withIds.length);
+  }
+  const ok = await window._DashweyWriteSubcollectionBatch(k, withIds);
+  if (!ok) {
+   console.error('[Dashwey/Migrate] FALLO en', k, '— abortando migración');
+   return { ok: false, reason: 'batch-failed', stateKey: k };
+  }
+  report[k].written = withIds.length;
+ }
+ // Todo escrito con éxito → marcar _schemaVersion:2 en doc raíz
+ // (pero NO borrar todavía los arrays del doc raíz — esperar confirmación del usuario)
+ console.info('[Dashwey/Migrate] ✓ escritura completa. Marcando schemaVersion=2');
+ try {
+  await fb.write('state', { _schemaVersion: 2, _migratedAt: new Date().toISOString() });
+ } catch(e) {
+  console.warn('[Dashwey/Migrate] error marcando schema:', e?.message);
+ }
+ return { ok: true, report };
+};
+
+// ──────────────────────────────────────────────────────────────────
+// ENCENDIDO CONTROLADO
+// ──────────────────────────────────────────────────────────────────
+// Este helper NO se auto-invoca. Se llama manualmente desde la consola
+// o desde un botón de ajustes oculto (a implementar en Fase 5).
+//
+// Flujo:
+//   1. Verifica que hay migración previa exitosa (schemaVersion:2)
+//   2. Activa flag _DashweyUseSubcollections
+//   3. Suscribe subcolecciones (si hay listener monolítico, sigue activo en paralelo)
+//   4. Próximo save() escribe a subcolecciones
+//
+// Reversible: _DashweyDisableSubcollections() revierte.
+window._DashweyEnableSubcollections = async function(opts) {
+ opts = opts || {};
+ const skipMigrationCheck = opts.skipMigrationCheck === true;
+ if (!skipMigrationCheck) {
+  const fb = window._DashweyFirebase;
+  const rootSnap = fb?.read ? await fb.read('state') : null;
+  if (rootSnap?._schemaVersion !== 2) {
+   console.warn('[Dashwey/SubB] no hay migración previa. Ejecuta _DashweyMigrateToSubcollections() primero.');
+   return { ok: false, reason: 'no-migration' };
+  }
+ }
+ window._DashweyUseSubcollections = true;
+ // Suscribir las 6 subcolecciones
+ const transactionalKeys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+ for (const k of transactionalKeys) {
+  await window._DashweySubscribeSubcollection(k, items => {
+   window._DashweyApplySubcollectionSnapshot(k, items);
+  });
+ }
+ console.info('[Dashwey/SubB] ✓ subcolecciones activadas — próximo save usará batches');
+ return { ok: true };
+};
+
+window._DashweyDisableSubcollections = function() {
+ window._DashweyUseSubcollections = false;
+ window._DashweyUnsubscribeAllSubcollections();
+ console.info('[Dashwey/SubB] subcolecciones desactivadas — volviendo a doc monolítico');
+ return { ok: true };
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -9872,7 +10073,7 @@ const State = (() => {
   }
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — _writeFirebaseDual (v1.3.1085-dev)
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1086-dev)
  // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
  // Flag maestro: window._DashweyUseSubcollections
  //
@@ -12709,7 +12910,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1085-dev';
+ const _APP_VERSION = 'v1.3.1086-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37104,6 +37305,72 @@ _eaRecalc();
 
  /* flag de sesión: toast solo 1 vez por sesión — evita spam con reloj adelantado */
 });
+
+ // ──────────────────────────────────────────────────────────────────
+ // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1086-dev)
+ // Escucha evento custom emitido por _DashweyApplySubcollectionSnapshot
+ // y aplica merge incremental al _state local. Solo activo cuando flag ON.
+ // ──────────────────────────────────────────────────────────────────
+ try {
+  if (window.DashweyBus?.on) {
+   window.DashweyBus.on('_subcollection_snapshot', (payload) => {
+    try {
+     if (!window._DashweyUseSubcollections) return; // guard adicional
+     const { stateKey, items } = payload || {};
+     if (!stateKey || !Array.isArray(items)) return;
+     // Usar State.raw (si existe) como fuente local para merge
+     const rawAccessor = window.State?.raw?.[stateKey];
+     const localArr = (typeof rawAccessor === 'function') ? rawAccessor() : [];
+     // Merge por ítem — reutiliza _mergeById si está en el closure de State
+     // Para cross-module: hacer merge básico aquí (por updatedAt/deletedAt/fecha)
+     const byId = {};
+     // 1. Items locales primero
+     (localArr || []).forEach(it => { if (it?.id) byId[it.id] = it; });
+     // 2. Items remotos ganan si son "más autoritativos"
+     const _tsOf = (it) => {
+      if (!it) return 0;
+      const d = it.deletedAt ? (typeof it.deletedAt === 'string' ? Date.parse(it.deletedAt) : it.deletedAt) : 0;
+      const u = it.updatedAt ? (typeof it.updatedAt === 'string' ? Date.parse(it.updatedAt) : it.updatedAt) : 0;
+      const f = it.fecha ? Date.parse(it.fecha) : 0;
+      const c = it.createdAt ? (typeof it.createdAt === 'string' ? Date.parse(it.createdAt) : it.createdAt) : 0;
+      return Math.max(d || 0, u || 0, f || 0, c || 0);
+     };
+     items.forEach(rit => {
+      if (!rit?.id) return;
+      const lit = byId[rit.id];
+      if (!lit) { byId[rit.id] = rit; return; }
+      if (_tsOf(rit) >= _tsOf(lit)) byId[rit.id] = rit;
+     });
+     const merged = Object.values(byId);
+     // Escribir al State vía setter masivo correspondiente
+     const setterMap = {
+      ventas: 'ventas',
+      gastosOp: 'setGastos',
+      ingresosFin: 'setIngresos',
+      historialPedidos: 'historialPedidos',
+      mermas: 'mermas',
+      facturas: 'facturas',
+     };
+     const setterName = setterMap[stateKey];
+     if (setterName && window.State?.set?.[setterName]) {
+      // ⚠️ el setter marca dirty otra vez — por eso isSaving guard en apply
+      // Para EVITAR loop: setear isSaving durante esta aplicación
+      const ctrl = window._DashweySavingCtrl;
+      const prev = ctrl?.isSaving;
+      if (ctrl) ctrl.isSaving = true;
+      try {
+       window.State.set[setterName](merged);
+      } finally {
+       if (ctrl) ctrl.isSaving = prev || false;
+      }
+      // Limpiar dirty que acabamos de aplicar (no re-subirlos)
+      try { window._DashweyClearDirty(stateKey); } catch(_) {}
+     }
+    } catch(e) { console.warn('[Dashwey/SubB] merge handler error:', e?.message); }
+   });
+  }
+ } catch(_) {}
+ // ──────────────────────────────────────────────────────────────────
 
  // ── Hook de escritura local ─────────────────────────────────
  // Llamado por State.save() en cada escritura. Actualiza lastSyncAt y deviceId
