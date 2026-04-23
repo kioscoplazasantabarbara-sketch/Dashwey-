@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1093-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1094-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1093-dev</title>
+<title>Dashwey v1.3.1094-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9092,7 +9092,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1093-dev)
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1094-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
@@ -9204,7 +9204,7 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
 
 // ──────────────────────────────────────────────────────────────────
 // ESTRATEGIA B — FASE 4: onSnapshot SUBCOLECCIONES + MIGRACIÓN
-// v1.3.1093-dev
+// v1.3.1094-dev
 // Todo está inactivo hasta que alguien llame explícitamente a
 // window._DashweyEnableSubcollections(). Ningún arranque automático.
 // ──────────────────────────────────────────────────────────────────
@@ -9354,6 +9354,14 @@ window._DashweyMigrateToSubcollections = async function(opts) {
    return { ok: false, reason: 'batch-failed', stateKey: k };
   }
   report[k].written = withIds.length;
+  // v1.3.1094: poblar snapshot "último sincronizado" para diff futuro
+  try {
+   if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+   window._DashweyLastSyncedSnap[k] = {};
+   for (const it of withIds) {
+    if (it?.id) { try { window._DashweyLastSyncedSnap[k][it.id] = JSON.stringify(it); } catch(_) {} }
+   }
+  } catch(_) {}
  }
  // Todo escrito con éxito → marcar _schemaVersion:2 en doc raíz
  // (pero NO borrar todavía los arrays del doc raíz — esperar confirmación del usuario)
@@ -10099,7 +10107,7 @@ const State = (() => {
   }
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — _writeFirebaseDual (v1.3.1093-dev)
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1094-dev)
  // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
  // Flag maestro: window._DashweyUseSubcollections
  //
@@ -10157,6 +10165,23 @@ const State = (() => {
     const batchOk = await window._DashweyWriteSubcollectionBatch(stateKey, items);
     if (batchOk) {
      dirtySet.clear();
+     // v1.3.1094: actualizar snapshot "último sincronizado" con los items escritos.
+     // Esto es fuente de verdad para _diffMarkDirty en futuros writes.
+     try {
+      if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+      if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
+      const snap = window._DashweyLastSyncedSnap[stateKey];
+      for (const it of items) {
+       if (it?.id) {
+        if (it.deleted === true) {
+         // Item borrado: removerlo del snapshot (ya no existe en Firestore)
+         delete snap[it.id];
+        } else {
+         try { snap[it.id] = JSON.stringify(it); } catch(_) {}
+        }
+       }
+      }
+     } catch(_) {}
     } else {
      // Fallo: mantener dirty para reintento en próximo save()
      console.warn('[Dashwey/SubB] batch falló para', stateKey, '— reintentará');
@@ -10590,38 +10615,31 @@ const State = (() => {
   const preserved = raw.filter(x => x && x.deleted && x.id && !newIds.has(x.id));
   return preserved.length ? newArr.concat(preserved) : newArr;
  };
- // v1.3.1089: diff-based dirty marking — solo marcar items nuevos o cambiados
- // Evita que setters masivos (ej: setGastos tras soft-delete) marquen los 704 items.
- // Compara `newArr` contra `prevSnapshotMap` (obj {id: stringifiedItem}).
- // Items que desaparecen del array sin deleted:true NO se marcan (no borrar de Firestore).
- // v1.3.1093: firma cambiada — ahora recibe `prevSnapshotMap` pre-stringified en el caller
- // porque mutaciones in-place sobre objetos del prev reference hacen imposible detectar cambios post-hoc.
- const _diffMarkDirty = (stateKey, prevSnapshotMap, newArr) => {
+ // v1.3.1094: diff robusto contra "último sincronizado"
+ // Problema previo: snapshot pre-mutación no funciona si el caller mutó antes del setter
+ // (slice() + .deleted=true → los objetos son mismo ref que _state.X → snapshot ya corrupto).
+ // Solución: mantener window._DashweyLastSyncedSnap[stateKey] = {id: JSON.stringify(item)}
+ // actualizado tras cada batch write exitoso. El diff compara contra esa "verdad confirmada".
+ // Mutaciones in-place siempre detectables porque el stringified NO coincide.
+ const _diffMarkDirty = (stateKey, _unused, newArr) => {
   try {
    if (!Array.isArray(newArr)) return;
-   const pm = prevSnapshotMap || {};
+   if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+   if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
+   const lastSynced = window._DashweyLastSyncedSnap[stateKey];
    newArr.forEach(x => {
     if (!x?.id) return;
-    const prevStr = pm[x.id];
-    if (prevStr === undefined) { window._DashweyMarkDirty(stateKey, x.id); return; } // nuevo
-    try {
-     if (prevStr !== JSON.stringify(x)) window._DashweyMarkDirty(stateKey, x.id);
-    } catch(_) {
+    let currentStr;
+    try { currentStr = JSON.stringify(x); } catch(_) { window._DashweyMarkDirty(stateKey, x.id); return; }
+    const lastStr = lastSynced[x.id];
+    if (lastStr === undefined || lastStr !== currentStr) {
      window._DashweyMarkDirty(stateKey, x.id);
     }
    });
   } catch(_) {}
  };
- // Helper: construir snapshot-map ANTES de mutar. Stringify ahora captura estado previo.
- const _snapshotMap = (arr) => {
-  const m = {};
-  try {
-   (Array.isArray(arr) ? arr : []).forEach(x => {
-    if (x?.id) { try { m[x.id] = JSON.stringify(x); } catch(_) {} }
-   });
-  } catch(_) {}
-  return m;
- };
+ // Helper legacy mantenido por si algo lo usa — no-op ahora
+ const _snapshotMap = (arr) => { return {}; };
  const get = {
  baseCats: () => _state.baseCats || DEFAULTS.baseCats,
  user: () => _state.user || DEFAULTS.user,
@@ -12968,7 +12986,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1093-dev';
+ const _APP_VERSION = 'v1.3.1094-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37394,7 +37412,7 @@ _eaRecalc();
 });
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1093-dev)
+ // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1094-dev)
  // Escucha evento custom emitido por _DashweyApplySubcollectionSnapshot
  // y aplica merge incremental al _state local. Solo activo cuando flag ON.
  // ──────────────────────────────────────────────────────────────────
@@ -37462,6 +37480,16 @@ _eaRecalc();
       }
       // Extra safety: limpiar cualquier dirty que se haya podido filtrar
       try { window._DashweyClearDirty(stateKey); } catch(_) {}
+      // v1.3.1094: actualizar snapshot "último sincronizado" con la verdad del remoto.
+      // Los items recibidos son la verdad de Firestore → ese es el baseline para diff.
+      try {
+       if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+       window._DashweyLastSyncedSnap[stateKey] = {};
+       const snap = window._DashweyLastSyncedSnap[stateKey];
+       for (const rit of items) {
+        if (rit?.id) { try { snap[rit.id] = JSON.stringify(rit); } catch(_) {} }
+       }
+      } catch(_) {}
      }
     } catch(e) { console.warn('[Dashwey/SubB] merge handler error:', e?.message); }
    });
