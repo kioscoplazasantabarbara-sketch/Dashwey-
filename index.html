@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1123-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1124-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1123-dev</title>
+<title>Dashwey v1.3.1124-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9378,17 +9378,38 @@ window._DashweyCleanRootDoc = async function(opts) {
 // Handler genérico: merge incremental de items remotos sobre _state[stateKey]
 // Usa _mergeById si está disponible, fallback a reemplazo simple
 // NO toca otros arrays — aislamiento total
+// v1.3.1124: cola de snapshots pendientes — evita descartar cuando isSaving=true
+window._DashweySubPending = window._DashweySubPending || {};
+
+window._DashweyDrainPendingSnapshots = function() {
+ try {
+  if (window._DashweySavingCtrl?.isSaving) return; // aún ocupado
+  var pending = window._DashweySubPending || {};
+  var keys = Object.keys(pending);
+  if (!keys.length) return;
+  var _Bus = (window.DashweyBus?.emit) ? window.DashweyBus : (window._DashweyBus?.emit ? window._DashweyBus : null);
+  if (!_Bus) return;
+  keys.forEach(function(k) {
+   var items = pending[k];
+   delete pending[k];
+   console.info('[Dashwey/SubB] ← drain pending:', k, '(' + (items?.length||0) + ' items)');
+   _Bus.emit('_subcollection_snapshot', { stateKey: k, items: items });
+  });
+ } catch(e) { console.warn('[Dashwey/SubB] drain error:', e?.message); }
+};
+
 window._DashweyApplySubcollectionSnapshot = function(stateKey, remoteItems) {
  try {
-  // Guard: no aplicar si hay write local en curso (evita loop)
-  if (window._DashweySavingCtrl?.isSaving) return;
   // Guard: grace period post-suscripción (1000ms)
   const subscribeTs = window._DashweySubSubscribeTs?.[stateKey] || 0;
   if (Date.now() - subscribeTs < 1000) return;
-  // El merge real se delega al código de State vía un evento custom
-  // (State está en closure — no accesible directamente desde window)
-  // Solución: DashweyBus emite un evento que State escucha
-  // v1.3.1088: DashweyBus puede estar en window.DashweyBus o window._DashweyBus
+  // v1.3.1124: si save local en curso, ENCOLAR (no descartar)
+  if (window._DashweySavingCtrl?.isSaving) {
+   window._DashweySubPending[stateKey] = remoteItems;
+   console.info('[Dashwey/SubB] → encolado (isSaving):', stateKey, '(' + (remoteItems?.length||0) + ' items)');
+   return;
+  }
+  // DashweyBus.emit hacia handler State (L38513)
   const _Bus = (window.DashweyBus?.emit) ? window.DashweyBus : (window._DashweyBus?.emit ? window._DashweyBus : null);
   if (_Bus) {
    _Bus.emit('_subcollection_snapshot', { stateKey, items: remoteItems });
@@ -9528,6 +9549,15 @@ window._DashweyDisableSubcollections = function() {
  console.info('[Dashwey/SubB] subcolecciones desactivadas — volviendo a doc monolítico');
  return { ok: true };
 };
+
+// v1.3.1124: drain periódico cada 5s como safety net
+// Si snapshots quedan atrapados por race condition, se procesan aquí
+if (!window._DashweyDrainIntervalSet) {
+ window._DashweyDrainIntervalSet = true;
+ setInterval(function() {
+  try { if (window._DashweyDrainPendingSnapshots) window._DashweyDrainPendingSnapshots(); } catch(_) {}
+ }, 5000);
+}
 
 // ──────────────────────────────────────────────────────────────────
 // FIN INFRAESTRUCTURA ESTRATEGIA B
@@ -10215,6 +10245,8 @@ const State = (() => {
   // save() tiene su propio debounce — escribir directo para que .then() mida el write real
   const ok = await fb.write('state', cleanData);
   if (_state.syncStatus) { _state.syncStatus.pendingWrites = ok ? 0 : 1; }
+  // v1.3.1124: drain snapshots pendientes tras terminar write
+  try { setTimeout(function(){ if (window._DashweyDrainPendingSnapshots) window._DashweyDrainPendingSnapshots(); }, 100); } catch(_) {}
   return ok;
   }
 
@@ -13184,7 +13216,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1123-dev';
+ const _APP_VERSION = 'v1.3.1124-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
