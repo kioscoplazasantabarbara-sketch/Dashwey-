@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1092-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1093-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1092-dev</title>
+<title>Dashwey v1.3.1093-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9092,7 +9092,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1092-dev)
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1093-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
@@ -9204,7 +9204,7 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
 
 // ──────────────────────────────────────────────────────────────────
 // ESTRATEGIA B — FASE 4: onSnapshot SUBCOLECCIONES + MIGRACIÓN
-// v1.3.1092-dev
+// v1.3.1093-dev
 // Todo está inactivo hasta que alguien llame explícitamente a
 // window._DashweyEnableSubcollections(). Ningún arranque automático.
 // ──────────────────────────────────────────────────────────────────
@@ -10099,7 +10099,7 @@ const State = (() => {
   }
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — _writeFirebaseDual (v1.3.1092-dev)
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1093-dev)
  // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
  // Flag maestro: window._DashweyUseSubcollections
  //
@@ -10592,31 +10592,35 @@ const State = (() => {
  };
  // v1.3.1089: diff-based dirty marking — solo marcar items nuevos o cambiados
  // Evita que setters masivos (ej: setGastos tras soft-delete) marquen los 704 items.
- // Compara `newArr` contra `prevArr` por id + JSON.stringify.
+ // Compara `newArr` contra `prevSnapshotMap` (obj {id: stringifiedItem}).
  // Items que desaparecen del array sin deleted:true NO se marcan (no borrar de Firestore).
- const _diffMarkDirty = (stateKey, prevArr, newArr) => {
+ // v1.3.1093: firma cambiada — ahora recibe `prevSnapshotMap` pre-stringified en el caller
+ // porque mutaciones in-place sobre objetos del prev reference hacen imposible detectar cambios post-hoc.
+ const _diffMarkDirty = (stateKey, prevSnapshotMap, newArr) => {
   try {
    if (!Array.isArray(newArr)) return;
-   const prevMap = {};
-   (Array.isArray(prevArr) ? prevArr : []).forEach(x => { if (x?.id) prevMap[x.id] = x; });
-   // Uso JSON.stringify con keys ordenadas no es necesario — Object.keys conserva orden de inserción
-   // y para items inmutables del mismo origen la comparación directa es suficiente.
-   // Falsos positivos (marca dirty por orden de keys) cuestan 1 write extra — aceptable.
+   const pm = prevSnapshotMap || {};
    newArr.forEach(x => {
     if (!x?.id) return;
-    const prev = prevMap[x.id];
-    if (!prev) { window._DashweyMarkDirty(stateKey, x.id); return; } // nuevo
-    // Check rápido: ¿son el mismo objeto en memoria? → no hubo mutación
-    if (prev === x) return; // ref idéntica, skip
-    // Fallback: stringify y comparar
+    const prevStr = pm[x.id];
+    if (prevStr === undefined) { window._DashweyMarkDirty(stateKey, x.id); return; } // nuevo
     try {
-     if (JSON.stringify(prev) !== JSON.stringify(x)) window._DashweyMarkDirty(stateKey, x.id);
+     if (prevStr !== JSON.stringify(x)) window._DashweyMarkDirty(stateKey, x.id);
     } catch(_) {
-     // Si stringify falla por ciclos → marcar por seguridad
      window._DashweyMarkDirty(stateKey, x.id);
     }
    });
   } catch(_) {}
+ };
+ // Helper: construir snapshot-map ANTES de mutar. Stringify ahora captura estado previo.
+ const _snapshotMap = (arr) => {
+  const m = {};
+  try {
+   (Array.isArray(arr) ? arr : []).forEach(x => {
+    if (x?.id) { try { m[x.id] = JSON.stringify(x); } catch(_) {} }
+   });
+  } catch(_) {}
+  return m;
  };
  const get = {
  baseCats: () => _state.baseCats || DEFAULTS.baseCats,
@@ -10685,11 +10689,11 @@ const State = (() => {
  const set = {
  proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); save(); },
  productos: (v) => { _state.productos = _preserveDeleted('productos', v); save(); },
- historialPedidos: (v) => { const _prev = _state.historialPedidos; _state.historialPedidos = _preserveDeleted('historialPedidos', v); _diffMarkDirty('historialPedidos', _prev, _state.historialPedidos); save(); },
- facturas: (v) => { const _prev = _state.facturas; _state.facturas = _preserveDeleted('facturas', v); _diffMarkDirty('facturas', _prev, _state.facturas); save(); },
+ historialPedidos: (v) => { const _snap = _snapshotMap(_state.historialPedidos); _state.historialPedidos = _preserveDeleted('historialPedidos', v); _diffMarkDirty('historialPedidos', _snap, _state.historialPedidos); save(); },
+ facturas: (v) => { const _snap = _snapshotMap(_state.facturas); _state.facturas = _preserveDeleted('facturas', v); _diffMarkDirty('facturas', _snap, _state.facturas); save(); },
  addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); try { if (f?.id) window._DashweyMarkDirty('facturas', f.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
- mermas: (v) => { const _prev = _state.mermas; _state.mermas = _preserveDeleted('mermas', v); _diffMarkDirty('mermas', _prev, _state.mermas); save(); },
- ventas: (v) => { const _prev = _state.ventas; _state.ventas = _preserveDeleted('ventas', v); _diffMarkDirty('ventas', _prev, _state.ventas); save(); },
+ mermas: (v) => { const _snap = _snapshotMap(_state.mermas); _state.mermas = _preserveDeleted('mermas', v); _diffMarkDirty('mermas', _snap, _state.mermas); save(); },
+ ventas: (v) => { const _snap = _snapshotMap(_state.ventas); _state.ventas = _preserveDeleted('ventas', v); _diffMarkDirty('ventas', _snap, _state.ventas); save(); },
  ordenItems: (v) => { _state.ordenItems = v; save(); },
  selectedProv: (v) => { _state.selectedProv = v; save(); },
  pendingOrders: (v) => { _state.pendingOrders = _preserveDeleted('pendingOrders', v); save(); },
@@ -10773,7 +10777,7 @@ const State = (() => {
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
  addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
   addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
- setGastos: (v) => { const _prev = _state.gastosOp; _state.gastosOp = _preserveDeleted('gastosOp', v); _diffMarkDirty('gastosOp', _prev, _state.gastosOp); save(); },
+ setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', v); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
@@ -10781,7 +10785,7 @@ const State = (() => {
  updateProv: (id, vals) => { const p = get.prov(id); if(p) Object.assign(p, vals); save(); },
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
  addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} window._DashweyUrgentSave = true; save(); },
- setIngresos: (v) => { const _prev = _state.ingresosFin; _state.ingresosFin = _preserveDeleted('ingresosFin', v); _diffMarkDirty('ingresosFin', _prev, _state.ingresosFin); save(); },
+ setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', v); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
@@ -12964,7 +12968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1092-dev';
+ const _APP_VERSION = 'v1.3.1093-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37390,7 +37394,7 @@ _eaRecalc();
 });
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1092-dev)
+ // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1093-dev)
  // Escucha evento custom emitido por _DashweyApplySubcollectionSnapshot
  // y aplica merge incremental al _state local. Solo activo cuando flag ON.
  // ──────────────────────────────────────────────────────────────────
