@@ -4,38 +4,184 @@
 
 ---
 
-## 🎯 ESTADO SESIÓN 24 ABR 2026 — CIERRE
+## 🎯 ESTADO SESIÓN 24 ABR 2026 (NOCHE) — CIERRE
 
-**Versión desplegada:** v1.3.1096-dev
-**Logro mayor:** Estrategia B (subcolecciones Firestore) IMPLEMENTADA Y OPERATIVA — supera límite 1MB definitivamente.
+**Versión desplegada:** v1.3.1098-dev
+**Logro mayor:** Import histórico completo desde 1 ene 2023 EJECUTADO Y VERIFICADO.
 
-**Sesión ejecutó 12 versiones (1085 → 1096):**
-- Fase 1-4: Infraestructura + migración 704 gastos + 584 pedidos a subcolecciones
-- Fase 5: Testing cross-device + bugs de sync
-- Fase 6 (v1.3.1093-1095): Diff robusto contra baseline sincronizado
-- Fase 7 (v1.3.1096): Filtrado transaccional del doc raíz + `_DashweyCleanRootDoc()`
+**Sesión ejecutó 2 versiones (1097 → 1098):**
+- v1.3.1097: helpers `_resetSubcollectionsFirestore` + `_importLoyverseSalesSummaryCsv` + `_revertLoyverseSalesSummary` (menú Reset)
+- v1.3.1098: eliminado bug silent data loss — filtro 18m `_cutoff18m` en `_bbParseAndPreview` (descartaba pre-oct 2024, hack anti-1MB de Estrategia A)
 
-**Estado actual verificado:**
-- ✅ Doc raíz limpio (arrays transaccionales vacíos)
-- ✅ Subcolecciones = fuente única de verdad
-- ✅ 704 gastos + 584 pedidos íntegros
-- ✅ Saldos correctos: Kiosco 9462.9€ + Santander 28984.48€
-- ✅ Sin fantasmas
-- ✅ 8 tombstones históricos (normal, filtrados por `_nd()`)
+**Estado final verificado (consola):**
+- ✅ 1208 ventas Loyverse (€238.903,83 — exacto vs CSV)
+- ✅ 1675 gastos BudgetBakers (€188.042,96 — exacto vs CSV)
+- ✅ 1415 pedidos sintéticos BB (€147.391,35 — category=Mercancía)
+- ✅ Santander: 28.984,48€ (cuadra exacto con BB)
+- ⚠️ Kiosco: 9.651,60€ Dashwey vs 9.439,89€ BB → diff 211.71€ = ventas de hoy 24/4/26 sin cerrar aún (no es bug)
 
-**Próxima sesión (en orden):**
-1. 🔴 **Punto 2 — Re-import Loyverse 3657 tickets** (empezar aquí)
-2. 🟡 Punto 3 — Firestore Rules hardening pre-Play Store
-3. 🟢 Punto 4+ — Historial multi-año, cierre caja, ticket medio TPV, etc.
+**Problema operacional resuelto durante sesión:**
+- Deploy GitHub Pages atascado: commit `bed2f57` marcado "Active" bloqueaba workflows posteriores
+- Causa raíz: `index.html` ~1.9MB + drag-and-drop web de GitHub → commits truncados silenciosos
+- Fix: delete 4 archivos viejos en UI + re-upload con botón "Upload files" (no drag) → deploy limpio
+
+**Próxima sesión (en orden, roadmap desbloqueado):**
+1. 🟢 **Sistema de Grupos dinámicos** — auto-matching SKU Loyverse (spec abajo intacta)
+2. 🟢 Dashboard 5 segundos + Ticket medio + Cierre caja diario
+3. 🟢 Smart order + Alertas stock "Pedir ahora" + Historial multi-año
+4. 🔵 UI import autoservicio · FCM push · Archivado Google Drive
+
+---
+
+## 🏗️ SPEC SISTEMA DE GRUPOS (decidido 24 abr 2026)
+
+**Problema:** Loyverse vende bajo SKUs agregados (ej: "Gominola"), pero Dashwey Almacén tiene productos granulares (fresas, plátanos, moras). Necesitamos reconciliar ambos mundos SIN forzar uno u otro.
+
+**Solución:** Entidad `grupo` que se define por el usuario, dinámicamente.
+
+**Modelo de datos:**
+```
+grupo {
+  id: "grp_xxx"
+  nombre: "Gominola"
+  skuLoyverse: "Gominola"  ← CLAVE: coincide con nombreArticulo del CSV Loyverse
+  precioVenta: 0.20
+  miembros: [
+    { prodId, peso: 1 }
+  ]
+  fechaCreacion, updatedAt
+}
+```
+
+**Regla de auto-matching:** `grupo.skuLoyverse === venta.nombreArticulo` → retroactivamente imputa TODO el histórico al grupo. Sin intervención manual.
+
+**UI Almacén:**
+- Pestaña "Grupos" → lista + botón "Crear grupo"
+- Editor: nombre, SKU Loyverse, lista miembros (picker productos)
+- Vista expandible: grupo colapsable con miembros
+
+**Reglas clave:**
+1. Ventas Loyverse se guardan con `nombreArticulo` original (sin tocar datos)
+2. Getter `ventasPorGrupo(grupoId)` filtra por `nombreArticulo === grupo.skuLoyverse`
+3. Un producto pertenece MÁX a 1 grupo
+4. Stock individual solo cambia por compras/recuentos (no por ventas del grupo)
+5. Stock del grupo = suma calculada (no persistido)
+6. Coste del grupo = coste medio ponderado de miembros
+7. Si borras grupo → ventas vuelven a ser "sueltas", no se pierden
+
+**Ventajas:**
+- Auto-descubrimiento: creas grupo → retroactivamente pilla histórico
+- Reversible
+- Progresivo (creas grupos según ves datos)
+- No destruye información al no matching (ventas quedan "sueltas")
+
+**Esfuerzo:** 3-5h en 2-3 sesiones
+- Sesión A: modelo + UI crear/editar grupos + getters
+- Sesión B: integración KPIs + vista consolidada Dashboard
+- Sesión C (opcional): auto-sugerencia de grupos basada en productos frecuentes
+
+**ORDEN DE EJECUCIÓN:**
+Después del import histórico. Razón: ver los datos primero ayuda a decidir qué grupos crear con propósito real.
+
+**NOTA — TPV DASHWEY SUSPENDIDO:**
+El módulo TPV de Dashwey queda en espera. Loyverse es la caja operativa. Dashwey se usa como:
+- Panel de KPIs consolidado (margen, flujo caja, histórico)
+- Gestor de gastos y cuentas (desde BudgetBakers)
+- Almacén (stock físico, gestión de pedidos a proveedores)
+- Vista unificada del negocio (ventas importadas desde Loyverse)
+
+**NOTA — USO PERSONAL (no Play Store):**
+Dashwey es uso personal durante ≥1 año. Rules hardening estricto NO es prioritario (las actuales bastan: solo owner accede por UID). Prioridades reenfocadas a mejoras de uso diario, no a exposición pública.
+
+---
+
+## 📥 IMPORT HISTÓRICO EJECUTADO (24 abr 2026 noche) ✅
+
+### ✅ LOG DE EJECUCIÓN
+
+**Herramientas usadas:**
+- `_importLoyverseSalesSummaryCsv` (NUEVO v1.3.1097) — 1208 ventas diarias sintéticas
+- `_importBudgetBakersCsvSoloGastos` (existente, bug fixed v1.3.1098) — 1675 gastos
+
+**Archivos procesados:**
+- `sales-summary-2021-12-01-2026-04-23.csv` (1606 filas → 1208 tras filtro 1/1/2023 + skip ventas=0)
+- `report_2026-04-23_215431.csv` (2890 filas → 1675 gastos desde 1/1/2023)
+
+**Resultado exacto:**
+| Métrica | Target (knowledge) | Real ejecutado | Match |
+|---|---|---|---|
+| Ventas Loyverse | 1208 | 1208 | ✅ |
+| Total ventas netas | 238.903,83€ | 238.903,83€ | ✅ |
+| Gastos BB | 1675 | 1675 | ✅ |
+| Total gastos | 188.042,96€ | 188.042,96€ | ✅ |
+| Pedidos sintéticos BB | (no planeado) | 1415 | ✅ útiles |
+| Total inversión mercancía | - | 147.391,35€ | — |
+
+**Saldos ajustados manualmente (decisión Q3):**
+- Santander: 28.984,48€ (ya cuadraba)
+- Kiosco: sin ajustar — 211.71€ diff = ventas de 24/4/26 aún sin cerrar (no es bug)
+
+### 📋 ESTRUCTURA DE DATOS RESULTANTE
+
+**Ventas Loyverse (id: `v_lvsum_YYYYMMDD`):**
+```js
+{
+  id: 'v_lvsum_20260423',
+  fecha: '2026-04-23T12:00:00.000Z',
+  metodo: 'efectivo',
+  total: 188.70,              // ventas netas
+  coste: 110.56,              // costo bienes Loyverse
+  margen: 78.14,
+  cuentaId: <Kiosco.id>,
+  items: [{
+    prodId: '_lvsum',
+    nombre: 'Ventas del día (Loyverse)',
+    qty: 1, pvp: 188.70, coste: 110.56, margen: 78.14
+  }],
+  metaTipo: 'loyverse_import',
+  origen: 'import_loyverse',
+  _syntheticDaily: true
+}
+```
+
+**Gastos BB (id: `bb_<hash>_<fecha>`):**
+- Todos con `origen: 'budgetbakers'`
+- Campos: fecha, importe, categoria, descripcion, cuentaId, provId
+- Categorías mapeadas: Mercancía (1430), Autónomos (74), Servicios (48), IVA (37), etc.
+
+**Pedidos sintéticos (id: `ped_bb_<hash>_<fecha>`):**
+- Solo las 1415 filas con `category=Mercancía` (15 duplicados detectados y omitidos)
+- `items[].nombre = "Compra histórica <Proveedor>"`
+- `estado: 'recibido'`, `sourceHistorical: true`
+- Útil para gráfica "Inversión en Mercancía" del Dashboard
+
+### ⚠️ BUG RESUELTO EN SESIÓN — v1.3.1098
+
+**Filtro `_cutoff18m` silenciosamente descartaba datos pre-oct 2024:**
+```js
+// v1.3.1036 — Estrategia A anti-1MB (OBSOLETO con Estrategia B)
+var _cutoff18m = new Date();
+_cutoff18m.setMonth(_cutoff18m.getMonth() - 18);
+rows = rows.filter(r => _bbParseDate(r.date) >= _cutoff18m);
+// → 1675 gastos CSV → 705 importados (-58%)
+```
+
+**Fix (L15977 index.html):** eliminado el filtro completo. Estrategia B (subcolecciones) ya supera límite 1MB, por lo que no hace falta truncar histórico.
+
+### 🎓 REGLAS DERIVADAS
+
+1. **Antes de importar cualquier CSV:** verificar siempre `head -3` + contar filas por tipo. El CSV real vs lo que el importer procesa pueden diferir silenciosamente.
+2. **Diagnóstico de importer "exitoso pero no insertó nada":** interceptar `_showDestructiveConfirm` + `setGastos` con console.trace. Expone si el commit corre pero descarta filas.
+3. **Deploy con files ~2MB en GitHub web:** NUNCA drag-and-drop. Usar botón "Upload files" explícito. Si se atasca un deployment en Pages, el fix es: delete archivos viejos uno a uno via UI + re-upload.
 
 ---
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1096-dev (24 abr 2026 — filtrado arrays transaccionales doc raíz + cleanRootDoc)
+**Versión:** v1.3.1098-dev (24 abr 2026 noche — bug filtro 18m BB fix + helpers import Loyverse sales-summary)
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
-**Usuarios:** Reales en producción — cero regresiones toleradas
+**Usuarios:** Uso personal (≥1 año sin Play Store)
 **Package:** `com.dashwey.app`
 
 ---
@@ -933,6 +1079,20 @@ El migrator pasaba TODO el array (incluidos `deleted:true`) al batch writer, que
 - **Impacto funcional:** 0 — KPIs, dashboards, TPV, sync sin cambios (regla de oro Fase 1A respetada)
 - **Preparación para:** Fase 1B (transferencias con `metaTipo: 'transfer'` + `transferId`), Fase 2 (Loyverse import con `origen: 'loyverse'`), Fase 5 (scope `personal`)
 
+### Cambios sesión v1.3.1097 + v1.3.1098 (24 abr 2026 noche)
+
+**v1.3.1097 — Helpers para import histórico (3 funciones nuevas en módulo `ui`):**
+- `_resetSubcollectionsFirestore()` — borra las 6 subcol Firestore (`ventas`, `gastos`, `ingresos`, `pedidos`, `mermas`, `facturas`) vía `writeBatch` + `deleteDoc`. Límite 450 ops/batch para estar bajo límite Firestore. Limpia state local post-delete (usa setters correctos: `State.set.ventas/historialPedidos/mermas/facturas` — NOTA: NO existen `setVentas`/`setHistorialPedidos`, son los setters sin prefijo `set`)
+- `_importLoyverseSalesSummaryCsv()` — parser para CSV sales-summary (formato `d/m/yy,netas,coste,...`). 1 fila = 1 venta diaria sintética. ID determinista `v_lvsum_YYYYMMDD`. Skipea ventas=0 y fechas pre-2023. Idempotente (reemplaza previas `origen: 'import_loyverse'`). Usa `items[{prodId:'_lvsum', nombre:'Ventas del día (Loyverse)', pvp, coste, margen}]` — compatible con KPI existentes.
+- `_revertLoyverseSalesSummary()` — reversión: borra solo ventas `origen: 'import_loyverse'`
+- Menú Reset: 3 entradas nuevas (Import Loyverse sum., Revertir LV sum., Reset subcol FS)
+- Expuestos en `return` del IIFE `ui` (App.ui.*)
+
+**v1.3.1098 — Fix crítico silent data loss en `_bbParseAndPreview`:**
+- Eliminado filtro `_cutoff18m` (L15977–15987 index.html) — era hack v1.3.1036 pre-Estrategia B para no saturar 1MB
+- Efecto antes del fix: CSV con 1675 gastos → solo 705 importados (58% datos perdidos silenciosamente, preview engañoso)
+- Efecto tras el fix: import completo sin filtro temporal
+
 ### Cambios sesión v1.3.980
 - **LOTE D — FIFO completo:**
   - `State.get.lotesStock` + `setLotesStock` + `addLoteStock` (con dedup por id)
@@ -1004,6 +1164,10 @@ El migrator pasaba TODO el array (incluidos `deleted:true`) al batch writer, que
 | CURRENT_CACHE desincronizado con CACHE_NAME | Bump histórico olvidaba `CURRENT_CACHE` en index.html (L153) | Añadir a lista de bump — 5 puntos, no 4 |
 | Transferencias duplicaban KPIs | `revenue`/`gastoBruto`/snap cards sumaban ambos lados del doble movimiento | `FinEngine._isTransfer` dual (metaTipo + tipo legacy) + exclusión en 13 agregaciones. Extracto cuenta NO excluye (muestra con icono ⇄) |
 | Editar 1 lado de transfer dejaba desbalance | `_openEditMovimientoSheet` editaba/borraba solo el registro activo | Cascade por `transferId`: save sincroniza importe+fecha al gemelo; delete borra ambos. Concepto libre. Fallback warn si huérfano |
+| Import BB silent data loss 58% | `_bbParseAndPreview` L15977 filtraba `_cutoff18m` (hack anti-1MB Estrategia A obsoleto) | Eliminado filtro completo en v1.3.1098. Estrategia B supera 1MB — no necesita truncar histórico |
+| Importer BB "exitoso" pero no inserta | `_bbCommit` parsea todo el CSV pero `setGastos` recibe solo items que pasan filtros internos — toast éxito igual aunque items efectivos = 0 | Diagnóstico: interceptar `_showDestructiveConfirm.onConfirm` + `State.set.setGastos` con console.trace. Si stack dice `setGastos(N items)` con N=gastosPrev, no entró ninguno nuevo. Revisar filtros internos del parser |
+| Setters inexistentes `setVentas`/`setHistorialPedidos` | Código nuevo asumió simetría con `setGastos`/`setIngresos`; no existen | Los setters de reemplazo son `State.set.ventas(arr)`, `State.set.historialPedidos(arr)`, `State.set.mermas(arr)`, `State.set.facturas(arr)` (sin prefijo `set`). Solo `setGastos`/`setIngresos`/`setLotesStock` llevan prefijo |
+| GitHub Pages deploy atascado bloqueaba workflow | Drag-and-drop web con files ~2MB → commits aparentemente exitosos pero deploy Pages rechaza con "deployment in progress" | Delete los 4 archivos viejos uno a uno via UI de GitHub web + re-upload con botón "Upload files" (no drag). Commits quedan limpios y Pages procesa |
 
 ---
 
