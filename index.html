@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1129-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1130-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1129-dev</title>
+<title>Dashwey v1.3.1130-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10763,28 +10763,27 @@ const State = (() => {
  let _lastSavedHash = ''; // fingerprint del ultimo estado guardado en Firebase
 
  // -- save: escribe local siempre, Firebase con guards anti-loop
- // v1.3.1074: marca dirty en cada invocación — se limpia tras write exitoso
+ // v1.3.1130 — PROTOCOLO ORIGEN: local vs remoto (determinista, sin throttle)
+ //   - cambios remotos NUNCA disparan write (bloqueo duro al entrar)
+ //   - cambios locales: debounce 500ms, un solo write por ráfaga
+ //   - sin reintentos cíclicos; sin throttle de tiempo
  function save() {
- // v1.3.1128: si save() es llamado durante apply remoto, NO marcar dirty
- // Los cambios vienen de Firestore, ya están en la nube — subirlos otra vez = loop
- if (window._DashweyApplyingRemote) { return; }
- window._DashweyDirty = true;
- // v1.3.1129: THROTTLE DURO — no ejecutar save si el anterior terminó hace <10s
- // Protege contra loops de re-renders y onSnapshot rebotando
- // El dirty sigue marcado, el próximo save() legítimo lo recoge
- var _now1129 = Date.now();
- if (window._DashweyLastSaveEndTs && (_now1129 - window._DashweyLastSaveEndTs) < 10000) {
-  // Agendar save diferido en 10s desde último save, si no hay uno ya agendado
-  clearTimeout(_saveTimer);
-  var _delay = 10000 - (_now1129 - window._DashweyLastSaveEndTs);
-  _saveTimer = setTimeout(save, _delay + 100);
+ // REGLA 1 — bloqueo absoluto durante apply remoto
+ if (window._DashweyApplyingRemote) {
+  console.log('[SAVE_ORIGIN] REMOTE_BLOCKED');
   return;
  }
+ // REGLA 2 — escritura local siempre (sin Firebase), vía marca dirty + debounce
+ window._DashweyDirty = true;
+ // REGLA 3 — single-flight debounce: si ya hay save agendado, no agendar otro
+ if (window._DashweySaveScheduled) return;
+ window._DashweySaveScheduled = true;
  clearTimeout(_saveTimer);
  _saveTimer = setTimeout(() => { 
-  // v1.3.1128: guard extra — si applyingRemote activa durante el delay, skip
+  window._DashweySaveScheduled = false;
+  // Re-check: si durante el debounce entró apply remoto, abortar write
   if (window._DashweyApplyingRemote) return;
-  if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
+  if (window._DashweySavingCtrl?.isSaving) return; // sync en curso, no concurrente
  const _t0Sync = Date.now();
  const fb = window._DashweyFirebase;
  // Guard: no escribir a Firebase antes del primer sync inicial.
@@ -10812,9 +10811,9 @@ const State = (() => {
  return;
  }
  // Guard de concurrencia: no escribir si ya hay un write en curso
- // v1.3.1128: solo marcar _dirtyDuringSave si NO es apply remoto
+ // v1.3.1130: si hay write en curso, simplemente abortamos. NO marcamos _dirtyDuringSave
+ // porque eso re-disparaba save tras el write → loop. Un setter posterior agendará save.
  if (_isSaving) { 
-  if (!window._DashweyApplyingRemote) _dirtyDuringSave = true;
   return;
  }
  // v1.3.1074: KILL hash-guard destructivo — usar dirty-flag incremental
@@ -10854,40 +10853,38 @@ const State = (() => {
   }
  }, 30000);
  // v1.3.1085: dispatcher dual — OFF = doc monolítico (actual), ON = subcolecciones
+ console.log('[SAVE_ORIGIN] LOCAL'); // v1.3.1130: log origen
+ console.log('[SAVE] START');        // v1.3.1130: log vida save
  _writeFirebaseDual(_fbPayloadCapped)
  .then(() => {
  clearTimeout(_watchdog1127);
  _isSaving = false;
- window._DashweyLastSaveEndTs = Date.now(); // v1.3.1129: throttle
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
+ console.log('[SAVE] SUCCESS'); // v1.3.1130
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  // Auto-fade badge after 3s
  setTimeout(function() {
  var badge = document.getElementById('sync-badge');
  if (badge) badge.style.opacity = '0.4';
  }, 3000);
- // v1.3.613: re-disparar save() SOLO si hubo cambios durante el write
- if (_dirtyDuringSave) {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(save, 300);
- }
+ // v1.3.1130: NO re-disparar save cíclico. El próximo cambio local agendará save vía debounce.
+ // _dirtyDuringSave queda reseteado abajo; un setter nuevo invocará scheduleSave().
+ _dirtyDuringSave = false;
  })
  .catch((err) => {
  clearTimeout(_watchdog1127);
  _isSaving = false;
- window._DashweyLastSaveEndTs = Date.now(); // v1.3.1129: throttle también en error
  _lastSavedHash = ''; // legacy — ya no se usa pero limpio por seguridad
  window._DashweyDirty = true; // v1.3.1074: re-marcar para reintentar en próximo save()
  console.warn('[Dashwey sync] ✗ firebase write failed:', err?.message || err);
+ console.log('[SAVE] ERROR', err?.message || err); // v1.3.1130
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
- // v1.3.613: re-disparar save() tras error solo si hay cambios pendientes
- if (_dirtyDuringSave) {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(save, 500);
- }
+ // v1.3.1130: en error NO agendamos auto-retry. El próximo setter local lo recogerá vía debounce.
+ _dirtyDuringSave = false;
  });
- // v1.3.1083: debounce adaptativo — inmediato si _DashweyUrgentSave=true, 300ms por defecto
- }, (window._DashweyUrgentSave ? 0 : 300));
+ // v1.3.1130: debounce fijo 500ms (sin urgent override para prevenir ráfagas)
+ // UrgentSave deprecated: el debounce single-flight ya agrupa cambios rápidos
+ }, 500);
  window._DashweyUrgentSave = false; // reset tras cada save
  }
 
@@ -13358,7 +13355,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1129-dev';
+ const _APP_VERSION = 'v1.3.1130-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
