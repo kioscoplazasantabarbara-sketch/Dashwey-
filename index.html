@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1127-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1128-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1127-dev</title>
+<title>Dashwey v1.3.1128-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10765,9 +10765,15 @@ const State = (() => {
  // -- save: escribe local siempre, Firebase con guards anti-loop
  // v1.3.1074: marca dirty en cada invocación — se limpia tras write exitoso
  function save() {
+ // v1.3.1128: si save() es llamado durante apply remoto, NO marcar dirty
+ // Los cambios vienen de Firestore, ya están en la nube — subirlos otra vez = loop
+ if (window._DashweyApplyingRemote) { return; }
  window._DashweyDirty = true;
  clearTimeout(_saveTimer);
- _saveTimer = setTimeout(() => { if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
+ _saveTimer = setTimeout(() => { 
+  // v1.3.1128: guard extra — si applyingRemote activa durante el delay, skip
+  if (window._DashweyApplyingRemote) return;
+  if (window._DashweySavingCtrl?.isSaving) return; // guard: sync en curso
  const _t0Sync = Date.now();
  const fb = window._DashweyFirebase;
  // Guard: no escribir a Firebase antes del primer sync inicial.
@@ -10795,7 +10801,11 @@ const State = (() => {
  return;
  }
  // Guard de concurrencia: no escribir si ya hay un write en curso
- if (_isSaving) { _dirtyDuringSave = true; return; } // v1.3.613: marcar cambio pendiente
+ // v1.3.1128: solo marcar _dirtyDuringSave si NO es apply remoto
+ if (_isSaving) { 
+  if (!window._DashweyApplyingRemote) _dirtyDuringSave = true;
+  return;
+ }
  // v1.3.1074: KILL hash-guard destructivo — usar dirty-flag incremental
  // Problema previo: hash igual tras recibir onSnapshot bloqueaba siguiente write legítimo.
  // Nuevo modelo: cada setter marca _dirty=true, save() solo sube si _dirty, lo limpia tras OK.
@@ -10822,9 +10832,20 @@ const State = (() => {
   : _archivePayload(_state);
  // Aplicar caps de archive (ventas/mermas/pedidos/facturas/chat) al payload FB
  const _fbPayloadCapped = _archivePayload(_fbPayload);
+ // v1.3.1127: watchdog 30s para prevenir _isSaving atascado si Promise no resuelve
+ var _watchdog1127 = setTimeout(function() {
+  if (_isSaving) {
+   console.warn('[Dashwey sync] watchdog: _isSaving atascado 30s — liberando');
+   _isSaving = false;
+   window._DashweyDirty = true;
+   if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
+   try { if (window._DashweyDrainPendingSnapshots) window._DashweyDrainPendingSnapshots(); } catch(_) {}
+  }
+ }, 30000);
  // v1.3.1085: dispatcher dual — OFF = doc monolítico (actual), ON = subcolecciones
  _writeFirebaseDual(_fbPayloadCapped)
  .then(() => {
+ clearTimeout(_watchdog1127);
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
@@ -10840,6 +10861,7 @@ const State = (() => {
  }
  })
  .catch((err) => {
+ clearTimeout(_watchdog1127);
  _isSaving = false;
  _lastSavedHash = ''; // legacy — ya no se usa pero limpio por seguridad
  window._DashweyDirty = true; // v1.3.1074: re-marcar para reintentar en próximo save()
@@ -13323,7 +13345,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1127-dev';
+ const _APP_VERSION = 'v1.3.1128-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
