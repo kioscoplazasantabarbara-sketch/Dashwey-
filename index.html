@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1122-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1123-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1122-dev</title>
+<title>Dashwey v1.3.1123-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13184,7 +13184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1122-dev';
+ const _APP_VERSION = 'v1.3.1123-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16062,16 +16062,140 @@ const ui = (() => {
  // Usa created_at_min y created_at_max para acotar API (más eficiente que paginar todo).
  // Idempotente: dedup por v_lv_<id> en _lvCommitReceipts.
  // Cache: marca día como fetched para no reconsultar.
- function _lvFetchRangoHistorico(startISO, endISO, onDone) {
+ // v1.3.1123: cola FIFO + prioridad + cancelación de stale
+ // Estado compartido
+ window._DashweyLvQueue = window._DashweyLvQueue || [];
+ window._DashweyLvActiveRequest = window._DashweyLvActiveRequest || null;
+
+ function _lvProcessQueue() {
+  // Si ya hay uno activo, esperar
+  if (window._DashweyLvActiveRequest) return;
+  if (!window._DashweyLvQueue.length) return;
+  // Tomar el siguiente (priority primero)
+  window._DashweyLvQueue.sort(function(a,b){ return (b.priority||0) - (a.priority||0); });
+  var next = window._DashweyLvQueue.shift();
+  if (next.cancelled) { _lvProcessQueue(); return; }
+  window._DashweyLvActiveRequest = next;
+  _lvExecuteFetch(next);
+ }
+
+ function _lvExecuteFetch(req) {
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token || !navigator.onLine) {
+   window._DashweyLvActiveRequest = null;
+   if (req.onDone) req.onDone(0);
+   setTimeout(_lvProcessQueue, 10);
+   return;
+  }
+  _lvSyncInFlight = true;
+  console.info('[Dashwey/LVHist]', req.priority >= 1 ? '▶ CLICK' : '… prefetch', 'fetch:', req.startISO, '→', req.endISO);
+  var startMs = new Date(req.startISO).getTime();
+  var endMs = new Date(req.endISO).getTime();
+  var cutoffStart = new Date(startMs);
+  var diaKey = req.startISO.slice(0, 10);
+
+  _lvFetchHistPaginated(token, [], null, cutoffStart, endMs, function(receipts, limitePlan, aborted) {
+   _lvSyncInFlight = false;
+   window._DashweyLvActiveRequest = null;
+   try {
+    if (req.cancelled || aborted) {
+     if (req.onDone) req.onDone(0);
+     setTimeout(_lvProcessQueue, 10);
+     return;
+    }
+    var ventasAntes = (State.get.ventas ? State.get.ventas().length : 0);
+    _lvCommitReceipts(receipts, null, limitePlan || false, true);
+    var ventasDespues = (State.get.ventas ? State.get.ventas().length : 0);
+    var nuevas = Math.max(0, ventasDespues - ventasAntes);
+    _lvMarcarDiaFetched(diaKey);
+    console.info('[Dashwey/LVHist] ✓', diaKey, '| nuevas:', nuevas, '| recibidos:', receipts.length);
+    if (nuevas > 0) {
+     try {
+      var _barsEl = document.getElementById('ev-chart-bars');
+      if (_barsEl) _barsEl._evHash = null;
+      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
+     } catch(_) {}
+     // Toast solo para clicks del usuario (priority >= 1), no para prefetches silenciosos
+     if (req.priority >= 1) {
+      try { showToast('✅ ' + nuevas + ' venta' + (nuevas===1?'':'s') + ' de ' + diaKey); } catch(_) {}
+     }
+    }
+    if (req.onDone) req.onDone(nuevas);
+   } catch(e) {
+    console.warn('[Dashwey/LVHist] commit:', e && e.message);
+    if (req.onDone) req.onDone(0);
+   } finally {
+    setTimeout(_lvProcessQueue, 10);
+   }
+  });
+ }
+
+ // v1.3.1123: Cancela todos los prefetches pendientes (priority < 1)
+ // Usado cuando usuario hace click nuevo — los prefetches antiguos ya no importan
+ function _lvCancelStalePrefetches() {
+  (window._DashweyLvQueue || []).forEach(function(req) {
+   if (req.priority < 1) req.cancelled = true;
+  });
+  window._DashweyLvQueue = (window._DashweyLvQueue || []).filter(function(req) {
+   return !req.cancelled;
+  });
+ }
+
+ function _lvFetchRangoHistorico(startISO, endISO, onDone, priority) {
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) { if (onDone) onDone(0); return; }
+  if (!navigator.onLine) { if (onDone) onDone(0); return; }
+
+  var diaKey = startISO.slice(0, 10);
+  if (_lvDiaYaFetched(diaKey)) {
+   console.info('[Dashwey/LVHist] día ya cacheado, skip:', diaKey);
+   if (onDone) onDone(0);
+   return;
+  }
+
+  // priority: 1 = click usuario (prioritario), 0 = prefetch (background)
+  var p = (typeof priority === 'number') ? priority : 1;
+
+  // Si es click usuario (priority 1) → CANCELAR prefetches stale
+  if (p >= 1) {
+   _lvCancelStalePrefetches();
+  }
+
+  // Evitar duplicados en cola (mismo día ya encolado)
+  var yaEnCola = (window._DashweyLvQueue || []).some(function(r) {
+   return !r.cancelled && r.startISO.slice(0,10) === diaKey;
+  });
+  // También considerar el activo
+  if (window._DashweyLvActiveRequest && window._DashweyLvActiveRequest.startISO.slice(0,10) === diaKey) {
+   yaEnCola = true;
+  }
+  if (yaEnCola) {
+   console.info('[Dashwey/LVHist] ya en cola, skip:', diaKey);
+   if (onDone) onDone(0);
+   return;
+  }
+
+  window._DashweyLvQueue.push({
+   startISO: startISO,
+   endISO: endISO,
+   onDone: onDone,
+   priority: p,
+   cancelled: false,
+   ts: Date.now()
+  });
+  console.info('[Dashwey/LVHist] encolado:', diaKey, '(priority=' + p + ', cola=' + window._DashweyLvQueue.length + ')');
+  _lvProcessQueue();
+ }
+
+ // Reemplaza el cuerpo viejo — no usado ya
+ function _lvFetchRangoHistoricoOLD_UNUSED(startISO, endISO, onDone) {
   var token = localStorage.getItem('dashwey_lv_token') || '';
   if (!token) { if (onDone) onDone(0); return; }
   if (!navigator.onLine) { if (onDone) onDone(0); return; }
   if (_lvSyncInFlight) { if (onDone) onDone(0); return; }
 
-  // Clave de cache: 'YYYY-MM-DD' del día de startISO
   var diaKey = startISO.slice(0, 10);
   if (_lvDiaYaFetched(diaKey)) {
-   console.info('[Dashwey/LVHist] día ya cacheado, skip:', diaKey);
    if (onDone) onDone(0);
    return;
   }
@@ -18264,29 +18388,23 @@ try { renderTopArticulos(period); } catch(e) {}
     });
     // Si hay menos de 3 ventas en rango de 24h → probablemente no se ha fetcheado
     if (_ventasLv.length < 3) {
+     // v1.3.1123: CLICK USUARIO → priority 1 (prioritario, cancela prefetches antiguos)
      App.ui._lvFetchRangoHistorico(newP.customStart, newP.customEnd, function(nuevas) {
-      if (nuevas > 0) console.info('[Dashwey/Shift] auto-fetch completado:', nuevas, 'ventas');
+      if (nuevas > 0) console.info('[Dashwey/Shift] click-fetch completado:', nuevas, 'ventas');
+     }, 1);
 
-      // v1.3.1122: PREFETCH PROACTIVO — al navegar ◀, precargar 2 días más atrás
-      // al navegar ▶, precargar 1 día más adelante. En background, sin bloquear UI.
-      // Así el siguiente click de navegación es INSTANTÁNEO (datos ya cacheados).
-      try {
-       var DIA = 24 * 3600 * 1000;
-       var prefetchOffsets = dir < 0 ? [-1, -2] : [+1];
-       prefetchOffsets.forEach(function(off, i) {
-        var prefetchStart = new Date(newStart.getTime() + off * DIA);
-        var prefetchEnd = new Date(newEnd.getTime() + off * DIA);
-        // Delay escalonado: 1s entre prefetches para no saturar API
-        setTimeout(function() {
-         var pad = function(n){return String(n).padStart(2,'0');};
-         var iso = function(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());};
-         App.ui._lvFetchRangoHistorico(iso(prefetchStart), iso(prefetchEnd), function() {
-          // silent — es prefetch
-         });
-        }, 1000 + i * 1000);
-       });
-      } catch(_) {}
-     });
+     // Prefetch PROACTIVO en background (priority 0) — se cancelan si usuario hace otro click
+     try {
+      var DIA = 24 * 3600 * 1000;
+      var prefetchOffsets = dir < 0 ? [-1, -2] : [+1];
+      prefetchOffsets.forEach(function(off) {
+       var prefetchStart = new Date(newStart.getTime() + off * DIA);
+       var prefetchEnd = new Date(newEnd.getTime() + off * DIA);
+       var pad = function(n){return String(n).padStart(2,'0');};
+       var iso = function(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());};
+       App.ui._lvFetchRangoHistorico(iso(prefetchStart), iso(prefetchEnd), null, 0);
+      });
+     } catch(_) {}
     }
    }
   } catch(_) {}
