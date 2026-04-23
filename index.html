@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1086-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1087-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1086-dev</title>
+<title>Dashwey v1.3.1087-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9092,7 +9092,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1086-dev)
+// ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1087-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
@@ -9125,9 +9125,17 @@ window._DashweySubcollectionMap = {
 };
 
 // Helper: marcar un ítem como dirty (llamado por setters en futuras fases)
+// Flag: cuando true, _DashweyMarkDirty es no-op. Se activa durante la
+// aplicación de snapshots remotos de subcolecciones para evitar que
+// el setter masivo marque como dirty los items recién recibidos del remoto.
+// El handler DashweyBus lo pone en true antes de setear y false después.
+window._DashweyApplyingRemote = false;
+
 window._DashweyMarkDirty = function(stateKey, id) {
  try {
   if (!id) return;
+  // v1.3.1087: si estamos aplicando snapshot remoto, no marcar (evita loop re-sync)
+  if (window._DashweyApplyingRemote) return;
   const dirty = window._DashweyDirtyItems;
   if (dirty && dirty[stateKey] instanceof Set) {
    dirty[stateKey].add(id);
@@ -9184,7 +9192,7 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
 
 // ──────────────────────────────────────────────────────────────────
 // ESTRATEGIA B — FASE 4: onSnapshot SUBCOLECCIONES + MIGRACIÓN
-// v1.3.1086-dev
+// v1.3.1087-dev
 // Todo está inactivo hasta que alguien llame explícitamente a
 // window._DashweyEnableSubcollections(). Ningún arranque automático.
 // ──────────────────────────────────────────────────────────────────
@@ -9317,11 +9325,12 @@ window._DashweyMigrateToSubcollections = async function(opts) {
   const fn = raw[k];
   const arr = (typeof fn === 'function') ? fn() : (Array.isArray(fn) ? fn : []);
   if (!Array.isArray(arr) || !arr.length) continue;
-  // Asignar id a items que no lo tengan (raro pero posible en datos antiguos)
-  const withIds = arr.filter(it => it && it.id);
-  if (withIds.length !== arr.length) {
-   console.warn('[Dashwey/Migrate]', k, 'items sin id omitidos:', arr.length - withIds.length);
-  }
+  // Filtrar: solo items con id Y no deleted (no hay nada que borrar en subcolección vacía)
+  const withIds = arr.filter(it => it && it.id && it.deleted !== true);
+  const skippedNoId = arr.filter(it => it && !it.id).length;
+  const skippedDeleted = arr.filter(it => it && it.deleted === true).length;
+  if (skippedNoId) console.warn('[Dashwey/Migrate]', k, 'items sin id omitidos:', skippedNoId);
+  if (skippedDeleted) console.info('[Dashwey/Migrate]', k, 'items deleted omitidos:', skippedDeleted);
   const ok = await window._DashweyWriteSubcollectionBatch(k, withIds);
   if (!ok) {
    console.error('[Dashwey/Migrate] FALLO en', k, '— abortando migración');
@@ -10073,7 +10082,7 @@ const State = (() => {
   }
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — _writeFirebaseDual (v1.3.1086-dev)
+ // ESTRATEGIA B — _writeFirebaseDual (v1.3.1087-dev)
  // Dispatcher: decide entre doc monolítico (OFF) o subcolecciones (ON).
  // Flag maestro: window._DashweyUseSubcollections
  //
@@ -12910,7 +12919,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1086-dev';
+ const _APP_VERSION = 'v1.3.1087-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37307,7 +37316,7 @@ _eaRecalc();
 });
 
  // ──────────────────────────────────────────────────────────────────
- // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1086-dev)
+ // ESTRATEGIA B — Handler de snapshots de subcolecciones (v1.3.1087-dev)
  // Escucha evento custom emitido por _DashweyApplySubcollectionSnapshot
  // y aplica merge incremental al _state local. Solo activo cuando flag ON.
  // ──────────────────────────────────────────────────────────────────
@@ -37353,17 +37362,22 @@ _eaRecalc();
      };
      const setterName = setterMap[stateKey];
      if (setterName && window.State?.set?.[setterName]) {
-      // ⚠️ el setter marca dirty otra vez — por eso isSaving guard en apply
-      // Para EVITAR loop: setear isSaving durante esta aplicación
+      // v1.3.1087: guard más limpio — _DashweyApplyingRemote impide que
+      // _DashweyMarkDirty registre los items recién recibidos del remoto.
+      // Además manipulamos isSaving para evitar que save() lance write a Firebase
+      // durante la aplicación (los items ya están en el remoto, no hay que re-subirlos).
       const ctrl = window._DashweySavingCtrl;
-      const prev = ctrl?.isSaving;
+      const prevSaving = ctrl?.isSaving;
+      const prevApplying = window._DashweyApplyingRemote;
+      window._DashweyApplyingRemote = true;
       if (ctrl) ctrl.isSaving = true;
       try {
        window.State.set[setterName](merged);
       } finally {
-       if (ctrl) ctrl.isSaving = prev || false;
+       if (ctrl) ctrl.isSaving = prevSaving || false;
+       window._DashweyApplyingRemote = prevApplying || false;
       }
-      // Limpiar dirty que acabamos de aplicar (no re-subirlos)
+      // Extra safety: limpiar cualquier dirty que se haya podido filtrar
       try { window._DashweyClearDirty(stateKey); } catch(_) {}
      }
     } catch(e) { console.warn('[Dashwey/SubB] merge handler error:', e?.message); }
