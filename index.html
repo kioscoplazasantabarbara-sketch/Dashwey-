@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1121-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1122-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1121-dev</title>
+<title>Dashwey v1.3.1122-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13184,7 +13184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1121-dev';
+ const _APP_VERSION = 'v1.3.1122-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16029,9 +16029,34 @@ const ui = (() => {
  // @param {Object} opts
  //   opts.force: ignorar debounce (para pull-to-refresh)
  //   opts.onDone(n): callback con número de tickets nuevos
- // v1.3.1121: cache de rangos ya fetched — evita refetch al navegar ←→
- // Set de strings 'YYYY-MM-DD' que representan días YA consultados a Loyverse API
- window._DashweyLvRangosFetched = window._DashweyLvRangosFetched || new Set();
+ // v1.3.1122: cache PERSISTENTE de días fetched (localStorage + TTL 30 días)
+ // Estructura: { "YYYY-MM-DD": timestamp_ms, ... }
+ // Beneficio: cada día solo se fetchea 1 vez en la vida de la app.
+ (function _lvInitCache() {
+  if (window._DashweyLvDiasFetched) return;
+  var raw = '';
+  try { raw = localStorage.getItem('dashwey_lv_dias_fetched') || ''; } catch(_) {}
+  var parsed = {};
+  if (raw) { try { parsed = JSON.parse(raw) || {}; } catch(_) { parsed = {}; } }
+  // Purgar entradas > 30 días (cache stale)
+  var now = Date.now();
+  var TTL = 30 * 24 * 3600 * 1000;
+  for (var k in parsed) {
+   if (now - (parsed[k] || 0) > TTL) delete parsed[k];
+  }
+  window._DashweyLvDiasFetched = parsed;
+  try { localStorage.setItem('dashwey_lv_dias_fetched', JSON.stringify(parsed)); } catch(_) {}
+ })();
+
+ function _lvMarcarDiaFetched(diaKey) {
+  if (!window._DashweyLvDiasFetched) window._DashweyLvDiasFetched = {};
+  window._DashweyLvDiasFetched[diaKey] = Date.now();
+  try { localStorage.setItem('dashwey_lv_dias_fetched', JSON.stringify(window._DashweyLvDiasFetched)); } catch(_) {}
+ }
+
+ function _lvDiaYaFetched(diaKey) {
+  return !!(window._DashweyLvDiasFetched && window._DashweyLvDiasFetched[diaKey]);
+ }
 
  // v1.3.1121: Fetch histórico Loyverse bajo demanda para un rango específico
  // Usa created_at_min y created_at_max para acotar API (más eficiente que paginar todo).
@@ -16045,8 +16070,8 @@ const ui = (() => {
 
   // Clave de cache: 'YYYY-MM-DD' del día de startISO
   var diaKey = startISO.slice(0, 10);
-  if (window._DashweyLvRangosFetched.has(diaKey)) {
-   console.info('[Dashwey/LVHist] día ya consultado, skip:', diaKey);
+  if (_lvDiaYaFetched(diaKey)) {
+   console.info('[Dashwey/LVHist] día ya cacheado, skip:', diaKey);
    if (onDone) onDone(0);
    return;
   }
@@ -16069,7 +16094,7 @@ const ui = (() => {
     var ventasDespues = (State.get.ventas ? State.get.ventas().length : 0);
     var nuevas = Math.max(0, ventasDespues - ventasAntes);
     // Marcar día como fetched (aunque no haya traído nada, ya consultamos)
-    window._DashweyLvRangosFetched.add(diaKey);
+    _lvMarcarDiaFetched(diaKey);
     console.info('[Dashwey/LVHist] ✓ día:', diaKey, '| nuevas:', nuevas, '| recibidos:', receipts.length);
     if (nuevas > 0) {
      // Forzar re-render tras ingestar
@@ -18241,6 +18266,26 @@ try { renderTopArticulos(period); } catch(e) {}
     if (_ventasLv.length < 3) {
      App.ui._lvFetchRangoHistorico(newP.customStart, newP.customEnd, function(nuevas) {
       if (nuevas > 0) console.info('[Dashwey/Shift] auto-fetch completado:', nuevas, 'ventas');
+
+      // v1.3.1122: PREFETCH PROACTIVO — al navegar ◀, precargar 2 días más atrás
+      // al navegar ▶, precargar 1 día más adelante. En background, sin bloquear UI.
+      // Así el siguiente click de navegación es INSTANTÁNEO (datos ya cacheados).
+      try {
+       var DIA = 24 * 3600 * 1000;
+       var prefetchOffsets = dir < 0 ? [-1, -2] : [+1];
+       prefetchOffsets.forEach(function(off, i) {
+        var prefetchStart = new Date(newStart.getTime() + off * DIA);
+        var prefetchEnd = new Date(newEnd.getTime() + off * DIA);
+        // Delay escalonado: 1s entre prefetches para no saturar API
+        setTimeout(function() {
+         var pad = function(n){return String(n).padStart(2,'0');};
+         var iso = function(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());};
+         App.ui._lvFetchRangoHistorico(iso(prefetchStart), iso(prefetchEnd), function() {
+          // silent — es prefetch
+         });
+        }, 1000 + i * 1000);
+       });
+      } catch(_) {}
      });
     }
    }
