@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1116-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1117-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1116-dev</title>
+<title>Dashwey v1.3.1117-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10211,11 +10211,21 @@ const State = (() => {
  //   hotPins, qgCells, qgSizeIdx, syncCommand, tombstones, etc.
  // ──────────────────────────────────────────────────────────────────
  async function _writeFirebaseDual(data) {
-  // Flag OFF → comportamiento idéntico al anterior
-  if (!window._DashweyUseSubcollections) {
+  // v1.3.1117: medir tamaño del payload y log
+  let _totalSize = 0;
+  try { _totalSize = JSON.stringify(data || {}).length; } catch(_) {}
+  console.info('[Dashwey/FB] payload input size:', (_totalSize/1024).toFixed(0), 'KB | subcol:', !!window._DashweyUseSubcollections);
+  // v1.3.1117: GUARD de seguridad — si payload > 900 KB, FORZAR limpieza arrays transaccionales
+  //           aunque _DashweyUseSubcollections esté off. Previene invalid-argument.
+  const _forceClean = _totalSize > 900 * 1024;
+  if (_forceClean) {
+   console.warn('[Dashwey/FB] payload >900KB — forzando limpieza de arrays transaccionales (safety guard)');
+  }
+  // Flag OFF y tamaño normal → comportamiento idéntico al anterior
+  if (!window._DashweyUseSubcollections && !_forceClean) {
    return _writeFirebase(data);
   }
-  // Flag ON → ruta subcolecciones
+  // Flag ON o forceClean → ruta subcolecciones / limpieza agresiva
   const fb = window._DashweyFirebase;
   if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
   try {
@@ -10226,6 +10236,14 @@ const State = (() => {
     if (transactionalKeys.includes(k)) continue;
     rootPayload[k] = v;
    }
+   // v1.3.1117: verificar tamaño del rootPayload tras limpiar — si aún >900 KB, pronto problema
+   try {
+    const _rootSize = JSON.stringify(rootPayload).length;
+    console.info('[Dashwey/FB] rootPayload size (sin trans arrays):', (_rootSize/1024).toFixed(0), 'KB');
+    if (_rootSize > 900 * 1024) {
+     console.warn('[Dashwey/FB] rootPayload aún >900KB tras limpiar transaccionales. Revisar: productos, chatMessages, lotesStock, etc.');
+    }
+   } catch(_) {}
    // Marcar arquitectura en doc raíz (permite a devices antiguos detectar)
    rootPayload._schemaVersion = 2;
    // 2. Escribir doc raíz (reutiliza _writeFirebase para limpieza + timestamps)
@@ -10272,7 +10290,7 @@ const State = (() => {
      } catch(_) {}
     } else {
      // Fallo: mantener dirty para reintento en próximo save()
-     console.warn('[Dashwey/SubB] batch falló para', stateKey, '— reintentará');
+     console.warn('[Dashwey/SubB] batch falló para', stateKey, '—', items.length, 'items — reintentará');
     }
    }
    if (totalDirty > 0) console.info('[Dashwey/SubB] ✓ subcolecciones escritas:', totalDirty, 'items');
@@ -13142,7 +13160,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1116-dev';
+ const _APP_VERSION = 'v1.3.1117-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
