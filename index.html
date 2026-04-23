@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1108-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1109-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1108-dev</title>
+<title>Dashwey v1.3.1109-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1129,6 +1129,9 @@ body[data-energy-saver="1"] .ss-panel {
 /* Ocultar flechas fuera del Dashboard */
 body:not([data-tab="1"]) #dash-nav-prev,
 body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
+/* v1.3.1109: deshabilitar flechas mientras sheet período abierto — evita tap-through */
+body:has(#dash-period-sheet.open) #dash-nav-prev,
+body:has(#dash-period-sheet.open) #dash-nav-next { pointer-events: none !important; opacity: 0.35 !important; }
 .dash-title-period-btn {
  /* Hereda 13px de .dash-page-sub — mismo tamaño que tpv-page-sub */
  display: inline-flex; align-items: baseline; gap: 2px;
@@ -12641,6 +12644,7 @@ const Utils = (() => {
  applyBtn.parentNode.replaceChild(cloned, applyBtn);
  cloned.addEventListener('click', function(ev) {
   ev.stopPropagation();
+  ev.preventDefault();
   try {
    const sheet = document.getElementById('dash-period-sheet');
    const cfg = sheet?._periodConfig;
@@ -12652,9 +12656,10 @@ const Utils = (() => {
    const desde = desdeRaw.length === 10 ? desdeRaw + 'T' + desdeH : desdeRaw;
    const hasta = hastaRaw.length === 10 ? hastaRaw + 'T' + hastaH : hastaRaw;
    if (new Date(hasta) <= new Date(desde)) { showToast('⚠️ La fecha/hora final debe ser posterior'); return; }
+   // v1.3.1109: delay 180ms antes de cerrar sheet → evita tap-through a elementos detrás (flechas ◀▶)
    if (cfg?.onCustom) {
     cfg.onCustom(desde, hasta);
-    _onPeriodSheetClose();
+    setTimeout(function(){ try { _onPeriodSheetClose(); } catch(_) {} }, 180);
    } else if (window.App?.dash?.applyGlobalCustom) {
     window.App.dash.applyGlobalCustom();
    }
@@ -13100,7 +13105,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1108-dev';
+ const _APP_VERSION = 'v1.3.1109-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22472,6 +22477,17 @@ function _confirmBorrarCuenta(id) {
  customHasta: _customHasta,
  onSelect: t => { selGlobalPeriod(t); },
  onCustom: (desde, hasta) => {
+ // v1.3.1109: sanear — asegurar strings no vacíos + dates válidas
+ if (!desde || !hasta || typeof desde !== 'string' || typeof hasta !== 'string') {
+  console.warn('[Dashwey] onCustom: desde/hasta inválidos', {desde, hasta});
+  return;
+ }
+ const dStart = new Date(desde), dEnd = new Date(hasta);
+ if (isNaN(dStart.getTime()) || isNaN(dEnd.getTime())) {
+  console.warn('[Dashwey] onCustom: fechas inválidas', {desde, hasta});
+  showToast('⚠️ Fechas inválidas');
+  return;
+ }
  const fmtDate = iso => {
  const d = new Date(iso);
  const M = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -22479,7 +22495,7 @@ function _confirmBorrarCuenta(id) {
  return pad(d.getDate())+' '+M[d.getMonth()]+' '+pad(d.getHours())+':'+pad(d.getMinutes());
  };
  const label = fmtDate(desde) + ' → ' + fmtDate(hasta);
- State.set.period({ type:'custom', label, offset:0, customStart: desde, customEnd: hasta, userSet:true });
+ State.set.period({ type:'custom', label, offset:0, customStart: String(desde), customEnd: String(hasta), userSet:true });
  _updateGlobalPeriodLabel(label);
 
  try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
