@@ -4,9 +4,35 @@
 
 ---
 
+## 🎯 ESTADO SESIÓN 24 ABR 2026 — CIERRE
+
+**Versión desplegada:** v1.3.1096-dev
+**Logro mayor:** Estrategia B (subcolecciones Firestore) IMPLEMENTADA Y OPERATIVA — supera límite 1MB definitivamente.
+
+**Sesión ejecutó 12 versiones (1085 → 1096):**
+- Fase 1-4: Infraestructura + migración 704 gastos + 584 pedidos a subcolecciones
+- Fase 5: Testing cross-device + bugs de sync
+- Fase 6 (v1.3.1093-1095): Diff robusto contra baseline sincronizado
+- Fase 7 (v1.3.1096): Filtrado transaccional del doc raíz + `_DashweyCleanRootDoc()`
+
+**Estado actual verificado:**
+- ✅ Doc raíz limpio (arrays transaccionales vacíos)
+- ✅ Subcolecciones = fuente única de verdad
+- ✅ 704 gastos + 584 pedidos íntegros
+- ✅ Saldos correctos: Kiosco 9462.9€ + Santander 28984.48€
+- ✅ Sin fantasmas
+- ✅ 8 tombstones históricos (normal, filtrados por `_nd()`)
+
+**Próxima sesión (en orden):**
+1. 🔴 **Punto 2 — Re-import Loyverse 3657 tickets** (empezar aquí)
+2. 🟡 Punto 3 — Firestore Rules hardening pre-Play Store
+3. 🟢 Punto 4+ — Historial multi-año, cierre caja, ticket medio TPV, etc.
+
+---
+
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1008-dev
+**Versión:** v1.3.1096-dev (24 abr 2026 — filtrado arrays transaccionales doc raíz + cleanRootDoc)
 **Plataforma:** APK Android via Capacitor + WebView
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -215,7 +241,361 @@ print('OK' if r.returncode == 0 else r.stderr.decode())
 
 | # | Área | Pendiente | Prioridad |
 |---|------|-----------|-----------|
-| 1 | Seguridad | Firestore Rules: schema estricto por tipo (validar `is list` / `is map` en cada clave). Diseñado y listo — aplicar antes de publicar en Play Store | 🟡 Mejora pre-publicación |
+| **1** | **Arquitectura** | **ESTRATEGIA B — Subcolecciones Firestore** (ventas/gastos/ingresos/pedidos/mermas/facturas en subcolecciones separadas). **REQUISITO BLOCKING.** Sin esto, Dashwey se rompe en ~3 meses con uso real (volumen kiosco = 42k ventas/año = 20MB/año, doc monolítico supera 1MB en 17 días). Plan: 6-10h de trabajo fresco. Coste: 0€/mes (cabe en tier gratuito Firebase). | 🔴 **CRÍTICO** — bloquea escalabilidad y Play Store |
+| 2 | Datos | Re-importar ventas Loyverse tras Estrategia B (el import previo se revirtió por exceder 1MB) | 🟠 Tras Estrategia B |
+| 3 | Seguridad | Firestore Rules: schema estricto por tipo (validar `is list` / `is map` en cada clave). Diseñado — aplicar antes de Play Store | 🟡 Pre-publicación |
+| 4 | Historial | Detalle completo multi-año (más vendidos, ticket medio, etc.) — llega gratis con Estrategia B | 🟢 Incluido en #1 |
+
+### Cambios sesión v1.3.1096 (24 abr 2026) — FILTRADO TRANSACCIONAL DOC RAÍZ + LIMPIEZA
+**Contexto:** Estrategia B tenía 3 fuentes de verdad simultáneas (localStorage + doc raíz monolítico + subcolecciones). El doc raíz seguía con 712 gastos legacy (pre-limpieza) que se inyectaban al state local vía 4 merges monolíticos (`_ALL_IDS_R` 17120, `_ALL_IDS_A` 34055, `_ALL_ID_KEYS` 37420, `_mKeys` 37296). Resultado: 4 tests borrados en device 1 reaparecían en device 2 vía snapshot del doc raíz.
+
+**FIX:**
+1. Helper `window._DashweyShouldSkipTransactionalInRoot()` → true si flag Estrategia B ON
+2. Helper `window._DashweyIsTransactionalKey(k)` → true para `ventas|gastosOp|ingresosFin|historialPedidos|mermas|facturas`
+3. En los 4 merges, cuando flag ON: `delete merged[k]` para arrays transaccionales. Solo mergear `productos/proveedores/cuentas/etc` (no transaccionales).
+4. `window._DashweyCleanRootDoc({force?})` → limpieza one-shot del doc raíz Firestore (escribe arrays vacíos). Guard `_schemaVersion:2`.
+
+**ORDEN DE EJECUCIÓN EN CONSOLA:**
+1. Deploy v1.3.1096 en ambos devices
+2. Verificar ambos arrancan OK con Estrategia B activa
+3. En device 1: `await window._DashweyCleanRootDoc()` → borra arrays transaccionales de Firestore
+4. Reload ambos devices → sync inicial ya no trae legacy
+5. (Opcional) confirmar en Firestore Console que doc raíz tiene `ventas:[]`, `gastosOp:[]`, etc
+
+**REGLA NUEVA:** con `_schemaVersion:2`, los 6 arrays transaccionales SOLO viven en subcolecciones. El doc raíz guarda: `settings`, `cuentas`, `productos`, `proveedores`, `hotPins`, `catLabels`, `lotesStock`, etc.
+
+---
+
+### Cambios sesión v1.3.1095 (24 abr 2026) — DETECCIÓN DE BORRADOS REMOTOS
+**Contexto:** v1.3.1094 arregló diff local pero device 2 seguía viendo TESTs borrados en device 1. Causa: el handler onSnapshot de subcolecciones hacía merge `local + remote` → items locales SIN contraparte remota (= borrados en Firestore) se mantenían vivos porque el remoto no tenía nada que decir de ellos.
+
+**FIX:** en handler snapshot, tras merge:
+- Construir `remoteIds` (Set de ids presentes en snapshot)
+- Para cada item local: si `!remoteIds.has(local.id) && !local.deleted` → marcar `deleted:true` + `deletedAt=now`
+- Así propaga el borrado remoto a UI local
+
+**GUARD DEFENSIVO:** si `remoteCount < localCount * 0.5` y `localCount > 10` → NO marcar deletions. Probable fetch incompleto o estado inicial pre-sync. Evita catástrofe (borrar 700 items por snapshot parcial offline).
+
+---
+
+### Cambios sesión v1.3.1094 (24 abr 2026) — DIFF VS "ÚLTIMO SINCRONIZADO"
+**Contexto:** v1.3.1093 intentó snapshot pre-mutación, pero el patrón real `_deleteGasto` hace `slice() + .deleted=true + setGastos(_arr)` — slice copia el array pero los OBJETOS son los mismos refs que `_state.gastosOp`. Al tomar snapshot dentro del setter, los objetos ya estaban mutados.
+
+**SOLUCIÓN DEFINITIVA:** cambiar el baseline del diff.
+- `window._DashweyLastSyncedSnap[stateKey] = {id: JSON.stringify(item)}` — mantenido globalmente
+- Se actualiza SOLO tras batch write exitoso O snapshot remoto aplicado
+- `_diffMarkDirty` compara `JSON.stringify(newItem)` contra el snapshot sincronizado
+- Mutación in-place SIEMPRE detectable porque el stringified del objeto mutado no coincide con el baseline confirmado
+
+**Puntos de actualización de `_DashweyLastSyncedSnap`:**
+1. Migrator inicial → poblar tras cada batch
+2. `_writeFirebaseDual` → actualizar tras batch OK; borrar key si `deleted:true`
+3. Handler onSnapshot de subcolección → reemplazar completo con items recibidos (verdad del remoto)
+
+**REGLA NUEVA:** el snapshot "último sincronizado" es la fuente de verdad para diff. No depende de capturar prev antes de mutación.
+
+---
+
+### Cambios sesión v1.3.1093 (24 abr 2026) — FIX CRÍTICO mutación in-place no detectada
+**Contexto:** Durante cleanup de items TEST se descubrió que `tests.forEach(g => g.deleted=true); setGastos(raw)` NO marcaba dirty. Los items quedaban con `deleted:true` localmente, pero no se subía nada a subcolecciones → device 2 recibía via onSnapshot versión sin `deleted:true` y sobrescribía → items "resucitados".
+
+**BUG:** `_diffMarkDirty(prevArr, newArr)` comparaba `prev === x` primero (mismo ref → skip). Cuando el caller mutaba objetos in-place dentro del mismo array, `prev` y `new` eran el mismo array con los mismos objetos con los mismos refs → todos los ítems "iguales" → 0 dirty.
+
+Peor: incluso sin el check de ref, si capturábamos `_prev = _state.gastosOp` y luego se muta in-place ANTES de llamar a diff, `prev` y `new` ya tenían los cambios → imposible detectar.
+
+**FIX (v1.3.1093):**
+- Helper nuevo `_snapshotMap(arr)` → construye `{id: JSON.stringify(item)}` **antes** de mutar.
+- `_diffMarkDirty(stateKey, prevSnapshotMap, newArr)` → compara stringify actual contra snapshot pre-mutación.
+- Los 6 setters masivos actualizados: `const _snap = _snapshotMap(_state.X); _state.X = ...; _diffMarkDirty('X', _snap, _state.X)`.
+
+**REGLA NUEVA:** `_diffMarkDirty` requiere snapshot **pre-mutación** (stringified map), no referencia al array.
+
+**COMPORTAMIENTO ESPERADO TRAS FIX:**
+- `g.deleted=true; setGastos(state.raw)` → 1 item dirty → 1 batch.delete en subcolección → device 2 ve desaparecer
+- Soft-delete visible siempre, independiente de cómo el caller construya el nuevo array
+
+---
+
+### Cambios sesión v1.3.1092 (24 abr 2026) — AUTO-ACTIVACIÓN SÍNCRONA
+**Contexto:** v1.3.1091 auto-activaba el flag tras `_doInitialSync` completo vía promise asíncrona. Problema: tardaba ~15s desde arranque app → primeros saves (si ocurrían rápido tras arranque) iban por modo monolítico (14s c/u, 500KB).
+
+**FIX:** mover la auto-activación al inicio de `_doInitialSync`, **síncrona con await**, justo después del `fb.read('state')`. Así el flag está activo ANTES de cualquier merge o save posterior.
+
+**Ubicación:** línea ~37130. El bloque promise-based de v1.3.1091 eliminado.
+
+**EFECTO:** abrir app → auto-activación inmediata (dentro de 1-2s del arranque, antes del primer save posible).
+
+---
+
+### Cambios sesión v1.3.1091 (24 abr 2026) — CIERRE ESTRATEGIA B + AUTO-ACTIVACIÓN
+**Contexto:** Durante testing del device 1 el flag `_DashweyUseSubcollections` se desactivó silenciosamente en algún momento (probable re-carga parcial del contexto window por SW update). El flag no persistía entre sesiones por diseño (memoria).
+
+**FIX:** auto-activación tras `_doInitialSync` exitoso:
+- Si `state._schemaVersion === 2` en Firestore → invocar `_DashweyEnableSubcollections({skipMigrationCheck:true})` automáticamente
+- Así el flag se reactiva en cada arranque / reload SW sin intervención manual
+- Idempotente: si ya está activado, no hace nada
+
+**ESTADO FINAL DE ESTRATEGIA B (validado en producción, device 1):**
+- ✅ Migrator: 704 gastos + 584 pedidos copiados a subcolecciones
+- ✅ Crear gasto: 1 write, ~3-4s (vs 14s antes)
+- ✅ Borrar gasto: 1 write con `batch.delete` (vs 705 writes en 1089)
+- ✅ Sync remoto no contamina dirty (`_DashweyApplyingRemote` guard en 3 merges monolíticos)
+- ✅ Diff granular: `_diffMarkDirty` solo marca items cambiados
+- ✅ Auto-activación: flag se restaura tras cada reload
+
+**PENDIENTE PARA PRÓXIMA SESIÓN:**
+- Testing en device 2 (activar flag por auto-activación tras deploy, verificar sync cross-device)
+- Limpieza del doc raíz: borrar los arrays `gastosOp/historialPedidos/etc` del state monolítico (actualmente duplicados). Requiere diseño cuidadoso — no tocar hasta confirmar que subcolecciones son fuente primaria en TODOS los devices
+- Re-import Loyverse 3657 tickets ahora que subcolecciones soportan volumen ilimitado
+- Diagnóstico bug flag-cae-solo: dejar `window._flagWatch` activo en producción 1-2 días para capturar stack trace
+
+**MÉTRICAS SESIÓN COMPLETA (v1.3.1085-1091, 7 versiones):**
+- 4 bugs críticos cazados y arreglados durante testing
+- 0 regresiones funcionales (todos los fixes fueron aditivos, flag OFF mantiene comportamiento idéntico)
+- Arquitectura escalable: 1MB Firestore limit ya no es bloqueante
+
+**REGLAS AÑADIDAS:**
+- State y DashweyBus viven en closure App. Usar `window._DashweyGetState()` o acceso vía `window.App.State` — `window.State` puede no estar expuesto en algunos contextos
+- Setters masivos deben usar `_diffMarkDirty(key, prev, new)` no `.forEach(markDirty)` — evita re-writes masivos
+- Merges remotos (onSnapshot, _doInitialSync, merges ad-hoc) DEBEN envolver el apply en `window._DashweyApplyingRemote = true` para no contaminar dirty tracking
+
+---
+
+### Cambios sesión v1.3.1090 (24 abr 2026) — ESTRATEGIA B FIX merges monolíticos
+**Contexto:** v1.3.1089 introdujo `_diffMarkDirty` para setters masivos, pero el flag enable seguía disparando 584 writes espontáneos. Diagnóstico: los merges remotos del doc monolítico (onSnapshot, _doInitialSync, renderOrden) invocan `State.set[sk](merged[k])` que pasa por el setter masivo → marca dirty TODOS los items porque son instancias diferentes tras serialización Firestore.
+
+**FIX:** `_DashweyApplyingRemote = true` envuelve los 3 merges monolíticos:
+1. `onSnapshot('state')` (línea ~37319)
+2. `_doInitialSync` merge inicial (línea ~37196)
+3. `renderOrden` context merge (línea ~33972)
+
+Durante merge remoto, `_DashweyMarkDirty` es no-op → no se acumulan dirty items falsos. Solo acciones **locales** del usuario marcan dirty (addVenta manual, edit gasto, etc.).
+
+**IMPORTANTE:** flujos de import legítimo (Loyverse importCatalog, import BB, import manual `_doImport`) NO se protegen con este flag — esos SÍ deben marcar dirty (son cambios reales del usuario que deben propagar).
+
+**COMPORTAMIENTO ESPERADO TRAS v1.3.1090:**
+- Enable flag por primera vez: 0 writes espontáneos (dirty sets vacíos)
+- Snapshot remoto llega: 0 writes spontáneos (guard evita marcado)
+- Venta local: 1 write
+- Borrar gasto: 1 write (batch.delete)
+- Import Loyverse 3657: 3657 writes (correcto)
+
+---
+
+### Cambios sesión v1.3.1089 (24 abr 2026) — ESTRATEGIA B FIX dirty granular
+**Contexto:** Tras activar flag ON en device 1, testing reveló que los setters masivos marcaban TODOS los items del array como dirty (no solo los cambiados). Ej: borrar 1 gasto → 705 writes innecesarios, 10.7s latencia.
+
+**BUG:** los 6 setters masivos (`ventas`, `mermas`, `facturas`, `historialPedidos`, `setGastos`, `setIngresos`) hacían `.forEach(x => markDirty(x.id))` tras asignar el nuevo array. No distinguían entre reemplazo masivo legítimo (import catálogo) y mutación puntual (soft delete).
+
+**FIX:** helper `_diffMarkDirty(stateKey, prevArr, newArr)` DENTRO del closure State:
+- Captura `_prev = _state.X` antes del reemplazo
+- Compara new vs prev por id + `JSON.stringify`:
+  - Item nuevo (id no en prev) → dirty
+  - Misma referencia → skip (no hubo mutación)
+  - Mismo id + contenido diferente → dirty
+  - Desaparición sin deleted:true → NO dirty (no borrar de Firestore)
+- Los 6 setters ahora usan este helper.
+
+**COMPORTAMIENTO ESPERADO TRAS FIX:**
+- Crear gasto via addGasto (granular): 1 write
+- Editar gasto via setGastos(arr modificado): 1 write (solo el editado)
+- Borrar gasto via soft-delete (setGastos con deleted:true): 1 write (batch.delete)
+- Import masivo 3657 tickets Loyverse: 3657 writes (correcto — todos nuevos)
+- Snapshot remoto aplicado: 0 writes (guard _DashweyApplyingRemote)
+
+**COSTE FIREBASE:** Con fix, kiosco típico ~125 writes/día (0.6% del tier Spark 20k). Antes del fix: ~10.700/día (54% del tier).
+
+**TESTING PENDIENTE post-fix:**
+- 7B/7C/7D/7E repetidos — confirmar que soft delete = 1 write
+- Testing multi-device — device 2 activar flag, sync entre ambos
+
+---
+
+### Cambios sesión v1.3.1088 (24 abr 2026) — FIX CRÍTICO State scope
+**Contexto:** Primera prueba de Fase 5 en device real reveló bug grave en el migrator.
+
+**BUG DETECTADO EN DRY RUN:**
+- `await _DashweyMigrateToSubcollections({dryRun:true})` devolvía TODO en 0 counts
+- Datos reales: 704 gastos + 584 pedidos + 2 cuentas (intactos)
+- Diagnóstico: `window.State` es `undefined` en este entorno — la línea `if (typeof State !== 'undefined') window.State = State` (fuera del IIFE App) nunca se ejecutó porque `State` bare no existe fuera del IIFE. `State` sí existe como `window.App.State` (via return del IIFE) y como closure interno para los `window.State.*` que aparecen en el código (que son dead code / protegidos por guards)
+- Mi código Fase 4 leía `window.State?.raw` → obtenía undefined → arrays vacíos → count=0
+
+**FIX APLICADO:**
+- Helper nuevo: `window._DashweyGetState()` con fallback `window.State → window.App.State`
+- Migrator, handler DashweyBus y setter apply usan el helper
+- **Bug histórico colateral arreglado:** la línea `if (typeof State !== 'undefined') window.State = State` ahora tiene `else if (window.App?.State) window.State = window.App.State` → `window.State` ahora SÍ está expuesto correctamente
+- Helper DashweyBus fallback: `window.DashweyBus || window._DashweyBus`
+
+**REGLA NUEVA AÑADIDA A HISTORIAL:**
+- State y DashweyBus viven dentro del cierre IIFE de App. Solo accesibles como:
+  - `window.App.State` / `window.App.DashweyBus` (via return del IIFE)
+  - `window._DashweyBus` (asignado explícitamente dentro del IIFE en línea 10899)
+- `window.State` requiere el fix v1.3.1088 para funcionar correctamente
+- Código NUEVO debe usar `window._DashweyGetState()` o fallback explícito
+
+**ESTADO PRE-REINTENTO:**
+- ✅ Código corregido y validado
+- ⏳ Próximo paso: deployar v1.3.1088 + repetir dry run → debe reportar 704 gastos + 584 pedidos
+
+---
+
+### Cambios sesión v1.3.1087 (24 abr 2026) — PRE-TESTING AUDIT: 4 bugs cazados
+Antes de probar Fase 5, auditoría del código de Fase 4. 4 bugs críticos detectados y corregidos:
+
+**Bug #1 — Loop auto-alimentado en handler snapshot remoto:**
+El setter masivo (`ventas`, `setGastos`, etc.) llama a `save()` internamente → `save()` programa timeout → al disparar el timeout (300ms después) intenta escribir a Firebase → esto es un snapshot remoto RE-enviado como write. Loop.
+**Fix:** flag nuevo `window._DashweyApplyingRemote`. Cuando está `true`, `_DashweyMarkDirty` es no-op. El handler lo pone en `true` durante `State.set[setterName](merged)` y lo restaura después. Resultado: los items del remoto NO se re-marcan dirty → el próximo save() no los re-sube.
+
+**Bug #2 — Race condition dirty entre apply remoto y venta local:**
+300ms entre setter y disparo del timeout era ventana para corrupción de dirty items.
+**Fix:** incluido en #1 — el `_DashweyApplyingRemote` flag cubre toda la ventana síncrona, y el `_DashweyClearDirty` extra al final limpia cualquier filtración.
+
+**Bug #3 — Firestore Rules rechazaban subcolecciones:**
+La regla `/usuarios/{uid}/{document=**}` aplicaba `isValidState()` que exige `hasKnownKey`. Docs de subcolección (una venta individual) no tienen claves como `user`/`productos`/etc → rejected.
+**Fix:** añadida rule específica `/usuarios/{uid}/contextos/{ctx}/datos/state_sub/{sub}/{itemId}` ANTES de la catch-all. Valida solo ownership + size<100KB (items individuales, no monolíticos). Firestore matchea la regla más específica primero.
+⚠️ **DEBE DEPLOYARSE A FIREBASE ANTES DE ACTIVAR FLAG:** `firebase deploy --only firestore:rules --project dashwey-project`
+
+**Bug #5 — Migrator enviaba items deleted a batch:**
+El migrator pasaba TODO el array (incluidos `deleted:true`) al batch writer, que intentaba `batch.delete(ref)` en docs que nunca existieron. Idempotente pero confuso.
+**Fix:** migrator filtra `deleted:true` además de items sin id. Subcolección se crea limpia, sin tombstones iniciales.
+
+**ESTADO PRE-TESTING:**
+- ✅ Código Fase 4 revisado y corregido
+- ✅ Firestore Rules actualizadas (pendiente deploy manual)
+- ✅ Flag sigue OFF — comportamiento externo 100% idéntico a v1.3.1084
+- ⏳ Listo para activación controlada en Fase 5
+
+---
+
+### Cambios sesión v1.3.1086 (24 abr 2026) — ESTRATEGIA B FASE 4
+**Flag sigue OFF** — comportamiento externo 100% idéntico a v1.3.1084. Infraestructura completa para activar en Fase 5.
+
+**AÑADIDO EN FASE 4:**
+- `_DashweySubscribeSubcollection(stateKey, callback)` — suscribe UNA subcolección Firestore; callback recibe items tras cada cambio remoto
+- `_DashweyUnsubscribeAllSubcollections()` — cancela todos los listeners (uso: logout)
+- `_DashweyApplySubcollectionSnapshot(stateKey, items)` — emite evento `_subcollection_snapshot` en DashweyBus para que State lo consuma
+- Handler `DashweyBus.on('_subcollection_snapshot', ...)` dentro del closure de sync:
+  - Merge por ítem usando `_tsOf` (deletedAt > updatedAt > fecha > createdAt)
+  - Guard `_DashweyUseSubcollections` + guard `isSaving` anti-loop
+  - Aplica vía setter masivo (`ventas`, `setGastos`, etc.) con `isSaving=true` durante apply
+  - Limpia dirty items aplicados (no los re-sube)
+- `_DashweyMigrateToSubcollections({dryRun:true/false})` — migrator one-time:
+  - Lee schemaVersion en doc raíz (idempotente)
+  - Escribe cada array transaccional en su subcolección vía batches de 450
+  - Marca `_schemaVersion:2 + _migratedAt` en doc raíz al completar
+  - NO borra arrays del doc raíz automáticamente (decisión manual Fase 5)
+- `_DashweyEnableSubcollections()` / `_DashweyDisableSubcollections()` — encendido/apagado controlado
+  - Enable verifica `schemaVersion:2` antes de activar (protección)
+  - Enable suscribe las 6 subcolecciones tras activar flag
+  - Disable desactiva flag y desuscribe
+
+**RUTA DE ACTIVACIÓN (Fase 5 manual):**
+1. Device A: consola → `await window._DashweyMigrateToSubcollections({dryRun:true})` — ver report
+2. Device A: `await window._DashweyMigrateToSubcollections()` — escribir subcolecciones
+3. Verificar Firebase Console: docs en `state_sub/ventas/*`, etc.
+4. Device A: `await window._DashweyEnableSubcollections()` — activar flag
+5. Operación de prueba (venta / gasto) — verificar escribe a subcolección
+6. Verificar saldos intactos
+7. Device B/C: pull nuevo código → `_DashweyEnableSubcollections({skipMigrationCheck:false})`
+8. Sync cross-device validado → decidir borrado de arrays del doc raíz
+
+**INVARIANTE FASE 2-4:** el flag está OFF. `_writeFirebaseDual(data)` → `_writeFirebase(data)`. Los listeners de subcolecciones NO se crean hasta llamar `_DashweyEnableSubcollections`. El migrator NO se auto-invoca.
+
+---
+
+### Cambios sesión v1.3.1085 (24 abr 2026) — ESTRATEGIA B FASES 2+3
+**Contexto:** arranque de refactor Subcolecciones Firestore. Principio: flag OFF por defecto, cero cambios de comportamiento.
+
+**FASE 2 — INFRAESTRUCTURA (no activada):**
+- Imports Firestore: + `writeBatch`, `deleteDoc`
+- Flag maestro: `window._DashweyUseSubcollections = false` (interruptor principal)
+- Dirty-tracking granular: `window._DashweyDirtyItems = { ventas, gastosOp, ingresosFin, historialPedidos, mermas, facturas }` (cada clave es un `Set<id>`)
+- Mapa subcolecciones: `window._DashweySubcollectionMap` (stateKey → fbName)
+- Helpers: `_DashweyMarkDirty(stateKey, id)` + `_DashweyClearDirty(stateKey)` + `_DashweyWriteSubcollectionBatch(stateKey, items)`
+- Batch writer: chunks de 450 ops (límite Firestore 500), usa `writeBatch.set/delete` según `item.deleted`
+- Ruta subcolecciones: `usuarios/{uid}/contextos/{ctx}/datos/state_sub/{fbName}/{itemId}`
+
+**FASE 3 — INSTRUMENTACIÓN SETTERS + DISPATCHER DUAL:**
+- 13 setters transaccionales marcan dirty en `try/catch` (cero riesgo de ruptura):
+  - Setters masivos: `ventas`, `mermas`, `facturas`, `historialPedidos`, `setGastos`, `setIngresos` (marcan todo el array)
+  - Setters granulares: `addFactura`, `addGasto`, `addMerma`, `addIngreso`, `addPedido`, `addVenta` (marcan por id)
+  - Removers soft-delete: `removeHistorialPedido`, `removeFactura` (marcan para propagar deleted:true)
+- `_writeFirebaseDual(data)` — dispatcher paralelo a `_writeFirebase`:
+  - Flag OFF: `return _writeFirebase(data)` → idéntico al comportamiento pre-refactor
+  - Flag ON: escribe doc raíz SIN arrays transaccionales + batches subcolecciones con items dirty
+  - Marca `_schemaVersion: 2` en doc raíz al escribir en modo ON
+- `save()` invoca `_writeFirebaseDual` en lugar de `_writeFirebase` — único cambio en el flujo existente
+
+**QUÉ NO CAMBIA EN ESTA VERSIÓN (flag OFF):**
+- `save()` sigue escribiendo doc monolítico vía `_writeFirebase` (redirigido por el dispatcher)
+- `onSnapshot` intacto
+- Comportamiento externo 100% idéntico a v1.3.1084
+
+**INVARIANTE CLAVE:** con flag OFF, las Sets `_DashweyDirtyItems` se llenan pero nadie las consume — son memoria intrascendente. No hay leak significativo porque cada save las deja tal cual (el flag OFF ignora el modo subcolecciones completo).
+
+**PRÓXIMOS PASOS (Fase 4+):**
+- Refactor `onSnapshot` para escuchar subcolecciones (no solo doc raíz)
+- Script de migración one-time: leer doc monolítico → crear docs en subcolecciones
+- Testing flag ON en 1 device, validar saldos intactos
+- Re-import Loyverse 3657 tickets
+
+---
+
+### Cambios sesión v1.3.1070 → v1.3.1084 (23 abr 2026) — SESIÓN DE 17 VERSIONES
+**Contexto:** reconstrucción completa datos Dashwey (eran testing) + sync multi-device + modelo BB real.
+
+**FIXES ARQUITECTÓNICOS (v1.3.1070-1078):**
+- **v1.3.1070:** feature `saldoInicial` modelo BB (sin movimiento)
+- **v1.3.1071:** reset TOTAL con purge Firebase + menú reset simplificado
+- **v1.3.1072:** PTR dashboard hace `fb.read` + aplica remoto (antes solo re-render local)
+- **v1.3.1073:** tombstones serializables (`_DashweyLocalDeletedIds.toArray/mergeArray`) + filtro tombstones extendido a TODOS los arrays con id
+- **v1.3.1074:** SOFT DELETE GLOBAL — helper `_nd()` filtra `deleted:true` en 13 getters; `_preserveDeleted` impide perder deleted en setter; KILL hash-guard destructivo → reemplazado por `_DashweyDirty` flag incremental; `_mergeById` con `deletedAt > updatedAt > fecha > createdAt`
+- **v1.3.1075:** COMMAND CHANNEL para resets globales (`_emitSyncCommand`, `_applySyncCommand`, `_lastSyncCommandSeen`) — reset TOTAL/clean-trans/clean-catalog sincronizan entre dispositivos
+- **v1.3.1076:** añadir arrays faltantes al snapshot (facturas, lotesStock, notifsRead, chatUsers, qgSizeIdx); mapping `_sm` incluye `lotesStock`; `_ALL_ID_KEYS` incluye `lotesStock`; eventos DashweyBus post-merge (9 eventos)
+- **v1.3.1077:** CRÍTICO — `save()` ahora usa `window._DashweyBuildSnapshot()` (antes usaba `_archivePayload(_state)` que esquivaba snapshot completo); nuevo `State.raw.*` para acceso sin filtro `deleted:true` (14 arrays); merges usan raw para que items deleted viajen a Firebase
+- **v1.3.1078:** FIX login en dispositivo nuevo — TTL 24h en syncCommand (evita re-ejecutar reset stale); guard "primera vez" (seen===0 + reset kind → marcar visto sin ejecutar); guard Firebase sync pending en `_checkCuentaOnboarding` (reintentar 1s × 10); lectura remota explícita antes de mostrar onboarding
+
+**RENDER + SYNC SPEED (v1.3.1079-1083):**
+- **v1.3.1079:** snap cards re-render al entrar al Dashboard vía goTab(1) (antes no se refrescaban si el usuario estaba en otra tab cuando llegaba sync)
+- **v1.3.1080:** Modelo BB REAL — `saldoInicialFecha` campo. `_bbRecalcSaldos` filtra movimientos con `fecha >= saldoInicialFecha`. Cuentas sin fecha → epoch 0 (compat total). Sheet "Cambiar saldo inicial" estampa fecha automáticamente
+- **v1.3.1081:** `updateCuenta` estampa `updatedAt`, `addCuenta` estampa `createdAt`+`updatedAt` → `_mergeById` respeta prioridad correcta
+- **v1.3.1082:** FIX CICLO OSCILANTE — `_recalcSaldosListener` no escucha evento `cuenta` (auto-alimentación); guard `isSaving` en recalc (no correr durante aplicación snapshot remoto); `updateCuenta` solo estampa `updatedAt` si NO es solo `saldo` (derivado)
+- **v1.3.1083:** SYNC RÁPIDO — debounce 800→300ms; modo urgente (0ms) en setters críticos (`_DashweyUrgentSave=true`) para addCuenta, addGasto, addIngreso, addVenta, addPedido, etc; grace period 3000→1000ms
+
+**IMPORT LOYVERSE (v1.3.1084):**
+- **v1.3.1084:** `_lvCommitCatalog` usa soft-delete en placeholders BB y proveedores/productos Loyverse obsoletos (en lugar de omitir). Usa `State.raw.*` para acceder incluyendo ya-deleted. Tombstones viajan vía sync → consistencia multi-dispositivo
+- Import catálogo Loyverse EJECUTADO: 13 proveedores `prov_lv_*` + N productos + 13 `prov_bb_*` tombstoneados ✅
+- Import receipts Loyverse EJECUTADO: 3657 tickets → pero REVERTIDO al final de sesión por exceder límite 1MB
+
+**NUEVOS REGISTROS EN EL KNOWLEDGE:**
+- Modelo cuenta: añadidos campos `saldoInicial`, `saldoInicialFecha`, `updatedAt`, `createdAt`
+- Setter universal: `updateCuenta` estampa `updatedAt` excepto si solo cambia `saldo`
+- Command Channel: 3 kinds (`clean-trans`, `clean-catalog`, `total`). TTL 24h. Idempotente por dispositivo.
+- Soft delete: 13 getters filtran `deleted:true` via `_nd()`. `State.raw.*` para 14 arrays CRÍTICOS acceso sin filtro.
+- Urgent save: `window._DashweyUrgentSave = true` antes de save() → debounce 0ms. Se autoresetea tras cada save.
+
+**REGLAS APRENDIDAS HOY (AÑADIR A ANTI-BUG):**
+1. NUNCA escuchar en un listener el mismo evento que el listener emite tras ejecutarse (auto-alimentación)
+2. `save()` DEBE pasar por `_buildLocalSnapshot` completo, NUNCA saltarse a `_archivePayload(_state)`
+3. `_mergeById` requiere `updatedAt` en items para decidir autoridad — todo `add*` y `update*` debe estamparlo
+4. Datos DERIVADOS (`saldo` de cuenta) NO deben estampar `updatedAt` — se recalculan del mismo modo en todos los dispositivos
+5. Soft-delete es OBLIGATORIO para consistencia multi-dispositivo — omitir un ítem sin marcarlo deleted lo resucita vía sync
+6. Firestore doc LIMIT ES 1MB HARD — no hay tier que lo quita → subcolecciones es requisito, no optimización
+7. Con uso real (>20 ventas/día) Strategy A (doc monolítico) se rompe en semanas
+
+**ESTADO FINAL DE DATOS (al cierre de sesión):**
+- Cuentas: Kiosco (saldoInicial: 9462.90 €, fecha: hoy) + Santander (saldoInicial: 28984.48 €, fecha: hoy) ✅
+- Gastos BB: 703 movimientos (18m) ✅
+- Catálogo Loyverse: 13 proveedores + productos ✅
+- Ventas Loyverse: REVERTIDAS (estaban subiendo correctamente a Firebase pero superaban 1MB). Pendiente re-importar tras Estrategia B.
+
+**RUTA NEXT SESIÓN (Estrategia B):**
+1. Diseño detallado: 1 doc raíz `/state/{uid}` para settings/cuentas/user + subcolecciones `/state/{uid}/ventas/{id}`, `/gastos/{id}`, `/ingresos/{id}`, `/pedidos/{id}`, `/mermas/{id}`, `/facturas/{id}`
+2. Refactor `save()`: en lugar de un write monolítico, hace writes granulares por ítem modificado
+3. Refactor `onSnapshot`: por subcolección, con filtros (p.ej. ventas últimos 30d cacheadas, resto on-demand)
+4. Migración: leer doc monolítico actual → crear docs individuales en subcolecciones → borrar datos antiguos del doc raíz
+5. Testing: verificar sync multi-device + offline + queries
+6. Re-import Loyverse receipts sobre nueva arquitectura → 42k ventas/año viables indefinidamente
 
 ### Cambios sesión v1.3.1007
 - **Lote P2 — Import catálogo Loyverse (destructivo):**
