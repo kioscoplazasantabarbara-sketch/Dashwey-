@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1096-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1097-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1096-dev</title>
+<title>Dashwey v1.3.1097-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13046,7 +13046,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1096-dev';
+ const _APP_VERSION = 'v1.3.1097-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15619,6 +15619,261 @@ const ui = (() => {
  // ── v1.3.1050: Menu unificado Reset/Limpieza como subpágina de Settings ─
  // Usa sdSubOpen (patrón interno de settings drawer) para renderizar.
  // v1.3.1071: Menú refactorizado — jerarquía clara por destructividad
+ // ── v1.3.1097: Reset subcolecciones Firestore ──────────────────
+ // Borra las 6 subcolecciones Firestore (ventas, gastos, ingresos,
+ // pedidos, mermas, facturas). Usa writeBatch (max 500 ops/batch).
+ // Previo reset local de arrays transaccionales.
+ // NO toca: productos, proveedores, cuentas, settings, lotesStock.
+ async function _resetSubcollectionsFirestore() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  var fb = window._DashweyFirebase;
+  if (!fb || !fb.enabled || !fb.ready) { showToast('⚠️ Firebase no disponible'); return; }
+  // Conteo previo
+  var subs = ['ventas','gastos','ingresos','pedidos','mermas','facturas'];
+  window._showDestructiveConfirm({
+   title: 'Reset subcolecciones Firestore',
+   message: '⚠️ Borra las 6 subcolecciones (ventas/gastos/ingresos/pedidos/mermas/facturas) del servidor.\n\nTambién borra ventas/gastos/ingresos/pedidos/mermas/facturas/lotes/cierres locales.\n\nCONSERVA: productos, proveedores, cuentas, settings.\n\n🌐 Se propaga a todos los dispositivos.\n\n¿Continuar?',
+   confirmText: 'Reset subcolecciones',
+   onConfirm: async function() {
+    try {
+     showToast('🧹 Borrando subcolecciones...');
+     // Import dinámico de los símbolos Firestore necesarios
+     var mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+     // Resolver _db y _uid vía window._DashweyFirebase (closure no accesible)
+     // Alternativa: usar la propia API fb pero no expone _db. Usamos el ref directo.
+     var uid = (fb.uid) || null;
+     if (!uid) { showToast('⚠️ uid no disponible'); return; }
+     var ctx = window._DashweyActiveContext || 'business';
+     var db = mod.getFirestore();
+     var totalDel = 0;
+     for (var si = 0; si < subs.length; si++) {
+      var subName = subs[si];
+      var colRef = mod.collection(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', subName);
+      var snap = await mod.getDocs(colRef);
+      if (snap.empty) continue;
+      // Batch max 500 ops
+      var docs = snap.docs;
+      for (var i = 0; i < docs.length; i += 450) {
+       var batch = mod.writeBatch(db);
+       var slice = docs.slice(i, i + 450);
+       slice.forEach(function(d){ batch.delete(d.ref); });
+       await batch.commit();
+       totalDel += slice.length;
+      }
+     }
+     // Limpiar state local también — usar setters oficiales con firma real
+     // (ver State.set: ventas, historialPedidos, mermas, facturas + setGastos/setIngresos/setLotesStock)
+     try {
+      if (State.set.ventas) State.set.ventas([]);
+      if (State.set.setGastos) State.set.setGastos([]);
+      if (State.set.setIngresos) State.set.setIngresos([]);
+      if (State.set.historialPedidos) State.set.historialPedidos([]);
+      if (State.set.mermas) State.set.mermas([]);
+      if (State.set.facturas) State.set.facturas([]);
+      if (State.set.setLotesStock) State.set.setLotesStock([]);
+      // cierresCaja no tiene setter de reemplazo directo — se limpia vía addCierre opuesto
+      // Forzar save urgente
+      try { window._DashweyUrgentSave = true; } catch(_) {}
+      try { window._DashweySavingCtrl && window._DashweySavingCtrl.resetHash && window._DashweySavingCtrl.resetHash(); } catch(_) {}
+     } catch(eLocal) { console.warn('[Dashwey/ResetSub] local:', eLocal); }
+     // Limpiar doc raíz también
+     try { if (typeof window._DashweyCleanRootDoc === 'function') await window._DashweyCleanRootDoc(); } catch(_) {}
+     showToast('✅ ' + totalDel + ' docs borrados · subcolecciones vacías');
+     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 500);
+    } catch(e) {
+     console.error('[Dashwey/ResetSub]', e);
+     showToast('⚠️ Error: ' + (e.message || e));
+    }
+   }
+  });
+ }
+
+ // ── v1.3.1097: Import Loyverse sales-summary CSV ────────────────
+ // Header: Fecha,Ventas brutas,Reembolsos,Descuentos,Ventas netas,Costo de los bienes,Beneficio bruto,Margen,Impuestos
+ // Formato fecha: d/m/yy
+ // 1 fila CSV = 1 venta diaria agregada
+ // Saltar filas con Ventas netas = 0
+ // Idempotente: IDs deterministas `v_lvsum_YYYYMMDD`, borra previos origen='import_loyverse'
+ function _importLoyverseSalesSummaryCsv() {
+  var inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.csv,text/csv';
+  inp.style.display = 'none';
+  document.body.appendChild(inp);
+  inp.onchange = function(ev) {
+   var file = ev.target.files && ev.target.files[0];
+   if (!file) { document.body.removeChild(inp); return; }
+   var reader = new FileReader();
+   reader.onload = function(ev2) {
+    try { _lvSumParseAndPreview(ev2.target.result); }
+    catch(err) { console.error('[Dashwey/LVSum]', err); showToast('⚠️ ' + (err.message||err)); }
+    finally { try { document.body.removeChild(inp); } catch(_) {} }
+   };
+   reader.readAsText(file, 'utf-8');
+  };
+  inp.click();
+ }
+
+ function _lvSumParseDate(s) {
+  // d/m/yy → Date ISO local 12:00
+  if (!s) return null;
+  var parts = String(s).trim().split('/');
+  if (parts.length !== 3) return null;
+  var day = parseInt(parts[0], 10);
+  var mon = parseInt(parts[1], 10);
+  var yr  = parseInt(parts[2], 10);
+  if (yr < 100) yr = 2000 + yr;
+  if (!day || !mon || !yr) return null;
+  var d = new Date(yr, mon - 1, day, 12, 0, 0);
+  return isNaN(d.getTime()) ? null : d;
+ }
+
+ function _lvSumParseAndPreview(csvText) {
+  var lines = csvText.split(/\r?\n/).filter(function(l){ return l.trim(); });
+  if (lines.length < 2) { showToast('⚠️ CSV vacío'); return; }
+  // Header esperado
+  var header = lines[0];
+  if (header.indexOf('Ventas netas') < 0 || header.indexOf('Fecha') < 0) {
+   showToast('⚠️ Header incorrecto · se esperaba columnas Fecha + Ventas netas');
+   return;
+  }
+  var rows = [];
+  var minDate = '2023-01-01';
+  var totalNetas = 0, totalCoste = 0, skipped0 = 0, skippedPre = 0;
+  for (var i = 1; i < lines.length; i++) {
+   var cols = lines[i].split(',');
+   if (cols.length < 6) continue;
+   var fecha = _lvSumParseDate(cols[0]);
+   if (!fecha) continue;
+   var iso = fecha.toISOString().slice(0,10); // YYYY-MM-DD
+   if (iso < minDate) { skippedPre++; continue; }
+   var netas = parseFloat(cols[4]) || 0;
+   var coste = parseFloat(cols[5]) || 0;
+   if (netas === 0) { skipped0++; continue; }
+   rows.push({ fecha: fecha, iso: iso, netas: netas, coste: coste });
+   totalNetas += netas; totalCoste += coste;
+  }
+  if (!rows.length) { showToast('⚠️ Sin filas válidas tras filtro'); return; }
+
+  // Preview
+  var _parts = [];
+  _parts.push('📊 Import Loyverse (sales-summary)');
+  _parts.push('');
+  _parts.push('Ventas detectadas: ' + rows.length + ' días');
+  _parts.push('Desde: ' + rows[rows.length-1].iso + '  →  Hasta: ' + rows[0].iso);
+  _parts.push('');
+  _parts.push('Total netas: ' + totalNetas.toFixed(2) + '€');
+  _parts.push('Total coste: ' + totalCoste.toFixed(2) + '€');
+  _parts.push('Margen bruto: ' + (totalNetas - totalCoste).toFixed(2) + '€');
+  _parts.push('');
+  _parts.push('Omitidos:');
+  _parts.push('  • ' + skipped0 + ' días con ventas = 0');
+  _parts.push('  • ' + skippedPre + ' filas anteriores a ' + minDate);
+  _parts.push('');
+  _parts.push('⚠️ Idempotente: reemplaza ventas con origen=import_loyverse previas.');
+  _parts.push('');
+  _parts.push('¿Confirmar import?');
+
+  window._showDestructiveConfirm({
+   title: 'Import Loyverse · Vista previa',
+   message: _parts.join('\n'),
+   confirmText: 'Importar ' + rows.length + ' ventas',
+   onConfirm: function() { _lvSumCommit(rows); }
+  });
+ }
+
+ function _lvSumCommit(rows) {
+  try {
+   // Borrar ventas previas origen=import_loyverse (idempotencia)
+   var ventasPrev = (State.get.ventas ? State.get.ventas() : []) || [];
+   var ventasKeep = ventasPrev.filter(function(v){ return v && v.origen !== 'import_loyverse'; });
+   var nBorradas = ventasPrev.length - ventasKeep.length;
+
+   // Cuenta destino: primary (Kiosco)
+   var cuentasDashwey = State.get.cuentas() || [];
+   var primary = cuentasDashwey.find(function(c){ return c.isPrimary; });
+   var cuentaId = primary ? primary.id : (cuentasDashwey[0] ? cuentasDashwey[0].id : null);
+
+   // Construir nuevas ventas
+   var nuevas = [];
+   rows.forEach(function(r){
+    var yyyymmdd = r.iso.replace(/-/g, '');
+    var id = 'v_lvsum_' + yyyymmdd;
+    var fechaISO = r.fecha.toISOString();
+    var netas = Math.round(r.netas * 100) / 100;
+    var coste = Math.round(r.coste * 100) / 100;
+    var margen = Math.round((netas - coste) * 100) / 100;
+    nuevas.push({
+     id: id,
+     negocioId: (State.get.settings().negocioId) || 'local',
+     ticketId: 'lvsum_' + yyyymmdd,
+     fecha: fechaISO,
+     metodo: 'efectivo',
+     total: netas,
+     coste: coste,
+     margen: margen,
+     cuentaId: cuentaId,
+     items: [{
+      prodId: '_lvsum',
+      nombre: 'Ventas del día (Loyverse)',
+      qty: 1,
+      pvp: netas,
+      coste: coste,
+      margen: margen
+     }],
+     metaTipo: 'loyverse_import',
+     origen: 'import_loyverse',
+     _syntheticDaily: true
+    });
+   });
+
+   // Escribir via State.set.ventas (setter de reemplazo con diff+merge+save)
+   var ventasFinal = ventasKeep.concat(nuevas);
+   if (State.set.ventas) {
+    State.set.ventas(ventasFinal);
+   } else {
+    console.warn('[Dashwey/LVSum] setter State.set.ventas no disponible');
+    showToast('⚠️ Setter no disponible');
+    return;
+   }
+   // Emitir evento venta para refrescar UI
+   try { DashweyBus.emit('venta'); } catch(_) {}
+   try { DashweyBus.emit('full'); } catch(_) {}
+
+   showToast('✅ ' + nuevas.length + ' ventas importadas (' + nBorradas + ' previas sustituidas)');
+   setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 400);
+  } catch(e) {
+   console.error('[Dashwey/LVSum] commit:', e);
+   showToast('⚠️ Error: ' + (e.message || e));
+  }
+ }
+
+ // ── v1.3.1097: Revertir import Loyverse sales-summary ─────────
+ function _revertLoyverseSalesSummary() {
+  if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirm no disponible'); return; }
+  var ventasPrev = (State.get.ventas ? State.get.ventas() : []) || [];
+  var n = ventasPrev.filter(function(v){ return v && v.origen === 'import_loyverse'; }).length;
+  if (!n) { showToast('ℹ️ Sin ventas import_loyverse'); return; }
+  window._showDestructiveConfirm({
+   title: 'Revertir import Loyverse',
+   message: '⚠️ Se eliminarán ' + n + ' ventas con origen=import_loyverse.\n\n¿Continuar?',
+   confirmText: 'Revertir',
+   onConfirm: function() {
+    try {
+     var keep = ventasPrev.filter(function(v){ return v && v.origen !== 'import_loyverse'; });
+     if (State.set.ventas) State.set.ventas(keep);
+     try { DashweyBus.emit('venta'); } catch(_) {}
+     try { DashweyBus.emit('full'); } catch(_) {}
+     showToast('🧹 ' + n + ' ventas import_loyverse eliminadas');
+     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 300);
+    } catch(e) {
+     console.error('[Dashwey/LVSumRevert]', e);
+     showToast('⚠️ Error: ' + (e.message || e));
+    }
+   }
+  });
+ }
+
  function _openResetMenu() {
   var _opts = [
    // ═══ BACKUPS (no destructivos) ═══
@@ -15637,6 +15892,9 @@ const ui = (() => {
    // ═══ RESETS GRADUALES (destructivos, jerarquía clara) ═══
    { grp:'🧨 Resets', icon:'🧽', iconBg:'#FEE2E2', title:'Limpiar transacciones', sub:'Borra ventas/pedidos/mermas · CONSERVA catálogo + cuentas + saldos', fn:'_cleanTransactionsDashwey' },
    { grp:'🧨 Resets', icon:'🧹', iconBg:'#FECACA', title:'Limpiar todo menos catálogo', sub:'Borra transacciones + saldos · CONSERVA productos + proveedores + cuentas', fn:'_cleanExceptCatalog' },
+   { grp:'🎯 Limpiezas específicas', icon:'📊', iconBg:'#E0F2FE', title:'Import Loyverse sales-summary', sub:'CSV diario agregado · origen=import_loyverse · idempotente', fn:'_importLoyverseSalesSummaryCsv' },
+   { grp:'🎯 Limpiezas específicas', icon:'🧹', iconBg:'#DBEAFE', title:'Revertir import Loyverse sum.', sub:'Elimina ventas origen=import_loyverse', fn:'_revertLoyverseSalesSummary' },
+   { grp:'🧨 Resets', icon:'🔥', iconBg:'#FCA5A5', title:'Reset subcolecciones Firestore', sub:'Borra 6 subcol Firestore · CONSERVA catálogo + cuentas', fn:'_resetSubcollectionsFirestore' },
    { grp:'🧨 Resets', icon:'🧨', iconBg:'#FCA5A5', title:'Reset TOTAL (local + Firebase)', sub:'⚠️ Borra TODO · incluye cuentas y Firebase · CONSERVA solo perfil/settings/login', fn:'_resetTotalDashwey' }
   ];
   var _grupos = {};
@@ -16505,7 +16763,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary };
 })();
 
 // ══════════════════════════════════════════
