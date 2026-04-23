@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1107-dev";
+ var CURRENT_CACHE = "dashwey-v1-3-1108-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1107-dev</title>
+<title>Dashwey v1.3.1108-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1236,7 +1236,14 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
  border: none; background: var(--red); color: #fff;
  font-size: var(--fs-lg); font-weight: var(--fw-bold);
  font-family: var(--font); cursor: pointer;
+ /* v1.3.1108: fix WebView — asegurar tap detecta */
+ touch-action: manipulation;
+ -webkit-tap-highlight-color: rgba(255,255,255,0.15);
+ position: relative; z-index: 2;
+ transition: opacity 0.15s ease;
+ margin-top: 14px;
 }
+.dps-apply-btn:active { opacity: 0.8; }
 
 /* ── § 2. RESET BASE ── */
 *, *::before, *::after {
@@ -12628,6 +12635,34 @@ const Utils = (() => {
  const applyBtn = document.querySelector('#dps-custom-form .dps-apply-btn');
  if (applyBtn) {
  applyBtn.textContent = config.customLabel || 'Aplicar periodo';
+ // v1.3.1108: listener redundante — protege contra fallos de onclick inline en WebView
+ // Idempotente: si ya hay, clonar el botón limpia listeners viejos
+ const cloned = applyBtn.cloneNode(true);
+ applyBtn.parentNode.replaceChild(cloned, applyBtn);
+ cloned.addEventListener('click', function(ev) {
+  ev.stopPropagation();
+  try {
+   const sheet = document.getElementById('dash-period-sheet');
+   const cfg = sheet?._periodConfig;
+   const desdeRaw = document.getElementById('dps-desde')?.value;
+   const hastaRaw = document.getElementById('dps-hasta')?.value;
+   if (!desdeRaw || !hastaRaw) { showToast('⚠️ Selecciona ambas fechas'); return; }
+   const desdeH = document.getElementById('dps-desde-h')?.value || '00:00';
+   const hastaH = document.getElementById('dps-hasta-h')?.value || '23:59';
+   const desde = desdeRaw.length === 10 ? desdeRaw + 'T' + desdeH : desdeRaw;
+   const hasta = hastaRaw.length === 10 ? hastaRaw + 'T' + hastaH : hastaRaw;
+   if (new Date(hasta) <= new Date(desde)) { showToast('⚠️ La fecha/hora final debe ser posterior'); return; }
+   if (cfg?.onCustom) {
+    cfg.onCustom(desde, hasta);
+    _onPeriodSheetClose();
+   } else if (window.App?.dash?.applyGlobalCustom) {
+    window.App.dash.applyGlobalCustom();
+   }
+  } catch(e) {
+   console.error('[Dashwey] Apply period listener:', e);
+   showToast('⚠️ Error al aplicar periodo');
+  }
+ }, { passive: false });
  }
 
  // Reset form personalizado
@@ -13065,7 +13100,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1107-dev';
+ const _APP_VERSION = 'v1.3.1108-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40514,7 +40549,7 @@ window._almCarritoOptions = function() {
  <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-hasta-h" value="23:59" style="margin-top:6px">
  </div>
  </div>
- <button class="dps-apply-btn" onclick="App.dash._applyPeriodSheet()">Aplicar periodo</button>
+ <button class="dps-apply-btn" id="dps-apply-btn" type="button" data-action="apply-period" onclick="try{event.stopPropagation();App.dash._applyPeriodSheet();}catch(e){console.error('[Dashwey] Apply periodo:',e);}">Aplicar periodo</button>
  </div>
  </div>
 </div>
