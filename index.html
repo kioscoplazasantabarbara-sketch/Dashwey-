@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1136-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1137-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1136-dev</title>
+<title>Dashwey v1.3.1137-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11532,10 +11532,10 @@ function _calcMargenProd(p) {
  var pCompra = p.precioCompra || 0;
  var udsCaja = p.udscaja || p.stockMinimo || 0;
  var ivaRaw = p.iva;
- // IVA: default 10% si no definido
- var ivaPct = (ivaRaw === null || ivaRaw === undefined || ivaRaw === '')
- ? 10
- : parseFloat(String(ivaRaw).replace('%', '')) || 10;
+ // v1.3.1137 FIX#5: usar helper global _ivaPct (con fallback inline si aún no cargó)
+ var ivaPct = (typeof window !== 'undefined' && window._ivaPct)
+  ? window._ivaPct(ivaRaw)
+  : ((ivaRaw === null || ivaRaw === undefined || ivaRaw === '') ? 10 : (parseFloat(String(ivaRaw).replace('%', '')) || 10));
 
  // Validación: datos insuficientes
  if (!pvp || pvp <= 0 || !pCompra || pCompra <= 0) {
@@ -11642,8 +11642,8 @@ const KPI = (() => {
  const totales = {};
  pedidos.forEach(ped => {
  (ped.items || []).forEach(item => { // v1.3.526: guard ped.items undefined
-   const _iva = item.iva !== undefined ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
-   const coste = item.ncajas * item.precio * _iva; // B-8: IVA real por item
+   // v1.3.1137 FIX#5: usar helper _ivaFactor (antes: inline duplicado)
+   const coste = item.ncajas * item.precio * _ivaFactor(item.iva);
  totales[item.prodId] = (totales[item.prodId] || 0) + coste;
  });
  });
@@ -11667,9 +11667,8 @@ const KPI = (() => {
  pedidos.forEach(ped => {
  let gastoPed = 0;
   (ped.items || []).forEach(item => { // v1.3.535: guard items undefined — consistente con getTopCompras
- // v1.3.585: leer IVA real del item — misma lógica que getTopCompras (FE-C1 class fix)
- const _ivaG = item.iva != null ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
- const c = item.ncajas * item.precio * _ivaG;
+ // v1.3.1137 FIX#5: usar helper _ivaFactor en lugar de inline duplicado
+ const c = item.ncajas * item.precio * _ivaFactor(item.iva);
  gastoPed += c;
  });
  totales[ped.provId] = (totales[ped.provId] || 0) + gastoPed;
@@ -11773,11 +11772,14 @@ const KPI = (() => {
 
  // v1.3.294: FIX — ventas v9.5.x tienen items[], no pvp/qty en raíz
  // ventaIngresos() y ventaUds() respetan ambos schemas (legacy + moderno)
- const _ventaIng = (v) => {
- if (v.total > 0) return v.total;
- if (v.items && v.items.length) return v.items.reduce((s,i) => s + (i.pvp||0)*(i.qty||0), 0);
- return (v.pvp||0)*(v.qty||0);
- };
+ // v1.3.1137 FIX#7: usar FinEngine.ventaIngresos (misma lógica, una sola fuente)
+ // Antes: _ventaIng local usaba `v.total > 0` sin chequear != null → ventas total=0 caían a items
+ //        Ahora FinEngine.ventaIngresos usa `v.total != null && v.total > 0` — comportamiento unificado
+ const _ventaIng = (v) => (typeof FinEngine !== 'undefined' && FinEngine.ventaIngresos)
+  ? FinEngine.ventaIngresos(v)
+  : (v.total != null && v.total > 0 ? v.total
+    : (v.items && v.items.length ? v.items.reduce((s,i) => s + (i.pvp||0)*(i.qty||0), 0)
+    : (v.pvp||0)*(v.qty||0)));
  const _ventaUds = (v) => {
  if (v.items && v.items.length) return v.items.reduce((s,i) => s + (i.qty||0), 0);
  return (v.qty||0);
@@ -11851,8 +11853,8 @@ const KPI = (() => {
  (ped.items || []).forEach(item => { // v1.3.525: guard ped.items undefined
  // v1.3.585: leer IVA real del item; guard udscaja=0 → excluir del cálculo de ROI
  if (!item.udscaja) return; // udscaja=0 → vta=0 → ROI imposible de calcular
- const _ivaR = item.iva != null ? (1 + parseFloat(String(item.iva||'10').replace('%',''))/100) : 1.10;
- const inv = item.ncajas * item.precio * _ivaR;
+ // v1.3.1137 FIX#5: usar helper _ivaFactor
+ const inv = item.ncajas * item.precio * _ivaFactor(item.iva);
  const vta = item.ncajas * item.udscaja * item.pvp;
  const gain = vta - inv;
  if(!map[item.prodId]) map[item.prodId] = { inv:0, gain:0 };
@@ -11889,7 +11891,10 @@ const KPI = (() => {
  function getBeneficioNeto(period) {
  // ── Usa FinEngine para coherencia total entre módulos ────────
  const inv = getKPIs(period).inv;
- const ventas = ventasEnPeriodo(period);
+ // v1.3.1137 FIX#3: filtrar ventas por _isKpiVisible (excluye ajuste/pendiente/scope)
+ // Sin esto, ventas con metaTipo:'ajuste' o scope ajeno inflaban beneficio
+ const _visible = window._isKpiVisible || ((x) => !!x);
+ const ventas = ventasEnPeriodo(period).filter(_visible);
 
  // Calcular con FinEngine utils (misma lógica que el resto de la app)
  let vta = 0, costeVentas = 0;
@@ -11901,13 +11906,17 @@ const KPI = (() => {
  ? FinEngine.ventaCoste(v)
  : (v.items ? v.items.reduce((s,i)=>s+i.qty*(i.coste||0),0) : (v.qty||0)*(v.coste||0));
  });
- const margenBruto = vta - costeVentas;
+ // v1.3.1137 FIX#8: renombrado de margenBruto (€) → beneficioBruto (€)
+ // para no colisionar con FinEngine.margenBruto (% relativo).
+ // Se mantiene `margenBruto` como alias por compatibilidad con callers externos.
+ const beneficioBruto = vta - costeVentas;
+ const margenBruto = beneficioBruto; // alias legacy
  const nTickets = new Set(ventas.map(v => v.ticketId || v.id)).size;
  const valorInv = typeof FinEngine !== 'undefined'
  ? FinEngine.valorStock()
  // v1.3.593: coste unitario real
  : State.get.productos().reduce((s,p) => { var uds=p.udscaja||1; return s+(p.stockActual||0)*((p.precioCompra||0)/uds); }, 0);
- return { beneficio: margenBruto, inv, vta, costeVentas, nTickets, valorInv };
+ return { beneficio: beneficioBruto, beneficioBruto, margenBruto, inv, vta, costeVentas, nTickets, valorInv };
  }
 
  /* ── getPresetRange(type) — v1.2.32
@@ -11987,6 +11996,21 @@ const KPI = (() => {
  * ═══════════════════════════════════════════════════════════════ */
 const FinEngine = (() => {
 
+ // v1.3.1137 FIX#5: helpers únicos para IVA (antes: 7 duplicaciones inline)
+ // _ivaPct(raw): devuelve porcentaje numérico (10, 21, etc.), default 10
+ // _ivaFactor(raw): devuelve factor (1.10, 1.21, etc.) para multiplicar base→total
+ function _ivaPct(raw) {
+  if (raw === null || raw === undefined || raw === '') return 10;
+  const n = parseFloat(String(raw).replace('%', ''));
+  return isNaN(n) ? 10 : n;
+ }
+ function _ivaFactor(raw) { return 1 + _ivaPct(raw) / 100; }
+ // Exponer globalmente para uso fuera de FinEngine
+ if (typeof window !== 'undefined') {
+  window._ivaPct = _ivaPct;
+  window._ivaFactor = _ivaFactor;
+ }
+
  // ── Utilidad: parsear moneda a 2 decimales ────────────────────
  function money(n) {
  return Math.round((n || 0) * 100) / 100;
@@ -12048,12 +12072,19 @@ const FinEngine = (() => {
  }
 
  // ── Utilidad: calcular coste de una venta ────────────────────────
+ // v1.3.1137 FIX#2: prioridad de lectura:
+ //   1. v.costeReal (FIFO — coste histórico al vender, captura inmutable)
+ //   2. suma de i.coste por línea (guardado al crear venta)
+ //   3. legacy: coste desde producto actual
  function ventaCoste(v) {
  if (!v) return 0;
+ // 1. FIFO coste real (fuente más fiable — histórico real del momento)
+ if (v.costeReal != null && v.costeReal > 0) return v.costeReal;
+ // 2. Línea por línea
  if (v.items && v.items.length) {
  return v.items.reduce((s, i) => s + (i.qty || 0) * (i.coste || 0), 0);
  }
- // Legacy: coste desde producto o campo coste
+ // 3. Legacy: coste desde producto o campo coste
  const p = State.get.prod(v.prodId);
  return (v.qty || 0) * (v.coste || p?.precioCompra || 0);
  }
@@ -12067,13 +12098,13 @@ const FinEngine = (() => {
   var _ncajas = it.ncajas || 1;
   var _precio = it.precio || 0;
   var _base1 = _ncajas * _precio;
+  // v1.3.1137 FIX#5: usar helper _ivaFactor — antes inline duplicado
   var _ivaRaw = it.iva != null ? it.iva : null;
   if (!_ivaRaw) {
    var _prod = State.get.prod ? State.get.prod(it.prodId) : null;
-   _ivaRaw = (_prod && _prod.iva) ? _prod.iva : '10%';
+   _ivaRaw = (_prod && _prod.iva) ? _prod.iva : null;
   }
-  var _ivaPct = parseFloat(String(_ivaRaw).replace('%', '')) / 100 || 0;
-  _base += _base1 * (1 + _ivaPct);
+  _base += _base1 * _ivaFactor(_ivaRaw);
  }
  // v1.3.642: cargos extra (RE, Punto Verde, cargo custom)
  var _ce = ped.cargosExtra || {};
@@ -12117,8 +12148,11 @@ const FinEngine = (() => {
  // v1.3.294: ingresosFin incluidos para beneficioNeto y margenBruto correctos
  function revenue(range) {
  const ventas = State.get.ventas();
+ // v1.3.1137 FIX#4: aplicar _isKpiVisible también a ventas (simetría con ingresosFin)
+ // Sin esto, ventas con scope distinto se mezclaban con ingresos del scope activo
  const vtaTotal = ventas
  .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
+ .filter(v => _isKpiVisible(v))
  .reduce((s, v) => s + ventaIngresos(v), 0);
  // v1.3.1045: FIX CRÍTICO doble conteo
  // Ingresos financieros: EXCLUIR los que ya están cubiertos por ventas (mismo dinero, dos registros)
@@ -12298,17 +12332,28 @@ const FinEngine = (() => {
  }
 
  // ── 7. STOCK ─────────────────────────────────────────────────────
- // valorStock(): valor de inventario al COSTE UNITARIO REAL (precioCompra / udscaja)
- // v1.3.593: precioCompra es precio de BULTO — dividir entre udscaja para obtener coste unitario
- // Si udscaja no definido → usa precioCompra directamente como fallback
+ // valorStock(): valor de inventario al COSTE HISTÓRICO REAL vía FIFO
+ // v1.3.1137: prioriza lotesStock (coste al momento de compra) sobre precioCompra actual.
+ //             Sin lotes → fallback al precio actual prorrateado (legacy).
+ //             Garantiza que el valor NO cambia al editar precioCompra en ficha producto.
  function valorStock() {
- return money((State.get.productos() || [])
- .reduce((s, p) => {
- const uds = p.udscaja || 1;
- const cu = (p.precioCompra || 0) / uds;
- return s + (p.stockActual || 0) * cu;
- }, 0)
- );
+  const lotes = State.get.lotesStock ? (State.get.lotesStock() || []) : [];
+  if (lotes.length > 0) {
+   // Suma qtyRestante × costeUnit de todos los lotes activos (qtyRestante > 0)
+   const valor = lotes.reduce((s, L) => {
+    if (!L || (L.qtyRestante || 0) <= 0) return s;
+    return s + (L.qtyRestante || 0) * (L.costeUnit || 0);
+   }, 0);
+   return money(valor);
+  }
+  // Fallback legacy: sin FIFO, usar precioCompra actual (drift inevitable)
+  return money((State.get.productos() || [])
+   .reduce((s, p) => {
+    const uds = p.udscaja || 1;
+    const cu = (p.precioCompra || 0) / uds;
+    return s + (p.stockActual || 0) * cu;
+   }, 0)
+  );
  }
 
  // valorStockBulto(): valor de referencia al precio de bulto (sin prorratear)
@@ -13521,7 +13566,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1136-dev';
+ const _APP_VERSION = 'v1.3.1137-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17091,14 +17136,12 @@ const ui = (() => {
  function _bbCalcProvMargenAvg(productos) {
   var acc = {};
   productos.forEach(function(p) {
-   if (!p || !p.prov || !p.precioCompra || !p.pvp || !p.udscaja) return;
-   var iva = parseFloat(String(p.iva||'10').replace('%','')) || 10;
-   var cu = p.precioCompra / p.udscaja;
-   var pvpNeto = p.pvp / (1 + iva / 100);
-   if (pvpNeto <= 0 || cu <= 0 || pvpNeto <= cu) return;
-   var mg = ((pvpNeto - cu) / pvpNeto) * 100;
+   if (!p || !p.prov) return;
+   // v1.3.1137 FIX#6: usar _calcMargenProd (fuente única) en vez de cálculo inline duplicado
+   var _r = _calcMargenProd(p);
+   if (!_r.valid) return;
    if (!acc[p.prov]) acc[p.prov] = { sum: 0, n: 0 };
-   acc[p.prov].sum += mg;
+   acc[p.prov].sum += _r.mg;
    acc[p.prov].n += 1;
   });
   var out = {};
@@ -31408,15 +31451,16 @@ function _parseIva(iva) {
     '<div class="alm-cat-add-lbl">+ Añadir</div>';
 
  const ucMg = p.udscaja || p.stockMinimo || 12;
- // v1.3.621: fórmula neto/neto — igual que _calcMargenProd
+ // v1.3.1137 FIX#6: usar _calcMargenProd para mg (fuente única)
+ const _mgResult = _calcMargenProd(p);
+ // cu / pvpNeto / ganCaja / costeUd se siguen calculando aquí (display-only, no consumibles por otros)
  const cu_mg = ucMg > 0 ? +(precioBase / ucMg).toFixed(4) : 0;
  const pvpNeto_mg = p.pvp > 0 ? +(p.pvp / (1 + ivaPct / 100)).toFixed(4) : 0;
  // v1.3.659: ganancia por UNIDAD — todo se vende por unidad
  const ganCaja = pvpNeto_mg > 0 && cu_mg > 0 ? +(pvpNeto_mg - cu_mg).toFixed(2) : null;
  // v1.3.669: coste por UNIDAD (precio con IVA / uds por bulto) para mostrar en catálogo
  const costeUd = ucMg > 0 ? +(precioIva / ucMg).toFixed(2) : null;
- const mg = pvpNeto_mg > 0 && cu_mg > 0
- ? Math.round((pvpNeto_mg - cu_mg) / pvpNeto_mg * 100) : null;
+ const mg = _mgResult.valid ? _mgResult.mg : null;
  const mgColor = mg === null ? 'var(--ink-soft)'
  : mg >= 30 ? '#16A34A' : mg >= 15 ? '#F97316' : '#E53935';
 
@@ -32874,8 +32918,9 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
     var _nArt = (order.items||[]).length;
     var _total = (order.items||[]).reduce(function(s,it){
      var p = State.get.prod(it.prodId);
-     var iva = p ? (parseFloat(String(p.iva||'10').replace('%',''))||10)/100 : 0.10;
-     return s + (it.ncajas||1)*(it.precio||0)*(1+iva);
+     // v1.3.1137 FIX#5: usar _ivaFactor global (antes inline duplicado)
+     var _ivaRawP = (it.iva != null) ? it.iva : (p ? p.iva : null);
+     return s + (it.ncajas||1)*(it.precio||0)*(window._ivaFactor ? window._ivaFactor(_ivaRawP) : 1.10);
     }, 0);
     var _entrega = calcEntrega(order.date, order.provId);
     var _entStr = String(_entrega.getDate()).padStart(2,'0') + ' ' + MON[_entrega.getMonth()] + ' ' + _entrega.getFullYear();
@@ -33419,7 +33464,8 @@ _catInlineQ = ''; // reset filtro al cambiar proveedor
         // Construir lineas de factura
         var _lineas=(_ord.items||[]).map(function(it){
          var _p=State.get.prod(it.prodId)||{};
-         var _ivaPct=parseFloat(String(_p.iva||'10%').replace('%',''))/100||0.10;
+         // v1.3.1137 FIX#5: usar helper global _ivaPct
+         var _ivaPct=(window._ivaPct ? window._ivaPct(_p.iva) : 10)/100;
          var _uds=(it.ncajas||1)*(it.udscaja||_p.udscaja||1);
          var _precioBase=(it.precio||0)/(1+_ivaPct); // precio bulto sin IVA
          var _ivaLin=(it.precio||0)-_precioBase;
@@ -35913,7 +35959,8 @@ _eaRecalc();
  var _carritoCount = Object.keys(_ordenCarrito).length;
  var _carritoTotal = Object.entries(_ordenCarrito).reduce(function(s, e) {
   var p = State.get.prod(e[0]);
-  return s + (e[1]||1) * (p ? (p.precioCompra||0) * (1 + (parseFloat(String(p.iva||'10').replace('%',''))||10)/100) : 0);
+  // v1.3.1137 FIX#5: usar helper global _ivaFactor
+  return s + (e[1]||1) * (p ? (p.precioCompra||0) * (window._ivaFactor ? window._ivaFactor(p.iva) : 1.10) : 0);
  }, 0);
 
  if (_carritoCount > 0 && !_hasOverlay) {
@@ -41780,12 +41827,9 @@ window._almCarritoOptions = function() {
 
  var _ceS = (meta && meta.cargosExtra) || {};
     var _extraS = (_ceS.re||0) + (_ceS.puntoVerde||0) + ((_ceS.custom&&_ceS.custom.importe)||0);
-    // v1.3.664: neto/neto con IVA real del producto
-    var _getIvaS = function(i) {
-     try { var iv=parseFloat(String(i.iva||'10').replace('%','')); return isNaN(iv)?0.10:iv/100; } catch(_){return 0.10;}
-    };
+    // v1.3.1137 FIX#5: usar helper global _ivaFactor
     var totalInv = items.reduce(function(s,i){
-     return s + (i.ncajas||1)*(i.precio||0)*(1+_getIvaS(i));
+     return s + (i.ncajas||1)*(i.precio||0) * (window._ivaFactor ? window._ivaFactor(i.iva) : 1.10);
     },0) + _extraS; // v1.3.665: _extraS una sola vez, no por item
     var totalVta = items.reduce(function(s,i){ return s+(i.ncajas||1)*(i.udscaja||1)*(i.pvpActual||0);},0);
  var ganancia = totalVta - totalInv;
@@ -42443,8 +42487,8 @@ window._almCarritoOptions = function() {
  var udscaja = o.udscaja||(p&&p.udscaja)||12;
  var precio = o.precio||(p&&p.precioCompra)||0;
  var pvp = o.pvp||(p&&p.pvp)||0;
- // v1.3.622: neto/neto con IVA real
- var _ivaOs = p ? (function(iv){ var n=parseFloat(String(iv||'').replace('%','')); return isNaN(n)?10:n; })(p.iva) : 10;
+ // v1.3.1137 FIX#5: usar helper global _ivaPct
+ var _ivaOs = p ? (window._ivaPct ? window._ivaPct(p.iva) : 10) : 10;
  var precIva = precio * (1 + _ivaOs/100);
  var cu_os = udscaja > 0 ? precio / udscaja : 0;
  var pvpNeto_os = pvp > 0 ? pvp / (1 + _ivaOs/100) : 0;
