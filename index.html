@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1150-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1151-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1150-dev</title>
+<title>Dashwey v1.3.1151-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14404,7 +14404,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1150-dev';
+ const _APP_VERSION = 'v1.3.1151-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17366,6 +17366,24 @@ const ui = (() => {
  var _lvLastSyncTs = 0;
  var _lvSyncInFlight = false;
 
+ // v1.3.1151 REALTIME SYNC
+ // Timestamp del último receipt traído — usado como cursor delta.
+ // Persistente en localStorage para sobrevivir reloads.
+ var _LV_TS_KEY = 'dashwey_lv_last_receipt_ts';
+ var _lvLastReceiptTs = (function(){
+  try { return parseInt(localStorage.getItem(_LV_TS_KEY), 10) || 0; } catch(_) { return 0; }
+ })();
+ var _lvSaveLastReceiptTs = function(ts) {
+  if (!ts || ts <= _lvLastReceiptTs) return;
+  _lvLastReceiptTs = ts;
+  try { localStorage.setItem(_LV_TS_KEY, String(ts)); } catch(_) {}
+ };
+ // Polling interval (ms) — 15s equilibrio entre latencia percibida y API calls
+ var _LV_POLL_INTERVAL = 15000;
+ var _lvPollTimer = null;
+ var _lvPollStarted = false;
+ var _lvRealtimeDebounceMs = 10000; // mínimo entre polls consecutivos
+
  // Sync silenciosa de tickets del día de hoy.
  // Idempotente: _lvCommitReceipts dedup por `v_lv_<receiptId>`.
  // Sin modal, sin confirm, fire-and-forget. Toast solo si N>0.
@@ -17630,6 +17648,113 @@ const ui = (() => {
     onDone(acc, false, true);
    });
  }
+
+ // v1.3.1151 REALTIME SYNC — polling ligero con cursor delta
+ // Complementa _lvSyncHoy (fetch completo 72h) con un polling rápido
+ // que solo trae tickets creados TRAS el último timestamp conocido.
+ //
+ // Latencia objetivo: 1-15s desde venta en Loyverse → visible en Dashwey
+ //
+ // Estrategia:
+ //   - Fetch limit:20 (página pequeña)
+ //   - Filter client-side: solo receipts con created_at > _lvLastReceiptTs
+ //   - Si ninguno nuevo → 0 operaciones adicionales
+ //   - Si hay nuevos → commit + actualizar _lvLastReceiptTs
+ //   - Sin save() intermedio por ticket: batch único al final
+ function _lvSyncRealtime(opts) {
+  opts = opts || {};
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) return;
+  if (!navigator.onLine) return;
+  if (_lvSyncInFlight) return;
+  if (!window._DashweyInitialSyncDone) return;
+  if (document.visibilityState !== 'visible') return;
+  // Debounce
+  var now = Date.now();
+  if (!opts.force && (now - _lvLastSyncTs < _lvRealtimeDebounceMs)) return;
+  _lvSyncInFlight = true;
+  _lvLastSyncTs = now;
+  // Fetch pequeño (20 recibos más recientes)
+  _lvProxyFetch('/receipts', token, { limit: 20 })
+   .then(function(r){
+    if (r.status === 402) return null; // Plan Free tope — ignorar
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+   })
+   .then(function(data){
+    if (!data) return;
+    var receipts = data.receipts || [];
+    if (!receipts.length) return;
+    // Filtrar solo los más recientes que el cursor
+    // Loyverse: created_at ISO → ms
+    var nuevos = [];
+    var maxTs = _lvLastReceiptTs;
+    receipts.forEach(function(rc){
+     var rawDate = rc.created_at || rc.receipt_date;
+     var t = rawDate ? Date.parse(rawDate) : 0;
+     if (!isNaN(t) && t > 0 && t > maxTs) maxTs = t;
+     if (!isNaN(t) && t > _lvLastReceiptTs) nuevos.push(rc);
+    });
+    if (!nuevos.length) {
+     // Nada nuevo — actualizar cursor igualmente si no estaba set (primer run)
+     if (!_lvLastReceiptTs && maxTs > 0) _lvSaveLastReceiptTs(maxTs);
+     return;
+    }
+    // Dedup contra ventas existentes por ID derivado
+    var rawVentas = (State.raw && State.raw.ventas) ? State.raw.ventas() : (State.get.ventas ? State.get.ventas() : []);
+    var existIds = new Set();
+    rawVentas.forEach(function(v){ if (v && v.id) existIds.add(v.id); });
+    var realmenteNuevos = nuevos.filter(function(rc){
+     var rid = rc.id || rc.receipt_number;
+     return rid && !existIds.has('v_lv_' + rid);
+    });
+    if (!realmenteNuevos.length) {
+     _lvSaveLastReceiptTs(maxTs);
+     return;
+    }
+    // Commit silencioso (ya el flujo normal de _lvCommitReceipts dedupea internamente)
+    var ventasAntes = rawVentas.length;
+    _lvCommitReceipts(realmenteNuevos, null, false, true); // silent=true
+    var rawAfter = (State.raw && State.raw.ventas) ? State.raw.ventas() : (State.get.ventas ? State.get.ventas() : []);
+    var nNuevas = Math.max(0, rawAfter.length - ventasAntes);
+    _lvSaveLastReceiptTs(maxTs);
+    if (nNuevas > 0) {
+     console.info('[Dashwey/LVRealtime] ✓ ' + nNuevas + ' venta' + (nNuevas===1?'':'s') + ' nueva' + (nNuevas===1?'':'s'));
+     // Render incremental: solo KPIs, sin repintar todo
+     try {
+      var _barsEl = document.getElementById('ev-chart-bars');
+      if (_barsEl) _barsEl._evHash = null;
+      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
+     } catch(_) {}
+    }
+   })
+   .catch(function(e){
+    console.warn('[Dashwey/LVRealtime] fetch error:', e && e.message);
+   })
+   .finally(function(){
+    _lvSyncInFlight = false;
+   });
+ }
+
+ // Polling: loop que dispara _lvSyncRealtime cada _LV_POLL_INTERVAL
+ // Solo arranca si hay token Loyverse. Se detiene si la app entra en background.
+ function _lvStartRealtimePoll() {
+  if (_lvPollStarted) return;
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) return;
+  _lvPollStarted = true;
+  var tick = function() {
+   try {
+    if (document.visibilityState === 'visible' && navigator.onLine) {
+     _lvSyncRealtime();
+    }
+   } catch(_) {}
+   _lvPollTimer = setTimeout(tick, _LV_POLL_INTERVAL);
+  };
+  _lvPollTimer = setTimeout(tick, _LV_POLL_INTERVAL); // primer tick 15s después
+  console.info('[Dashwey/LVRealtime] polling iniciado — interval ' + (_LV_POLL_INTERVAL/1000) + 's');
+ }
+ window._DashweyLVStartRealtime = _lvStartRealtimePoll;
 
  function _lvSyncHoy(opts) {
   opts = opts || {};
@@ -40362,6 +40487,13 @@ _eaRecalc();
    setTimeout(function() { window._DashweySavingCtrl?.triggerSave?.(); }, 1000);
   } catch(_) {}
  }
+ // v1.3.1151 REALTIME: arrancar polling Loyverse (15s) tras initial sync
+ //                     Solo si hay token. Sin ruido si no hay Loyverse configurado.
+ try {
+  setTimeout(function(){
+   if (window._DashweyLVStartRealtime) window._DashweyLVStartRealtime();
+  }, 3000);
+ } catch(_) {}
  // v1.3.1092: auto-activación movida arriba (línea ~37130) para disparar ANTES de
  // cualquier merge. El bloque antiguo promise-based quedaba obsoleto.
  // v1.3.1069: Safety net compactación DESHABILITADO — destructivo. Pendiente Estrategia B.
