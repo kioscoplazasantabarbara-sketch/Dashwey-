@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1139-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1140-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1139-dev</title>
+<title>Dashwey v1.3.1140-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10583,6 +10583,11 @@ const State = (() => {
   }
  }
 
+ // v1.3.1140 — EXPOSICIÓN GLOBAL: permite que callsites fuera del IIFE usen el dispatcher
+ // dual (subcolecciones + root filtrado). Sin esto, los fb.write('state', snap) directos
+ // mandan las 6 claves transaccionales al doc root → invalid-argument >1MB.
+ window._DashweyWriteDual = _writeFirebaseDual;
+
 
  // ── 3. Cola offline → flush cuando vuelve la red ───────────────
  let _lastFlushAt = 0; // anti-spam: mínimo 5s entre intentos
@@ -13576,7 +13581,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1139-dev';
+ const _APP_VERSION = 'v1.3.1140-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38693,8 +38698,8 @@ _eaRecalc();
 
  const remote = await fb.read('state');
  if (!remote) {
- // Primera vez en la nube — subir snapshot del estado local
- const ok = await fb.write('state', _buildLocalSnapshot());
+ // Primera vez en la nube — subir snapshot del estado local (dual: subcol + root filtrado)
+ const ok = await (window._DashweyWriteDual ? window._DashweyWriteDual(_buildLocalSnapshot()) : fb.write('state', _buildLocalSnapshot()));
  if (ok) {
  State.set.syncStatus({ mode: 'synced', pendingWrites: 0 });
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
@@ -38815,12 +38820,19 @@ _eaRecalc();
  }
  _renderAll();
  showToast('☁️ Datos sincronizados');
-  // v1.3.730: subir snapshot fusionado para que otros dispositivos reciban el merge
-  setTimeout(function() { try { fb.write('state', _buildLocalSnapshot()); } catch(_) {} }, 1500);
+  // v1.3.1140: subir snapshot fusionado vía dispatcher dual (root filtrado + subcol)
+  setTimeout(function() {
+   try {
+    var _snap = _buildLocalSnapshot();
+    if (window._DashweyWriteDual) { window._DashweyWriteDual(_snap); }
+    else { fb.write('state', _snap); }
+   } catch(_) {}
+  }, 1500);
  // NO subir de vuelta -- ya tenemos los datos remotos
  } else if (localTs > remoteTs && localTs > 0 && _hasLocalData) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
- await fb.write('state', _buildLocalSnapshot());
+ // v1.3.1140: vía dispatcher dual (root filtrado + subcol) para evitar >1MB en root
+ await (window._DashweyWriteDual ? window._DashweyWriteDual(_buildLocalSnapshot()) : fb.write('state', _buildLocalSnapshot()));
  }
  // Actualizar syncStatus y uid via State API (sin disparar save())
  // State.set.syncStatus no llama save() - es seguro
@@ -39421,11 +39433,14 @@ window._DashweyDeviceId = (() => {
  if (document.visibilityState === 'hidden') {
  _hiddenAt = Date.now();
  // v1.3.580: flush a Firebase si hay write pendiente — evita pérdida al matar la app
+ // v1.3.1140: usar dispatcher dual (root filtrado + subcol) — evita >1MB en root
  // fire-and-forget: write() tiene su propio try/catch
  try {
   var _fb = window._DashweyFirebase;
   if (_fb && _fb.ready && navigator.onLine && !window._DashweySavingCtrl?.isSaving) {
-   _fb.write('state', _buildLocalSnapshot());
+   var _snap = _buildLocalSnapshot();
+   if (window._DashweyWriteDual) { window._DashweyWriteDual(_snap); }
+   else { _fb.write('state', _snap); }
   }
  } catch(_) {}
  return;
