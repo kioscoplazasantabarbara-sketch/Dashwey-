@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1151-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1152-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1151-dev</title>
+<title>Dashwey v1.3.1152-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10424,6 +10424,8 @@ const State = (() => {
    }
   }, 3000); // 3s para que Firebase termine init
  }
+ // v1.3.1152: exponer getter para guard de logout (no expone la cola entera)
+ window._DashweyGetPendingQueueCount = function() { return _pendingQueue.length; };
  let _isSyncing = false;
  let _isSaving = false; // guard: evita writes concurrentes
  let _dirtyDuringSave = false; // v1.3.613: cambios ocurridos durante un write activo
@@ -14404,7 +14406,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1151-dev';
+ const _APP_VERSION = 'v1.3.1152-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14796,6 +14798,35 @@ const ui = (() => {
  async function authLogout() {
   try {
    const fb = window._DashweyFirebase;
+   // v1.3.1152 EDGE CASE FIX: no permitir logout con datos pendientes de subir
+   //  Riesgo: si usuario cierra sesión con dirty/queue, al volver a loguearse el state
+   //  remoto no tiene esos cambios → pérdida de datos permanente.
+   //  Mitigación: intentar flush primero; solo bloquear si offline y hay pendientes.
+   try {
+    const dirty = window._DashweyDirtyItems || {};
+    let dirtyCount = 0;
+    Object.values(dirty).forEach(s => { if (s instanceof Set) dirtyCount += s.size; });
+    const queuePending = (typeof window._DashweyGetPendingQueueCount === 'function') ? window._DashweyGetPendingQueueCount() : 0;
+    if ((dirtyCount > 0 || queuePending > 0)) {
+     if (!navigator.onLine) {
+      // Offline + datos pendientes → bloquear
+      try { showToast('⚠️ Hay ' + (dirtyCount + queuePending) + ' cambios sin sincronizar. Conéctate a internet antes de cerrar sesión.'); } catch(_) {}
+      console.warn('[Auth] logout bloqueado — offline con', dirtyCount, 'dirty +', queuePending, 'queue pendientes');
+      return;
+     }
+     // Online: forzar flush antes de salir (máximo 8s espera)
+     console.info('[Auth] logout: forzando flush de', dirtyCount, 'dirty +', queuePending, 'queue antes de salir');
+     try { showToast('💾 Guardando cambios pendientes…'); } catch(_) {}
+     try {
+      if (window._DashweyFlushDirty) {
+       await Promise.race([
+        window._DashweyFlushDirty(),
+        new Promise(r => setTimeout(r, 8000))
+       ]);
+      }
+     } catch(eF) { console.warn('[Auth] flush en logout:', eF); }
+    }
+   } catch(eG) { console.warn('[Auth] logout guard:', eG); }
    // Bloquear escritura a Firebase ANTES de resetear
    // Evita que resetStorage() sobreescriba Firebase con datos vacios
    if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
@@ -19338,7 +19369,11 @@ try { renderTopArticulos(period); } catch(e) {}
  // v1.3.1072: refresh ahora SÍ sincroniza con Firebase (antes solo re-renderizaba)
  // Simetría con almRefresh: fb.read() + aplicar remoto + render
  async function refresh() {
- _shimmerAllCards(280);
+ // v1.3.1152 SMOOTH UI: shimmer reducido a 120ms (antes 280ms).
+ //                      La ventana breve evita el salto a 0 y mantiene percepción
+ //                      de datos continuos hasta que el render actualiza los valores.
+ //                      Count animation full-featured pendiente v1.3.1153+.
+ _shimmerAllCards(120);
  // v1.3.1100: disparar sync Loyverse en paralelo (fire-and-forget, no bloquea render)
  try { if (App.ui && App.ui._lvSyncHoy) App.ui._lvSyncHoy({ force: true }); } catch(_) {}
  try {
@@ -21278,6 +21313,29 @@ function _toggleCardFromManager(id, btn) {
  }
 
  function renderFlujoCaja() {
+ // v1.3.1152 EVENT-DRIVEN: si el cierre está isCached y tiene eventIds, recalcular
+ //                         desde eventos actuales y usar el valor real (eventos mandan).
+ //                         Caché en cierre nunca es fuente de verdad.
+ var _cierreValores = function(c) {
+  try {
+   if (!c || !c.eventIds || !c.isCached) return c; // legacy: usar valores guardados
+   var CE = (window.App && App.CierreEngine);
+   if (!CE || !CE.recalcularCierre) return c;
+   var rec = CE.recalcularCierre(c.id, { commit: false });
+   if (!rec) return c;
+   // Tolerancia 0.01€ para flotantes
+   var _diff = Math.abs((rec.ventas||0) - (Number(c.ventas)||0))
+            + Math.abs((rec.gastos||0) - (Number(c.gastos)||0))
+            + Math.abs((rec.ingresos||0) - (Number(c.ingresos)||0));
+   if (_diff < 0.01) return c; // no hay divergencia significativa
+   // Divergencia: usar recalculado (sin commit — solo display)
+   console.warn('[Dashwey/Cierre] recalc divergencia', c.id, 'Δ€', _diff.toFixed(2));
+   return Object.assign({}, c, {
+    ventas: rec.ventas, gastos: rec.gastos, ingresos: rec.ingresos,
+    nVentas: rec.nVentas, nGastos: rec.nGastos, nIngresos: rec.nIngresos,
+   });
+  } catch(_) { return c; }
+ };
  const cuentas = (State.get.cuentas() || []).filter(c => window._matchesScope ? window._matchesScope(c) : true); // v1.3.1003 Fase 5
  const gastos = State.get.gastosOp() || [];
  const ingresos = State.get.ingresosFin() || [];
@@ -21445,7 +21503,8 @@ function _toggleCardFromManager(id, btn) {
  // Concepto: "💰 Cierre 2026-04-24 · 372 tickets" con la suma neta de la jornada.
  try {
   const _cierres = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
-  _cierres.filter(c => c && !c.deleted && c.estado === 'cerrado' && c.cierreTs).forEach(c => {
+  _cierres.filter(c => c && !c.deleted && c.estado === 'cerrado' && c.cierreTs).forEach(rawC => {
+   const c = _cierreValores(rawC); // v1.3.1152: event-driven (eventos mandan sobre cache)
    const neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
    if (neto !== 0) {
     const nTickets = Number(c.nVentas) || 0;
@@ -27464,7 +27523,25 @@ function _confirmBorrarCuenta(id) {
   movs.push({ nombre: _label, importe: tot, fecha: v.fecha||'', color: 'var(--ink)', sign: '+' });
  });
  // v1.3.1144 HÍBRIDO: cierres cerrados → 1 movimiento agregado por cierre
- cierresSnap.filter(function(c){ return c && !c.deleted && c.estado === 'cerrado' && c.cierreTs; }).forEach(function(c) {
+ // v1.3.1152 EVENT-DRIVEN: si isCached + eventIds, recalcular y usar eventos
+ cierresSnap.filter(function(c){ return c && !c.deleted && c.estado === 'cerrado' && c.cierreTs; }).forEach(function(rawC) {
+  var c = rawC;
+  try {
+   if (rawC.isCached && rawC.eventIds) {
+    var CE = (window.App && App.CierreEngine);
+    if (CE && CE.recalcularCierre) {
+     var rec = CE.recalcularCierre(rawC.id, { commit: false });
+     if (rec) {
+      var _diff = Math.abs((rec.ventas||0) - (Number(rawC.ventas)||0))
+               + Math.abs((rec.gastos||0) - (Number(rawC.gastos)||0))
+               + Math.abs((rec.ingresos||0) - (Number(rawC.ingresos)||0));
+      if (_diff >= 0.01) {
+       c = Object.assign({}, rawC, { ventas: rec.ventas, gastos: rec.gastos, ingresos: rec.ingresos, nVentas: rec.nVentas });
+      }
+     }
+    }
+   }
+  } catch(_) {}
   var neto = (Number(c.ventas)||0) + (Number(c.ingresos)||0) - (Number(c.gastos)||0);
   if (neto === 0) return;
   var nT = Number(c.nVentas) || 0;
