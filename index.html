@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1140-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1141-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1140-dev</title>
+<title>Dashwey v1.3.1141-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8968,9 +8968,27 @@ window._DashweyFirebase = {
 
  async write(coleccion, data, _attempt = 0) {
  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
+ // v1.3.1141 FIX#1 — ROOT WRITE GUARD (consistencia FUERTE):
+ // Si se intenta escribir 'state' y el payload incluye arrays transaccionales CON DATOS,
+ // redirigir a _DashweyWriteDual. Esto blinda contra cualquier callsite nuevo o legacy
+ // que bypassee el dispatcher dual y provoque invalid-argument >1MB en root.
+ // No bloquea cuando los arrays vienen vacíos (caso _writeFirebaseDual con rootPayload limpio).
+ if (coleccion === 'state' && data && typeof data === 'object') {
+  const TRANSACTIONAL = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+  let _hasTransactional = false;
+  for (const k of TRANSACTIONAL) {
+   if (Array.isArray(data[k]) && data[k].length > 0) { _hasTransactional = true; break; }
+  }
+  if (_hasTransactional && typeof window._DashweyWriteDual === 'function' && !data.__dualBypass) {
+   console.warn('[Dashwey/FB] ROOT_GUARD: write con arrays transaccionales → redirigido a WriteDual');
+   return await window._DashweyWriteDual(data);
+  }
+ }
  try {
  // v1.3.1119: usar _DashweyDeepClean global (coherencia con batches subcolecciones)
  const clean = (window._DashweyDeepClean || (v=>v))(data);
+ // v1.3.1141: remover flag interno si existe (no debe llegar a Firestore)
+ if (clean && typeof clean === 'object') delete clean.__dualBypass;
  await setDoc(
  this._ref(_uid, coleccion),
  { ...clean, _updatedAt: serverTimestamp() },
@@ -10476,6 +10494,9 @@ const State = (() => {
   }
   // Flag OFF y tamaño normal → comportamiento idéntico al anterior
   if (!window._DashweyUseSubcollections && !_forceClean) {
+   // v1.3.1141: marcar __dualBypass para que fb.write ROOT_GUARD no reentrante
+   //             (data aquí YA pasó por el dispatcher dual — es la ruta legacy legítima)
+   try { if (data && typeof data === 'object') data.__dualBypass = true; } catch(_) {}
    return _writeFirebase(data);
   }
   // Flag ON o forceClean → ruta subcolecciones / limpieza agresiva
@@ -10499,6 +10520,8 @@ const State = (() => {
    } catch(_) {}
    // Marcar arquitectura en doc raíz (permite a devices antiguos detectar)
    rootPayload._schemaVersion = 2;
+   // v1.3.1141: marcar __dualBypass por defensa en profundidad (root guard no reentrante)
+   rootPayload.__dualBypass = true;
    // v1.3.1136 FIX#1: BATCHES SUBCOL PRIMERO, ROOT DESPUÉS
    // Razón: si batches fallan, NO debemos subir el root con schemaVersion:2
    // porque otros devices verían doc raíz declarando subcol vacía (= datos perdidos).
@@ -10588,6 +10611,80 @@ const State = (() => {
  // mandan las 6 claves transaccionales al doc root → invalid-argument >1MB.
  window._DashweyWriteDual = _writeFirebaseDual;
 
+ // v1.3.1141 FIX#2 — DIRTY QUEUE FLUSH manual seguro.
+ // Uso: cold start, reconexión online, visibilitychange, diagnóstico.
+ // Invocable vía window._DashweyFlushDirty().
+ // Propiedades:
+ //   - Idempotente: si dirty vacío, retorna sin side effects
+ //   - Single-flight: 1 flush a la vez (flag _DashweyFlushing)
+ //   - Solo limpia Set tras confirmación (ya garantizado por _DashweyWriteSubcollectionBatch)
+ //   - No hace root write (solo drena subcolecciones pendientes)
+ //   - Retorna { ok, flushed, skipped, error } para monitoreo
+ window._DashweyFlushDirty = async function() {
+  if (window._DashweyFlushing) return { ok: false, skipped: 'in_progress' };
+  const fb = window._DashweyFirebase;
+  if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return { ok: false, skipped: 'fb_not_ready' };
+  if (!navigator.onLine) return { ok: false, skipped: 'offline' };
+  if (!window._DashweyInitialSyncDone) return { ok: false, skipped: 'initial_sync_pending' };
+  const dirty = window._DashweyDirtyItems || {};
+  const transactionalKeys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
+  let pendingCount = 0;
+  for (const k of transactionalKeys) {
+   const s = dirty[k];
+   if (s instanceof Set) pendingCount += s.size;
+  }
+  if (pendingCount === 0) return { ok: true, flushed: 0, skipped: 'no_dirty' };
+  window._DashweyFlushing = true;
+  let flushed = 0;
+  let errors = 0;
+  try {
+   const _S = window.App?.State || (typeof State !== 'undefined' ? State : null);
+   const _raw = (_S && _S.raw) ? _S.raw : null;
+   for (const stateKey of transactionalKeys) {
+    const dirtySet = dirty[stateKey];
+    if (!(dirtySet instanceof Set) || dirtySet.size === 0) continue;
+    let arr = [];
+    try {
+     if (_raw && typeof _raw[stateKey] === 'function') arr = _raw[stateKey]();
+     else if (_S?.get?.[stateKey]) arr = _S.get[stateKey]();
+    } catch(_) {}
+    if (!Array.isArray(arr)) arr = [];
+    const byId = {};
+    for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
+    const items = Object.values(byId);
+    if (!items.length) { dirtySet.clear(); continue; }
+    const ok = await window._DashweyWriteSubcollectionBatch(stateKey, items);
+    if (ok) {
+     dirtySet.clear();
+     flushed += items.length;
+     // Actualizar lastSynced baseline para estos items (evita falsos positivos delete)
+     try {
+      if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+      if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
+      const snap = window._DashweyLastSyncedSnap[stateKey];
+      for (const it of items) {
+       if (it?.id) {
+        if (it.deleted === true) delete snap[it.id];
+        else { try { snap[it.id] = (window._DashweyCanonStringify || JSON.stringify)(it); } catch(_) {} }
+       }
+      }
+     } catch(_) {}
+    } else {
+     errors++;
+     console.warn('[Dashwey/Flush] batch falló:', stateKey, '— items mantenidos en dirty para retry');
+    }
+   }
+   try { window._DashweyPersistDirty && window._DashweyPersistDirty(); } catch(_) {}
+   console.info('[Dashwey/Flush] ✓ flushed:', flushed, '| errors:', errors);
+   return { ok: errors === 0, flushed, errors };
+  } catch(e) {
+   console.warn('[Dashwey/Flush] error:', e?.code || e?.message);
+   return { ok: false, error: e?.message };
+  } finally {
+   window._DashweyFlushing = false;
+  }
+ };
+
 
  // ── 3. Cola offline → flush cuando vuelve la red ───────────────
  let _lastFlushAt = 0; // anti-spam: mínimo 5s entre intentos
@@ -10627,6 +10724,11 @@ const State = (() => {
  }
  }
  _flushQueue();
+ // v1.3.1141 FIX#2: auto-flush dirty queue al recuperar conexión
+ //                   Items marcados dirty durante offline se suben a subcolecciones.
+ setTimeout(function() {
+  try { if (window._DashweyFlushDirty) window._DashweyFlushDirty(); } catch(_) {}
+ }, 1500);
  });
  window.addEventListener('offline', function() {
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
@@ -13581,7 +13683,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1140-dev';
+ const _APP_VERSION = 'v1.3.1141-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
