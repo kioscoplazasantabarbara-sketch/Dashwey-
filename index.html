@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1152-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1153-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1152-dev</title>
+<title>Dashwey v1.3.1153-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10981,6 +10981,29 @@ const State = (() => {
  Utils.showToast('✅ Conectado — sincronizando datos');
  }
  }
+ // v1.3.1153 FIX C1+A2: si el cold start fue offline, completar _doInitialSync ahora
+ //                      antes de cualquier flush. Esto garantiza que el state remoto
+ //                      se lea y mergee correctamente antes de subir cola local.
+ if (window._DashweyOfflineBoot && window._DashweyInitialSync) {
+  console.info('[Sync] online tras cold start offline → completando initial sync');
+  window._DashweyOfflineBoot = false;
+  // Marcar temporalmente false para que _doInitialSync entre en la lógica remota
+  // (el propio _doInitialSync lo pondrá true tras completar).
+  window._DashweyInitialSyncDone = false;
+  Promise.resolve(window._DashweyInitialSync()).then(function(){
+   // Tras initial sync, flush de cola offline
+   try { _flushQueue(); } catch(_) {}
+   setTimeout(function(){
+    try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('online'); } catch(_) {}
+   }, 1500);
+  }).catch(function(e){
+   console.warn('[Sync] completion initial sync error:', e);
+   // Fallback: restaurar flag y flush de todas formas
+   window._DashweyInitialSyncDone = true;
+   try { _flushQueue(); } catch(_) {}
+  });
+  return;
+ }
  _flushQueue();
  // v1.3.1147: reemplaza flush individual por autoHeal unificado
  //            Incluye canary scan + flush dirty en una sola operación throttled.
@@ -11658,13 +11681,14 @@ const State = (() => {
  updateCuenta: (id, v) => {
     const c = _state.cuentas.find(x=>x.id===id);
     if(!c) { save(); return; }
-    const keys = Object.keys(v || {});
-    const onlySaldo = keys.length === 1 && keys[0] === 'saldo';
+    // v1.3.1153 FIX C2: estampar SIEMPRE updatedAt para merge multi-device determinista.
+    //   Antes: solo-saldo omitía updatedAt (v1.3.1083) porque saldo es derivado.
+    //   Problema: con 2 devices actualizando saldo simultáneamente, _mergeById caía a
+    //   createdAt → merge arbitrario, saldo final indeterminado.
+    //   Ahora: saldo sigue siendo derivado (se recalcula desde eventos vía _recalcSaldosCuentas),
+    //   pero updatedAt garantiza que el merge elige la versión más reciente mientras tanto.
     Object.assign(c, v);
-    if (!onlySaldo) {
-     c.updatedAt = new Date().toISOString();
-     // v1.3.1083: cambios autoritativos (no solo saldo derivado) → sync urgente
-     }
+    c.updatedAt = new Date().toISOString();
     save();
    },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
@@ -14406,7 +14430,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1152-dev';
+ const _APP_VERSION = 'v1.3.1153-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -14827,6 +14851,14 @@ const ui = (() => {
      } catch(eF) { console.warn('[Auth] flush en logout:', eF); }
     }
    } catch(eG) { console.warn('[Auth] logout guard:', eG); }
+   // v1.3.1153 FIX A3: detener polling Loyverse ANTES de cualquier otra limpieza.
+   //                   Evita que tras logout+relogin de otra cuenta, el polling con el
+   //                   token previo siga trayendo ventas de cuenta A hacia cuenta B.
+   try { if (window._DashweyLVStopRealtime) window._DashweyLVStopRealtime(); } catch(_) {}
+   // v1.3.1153 FIX M3: reset digest del root listener para evitar skips cruzados entre cuentas
+   try { window._DashweyLastRootDigest = ''; } catch(_) {}
+   // v1.3.1153: limpiar token Loyverse para que el próximo relogin no reutilice credenciales previas
+   try { localStorage.removeItem('dashwey_lv_token'); } catch(_) {}
    // Bloquear escritura a Firebase ANTES de resetear
    // Evita que resetStorage() sobreescriba Firebase con datos vacios
    if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
@@ -17785,7 +17817,16 @@ const ui = (() => {
   _lvPollTimer = setTimeout(tick, _LV_POLL_INTERVAL); // primer tick 15s después
   console.info('[Dashwey/LVRealtime] polling iniciado — interval ' + (_LV_POLL_INTERVAL/1000) + 's');
  }
+ // v1.3.1153 FIX A3: detener polling al cambiar de cuenta (logout)
+ function _lvStopRealtimePoll() {
+  if (_lvPollTimer) { try { clearTimeout(_lvPollTimer); } catch(_) {} _lvPollTimer = null; }
+  _lvPollStarted = false;
+  _lvLastReceiptTs = 0; // cursor reset para siguiente cuenta
+  try { localStorage.removeItem(_LV_TS_KEY); } catch(_) {}
+  console.info('[Dashwey/LVRealtime] polling detenido (logout)');
+ }
  window._DashweyLVStartRealtime = _lvStartRealtimePoll;
+ window._DashweyLVStopRealtime = _lvStopRealtimePoll;
 
  function _lvSyncHoy(opts) {
   opts = opts || {};
@@ -40064,6 +40105,20 @@ _eaRecalc();
  if (!fb?.enabled) { _syncRunning = false; return; }
  const uid = fb.uid || fb._auth?.currentUser?.uid;
  if (!uid) { _syncRunning = false; return; }
+
+ // v1.3.1153 FIX C1+A2: offline-aware initial sync
+ // Si arrancamos offline, NO intentar fb.read (falla silent y deja el flag en false,
+ // bloqueando escrituras vía guard hydration). En su lugar, marcar sync inicial como
+ // completado en "modo local-only": escrituras permitidas localmente y encoladas
+ // (pendingQueue), y se dispara un reintento al primer evento 'online'.
+ if (!navigator.onLine) {
+  console.warn('[Sync] cold start OFFLINE — modo local-only activado');
+  window._DashweyInitialSyncDone = true; // permitir save() local → queue
+  window._DashweyOfflineBoot = true; // marca para reintento al reconectar
+  State.set.syncStatus({ mode: 'local', pendingWrites: (typeof _pendingQueue !== 'undefined' ? _pendingQueue.length : 0) });
+  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
+  return;
+ }
 
  // ── Device ID: identificador único por dispositivo ──────────
  // Permite al onSnapshot ignorar snapshots causados por este mismo dispositivo
