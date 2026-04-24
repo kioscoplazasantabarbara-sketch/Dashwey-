@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1145-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1146-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1145-dev</title>
+<title>Dashwey v1.3.1146-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8779,6 +8779,11 @@ function _authTabSafe(tab) {
 
  <!-- Subgrupo: Debug / Diagnóstico -->
  <div class="sd-group">
+ <div class="sd-row" onclick="App.ui._openHealthSheet()">
+ <div class="sd-icon" style="background:#DCFCE7">🩺</div>
+ <div class="sd-info"><div class="sd-title">Salud sync</div><div class="sd-sub">Diagnóstico sistema · auto-purga · métricas</div></div>
+ <div class="sd-chev">›</div>
+ </div>
  <div class="sd-row" onclick="App.ui._devLoyverseInspect()">
  <div class="sd-icon" style="background:#E0E7FF">🔍</div>
  <div class="sd-info"><div class="sd-title">Inspeccionar ingresos</div><div class="sd-sub">Conteo y detalle en consola</div></div>
@@ -10490,6 +10495,9 @@ const State = (() => {
  //   hotPins, qgCells, qgSizeIdx, syncCommand, tombstones, etc.
  // ──────────────────────────────────────────────────────────────────
  async function _writeFirebaseDual(data) {
+  // v1.3.1146 CAPA 4: pre-sync integrity check — filtra zombies externos del payload
+  // antes de cualquier escritura. Impide propagar items deleted:true con origen externo.
+  try { data = window._DashweyIntegrityCheck ? window._DashweyIntegrityCheck(data) : data; } catch(_) {}
   // v1.3.1117: medir tamaño del payload y log
   let _totalSize = 0;
   try { _totalSize = JSON.stringify(data || {}).length; } catch(_) {}
@@ -10691,6 +10699,101 @@ const State = (() => {
   } finally {
    window._DashweyFlushing = false;
   }
+ };
+
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1146 CAPA 2 — MONITOR CANARY: auto-detección + auto-purga periódica
+ // ══════════════════════════════════════════════════════════════
+ // Cada 60s revisa arrays raw (ventas/gastos/ingresos) buscando zombies:
+ // items con origen externo + deleted:true. Si encuentra:
+ //   1. Splice del array raw (elimina zombie)
+ //   2. Delete tombstone asociado (si existe)
+ //   3. Incrementa métrica _DashweyHealth.zombiesPurged
+ //   4. Log estructurado
+ // Solo corre si la app está visible (no en background).
+ // No bloquea, no rompe — es defensivo puro.
+ window._DashweyCanaryScan = function() {
+  try {
+   const keys = ['ventas', 'gastosOp', 'ingresosFin'];
+   let purged = 0;
+   const tomb = window._DashweyLocalDeletedIds;
+   for (const k of keys) {
+    const raw = _state[k];
+    if (!Array.isArray(raw)) continue;
+    for (let i = raw.length - 1; i >= 0; i--) {
+     const it = raw[i];
+     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen]) {
+      try { tomb && tomb.delete && tomb.delete(it.id); } catch(_) {}
+      raw.splice(i, 1);
+      purged++;
+     }
+    }
+   }
+   if (purged > 0) {
+    window._DashweyHealth.zombiesPurged += purged;
+    window._DashweyHealth.lastAutoPurgeAt = Date.now();
+    window._DashweyHealth.lastAutoPurgeCount = purged;
+    console.warn('[Dashwey/Canary] ✓ purgados ' + purged + ' zombies externos. Total acumulado:', window._DashweyHealth.zombiesPurged);
+    try { save(); } catch(_) {}
+   }
+   return { ok: true, purged };
+  } catch(e) {
+   console.warn('[Dashwey/Canary] error:', e);
+   return { ok: false, error: e?.message };
+  }
+ };
+
+ // Loop canary: cada 60s, solo si documento visible
+ (function _startCanaryLoop(){
+  let _canaryStopped = false;
+  window._DashweyCanaryStop = () => { _canaryStopped = true; };
+  const _tick = () => {
+   if (_canaryStopped) return;
+   try {
+    if (document.visibilityState === 'visible' && window._DashweyInitialSyncDone) {
+     window._DashweyCanaryScan();
+    }
+   } catch(_) {}
+   setTimeout(_tick, 60000); // 60s
+  };
+  setTimeout(_tick, 60000); // primer tick a los 60s (no inmediato — deja arranque tranquilo)
+ })();
+
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1146 CAPA 4 — PRE-SYNC INTEGRITY CHECK
+ // ══════════════════════════════════════════════════════════════
+ // Antes de cada escritura a Firestore, escanear snapshot por zombies.
+ // Si encuentra: auto-purgar, logear, incrementar métrica. No bloquea sync.
+ window._DashweyIntegrityCheck = function(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  try {
+   window._DashweyHealth.integrityChecks++;
+   const keys = ['ventas', 'gastosOp', 'ingresosFin'];
+   let totalBlocked = 0;
+   for (const k of keys) {
+    const arr = snapshot[k];
+    if (!Array.isArray(arr)) continue;
+    const cleaned = [];
+    for (const it of arr) {
+     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen]) {
+      totalBlocked++;
+      // No incluir — evita subir zombies a Firestore
+      continue;
+     }
+     cleaned.push(it);
+    }
+    if (cleaned.length !== arr.length) {
+     snapshot[k] = cleaned;
+    }
+   }
+   if (totalBlocked > 0) {
+    window._DashweyHealth.integrityBlocks++;
+    console.warn('[Dashwey/Integrity] pre-sync: bloqueados ' + totalBlocked + ' zombies externos. Total checks:', window._DashweyHealth.integrityChecks, '| con blocks:', window._DashweyHealth.integrityBlocks);
+   }
+  } catch(e) {
+   console.warn('[Dashwey/Integrity] error:', e);
+  }
+  return snapshot;
  };
 
 
@@ -11288,15 +11391,55 @@ const State = (() => {
   lotesStock: () => _state.lotesStock || [],
  };
 
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1146 CAPA 1+3 — GUARD INVARIANTE: items externos no se marcan deleted
+ // ══════════════════════════════════════════════════════════════
+ // Regla: items con origen externo (loyverse/budgetbakers/import_loyverse) son fuente
+ // autoritativa. Nadie dentro de Dashwey puede marcarlos deleted — solo su fuente
+ // origen (Loyverse vía API) puede retirarlos.
+ //
+ // Aplicación: toda ruta de escritura masiva (setVentas, setGastos, setIngresos) pasa
+ // por _guardExt, que devuelve una copia del array con los deleted externos neutralizados
+ // (deleted removed) y registra el intento en window._DashweyHealth para diagnóstico.
+ const _EXT_ORIGINS = { loyverse: 1, import_loyverse: 1, budgetbakers: 1 };
+ window._DashweyHealth = window._DashweyHealth || {
+  zombiesBlocked: 0,        // intentos de marcar deleted:true items externos
+  zombiesPurged: 0,         // zombies purgados automáticamente
+  lastAutoPurgeAt: 0,       // timestamp última auto-purga
+  lastAutoPurgeCount: 0,    // items purgados en última ronda
+  integrityChecks: 0,       // checks pre-sync ejecutados
+  integrityBlocks: 0,       // checks pre-sync que encontraron zombies
+ };
+ const _guardExt = (arr) => {
+  if (!Array.isArray(arr)) return arr;
+  let blocked = 0;
+  const out = arr.map((x) => {
+   if (x && x.origen && _EXT_ORIGINS[x.origen] && x.deleted === true) {
+    blocked++;
+    // Neutralizar: devolver copia sin deleted/deletedAt
+    const copy = Object.assign({}, x);
+    delete copy.deleted;
+    delete copy.deletedAt;
+    return copy;
+   }
+   return x;
+  });
+  if (blocked > 0) {
+   window._DashweyHealth.zombiesBlocked += blocked;
+   console.warn('[Dashwey/Guard] bloqueados ' + blocked + ' intentos de marcar deleted en items externos. Total acumulado:', window._DashweyHealth.zombiesBlocked);
+  }
+  return out;
+ };
+ window._DashweyGuardExt = _guardExt;
+
  // Setters — siempre guardan
  const set = {
  proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); save(); },
  productos: (v) => { _state.productos = _preserveDeleted('productos', v); save(); },
- historialPedidos: (v) => { const _snap = _snapshotMap(_state.historialPedidos); _state.historialPedidos = _preserveDeleted('historialPedidos', v); _diffMarkDirty('historialPedidos', _snap, _state.historialPedidos); save(); },
- facturas: (v) => { const _snap = _snapshotMap(_state.facturas); _state.facturas = _preserveDeleted('facturas', v); _diffMarkDirty('facturas', _snap, _state.facturas); save(); },
+ historialPedidos: (v) => { const _snap = _snapshotMap(_state.historialPedidos); _state.historialPedidos = _preserveDeleted('historialPedidos', v); _diffMarkDirty('historialPedidos', _snap, _state.historialPedidos); save(); }, facturas: (v) => { const _snap = _snapshotMap(_state.facturas); _state.facturas = _preserveDeleted('facturas', v); _diffMarkDirty('facturas', _snap, _state.facturas); save(); },
  addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); try { if (f?.id) window._DashweyMarkDirty('facturas', f.id); } catch(_) {} save(); },
  mermas: (v) => { const _snap = _snapshotMap(_state.mermas); _state.mermas = _preserveDeleted('mermas', v); _diffMarkDirty('mermas', _snap, _state.mermas); save(); },
- ventas: (v) => { const _snap = _snapshotMap(_state.ventas); _state.ventas = _preserveDeleted('ventas', v); _diffMarkDirty('ventas', _snap, _state.ventas); save(); },
+ ventas: (v) => { const _snap = _snapshotMap(_state.ventas); _state.ventas = _preserveDeleted('ventas', _guardExt(v)); _diffMarkDirty('ventas', _snap, _state.ventas); save(); },
  ordenItems: (v) => { _state.ordenItems = v; save(); },
  selectedProv: (v) => { _state.selectedProv = v; save(); },
  pendingOrders: (v) => { _state.pendingOrders = _preserveDeleted('pendingOrders', v); save(); },
@@ -11379,7 +11522,8 @@ const State = (() => {
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
  addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO: setters update (trazabilidad closureId)
- updateGasto: (id, vals) => { const g = (_state.gastosOp || []).find(x => x.id === id); if (!g) return; Object.assign(g, vals); try { window._DashweyMarkDirty('gastosOp', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} },
+ // v1.3.1146 CAPA 1: bloquear intento de poner deleted:true en item externo
+ updateGasto: (id, vals) => { const g = (_state.gastosOp || []).find(x => x.id === id); if (!g) return; if (vals && vals.deleted === true && g.origen && _EXT_ORIGINS[g.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateGasto: bloqueado deleted:true en item externo', g.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } Object.assign(g, vals); try { window._DashweyMarkDirty('gastosOp', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} },
   // v1.3.1142 — Cierre de caja: setters robustos (patrón addGasto/setGastos)
   // Esquema cierre: { id, aperturaTs, cierreTs, jornadaLabel, saldoInicial,
   //                   saldoEsperado, saldoReal, diferencia, ventas, gastos,
@@ -11425,7 +11569,7 @@ const State = (() => {
    save();
    try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
   },
- setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', v); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
+ setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', _guardExt(v)); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
@@ -11434,8 +11578,9 @@ const State = (() => {
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('merma'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO
- updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
- setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', v); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
+ // v1.3.1146 CAPA 1: guard deleted:true items externos
+ updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; if (vals && vals.deleted === true && i.origen && _EXT_ORIGINS[i.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: bloqueado deleted:true en item externo', i.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
+ setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', _guardExt(v)); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
@@ -11506,7 +11651,8 @@ const State = (() => {
  } catch(_) {}
  },
  // v1.3.1144 HÍBRIDO: updateVenta para estampar closureId
- updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
+ // v1.3.1146 CAPA 1: guard deleted:true items externos
+ updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
  addProd: (p) => { _state.productos.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {} },
  addProv: (p) => { _state.proveedores.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {} },
  // v1.3.1075: syncCommand setter
@@ -14039,7 +14185,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1145-dev';
+ const _APP_VERSION = 'v1.3.1146-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15866,6 +16012,110 @@ const ui = (() => {
    console.error('[Dashwey] _devLoyverseSimulate:', e);
    showToast('⚠️ Fallo: ' + (e.message||e));
   }
+ }
+
+ // v1.3.1146 CAPA 5 — Dashboard Salud Sync
+ function _openHealthSheet() {
+  var h = window._DashweyHealth || {};
+  var tomb = window._DashweyLocalDeletedIds;
+  var tombSize = tomb ? (tomb.size || 0) : 0;
+  var dirty = window._DashweyDirtyItems || {};
+  var dirtyTotal = 0;
+  Object.keys(dirty).forEach(function(k){
+   if (dirty[k] instanceof Set) dirtyTotal += dirty[k].size;
+  });
+  var raw = (State.raw && State.raw.ventas) ? State.raw.ventas() : [];
+  var visibles = State.get.ventas ? State.get.ventas() : [];
+  var delta = raw.length - visibles.length;
+  var baseline = window._DashweyLastSyncedSnap && window._DashweyLastSyncedSnap.ventas ? Object.keys(window._DashweyLastSyncedSnap.ventas).length : 0;
+  var initSync = !!window._DashweyInitialSyncDone;
+  var online = navigator.onLine;
+  var fb = window._DashweyFirebase;
+  var fbReady = !!(fb && fb.ready);
+
+  var _fmtTs = function(ts){
+   if (!ts) return '—';
+   var d = new Date(ts);
+   var pad = function(n){ return String(n).padStart(2,'0'); };
+   return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  };
+
+  var pill = function(ok, okTxt, badTxt) {
+   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:' + (ok ? 'rgba(22,163,74,.12)' : 'rgba(220,38,38,.12)') + ';color:' + (ok ? '#16A34A' : '#DC2626') + ';font-size:var(--fs-xs);font-weight:var(--fw-bold)">' + (ok ? okTxt : badTxt) + '</span>';
+  };
+
+  var row = function(lbl, val, danger) {
+   return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border)"><div style="font-size:var(--fs-sm);color:var(--ink-mid)">' + lbl + '</div><div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + (danger ? 'var(--red)' : 'var(--ink)') + '">' + val + '</div></div>';
+  };
+
+  var html =
+    '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   +'<div class="mhd-title">🩺 Salud sync</div>'
+   +'<div class="mhd-sub">Diagnóstico del sistema</div>'
+   +'</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   // Estado general
+   +'<div style="padding:16px 16px 8px;display:flex;gap:6px;flex-wrap:wrap">'
+   +pill(online, '🌐 Online', '🔌 Offline')
+   +pill(fbReady, '🔥 Firebase OK', '🔥 Firebase KO')
+   +pill(initSync, '✅ Sync inicial', '⏳ Sync pendiente')
+   +'</div>'
+   // Métricas ventas
+   +'<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;padding:12px 16px 4px">Ventas</div>'
+   +row('Total visibles', visibles.length)
+   +row('Total raw (incl. deleted)', raw.length, delta > 0)
+   +row('Baseline Firestore', baseline)
+   +row('Delta raw vs visibles', delta + (delta > 0 ? ' zombies' : ''), delta > 0)
+   // Tombstones + dirty
+   +'<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;padding:12px 16px 4px">Sync</div>'
+   +row('Items pendientes subir', dirtyTotal)
+   +row('Tombstones locales', tombSize)
+   // Health acumulado
+   +'<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;padding:12px 16px 4px">Guardas defensivas</div>'
+   +row('Zombies bloqueados (setter)', h.zombiesBlocked || 0)
+   +row('Zombies purgados (canary)', h.zombiesPurged || 0)
+   +row('Última auto-purga', _fmtTs(h.lastAutoPurgeAt))
+   +row('Items última purga', h.lastAutoPurgeCount || 0)
+   +row('Checks integridad pre-sync', h.integrityChecks || 0)
+   +row('Checks con blocks', h.integrityBlocks || 0, (h.integrityBlocks || 0) > 0)
+   // Acciones
+   +'<div style="padding:16px">'
+   +'<button id="hs-scan-btn" class="btn-ok" style="width:100%">🔍 Escanear + auto-purgar ahora</button>'
+   +'<button id="hs-flush-btn" style="margin-top:8px;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm2);padding:12px;color:var(--ink);font-weight:var(--fw-bold);font-size:var(--fs-sm);-webkit-tap-highlight-color:transparent">💾 Forzar flush dirty queue</button>'
+   +'<button id="hs-reload-btn" style="margin-top:8px;width:100%;background:transparent;border:none;color:var(--ink-soft);font-size:var(--fs-sm);padding:8px;-webkit-tap-highlight-color:transparent">🔄 Recargar app</button>'
+   +'</div>'
+   +'<div style="height:24px"></div>';
+
+  ui.setFs(html);
+  ui.openFs('full');
+
+  var _scan = document.getElementById('hs-scan-btn');
+  var _running = false;
+  if (_scan) _scan.addEventListener('click', function(){
+   if (_running) return; _running = true;
+   setTimeout(function(){ _running = false; }, 500);
+   try {
+    var r = window._DashweyCanaryScan ? window._DashweyCanaryScan() : { ok: false };
+    showToast(r.ok ? ('✅ Purgados: ' + (r.purged || 0)) : '⚠️ Error en scan');
+    setTimeout(function(){ _openHealthSheet(); }, 400); // refresh view
+   } catch(e){ showToast('⚠️ Error: ' + e.message); }
+  });
+
+  var _flush = document.getElementById('hs-flush-btn');
+  var _runningF = false;
+  if (_flush) _flush.addEventListener('click', async function(){
+   if (_runningF) return; _runningF = true;
+   setTimeout(function(){ _runningF = false; }, 1500);
+   try {
+    var r = await window._DashweyFlushDirty();
+    showToast(r.ok ? ('✅ Flushed: ' + (r.flushed || 0)) : ('⚠️ ' + (r.skipped || r.error || 'error')));
+    setTimeout(function(){ _openHealthSheet(); }, 600);
+   } catch(e){ showToast('⚠️ Error: ' + e.message); }
+  });
+
+  var _reload = document.getElementById('hs-reload-btn');
+  if (_reload) _reload.addEventListener('click', function(){
+   location.reload();
+  });
  }
 
  function _devLoyverseInspect() {
@@ -18148,7 +18398,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openLoyverseMapping, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
 })();
 
 // ══════════════════════════════════════════
