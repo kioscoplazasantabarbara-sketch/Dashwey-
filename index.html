@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1148-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1149-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1148-dev</title>
+<title>Dashwey v1.3.1149-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8973,6 +8973,20 @@ window._DashweyFirebase = {
 
  async write(coleccion, data, _attempt = 0) {
  if (!FIREBASE_ENABLED || !_db || !_uid) return false;
+ // v1.3.1149 SYNC STABILITY: guard hydration + payload no vacío
+ // Antes: fb.write no verificaba _DashweyInitialSyncDone — si algún callsite
+ //        escribía antes del initial sync, podía subir estado parcial vacío
+ //        y destruir datos remotos de otros dispositivos.
+ if (coleccion === 'state') {
+  if (!window._DashweyInitialSyncDone && !data?.__forceSystem) {
+   console.warn('[Dashwey/FB] write bloqueado: initial sync pendiente.');
+   return false;
+  }
+  if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+   console.warn('[Dashwey/FB] write bloqueado: payload vacío.');
+   return false;
+  }
+ }
  // v1.3.1141 FIX#1 — ROOT WRITE GUARD (consistencia FUERTE):
  // Si se intenta escribir 'state' y el payload incluye arrays transaccionales CON DATOS,
  // redirigir a _DashweyWriteDual. Esto blinda contra cualquier callsite nuevo o legacy
@@ -8993,7 +9007,7 @@ window._DashweyFirebase = {
  // v1.3.1119: usar _DashweyDeepClean global (coherencia con batches subcolecciones)
  const clean = (window._DashweyDeepClean || (v=>v))(data);
  // v1.3.1141: remover flag interno si existe (no debe llegar a Firestore)
- if (clean && typeof clean === 'object') delete clean.__dualBypass;
+ if (clean && typeof clean === 'object') { delete clean.__dualBypass; delete clean.__forceSystem; }
  await setDoc(
  this._ref(_uid, coleccion),
  { ...clean, _updatedAt: serverTimestamp() },
@@ -9809,9 +9823,13 @@ window._DashweyRegisterFCM = async function() {
     const token = window._DashweyEarlyFCMToken;
     const deviceId = window._DashweyDeviceId || 'unknown';
     try {
-     // Guardar token en state/{uid} como campo — ruta permitida por Security Rules
-     const { doc, setDoc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-     await setDoc(doc(_db, 'state', _uid), { _fcmToken: token, _fcmDevice: deviceId, _fcmUpdated: serverTimestamp() }, { merge: true });
+     // v1.3.1149 SYNC STABILITY: rutar por fb.write (único punto de escritura)
+     // __forceSystem bypasea el guard hydration porque FCM token puede escribirse antes
+     // del initial sync. Sigue pasando por integrity check + root guard (payload sin arrays transaccionales).
+     const _fbObj = window._DashweyFirebase;
+     if (_fbObj && typeof _fbObj.write === 'function') {
+      await _fbObj.write('state', { _fcmToken: token, _fcmDevice: deviceId, _fcmUpdated: Date.now(), __forceSystem: true });
+     }
      console.info('[Dashwey/FCM] Token early guardado en Firestore:', token.slice(0,20)+'...');
     } catch(e) {
      console.warn('[Dashwey/FCM] Error guardando token early:', e?.code || e?.message);
@@ -10370,7 +10388,42 @@ const State = (() => {
  // EL MASTER SWITCH: window._DashweyFirebase.enabled
  // ──────────────────────────────────────────────────────────────
 
- let _pendingQueue = []; // escrituras offline pendientes
+ // v1.3.1149 SYNC STABILITY — persistir pendingQueue en localStorage
+ // Antes: si usuario cierra app offline con queue pendiente, PÉRDIDA DE DATOS al reabrir
+ // Ahora: cola persiste entre sesiones, flush automático al reconectar
+ const _PQ_KEY = 'dashwey_pending_queue';
+ let _pendingQueue = (function _loadPQ(){
+  try {
+   const raw = localStorage.getItem(_PQ_KEY);
+   if (!raw) return [];
+   const parsed = JSON.parse(raw);
+   if (Array.isArray(parsed) && parsed.length > 0) {
+    console.info('[Dashwey/PendingQueue] recuperados ' + parsed.length + ' snapshots offline persistidos');
+   }
+   return Array.isArray(parsed) ? parsed : [];
+  } catch(_) { return []; }
+ })();
+ const _persistPQ = function() {
+  try {
+   if (_pendingQueue.length === 0) {
+    localStorage.removeItem(_PQ_KEY);
+   } else {
+    // Persistir solo el último snapshot — es el más reciente, evita crecer sin fin
+    localStorage.setItem(_PQ_KEY, JSON.stringify([_pendingQueue[_pendingQueue.length - 1]]));
+   }
+  } catch(e) {
+   // QuotaExceeded o similar: silent, no romper app
+   console.warn('[Dashwey/PendingQueue] persist error:', e?.message);
+  }
+ };
+ // Auto-flush si recuperamos cola al arrancar (online + Firebase ready)
+ if (_pendingQueue.length > 0) {
+  setTimeout(function(){
+   if (navigator.onLine && window._DashweyFirebase?.ready) {
+    try { _flushQueue(); } catch(_) {}
+   }
+  }, 3000); // 3s para que Firebase termine init
+ }
  let _isSyncing = false;
  let _isSaving = false; // guard: evita writes concurrentes
  let _dirtyDuringSave = false; // v1.3.613: cambios ocurridos durante un write activo
@@ -10912,7 +10965,7 @@ const State = (() => {
  //                   Sin esto, al reconectar solo subía el doc raíz y las subcol
  //                   quedaban desincronizadas hasta próximo save() manual.
  _writeFirebaseDual(snapshot).then(ok => {
- if (ok) { _pendingQueue = []; }
+ if (ok) { _pendingQueue = []; _persistPQ(); /* v1.3.1149 limpiar persistencia */ }
  _isSyncing = false;
  }).catch(() => { _isSyncing = false; });
  }
@@ -11279,6 +11332,7 @@ const State = (() => {
  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
  _writeLocal(_archivePayload(_state));
  _pendingQueue = [JSON.parse(JSON.stringify(_archivePayload(_state)))];
+ _persistPQ(); // v1.3.1149 SYNC STABILITY: persistir cola offline
  State.set.syncStatus({ mode: 'local', pendingWrites: 1 });
  // v1.3.1135 FIX#1: offline — mantener dirty=true para reintento al volver online
  return;
@@ -14277,7 +14331,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1148-dev';
+ const _APP_VERSION = 'v1.3.1149-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
