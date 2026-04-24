@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1135-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1136-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1135-dev</title>
+<title>Dashwey v1.3.1136-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9142,13 +9142,39 @@ window._DashweyUseSubcollections = false;
 // Estructura: { ventas: Set<id>, gastos: Set<id>, ... }
 // Cada setter (add/update/remove) añadirá el id a la Set correspondiente
 // _writeFirebaseSubcollections() consumirá estas Sets y limpiará tras éxito
-window._DashweyDirtyItems = {
- ventas:         new Set(),
- gastosOp:       new Set(),
- ingresosFin:    new Set(),
- historialPedidos: new Set(),
- mermas:         new Set(),
- facturas:       new Set(),
+// v1.3.1136 FIX#2: hidratar desde localStorage si había dirty pendientes de sesión anterior
+//                  Sin esto, cambios offline + cierre de tab = datos perdidos al volver online
+window._DashweyDirtyItems = (function() {
+ const base = {
+  ventas:         new Set(),
+  gastosOp:       new Set(),
+  ingresosFin:    new Set(),
+  historialPedidos: new Set(),
+  mermas:         new Set(),
+  facturas:       new Set(),
+ };
+ try {
+  const stored = localStorage.getItem('dashwey_dirty_items_v1');
+  if (stored) {
+   const obj = JSON.parse(stored);
+   for (const k of Object.keys(base)) {
+    if (Array.isArray(obj[k])) obj[k].forEach(id => base[k].add(id));
+   }
+  }
+ } catch(_) {}
+ return base;
+})();
+
+// v1.3.1136 FIX#2: persistencia dirty — llamada desde markDirty/clearDirty
+window._DashweyPersistDirty = function() {
+ try {
+  const out = {};
+  const dirty = window._DashweyDirtyItems || {};
+  for (const k of Object.keys(dirty)) {
+   if (dirty[k] instanceof Set) out[k] = Array.from(dirty[k]);
+  }
+  localStorage.setItem('dashwey_dirty_items_v1', JSON.stringify(out));
+ } catch(_) {}
 };
 
 // Mapa de subcolección → nombre de array en State
@@ -9189,6 +9215,8 @@ window._DashweyMarkDirty = function(stateKey, id) {
   const dirty = window._DashweyDirtyItems;
   if (dirty && dirty[stateKey] instanceof Set) {
    dirty[stateKey].add(id);
+   // v1.3.1136 FIX#2: persistir tras cada marca — offline + cierre tab no pierde dirty
+   try { window._DashweyPersistDirty && window._DashweyPersistDirty(); } catch(_) {}
   }
  } catch(_) {}
 };
@@ -9199,6 +9227,8 @@ window._DashweyClearDirty = function(stateKey) {
   const dirty = window._DashweyDirtyItems;
   if (dirty && dirty[stateKey] instanceof Set) {
    dirty[stateKey].clear();
+   // v1.3.1136 FIX#2: persistir tras clear
+   try { window._DashweyPersistDirty && window._DashweyPersistDirty(); } catch(_) {}
   }
  } catch(_) {}
 };
@@ -10399,19 +10429,12 @@ const State = (() => {
  if (data?.user && window._DashweyDeviceId) {
  data.user.lastDeviceId = window._DashweyDeviceId;
  }
- // Limpiar claves inválidas para Firestore (__ prefix, undefined, funciones)
- const _cleanForFirestore = (obj) => {
- if (!obj || typeof obj !== 'object') return obj;
- const clean = {};
- for (const [k, v] of Object.entries(obj)) {
- if (k.startsWith('__') || k.endsWith('__')) continue; // Firestore no acepta __key__
- if (typeof v === 'function') continue;
- if (v === undefined) { clean[k] = null; continue; }
- clean[k] = (typeof v === 'object' && !Array.isArray(v)) ? _cleanForFirestore(v) : v;
- }
- return clean;
- };
-  const cleanData = _cleanForFirestore(data);
+ // v1.3.1136 FIX#7: usar _DashweyDeepClean global (recursivo en arrays + BigInt + circular)
+ //                  La versión local _cleanForFirestore no recursaba en arrays →
+ //                  objetos corruptos dentro de arrays pasaban sin limpiar → 400.
+ const cleanData = (typeof window._DashweyDeepClean === 'function')
+  ? window._DashweyDeepClean(data)
+  : data;
   // save() tiene su propio debounce — escribir directo para que .then() mida el write real
   const ok = await fb.write('state', cleanData);
   if (_state.syncStatus) { _state.syncStatus.pendingWrites = ok ? 0 : 1; }
@@ -10472,20 +10495,15 @@ const State = (() => {
    } catch(_) {}
    // Marcar arquitectura en doc raíz (permite a devices antiguos detectar)
    rootPayload._schemaVersion = 2;
-   // 2. Escribir doc raíz (reutiliza _writeFirebase para limpieza + timestamps)
-   const rootOk = await _writeFirebase(rootPayload);
-   if (!rootOk) {
-    console.warn('[Dashwey/SubB] root write failed — abortando batches');
-    return false;
-   }
-   // 3. Para cada subcolección: extraer items dirty del state y hacer batch
-   // v1.3.1133: leer arrays directamente de State.raw, SIN _buildLocalSnapshot
-   // Antes: _buildLocalSnapshot() serializa 1613 KB cada save (CPU + mem wasted)
-   // Ahora: accedemos al array raw directo → solo leemos la key que necesitamos
+   // v1.3.1136 FIX#1: BATCHES SUBCOL PRIMERO, ROOT DESPUÉS
+   // Razón: si batches fallan, NO debemos subir el root con schemaVersion:2
+   // porque otros devices verían doc raíz declarando subcol vacía (= datos perdidos).
+   // Orden correcto: subcol OK → root OK. Si subcol falla → abortar sin tocar root.
    const dirty = window._DashweyDirtyItems || {};
    const _S = window.App?.State || State;
    const _raw = (_S && _S.raw) ? _S.raw : null;
    let totalDirty = 0;
+   const _pendingClears = []; // limpiar Sets SOLO si todo OK
    for (const stateKey of transactionalKeys) {
     const dirtySet = dirty[stateKey];
     if (!(dirtySet instanceof Set) || dirtySet.size === 0) continue;
@@ -10504,30 +10522,55 @@ const State = (() => {
     if (!items.length) { dirtySet.clear(); continue; }
     const batchOk = await window._DashweyWriteSubcollectionBatch(stateKey, items);
     if (batchOk) {
+     // No limpiar aún — solo tras root OK
+     _pendingClears.push({ dirtySet, stateKey, items });
+    } else {
+     // v1.3.1136 FIX#1: batch falló → ABORTAR todo, NO subir root
+     console.warn('[Dashwey/SubB] batch falló para', stateKey, '— abortando dual write (root NO se sube)');
+     return false;
+    }
+   }
+   // 2. Escribir doc raíz DESPUÉS de batches exitosos
+   const rootOk = await _writeFirebase(rootPayload);
+   if (!rootOk) {
+    console.warn('[Dashwey/SubB] root write failed TRAS batches OK — items en subcol, root legacy');
+    // Los items SÍ están en subcol. El root no tiene schemaVersion:2.
+    // Próximo save reintentará el root. Limpiar dirty porque subcol ya los tiene.
+    for (const { dirtySet, stateKey, items } of _pendingClears) {
      dirtySet.clear();
-     // v1.3.1094: actualizar snapshot "último sincronizado" con los items escritos.
-     // Esto es fuente de verdad para _diffMarkDirty en futuros writes.
      try {
       if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
       if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
       const snap = window._DashweyLastSyncedSnap[stateKey];
       for (const it of items) {
-       if (it?.id) {
-        if (it.deleted === true) {
-         // Item borrado: removerlo del snapshot (ya no existe en Firestore)
-         delete snap[it.id];
-        } else {
-         // v1.3.1127: canonical stringify
-         try { snap[it.id] = (window._DashweyCanonStringify || JSON.stringify)(it); } catch(_) {}
-        }
-       }
+       if (it?.id) { try { snap[it.id] = JSON.stringify(it); } catch(_) {} }
       }
      } catch(_) {}
-    } else {
-     // Fallo: mantener dirty para reintento en próximo save()
-     console.warn('[Dashwey/SubB] batch falló para', stateKey, '—', items.length, 'items — reintentará');
     }
+    return false;
    }
+   // 3. TODO OK → limpiar Sets y actualizar lastSynced baseline
+   for (const { dirtySet, stateKey, items } of _pendingClears) {
+    dirtySet.clear();
+    try {
+     if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+     if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
+     const snap = window._DashweyLastSyncedSnap[stateKey];
+     for (const it of items) {
+      if (it?.id) {
+       if (it.deleted === true) {
+        // Item borrado: removerlo del snapshot (ya no existe en Firestore)
+        delete snap[it.id];
+       } else {
+        // v1.3.1127: canonical stringify
+        try { snap[it.id] = (window._DashweyCanonStringify || JSON.stringify)(it); } catch(_) {}
+       }
+      }
+     }
+    } catch(_) {}
+   }
+   // v1.3.1136 FIX#2: persistir dirty tras clears masivos
+   try { window._DashweyPersistDirty && window._DashweyPersistDirty(); } catch(_) {}
    if (totalDirty > 0) console.info('[Dashwey/SubB] ✓ subcolecciones escritas:', totalDirty, 'items');
    return true;
   } catch(e) {
@@ -10555,7 +10598,11 @@ const State = (() => {
  snapshot.user.lastSyncAt = Date.now();
  snapshot.user.lastDeviceId = window._DashweyDeviceId || 'unknown';
  }
- _writeFirebase(snapshot).then(ok => {
+ // v1.3.1136 FIX#5: usar _writeFirebaseDual (no _writeFirebase) para que
+ //                   subcolecciones dirty también se sincronicen en flush offline.
+ //                   Sin esto, al reconectar solo subía el doc raíz y las subcol
+ //                   quedaban desincronizadas hasta próximo save() manual.
+ _writeFirebaseDual(snapshot).then(ok => {
  if (ok) { _pendingQueue = []; }
  _isSyncing = false;
  }).catch(() => { _isSyncing = false; });
@@ -10890,6 +10937,12 @@ const State = (() => {
  // Guard: no escribir a Firebase antes del primer sync inicial.
  // Evita que un estado local vacío (tras borrar almacenamiento) sobrescriba la nube.
  if (fb?.enabled && fb.isRegistered?.() && !window._DashweyInitialSyncDone) {
+  // v1.3.1136 FIX#3: estampar ts ANTES de _writeLocal para que lastSyncAt refleje
+  //                  la realidad. Sin esto, _doInitialSync comparaba ts stale y
+  //                  podía considerar remoto más nuevo → borraba cambios locales.
+  const _ts0 = Date.now();
+  const _did0 = window._DashweyDeviceId || 'unknown';
+  if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
   _writeLocal(_archivePayload(_state));
   // v1.3.1135 FIX#1: no limpiar dirty — esperar a que InitialSync termine
   //                    y entonces el próximo save() lo recoge y sube
@@ -11255,12 +11308,18 @@ const State = (() => {
  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
  try { if (v?.id) window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
  // v1.3.980: FIFO — consumir lotes para registrar coste real de esta venta
+ // v1.3.1136 FIX#8: si FIFO falla, marcar costeRealPending para retry
+ //                  Sin esto, ventas quedaban sin costeReal indefinidamente (KPIs erróneos)
  try {
   if (typeof FinEngine !== 'undefined' && FinEngine.consumirLotesFIFO && v?.prodId && v?.qty) {
    var _r = FinEngine.consumirLotesFIFO(v.prodId, v.qty);
    if (_r && _r.qtyConsumida > 0) v.costeReal = _r.costeConsumido; // coste histórico al que se vendió
+   else v.costeRealPending = true; // no hay lotes suficientes → pending para retry
   }
- } catch(_e) { console.warn('[FIFO] consumirLotesFIFO falló:', _e?.message); }
+ } catch(_e) {
+  console.warn('[FIFO] consumirLotesFIFO falló:', _e?.message);
+  if (v) v.costeRealPending = true; // marcar para retry próximo save
+ }
  save();
  },
  addProd: (p) => { _state.productos.push(p); save(); },
@@ -13462,7 +13521,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1135-dev';
+ const _APP_VERSION = 'v1.3.1136-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -13857,9 +13916,25 @@ const ui = (() => {
    // Bloquear escritura a Firebase ANTES de resetear
    // Evita que resetStorage() sobreescriba Firebase con datos vacios
    if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
+   // v1.3.1136 FIX#4: limpiar dirty flags del usuario anterior — sin esto
+   // el próximo login intentaría subir items con IDs que no existen en el nuevo state
+   try {
+    if (window._DashweyDirtyItems) {
+     Object.values(window._DashweyDirtyItems).forEach(s => {
+      if (s instanceof Set) s.clear();
+     });
+    }
+    window._DashweyDirty = false;
+    window._DashweySaveScheduled = false;
+    window._DashweySubPending = {};
+    window._DashweyLastSyncedSnap = {};
+    window._DashweyLastRootDigest = '';
+    window._DashweyInitialSyncDone = false; // forzar re-sync en próximo login
+   } catch(_) {}
    // Cancelar onSnapshot antes de limpiar — evita restaurar datos borrados
    if (fb?.enabled) {
     try { fb.unsubscribeAll?.(); } catch(_) {}
+    try { window._DashweyUnsubscribeAllSubcollections?.(); } catch(_) {}
     await fb.logout();
    }
    // NO borrar datos locales al logout -- evita sobreescribir Firebase con datos vacios
@@ -38905,15 +38980,27 @@ _eaRecalc();
      // local que NO aparece en ese snapshot ha sido eliminado remotamente.
      // Marcarlo deleted:true para propagar al UI local y eliminar en siguientes syncs.
      //
-     // GUARD DEFENSIVO: si el snapshot remoto es significativamente menor que el local
-     // (<50% del local AND local>10), NO marcar deletions — probablemente fetch incompleto
-     // o estado inicial antes de que Firestore sincronice. Evita borrar 700 items por accidente.
+     // v1.3.1136 FIX#6: guard MÁS ESTRICTO — solo marcar deletions si:
+     //   - local count <= 10 (datasets pequeños: siempre procesar), O
+     //   - remoto >= 95% local Y delta absoluto < 20 items (borrados puntuales reales), O
+     //   - ya tuvimos un snapshot baseline previo (evita falsos positivos en cold-start)
+     // Razón: con guard antiguo 50%, si local=100 y remoto=51 (reducción 49%) se
+     // marcaban 49 items como deleted → borrado en cascada entre devices.
      const remoteIds = new Set();
      items.forEach(rit => { if (rit?.id) remoteIds.add(rit.id); });
      const localCount = (localArr || []).length;
      const remoteCount = items.length;
-     const suspiciousGap = (localCount > 10) && (remoteCount < localCount * 0.5);
-     if (!suspiciousGap) {
+     // Safe to delete si:
+     //  a) dataset pequeño (≤10) siempre procesable
+     //  b) baseline existe Y el delta es ≤20 items (o ≤5% local) → borrados puntuales
+     const hasBaseline = !!(window._DashweyLastSyncedSnap && 
+                             window._DashweyLastSyncedSnap[stateKey] &&
+                             Object.keys(window._DashweyLastSyncedSnap[stateKey]).length > 0);
+     const delta = localCount - remoteCount;
+     const safeToDeleteTiny = (localCount <= 10);
+     const safeToDeleteIncremental = hasBaseline && (delta <= 20 || delta <= localCount * 0.05);
+     const canDelete = safeToDeleteTiny || safeToDeleteIncremental;
+     if (canDelete) {
       const _now = Date.now();
       (localArr || []).forEach(lit => {
        if (!lit?.id) return;
@@ -38926,8 +39013,8 @@ _eaRecalc();
        }
       });
      } else {
-      console.warn('[Dashwey/SubB] snapshot remoto incompleto (', remoteCount, '<',
-                   Math.round(localCount * 0.5), '), ignorando detección de borrados para', stateKey);
+      console.warn('[Dashwey/SubB] skip detección de borrados para', stateKey,
+                   '— local:', localCount, 'remoto:', remoteCount, 'baseline:', hasBaseline);
      }
      const merged = Object.values(byId);
      // Escribir al State vía setter masivo correspondiente
