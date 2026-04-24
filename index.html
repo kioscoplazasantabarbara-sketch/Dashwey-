@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1133-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1134-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1133-dev</title>
+<title>Dashwey v1.3.1134-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8980,6 +8980,17 @@ window._DashweyFirebase = {
  if (silenced.some(s => e?.message?.includes(s) || e?.code?.includes(s))) {
  return false; // silencioso — el bloqueador de red es externo a la app
  }
+ // v1.3.1134: si es invalid-argument, loguear EL campo culpable
+ if (e?.code === 'invalid-argument' || e?.message?.includes('invalid-argument')) {
+  try {
+   const problem = (window._DashweyValidatePayload || (()=>null))(data);
+   if (problem) {
+    console.error('[Dashwey/FB] invalid-argument field:', problem.path, '—', problem.reason);
+   } else {
+    console.error('[Dashwey/FB] invalid-argument pero validator no detecta problema. Payload keys:', Object.keys(data||{}));
+   }
+  } catch(_) {}
+ }
  // Solo 1 reintento para errores recuperables (no resource-exhausted)
  if (_attempt < 1 && e?.name === 'FirebaseError') {
  await new Promise(r => setTimeout(r, 2000));
@@ -9194,24 +9205,71 @@ window._DashweyClearDirty = function(stateKey) {
 
 // v1.3.1119: limpieza global reutilizable — undefined/NaN/Infinity → null
 // Usada por batches subcolecciones y fb.write (coherencia total)
-window._DashweyDeepClean = function(v) {
+// v1.3.1134: endurecimiento — BigInt, claves inválidas, circular refs, arrays vacíos
+window._DashweyDeepClean = function(v, _seen) {
  if (v === undefined || v === null) return null;
  if (typeof v === 'function' || typeof v === 'symbol') return null;
+ if (typeof v === 'bigint') return Number(v); // v1.3.1134: BigInt no soportado Firestore
  if (typeof v === 'number') {
   if (isNaN(v) || !isFinite(v)) return null;
   return v;
  }
+ if (typeof v === 'string') {
+  // Firestore acepta strings sin límite hasta 1MB — pero truncamos paranoia
+  if (v.length > 900000) return v.slice(0, 900000);
+  return v;
+ }
  if (typeof v !== 'object') return v;
  if (v instanceof Date) return v.toISOString();
- if (Array.isArray(v)) return v.map(window._DashweyDeepClean);
+ // v1.3.1134: detectar y romper referencias circulares
+ if (!_seen) _seen = new WeakSet();
+ if (_seen.has(v)) return null;
+ _seen.add(v);
+ if (Array.isArray(v)) return v.map(x => window._DashweyDeepClean(x, _seen));
  const out = {};
  for (const k of Object.keys(v)) {
+  // Claves inválidas Firestore
   if (k.startsWith('__') || k.endsWith('__')) continue;
-  const cleaned = window._DashweyDeepClean(v[k]);
+  if (k === '' || k == null) continue;              // v1.3.1134: key vacía
+  if (k.includes('.') || k.includes('/')) continue; // v1.3.1134: Firestore usa . y / como separadores de path
+  if (k.length > 1500) continue;                     // v1.3.1134: Firestore hard limit keys ~1500 chars
+  const cleaned = window._DashweyDeepClean(v[k], _seen);
   if (cleaned === undefined) continue;
   out[k] = cleaned;
  }
  return out;
+};
+
+// v1.3.1134: validator de diagnóstico — detecta qué campo causa invalid-argument
+// Se ejecuta ANTES del write; si encuentra problema, loguea path completo
+window._DashweyValidatePayload = function(obj, path) {
+ path = path || '$';
+ if (obj === null || obj === undefined) return null;
+ const t = typeof obj;
+ if (t === 'function' || t === 'symbol') return { path, reason: 'type_' + t };
+ if (t === 'bigint') return { path, reason: 'bigint_not_supported' };
+ if (t === 'number' && (isNaN(obj) || !isFinite(obj))) return { path, reason: 'nan_or_infinity' };
+ if (t !== 'object') return null;
+ if (obj instanceof Date) return null;
+ if (Array.isArray(obj)) {
+  if (obj.length > 20000) return { path, reason: 'array_too_large_' + obj.length };
+  for (let i = 0; i < obj.length; i++) {
+   const sub = window._DashweyValidatePayload(obj[i], path + '[' + i + ']');
+   if (sub) return sub;
+  }
+  return null;
+ }
+ const keys = Object.keys(obj);
+ for (const k of keys) {
+  if (k === '') return { path: path + '.""', reason: 'empty_key' };
+  if (k.startsWith('__') || k.endsWith('__')) return { path: path + '.' + k, reason: 'double_underscore_key' };
+  if (k.includes('.')) return { path: path + '.' + k, reason: 'key_has_dot' };
+  if (k.includes('/')) return { path: path + '.' + k, reason: 'key_has_slash' };
+  if (k.length > 1500) return { path: path + '.' + k.slice(0,40) + '...', reason: 'key_too_long' };
+  const sub = window._DashweyValidatePayload(obj[k], path + '.' + k);
+  if (sub) return sub;
+ }
+ return null;
 };
 
 // Helper: batch writer para subcolecciones — NO se invoca todavía
@@ -9249,6 +9307,18 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
   }
   return true;
  } catch(e) {
+  // v1.3.1134: si es invalid-argument, loguear el primer item problemático
+  if (e?.code === 'invalid-argument' || e?.message?.includes('invalid-argument')) {
+   try {
+    for (const it of items) {
+     const problem = (window._DashweyValidatePayload || (()=>null))(it);
+     if (problem) {
+      console.error('[Dashwey/SubB] invalid-argument — stateKey:', stateKey, '| item.id:', it?.id, '| path:', problem.path, '| reason:', problem.reason);
+      break; // solo el primero
+     }
+    }
+   } catch(_) {}
+  }
   console.warn('[Dashwey/SubB] batch error:', stateKey, e?.code || e?.message);
   return false;
  }
@@ -13381,7 +13451,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1133-dev';
+ const _APP_VERSION = 'v1.3.1134-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
