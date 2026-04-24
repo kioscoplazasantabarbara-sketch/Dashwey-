@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1144-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1145-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1144-dev</title>
+<title>Dashwey v1.3.1145-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13179,12 +13179,16 @@ const Loyverse = (() => {
   const _fallbackCuenta = (cuentas.find((c) => c.scope === 'negocio') || cuentas[0] || {}).id || null;
 
   // Sets de IDs existentes para dedup
+  // v1.3.1145 FIX: usar State.raw (incluye items deleted) — evita recrear refunds/ingresos
+  // previamente marcados como deleted que causarían backfill repetido.
   const _existingIngSrc = new Set();
   const _existingGasSrc = new Set();
-  (State.get.ingresosFin ? State.get.ingresosFin() : []).forEach((i) => {
+  const _rawIng = (State.raw && State.raw.ingresosFin) ? State.raw.ingresosFin() : (State.get.ingresosFin ? State.get.ingresosFin() : []);
+  const _rawGas = (State.raw && State.raw.gastosOp) ? State.raw.gastosOp() : (State.get.gastosOp ? State.get.gastosOp() : []);
+  (_rawIng || []).forEach((i) => {
    if (i && i.sourceRefId) _existingIngSrc.add(i.sourceRefId);
   });
-  (State.get.gastosOp ? State.get.gastosOp() : []).forEach((g) => {
+  (_rawGas || []).forEach((g) => {
    if (g && g.sourceRefId) _existingGasSrc.add(g.sourceRefId);
   });
 
@@ -14035,7 +14039,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1144-dev';
+ const _APP_VERSION = 'v1.3.1145-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -17947,7 +17951,12 @@ const ui = (() => {
     var prodByLvId = {};
     productos.forEach(function(p){ if (p && p.loyverseItemId) prodByLvId[p.loyverseItemId] = p; });
     var ventasExistentes = new Set();
-    (State.get.ventas ? State.get.ventas() : []).forEach(function(v){ if (v && v.id) ventasExistentes.add(v.id); });
+    // v1.3.1145 FIX: usar State.raw.ventas (incluye items con deleted:true) para evitar
+    // recrear ventas que ya fueron marcadas deleted. Antes usaba State.get.ventas (filtrado),
+    // por lo que cada sync Loyverse recreaba las mismas ventas deleted → backfill las marcaba
+    // otra vez → ping-pong sin fin propagándose entre dispositivos.
+    var _rawVentas = (State.raw && State.raw.ventas) ? State.raw.ventas() : (State.get.ventas ? State.get.ventas() : []);
+    (_rawVentas || []).forEach(function(v){ if (v && v.id) ventasExistentes.add(v.id); });
 
     receipts.forEach(function(raw) {
      try {
@@ -40049,17 +40058,62 @@ _eaRecalc();
 })();
 // v1.3.1074: BACKFILL — convertir tombstones locales en flags deleted:true en items actuales
 // Esto sincroniza el soft delete a Firebase para dispositivos que ya habían borrado con v1.3.1073
+// v1.3.1145 FIX: respetar items con origen externo (loyverse/budgetbakers).
+// Esos items son fuente autoritativa: si Loyverse los resincroniza, son válidos.
+// Sin este filtro, un tombstone viejo + resync Loyverse = ping-pong de marcado deleted
+// propagándose entre dispositivos (causa de los 707 en tablet y 22 en smartphone).
+
+// v1.3.1145 FIX#4 — AUTO-PURGA arranque: items con origen externo + deleted:true se purgan
+// del array raw. Los zombies se eliminan definitivamente; la fuente externa los recreará
+// limpios en la próxima sincronización. Imposible que resurjan tras FIX#1 del backfill.
+try {
+ if (typeof State !== 'undefined' && State.raw) {
+  var _EXT_ORIGIN = { loyverse: 1, import_loyverse: 1, budgetbakers: 1 };
+  var _purgeKeys = ['ventas','gastosOp','ingresosFin'];
+  var _purgedTotal = 0;
+  _purgeKeys.forEach(function(k){
+   try {
+    var raw = State.raw[k] && State.raw[k]();
+    if (!Array.isArray(raw)) return;
+    var before = raw.length;
+    for (var i = raw.length - 1; i >= 0; i--) {
+     var it = raw[i];
+     if (it && it.deleted && it.origen && _EXT_ORIGIN[it.origen]) {
+      // También limpiar tombstone asociado (fuente externa manda)
+      try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.delete && window._DashweyLocalDeletedIds.delete(it.id); } catch(_) {}
+      raw.splice(i, 1);
+      _purgedTotal++;
+     }
+    }
+   } catch(_) {}
+  });
+  if (_purgedTotal > 0) {
+   console.log('[Dashwey/AutoPurgaExt] Purgados ' + _purgedTotal + ' items externos soft-deleted (zombies).');
+   try { window._DashweyDirty = true; } catch(_) {}
+  }
+ }
+} catch(ePurga) { console.warn('[Dashwey/AutoPurgaExt]', ePurga); }
+
 try {
  var _tomb = window._DashweyLocalDeletedIds;
  if (_tomb && _tomb.size > 0 && typeof State !== 'undefined' && State.get) {
   var _bfKeys = ['cuentas','productos','proveedores','historialPedidos','facturas','mermas','ventas','pendingOrders','gastosOp','ingresosFin','visitasComerciales','cierresCaja','recordatorios'];
-  var _bfCount = 0;
+  var _bfCount = 0, _bfSkippedExt = 0;
+  var _EXTERNAL_ORIGINS = { loyverse: 1, import_loyverse: 1, budgetbakers: 1 };
   _bfKeys.forEach(function(k){
    try {
     var arr = State.get[k] && State.get[k]();
     if (!Array.isArray(arr)) return;
     arr.forEach(function(x){
      if (x && x.id && !x.deleted && _tomb.has(x.id)) {
+      // v1.3.1145 FIX: items de fuente externa NO se marcan deleted por tombstone local.
+      // La fuente externa es autoritativa — si reaparecen, es porque deben existir.
+      if (x.origen && _EXTERNAL_ORIGINS[x.origen]) {
+       _bfSkippedExt++;
+       // Limpiar tombstone stale para que no siga causando backfill futuro
+       try { _tomb.delete && _tomb.delete(x.id); } catch(_) {}
+       return;
+      }
       x.deleted = true;
       x.deletedAt = Date.now();
       _bfCount++;
@@ -40067,8 +40121,8 @@ try {
     });
    } catch(_) {}
   });
-  if (_bfCount > 0) {
-   console.log('[Dashwey/Backfill] Marcados ' + _bfCount + ' items con deleted:true desde tombstones locales');
+  if (_bfCount > 0 || _bfSkippedExt > 0) {
+   console.log('[Dashwey/Backfill] Marcados ' + _bfCount + ' deleted:true | skipped externos: ' + _bfSkippedExt);
    try { window._DashweyDirty = true; } catch(_) {} // forzar sync próximo save
   }
  }
