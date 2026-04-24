@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1160-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1161-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1160-dev</title>
+<title>Dashwey v1.3.1161-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11987,6 +11987,22 @@ const State = (() => {
  // v1.3.582: deduplicación por ID — evita duplicados si addVenta se llama dos veces con el mismo payload
  addVenta: (v) => {
  if (v?.id && _state.ventas.some(x => x.id === v.id)) return;
+ // v1.3.1161 DATA INTEGRITY: garantizar v.total siempre definido.
+ //   Si falta, calcular desde items[] (pvp*qty). Evita divisiones por 0 en KPIs
+ //   y mantiene coherencia entre callers (TPV, Loyverse, import, tests).
+ try {
+  if (v && (v.total === undefined || v.total === null || isNaN(Number(v.total)))) {
+   var _sum = 0;
+   if (Array.isArray(v.items)) {
+    v.items.forEach(function(it){
+     var _pvp = Number(it && it.pvp) || 0;
+     var _qty = Number(it && it.qty) || 0;
+     _sum += _pvp * _qty;
+    });
+   }
+   v.total = _sum;
+  }
+ } catch(_) { if (v && (v.total === undefined || v.total === null)) v.total = 0; }
  // v1.3.1154 GRUPOS: heredar grupoId en cada item desde su producto.
  // Solo para TPV Dashwey (origen manual o sin origen). Loyverse asigna aparte en commit.
  try {
@@ -14773,7 +14789,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1160-dev';
+ const _APP_VERSION = 'v1.3.1161-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19906,7 +19922,7 @@ try { renderTopArticulos(period); } catch(e) {}
       window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
      }
     } catch(_) {}
-    var _ALL_IDS_R = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+    var _ALL_IDS_R = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock','gruposVenta'];
     // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
     // Saltar su merge desde doc raíz para evitar fantasmas de datos legacy.
     var _skipTrans_17 = window._DashweyShouldSkipTransactionalInRoot?.();
@@ -27883,6 +27899,14 @@ function _confirmBorrarCuenta(id) {
 
  // Ingresos y gastos del período
  // v1.3.1045: FIX doble conteo — ingresos origen=loyverse/tpv están ya como ventas
+ // v1.3.1161 AUDIT DECISION:
+ //   KPI saldo/delta usa ventas individuales en tiempo real (correcto).
+ //   LISTA "Últimos movimientos" usa solo cierres + movs manuales (v1.3.1159).
+ //   Son dos vistas distintas del mismo estado:
+ //     - KPI saldo: "¿cuánto he facturado este período?" → realtime, acumulado
+ //     - Lista movs: "¿qué eventos financieros han ocurrido?" → agregados discretos
+ //   No es inconsistencia: el saldo entre cierres DEBE reflejar ventas en curso,
+ //   pero no se duplican en la lista (esa pertenece al dominio "eventos cerrados").
  var _ingPeriodo = 0, _gastoPeriodo = 0;
  if (_range) {
   // v1.3.1003 Fase 5: excluir por scope + pendiente (usar _isKpiVisible)
@@ -37526,7 +37550,7 @@ _eaRecalc();
     window._DashweyLocalDeletedIds.mergeArray(merged._deletedIds);
    }
   } catch(_) {}
-  var _ALL_IDS_A = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+  var _ALL_IDS_A = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock','gruposVenta'];
   // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
   var _skipTrans_34 = window._DashweyShouldSkipTransactionalInRoot?.();
   _ALL_IDS_A.forEach(function(k) {
@@ -37546,7 +37570,8 @@ _eaRecalc();
    chatUsers:'chatUsers', notifsRead:'notifsRead',
    recordatorios:'setRecordatorios',
    // v1.3.1076: lotesStock mapping explícito
-   lotesStock:'setLotesStock' };
+   lotesStock:'setLotesStock',
+   gruposVenta:'setGrupos' };
   // v1.3.1090: proteger marcado dirty durante merge remoto
   var _prevApp = window._DashweyApplyingRemote;
   window._DashweyApplyingRemote = true;
@@ -41008,7 +41033,8 @@ _eaRecalc();
    chatUsers:'chatUsers', notifsRead:'notifsRead',
    recordatorios:'setRecordatorios',
    // v1.3.1076: lotesStock mapping explícito
-   lotesStock:'setLotesStock' };
+   lotesStock:'setLotesStock',
+   gruposVenta:'setGrupos' };
   Object.keys(merged).forEach(function(k) {
    var sk = (_sm[k] !== undefined) ? _sm[k] : k;
    if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
@@ -41137,7 +41163,8 @@ _eaRecalc();
   } catch(_) {}
  // v1.3.1074: _mergeById aplicado a TODOS los arrays con id (no solo acumulativos)
  // Así deletedAt del ítem marca autoridad entre dispositivos
- var _ALL_ID_KEYS = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock'];
+ // v1.3.1161: gruposVenta añadido (merge-by-id + tombstone respeto)
+ var _ALL_ID_KEYS = ['productos','proveedores','ventas','historialPedidos','facturas','mermas','pendingOrders','cierresCaja','cuentas','gastosOp','ingresosFin','recordatorios','visitasComerciales','lotesStock','gruposVenta'];
  // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
  var _skipTrans_37 = window._DashweyShouldSkipTransactionalInRoot?.();
  _ALL_ID_KEYS.forEach(function(k) {
@@ -41175,7 +41202,8 @@ _eaRecalc();
    chatUsers:'chatUsers', notifsRead:'notifsRead',
    recordatorios:'setRecordatorios',
    // v1.3.1076: lotesStock mapping explícito
-   lotesStock:'setLotesStock' };
+   lotesStock:'setLotesStock',
+   gruposVenta:'setGrupos' };
   Object.keys(merged).forEach(function(k) {
    var sk = (_sm[k] !== undefined) ? _sm[k] : k;
    if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
@@ -41449,7 +41477,7 @@ _eaRecalc();
          // Aplicar TODO el snapshot remoto (no solo cuentas) para consistencia
          if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
          try {
-          var _arraysCriticos = ['cuentas','productos','proveedores','historialPedidos','facturas','mermas','ventas','pendingOrders','gastosOp','ingresosFin','cierresCaja','recordatorios','lotesStock','visitasComerciales'];
+          var _arraysCriticos = ['cuentas','productos','proveedores','historialPedidos','facturas','mermas','ventas','pendingOrders','gastosOp','ingresosFin','cierresCaja','recordatorios','lotesStock','visitasComerciales','gruposVenta'];
           _arraysCriticos.forEach(function(k){
            if (Array.isArray(remote[k])) {
             var setterKey = k;
