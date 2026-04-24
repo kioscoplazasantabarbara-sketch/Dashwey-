@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1153-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1154-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1153-dev</title>
+<title>Dashwey v1.3.1154-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10369,6 +10369,10 @@ const State = (() => {
   _jornadaActivaId: null,
   // v1.3.979: FIFO — lotes de stock por coste histórico (ver FinEngine.crearLotesDesdeItems/consumirLotesFIFO)
   lotesStock: [],
+  // v1.3.1154: grupos de venta — capa analítica opcional sobre productos y ventas.
+  // Cada grupo tiene un nombre interno + (opcional) nombre exacto en Loyverse para matching.
+  // Items de venta heredan grupoId en ingestión (nunca retroactivo).
+  gruposVenta: [],
  };
 
  const STORAGE_KEY = 'dashwey_v3';
@@ -11523,6 +11527,9 @@ const State = (() => {
   // v1.3.1142 — ID cierre en curso
   jornadaActivaId: () => _state._jornadaActivaId || null,
  lotesStock: () => _state.lotesStock || [],
+ // v1.3.1154: grupos de venta (capa analítica, filtra deleted)
+ gruposVenta: () => (_state.gruposVenta || []).filter(g => g && !g.deleted),
+ grupo: (id) => (_state.gruposVenta || []).find(g => g && g.id === id),
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
  hotPins: () => _state.hotPins || [],
@@ -11560,6 +11567,7 @@ const State = (() => {
   visitasComerciales: () => _state.visitasComerciales || [],
   recordatorios: () => _state.recordatorios || [],
   lotesStock: () => _state.lotesStock || [],
+  gruposVenta: () => _state.gruposVenta || [],
  };
 
  // ══════════════════════════════════════════════════════════════
@@ -11650,6 +11658,109 @@ const State = (() => {
  addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); c.updatedAt = c.updatedAt || new Date().toISOString(); c.createdAt = c.createdAt || c.updatedAt; } _state.cuentas.push(c); save(); },
  setLotesStock: (v) => { _state.lotesStock = Array.isArray(v) ? v : []; save(); },
  addLoteStock: (l) => { if (!_state.lotesStock) _state.lotesStock = []; if (l?.id && _state.lotesStock.some(x => x.id === l.id)) return; _state.lotesStock.push(l); save(); },
+
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1154 GRUPOS DE VENTA — setters
+ // ══════════════════════════════════════════════════════════════
+ addGrupo: (g) => {
+  if (!g || !g.id) return;
+  if (!_state.gruposVenta) _state.gruposVenta = [];
+  if (_state.gruposVenta.some(x => x && x.id === g.id)) return;
+  g.activo = (typeof g.activo === 'boolean') ? g.activo : true;
+  g.articuloIds = Array.isArray(g.articuloIds) ? g.articuloIds : [];
+  g.loyverseName = g.loyverseName || '';
+  g.createdAt = g.createdAt || new Date().toISOString();
+  g.updatedAt = g.createdAt;
+  _state.gruposVenta.push(g);
+  // Sincronizar grupoId en los artículos miembros
+  (g.articuloIds || []).forEach(function(pid){
+   var p = (_state.productos || []).find(x => x && x.id === pid);
+   if (p) p.grupoId = g.id;
+  });
+  try { if (g.id) window._DashweyMarkDirty && window._DashweyMarkDirty('gruposVenta', g.id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('grupo'); } catch(_) {}
+ },
+ updateGrupo: (id, vals) => {
+  const g = (_state.gruposVenta || []).find(x => x && x.id === id);
+  if (!g) return;
+  // Inmutables del grupo
+  const _IMMUT_GR = ['id', 'createdAt'];
+  let _bloq = [];
+  for (const k of _IMMUT_GR) {
+   if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== g[k]) {
+    _bloq.push(k); delete vals[k];
+   }
+  }
+  if (_bloq.length) console.warn('[Dashwey/Guard] updateGrupo: inmutables bloqueados', id, ':', _bloq.join(','));
+  Object.assign(g, vals);
+  g.updatedAt = new Date().toISOString();
+  try { window._DashweyMarkDirty && window._DashweyMarkDirty('gruposVenta', id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('grupo'); } catch(_) {}
+ },
+ // Añadir artículos a un grupo (sincroniza grupoId en productos)
+ addArticulosAGrupo: (grupoId, articuloIds) => {
+  const g = (_state.gruposVenta || []).find(x => x && x.id === grupoId);
+  if (!g || !Array.isArray(articuloIds)) return;
+  if (!Array.isArray(g.articuloIds)) g.articuloIds = [];
+  const existing = new Set(g.articuloIds);
+  articuloIds.forEach(function(pid){
+   if (!pid || existing.has(pid)) return;
+   // Regla MVP: un artículo pertenece a 1 solo grupo. Si ya tiene grupo, moverlo.
+   const p = (_state.productos || []).find(x => x && x.id === pid);
+   if (!p) return;
+   if (p.grupoId && p.grupoId !== grupoId) {
+    // Remover del grupo previo
+    const old = (_state.gruposVenta || []).find(x => x && x.id === p.grupoId);
+    if (old && Array.isArray(old.articuloIds)) old.articuloIds = old.articuloIds.filter(x => x !== pid);
+   }
+   p.grupoId = grupoId;
+   g.articuloIds.push(pid);
+   existing.add(pid);
+  });
+  g.updatedAt = new Date().toISOString();
+  try { window._DashweyMarkDirty && window._DashweyMarkDirty('gruposVenta', grupoId); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('grupo'); } catch(_) {}
+ },
+ // Quitar artículos de un grupo
+ removeArticulosDeGrupo: (grupoId, articuloIds) => {
+  const g = (_state.gruposVenta || []).find(x => x && x.id === grupoId);
+  if (!g || !Array.isArray(articuloIds)) return;
+  if (!Array.isArray(g.articuloIds)) g.articuloIds = [];
+  const toRemove = new Set(articuloIds);
+  g.articuloIds = g.articuloIds.filter(x => !toRemove.has(x));
+  articuloIds.forEach(function(pid){
+   const p = (_state.productos || []).find(x => x && x.id === pid);
+   if (p && p.grupoId === grupoId) delete p.grupoId;
+  });
+  g.updatedAt = new Date().toISOString();
+  try { window._DashweyMarkDirty && window._DashweyMarkDirty('gruposVenta', grupoId); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('grupo'); } catch(_) {}
+ },
+ // Soft delete — preserva venta.items[].grupoId histórico (inmutabilidad)
+ deleteGrupo: (id) => {
+  const g = (_state.gruposVenta || []).find(x => x && x.id === id);
+  if (!g) return;
+  g.deleted = true;
+  g.deletedAt = Date.now();
+  g.activo = false;
+  // Limpiar grupoId de productos afiliados (futuras ventas no heredarán)
+  (g.articuloIds || []).forEach(function(pid){
+   const p = (_state.productos || []).find(x => x && x.id === pid);
+   if (p && p.grupoId === id) delete p.grupoId;
+  });
+  try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.add && window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+  try { window._DashweyMarkDirty && window._DashweyMarkDirty('gruposVenta', id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('grupo'); } catch(_) {}
+ },
+ setGrupos: (v) => {
+  _state.gruposVenta = Array.isArray(v) ? v : [];
+  save();
+ },
  hiddenCards: (v) => { _state.hiddenCards = v; save(); },
  catLabels: (v) => { _state.catLabels = v; save(); },
  hotPins: (v) => {
@@ -11806,6 +11917,18 @@ const State = (() => {
  // v1.3.582: deduplicación por ID — evita duplicados si addVenta se llama dos veces con el mismo payload
  addVenta: (v) => {
  if (v?.id && _state.ventas.some(x => x.id === v.id)) return;
+ // v1.3.1154 GRUPOS: heredar grupoId en cada item desde su producto.
+ // Solo para TPV Dashwey (origen manual o sin origen). Loyverse asigna aparte en commit.
+ try {
+  if (v && Array.isArray(v.items) && v.origen !== 'loyverse') {
+   v.items.forEach(function(it){
+    if (it && it.prodId && !it.grupoId) {
+     const p = (_state.productos || []).find(x => x && x.id === it.prodId);
+     if (p && p.grupoId) it.grupoId = p.grupoId;
+    }
+   });
+  }
+ } catch(_) {}
  _state.ventas.push(v);
  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
  try { if (v?.id) window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
@@ -13486,6 +13609,156 @@ const CierreEngine = (() => {
 })();
 
 
+// ═══════════════════════════════════════════════════════════════════
+// v1.3.1154 MODULE: GruposVenta — capa analítica sobre productos y ventas
+// ───────────────────────────────────────────────────────────────────
+// Propósito: agrupar artículos similares para análisis Dashboard (Fase 2).
+// Principios:
+//  - La venta existe UNA sola vez. Grupos son solo metadata en items.
+//  - Nunca modificar ventas históricas (grupoId se asigna en ingestión).
+//  - Un artículo pertenece a 1 solo grupo (MVP).
+//  - Matching Loyverse: grupo.loyverseName === item.item_name (exacto).
+//
+// Fase 1 (v1.3.1154): modelo + setters + UI crear/editar + herencia TPV/Loyverse.
+// Fase 2 (próxima): agregados Dashboard (ranking, inversión prorrateada, ROI).
+// ═══════════════════════════════════════════════════════════════════
+const GruposVenta = (() => {
+
+ // List grupos activos (no deleted, no desactivados)
+ function listActivos() {
+  const all = State.get.gruposVenta ? State.get.gruposVenta() : [];
+  return all.filter(g => g && !g.deleted && g.activo !== false);
+ }
+
+ // Grupo de un artículo (o null)
+ function grupoDeArticulo(prodId) {
+  if (!prodId) return null;
+  const p = State.get.prod ? State.get.prod(prodId) : null;
+  if (!p || !p.grupoId) return null;
+  return State.get.grupo ? State.get.grupo(p.grupoId) : null;
+ }
+
+ // Crear grupo nuevo
+ function crear(nombre, loyverseName, articuloIds) {
+  if (!nombre || typeof nombre !== 'string' || !nombre.trim()) return null;
+  const g = {
+   id: 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+   nombre: nombre.trim(),
+   loyverseName: (loyverseName || '').trim(),
+   articuloIds: Array.isArray(articuloIds) ? articuloIds.slice() : [],
+   activo: true,
+  };
+  State.set.addGrupo(g);
+  return g;
+ }
+
+ // Fase 2 helper: prorrateo de inversión por artículos del grupo.
+ // Devuelve { inversion, nLineas } sumando coste unitario × qty de TODOS los
+ // pedidos que contienen artículos del grupo. Conservador: si no hay datos, 0.
+ function inversionGrupoProrrateada(grupoId, dateFromMs, dateToMs) {
+  const g = State.get.grupo ? State.get.grupo(grupoId) : null;
+  if (!g || !Array.isArray(g.articuloIds) || !g.articuloIds.length) return { inversion: 0, nLineas: 0 };
+  const prodSet = new Set(g.articuloIds);
+  const pedidos = State.get.historialPedidos ? State.get.historialPedidos() : [];
+  let inversion = 0, nLineas = 0;
+  pedidos.forEach(function(p){
+   if (!p || p.deleted || !Array.isArray(p.items)) return;
+   const t = p.fecha ? Date.parse(p.fecha) : 0;
+   if (dateFromMs && t < dateFromMs) return;
+   if (dateToMs && t > dateToMs) return;
+   p.items.forEach(function(it){
+    if (!it || !prodSet.has(it.prodId)) return;
+    const udscaja = Number(it.udscaja) || 1;
+    const precio = Number(it.precio) || 0;
+    const ncajas = Number(it.ncajas) || 0;
+    // coste unitario * unidades totales de la línea
+    const costeUnit = precio / Math.max(1, udscaja);
+    const udsTotal = ncajas * udscaja;
+    inversion += costeUnit * udsTotal;
+    nLineas++;
+   });
+  });
+  return { inversion: inversion, nLineas: nLineas };
+ }
+
+ // Fase 2 helper: ventas agregadas por grupo desde items[].grupoId
+ // Devuelve { ventas, nItems, qty } — por línea, no por ticket
+ function ventasGrupo(grupoId, dateFromMs, dateToMs) {
+  if (!grupoId) return { ventas: 0, nItems: 0, qty: 0 };
+  const ventas = State.get.ventas ? State.get.ventas() : [];
+  let total = 0, nItems = 0, qty = 0;
+  ventas.forEach(function(v){
+   if (!v || v.deleted || !Array.isArray(v.items)) return;
+   const t = v.fecha ? Date.parse(v.fecha) : 0;
+   if (dateFromMs && t < dateFromMs) return;
+   if (dateToMs && t > dateToMs) return;
+   v.items.forEach(function(it){
+    if (!it || it.grupoId !== grupoId) return;
+    const q = Number(it.qty) || 0;
+    const pvp = Number(it.pvp) || 0;
+    total += q * pvp;
+    qty += q;
+    nItems++;
+   });
+  });
+  return { ventas: total, nItems: nItems, qty: qty };
+ }
+
+ // Ventas SIN grupo (invariante: ventasGrupo + ventasSinGrupo = total)
+ function ventasSinGrupo(dateFromMs, dateToMs) {
+  const ventas = State.get.ventas ? State.get.ventas() : [];
+  let total = 0, nItems = 0;
+  ventas.forEach(function(v){
+   if (!v || v.deleted || !Array.isArray(v.items)) return;
+   const t = v.fecha ? Date.parse(v.fecha) : 0;
+   if (dateFromMs && t < dateFromMs) return;
+   if (dateToMs && t > dateToMs) return;
+   v.items.forEach(function(it){
+    if (!it || it.grupoId) return;
+    const q = Number(it.qty) || 0;
+    const pvp = Number(it.pvp) || 0;
+    total += q * pvp;
+    nItems++;
+   });
+  });
+  return { ventas: total, nItems: nItems };
+ }
+
+ // Validación integridad (para dashboard Salud Sync fase 2):
+ // { totalVentas, sumGrupos, sumSinGrupo, coherente }
+ function validarIntegridad(dateFromMs, dateToMs) {
+  const ventas = State.get.ventas ? State.get.ventas() : [];
+  let total = 0, sumG = 0, sumS = 0;
+  ventas.forEach(function(v){
+   if (!v || v.deleted || !Array.isArray(v.items)) return;
+   const t = v.fecha ? Date.parse(v.fecha) : 0;
+   if (dateFromMs && t < dateFromMs) return;
+   if (dateToMs && t > dateToMs) return;
+   v.items.forEach(function(it){
+    if (!it) return;
+    const q = Number(it.qty) || 0;
+    const pvp = Number(it.pvp) || 0;
+    const line = q * pvp;
+    total += line;
+    if (it.grupoId) sumG += line; else sumS += line;
+   });
+  });
+  const coherente = Math.abs(total - (sumG + sumS)) < 0.01;
+  return { totalVentas: total, sumGrupos: sumG, sumSinGrupo: sumS, coherente: coherente };
+ }
+
+ return {
+  listActivos,
+  grupoDeArticulo,
+  crear,
+  inversionGrupoProrrateada,
+  ventasGrupo,
+  ventasSinGrupo,
+  validarIntegridad,
+ };
+})();
+
+
 /* ═══════════════════════════════════════════════════════════════════
  * MODULE: Loyverse — Adaptador ingestion-first (Fase 2 L1)
  * ───────────────────────────────────────────────────────────────────
@@ -14430,7 +14703,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1153-dev';
+ const _APP_VERSION = 'v1.3.1154-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18665,6 +18938,18 @@ const ui = (() => {
        } catch(_) { ventaCuentaId = null; }
       }
 
+      // v1.3.1154 GRUPOS: construir índice para matching Loyverse
+      //   1) Por producto mapeado (prod.grupoId) — prioridad
+      //   2) Por nombre exacto Loyverse (grupo.loyverseName === li.item_name)
+      //   Cero fuzzy match en MVP. Cero modificación de venta post-facto.
+      var _gruposAll = (State.raw && State.raw.gruposVenta) ? State.raw.gruposVenta() : (State.get.gruposVenta ? State.get.gruposVenta() : []);
+      var _gruposByLvName = {};
+      (_gruposAll || []).forEach(function(g){
+       if (g && !g.deleted && g.activo !== false && g.loyverseName) {
+        _gruposByLvName[g.loyverseName] = g.id;
+       }
+      });
+
       var items = lineItems.map(function(li) {
        var lvItemId = li.item_id || li.variant_id || li.id;
        var prod = lvItemId ? prodByLvId[lvItemId] : null;
@@ -18674,14 +18959,21 @@ const ui = (() => {
        var pvp = typeof li.price === 'number' ? li.price
                 : typeof li.pvp === 'number' ? li.pvp
                 : parseFloat(li.price || li.pvp || li.total_money || 0) || 0;
-       return {
+       var itName = li.item_name || li.name || '';
+       // Resolución de grupoId: prioridad producto → fallback nombre Loyverse
+       var grupoId = null;
+       if (prod && prod.grupoId) grupoId = prod.grupoId;
+       else if (itName && _gruposByLvName[itName]) grupoId = _gruposByLvName[itName];
+       var it = {
         prodId: prod ? prod.id : '_lv_' + (lvItemId || 'unknown'),
-        nombre: (prod && prod.nombre) || li.item_name || li.name || 'Item',
+        nombre: (prod && prod.nombre) || itName || 'Item',
         qty: qty,
         pvp: pvp,
         coste: (prod && prod.precioCompra && prod.udscaja) ? (prod.precioCompra / prod.udscaja) * qty : 0,
         margen: 0
        };
+       if (grupoId) it.grupoId = grupoId;
+       return it;
       });
 
       State.set.addVenta({
@@ -33183,6 +33475,12 @@ const marginLine = mg === null ? '' :
  label: 'Mover', cls: '',
  fn: () => { menu.remove(); App.alm._catReorderArt(prodId); }
  },
+ // v1.3.1154 GRUPOS: añadir/editar grupo del artículo
+ {
+ icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="5" cy="17" r="2"/><circle cx="19" cy="17" r="2"/><line x1="12" y1="9" x2="5" y2="9"/><line x1="12" y1="15" x2="5" y2="15"/><line x1="12" y1="9" x2="19" y2="9"/><line x1="12" y1="15" x2="19" y2="15"/></svg>',
+ label: 'Grupo', cls: '',
+ fn: () => { menu.remove(); App.alm._openGrupoPicker(prodId); }
+ },
  {
  icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
  label: 'Borrar', cls: 'danger',
@@ -37184,6 +37482,186 @@ _eaRecalc();
   if (inp) { inp.value = val; _eaRecalc(); }
  }
 
+ // ══════════════════════════════════════════════════════════════════
+ // v1.3.1154 GRUPOS DE VENTA — UI: picker + creator + editor
+ // ══════════════════════════════════════════════════════════════════
+ // Long-press artículo → menú "Grupo" → _openGrupoPicker
+ //
+ // Flujos cubiertos:
+ //   - Artículo sin grupo: lista grupos existentes + opción "Crear grupo"
+ //   - Artículo con grupo: ver grupo actual + "Cambiar" / "Quitar de grupo"
+ //   - Crear nuevo: nombre + loyverseName opcional + selección múltiple artículos
+ //
+ // Datos: siempre via State.set.addGrupo / addArticulosAGrupo / removeArticulosDeGrupo
+ //        Nunca mutación directa.
+
+ function _esc(s) {
+  return String(s||'').replace(/[&<>"']/g, function(c){
+   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+ }
+
+ // Picker principal — llamado desde long-press del catálogo
+ function _openGrupoPicker(prodId) {
+  const p = State.get.prod(prodId); if (!p) return;
+  const grupos = (State.get.gruposVenta ? State.get.gruposVenta() : [])
+   .filter(g => g && !g.deleted && g.activo !== false);
+  const grupoActual = p.grupoId ? grupos.find(g => g.id === p.grupoId) : null;
+
+  const html =
+   '<div class="modal-header-dark"><div class="mhd-row"><div>'
+    +'<div class="mhd-title">📦 Grupo de venta</div>'
+    +'<div class="mhd-sub">'+_esc(p.nombre)+'</div>'
+    +'</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   // Estado actual
+   +(grupoActual
+    ? '<div style="padding:16px"><div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Grupo actual</div>'
+      +'<div style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-md)">'
+      +'<div style="font-size:22px">📦</div>'
+      +'<div style="flex:1"><div style="font-weight:var(--fw-bold);font-size:var(--fs-sm)">'+_esc(grupoActual.nombre)+'</div>'
+      +(grupoActual.loyverseName ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Loyverse: '+_esc(grupoActual.loyverseName)+'</div>' : '')
+      +'</div>'
+      +'<button id="grp-remove-btn" style="background:transparent;border:1px solid var(--red);color:var(--red);border-radius:var(--r-sm2);padding:6px 10px;font-size:var(--fs-xs);font-weight:var(--fw-bold)">Quitar</button>'
+      +'</div></div>'
+    : '')
+   // Divider
+   +'<div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;padding:16px 16px 6px">'+(grupoActual ? 'Cambiar a otro grupo' : 'Asignar grupo')+'</div>'
+   // Lista de grupos
+   +'<div id="grp-picker-list" style="padding:0 12px">'
+   +(grupos.length
+    ? grupos.filter(g => g.id !== p.grupoId).map(g =>
+       '<button data-gid="'+_esc(g.id)+'" class="grp-pick-row" style="width:100%;display:flex;align-items:center;gap:10px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:6px;color:var(--ink);font-weight:var(--fw-semi);text-align:left;-webkit-tap-highlight-color:transparent">'
+       +'<span style="font-size:20px">📦</span>'
+       +'<span style="flex:1;font-size:var(--fs-sm)">'+_esc(g.nombre)+'</span>'
+       +'<span style="font-size:var(--fs-2xs);color:var(--ink-soft)">'+(g.articuloIds||[]).length+' arts.</span>'
+       +'</button>'
+      ).join('')
+    : '<div style="padding:12px;color:var(--ink-soft);font-size:var(--fs-sm);text-align:center">Aún no hay grupos</div>')
+   +'</div>'
+   // Crear nuevo
+   +'<div style="padding:16px"><button id="grp-create-btn" class="btn-ok" style="width:100%">➕ Crear grupo nuevo</button></div>'
+   +'<div style="height:24px"></div>';
+
+  ui.setFs(html);
+  ui.openFs('full');
+
+  // Handlers
+  setTimeout(function(){
+   const list = document.getElementById('grp-picker-list');
+   if (list) {
+    list.querySelectorAll('[data-gid]').forEach(btn => {
+     btn.addEventListener('click', function(){
+      const gid = btn.getAttribute('data-gid');
+      State.set.addArticulosAGrupo(gid, [prodId]);
+      try { Utils.showToast('✅ Añadido al grupo'); } catch(_) {}
+      ui.closeFs();
+     });
+    });
+   }
+   const remBtn = document.getElementById('grp-remove-btn');
+   if (remBtn) remBtn.addEventListener('click', function(){
+    if (p.grupoId) {
+     State.set.removeArticulosDeGrupo(p.grupoId, [prodId]);
+     try { Utils.showToast('✅ Artículo quitado del grupo'); } catch(_) {}
+    }
+    ui.closeFs();
+   });
+   const createBtn = document.getElementById('grp-create-btn');
+   if (createBtn) createBtn.addEventListener('click', function(){
+    _openGrupoCreator([prodId]); // pre-seleccionar este artículo
+   });
+  }, 30);
+ }
+
+ // Creator — crea grupo nuevo con nombre + loyverseName + artículos seleccionados
+ function _openGrupoCreator(preselectedIds) {
+  preselectedIds = Array.isArray(preselectedIds) ? preselectedIds : [];
+  const productos = (State.get.productos ? State.get.productos() : []).filter(x => x && !x.deleted);
+  const selected = new Set(preselectedIds);
+
+  const html =
+   '<div class="modal-header-dark"><div class="mhd-row"><div>'
+    +'<div class="mhd-title">➕ Crear grupo</div>'
+    +'<div class="mhd-sub">Agrupa artículos para analíticas</div>'
+    +'</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   // Campos
+   +'<div style="padding:16px"><div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Nombre del grupo</div>'
+   +'<input id="grp-new-name" type="text" placeholder="Ej: Bebidas frías" maxlength="60" style="width:100%;box-sizing:border-box;height:44px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);padding:0 12px;font-family:var(--font)"></div>'
+   +'<div style="padding:0 16px 16px"><div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Nombre exacto en Loyverse <span style="text-transform:none;letter-spacing:0">(opcional)</span></div>'
+   +'<input id="grp-new-lvname" type="text" placeholder="Si Loyverse vende este grupo como un único ítem" maxlength="80" style="width:100%;box-sizing:border-box;height:44px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);padding:0 12px;font-family:var(--font)">'
+   +'<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:4px">Matching exacto. Si se vende ese nombre en Loyverse, la venta se asigna automáticamente al grupo.</div>'
+   +'</div>'
+   // Lista artículos
+   +'<div style="padding:0 16px 8px;display:flex;justify-content:space-between;align-items:center"><div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Artículos del grupo</div>'
+   +'<div id="grp-sel-count" style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink)">'+selected.size+' seleccionados</div></div>'
+   +'<div id="grp-arts-list" style="padding:0 12px;max-height:50vh;overflow-y:auto">'
+   +(productos.length
+    ? productos.map(p => {
+      const isSel = selected.has(p.id);
+      const hasGroup = p.grupoId && !selected.has(p.id); // pertenece a otro grupo
+      return '<label data-pid="'+_esc(p.id)+'" class="grp-art-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:'+(isSel?'rgba(22,163,74,.08)':'var(--bg)')+';border:1px solid '+(isSel?'#16A34A':'var(--border)')+';border-radius:var(--r-md);margin-bottom:6px;cursor:pointer">'
+       +'<input type="checkbox" '+(isSel?'checked':'')+' style="width:18px;height:18px;accent-color:#16A34A">'
+       +'<span style="font-size:18px">'+_esc(p.e||'📦')+'</span>'
+       +'<span style="flex:1;font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi)">'+_esc(p.nombre)+'</span>'
+       +(hasGroup ? '<span style="font-size:var(--fs-2xs);color:#F97316">en otro grupo</span>' : '')
+       +'</label>';
+     }).join('')
+    : '<div style="padding:12px;color:var(--ink-soft);font-size:var(--fs-sm);text-align:center">Sin artículos</div>')
+   +'</div>'
+   // Acciones
+   +'<div style="padding:16px"><button id="grp-save-btn" class="btn-ok" style="width:100%">Crear grupo</button></div>'
+   +'<div style="height:24px"></div>';
+
+  ui.setFs(html);
+  ui.openFs('full');
+
+  setTimeout(function(){
+   const list = document.getElementById('grp-arts-list');
+   const updateCount = function(){
+    const el = document.getElementById('grp-sel-count');
+    if (el) el.textContent = selected.size + ' seleccionados';
+   };
+   if (list) {
+    list.querySelectorAll('[data-pid]').forEach(row => {
+     const pid = row.getAttribute('data-pid');
+     const cb = row.querySelector('input[type=checkbox]');
+     row.addEventListener('click', function(e){
+      if (e.target !== cb) { e.preventDefault(); cb.checked = !cb.checked; }
+      if (cb.checked) selected.add(pid); else selected.delete(pid);
+      row.style.background = cb.checked ? 'rgba(22,163,74,.08)' : 'var(--bg)';
+      row.style.borderColor = cb.checked ? '#16A34A' : 'var(--border)';
+      updateCount();
+     });
+    });
+   }
+   const save = document.getElementById('grp-save-btn');
+   if (save) save.addEventListener('click', function(){
+    const nameEl = document.getElementById('grp-new-name');
+    const lvEl = document.getElementById('grp-new-lvname');
+    const nombre = (nameEl && nameEl.value || '').trim();
+    const loyverseName = (lvEl && lvEl.value || '').trim();
+    if (!nombre) {
+     try { Utils.showToast('⚠️ Ponle nombre al grupo'); } catch(_) {}
+     if (nameEl) nameEl.focus();
+     return;
+    }
+    if (selected.size === 0) {
+     try { Utils.showToast('⚠️ Selecciona al menos 1 artículo'); } catch(_) {}
+     return;
+    }
+    const gid = 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    State.set.addGrupo({
+     id: gid,
+     nombre: nombre,
+     loyverseName: loyverseName,
+     articuloIds: Array.from(selected),
+     activo: true,
+    });
+    try { Utils.showToast('✅ Grupo «'+nombre+'» creado con '+selected.size+' artículos'); } catch(_) {}
+    ui.closeFs();
+   });
+  }, 30);
+ }
 
  return {
  // Proveedor
@@ -37242,6 +37720,7 @@ _eaRecalc();
  renderCatInline, _catInlineTap, _catInlineStep, _catInlineRefreshItem,
  _catInlineLpStart, _catInlineLpEnd, _openCatInlineCtxMenu,
  _catCopyArt, _catReorderArt, _catDeleteArt,
+ _openGrupoPicker, _openGrupoCreator,
  _catFilterInline, _catFilterInlineFocus, _catFilterInlineBlur, _catFilterInlineClear, _catInlineAddNew,
  _abrirCheckModalPendiente, _vaciarCesta,
  selProvInline, openProvPicker, _almShowProvList, _almHideProvList, _almLoadInitialState, _loadCarritoLocal,
@@ -37963,6 +38442,160 @@ _eaRecalc();
  App.alm._catDeleteConfirm(id);
  }
  });
+ }
+
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1154 GRUPOS — UI picker + creator + editor
+ // ══════════════════════════════════════════════════════════════
+ // _openGrupoPicker(prodId): sheet con lista de grupos existentes + "Crear nuevo"
+ //   Al seleccionar grupo → asigna producto. Al deseleccionar → lo quita.
+ //   Al crear → abre _openGrupoCreator con prodId preseleccionado.
+ function _openGrupoPicker(prodId) {
+  var p = State.get.prod(prodId);
+  if (!p) return;
+  var grupos = (State.get.gruposVenta ? State.get.gruposVenta() : []).slice();
+  grupos.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+  var currentGId = p.grupoId || null;
+  var html = ''
+   + '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   + '<div class="mhd-title">Grupo de venta</div>'
+   + '<div class="mhd-sub">' + esc(p.nombre || 'Artículo') + '</div>'
+   + '</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   + '<div style="padding:16px">'
+   + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.6px;font-weight:var(--fw-bold)">Grupos disponibles</div>';
+  if (!grupos.length) {
+   html += '<div style="padding:16px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm);border:1px dashed var(--border);border-radius:var(--r-sm2);margin-bottom:12px">No hay grupos creados todavía</div>';
+  } else {
+   html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">';
+   grupos.forEach(function(g){
+    var isCurrent = g.id === currentGId;
+    var nArts = Array.isArray(g.articuloIds) ? g.articuloIds.length : 0;
+    html += '<div data-gid="' + g.id + '" class="alm-grupo-row"'
+     + ' style="display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid ' + (isCurrent ? 'var(--accent)' : 'var(--border)') + ';border-radius:var(--r-sm2);background:' + (isCurrent ? 'rgba(220,38,38,.05)' : 'var(--card-bg)') + '">'
+     + '<div style="flex:1;min-width:0">'
+     +  '<div style="font-weight:var(--fw-bold);color:var(--ink);font-size:var(--fs-sm)">' + esc(g.nombre) + '</div>'
+     +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">' + nArts + ' artículo' + (nArts !== 1 ? 's' : '') + (g.loyverseName ? ' · Loyverse: ' + esc(g.loyverseName) : '') + '</div>'
+     + '</div>'
+     + '<button class="btn-ok" style="margin-left:8px;min-width:72px" data-act="' + (isCurrent ? 'remove' : 'assign') + '" data-gid="' + g.id + '">'
+     +  (isCurrent ? 'Quitar' : 'Añadir')
+     + '</button>'
+     + '</div>';
+   });
+   html += '</div>';
+  }
+  html += '<button id="grupo-new-btn" style="width:100%;padding:12px;border-radius:var(--r-sm2);background:var(--accent);color:#fff;border:none;font-weight:var(--fw-bold);font-size:var(--fs-sm);-webkit-tap-highlight-color:transparent">➕ Crear nuevo grupo</button>';
+  html += '<div style="height:24px"></div>';
+  html += '</div>';
+  ui.setFs(html);
+  ui.openFs('full');
+
+  // Wiring
+  setTimeout(function(){
+   var root = document.getElementById('fs-overlay-content') || document;
+   var btns = root.querySelectorAll('button[data-act]');
+   btns.forEach(function(btn){
+    btn.addEventListener('click', function(){
+     var act = btn.dataset.act;
+     var gid = btn.dataset.gid;
+     try { Utils.triggerHaptic('light'); } catch(_) {}
+     if (act === 'assign') {
+      State.set.addArticulosAGrupo(gid, [prodId]);
+      showToast('✅ Añadido al grupo');
+     } else if (act === 'remove') {
+      State.set.removeArticulosDeGrupo(gid, [prodId]);
+      showToast('Quitado del grupo');
+     }
+     // Refrescar
+     setTimeout(function(){ _openGrupoPicker(prodId); }, 100);
+    });
+   });
+   var newBtn = document.getElementById('grupo-new-btn');
+   if (newBtn) newBtn.addEventListener('click', function(){
+    try { Utils.triggerHaptic('light'); } catch(_) {}
+    _openGrupoCreator(prodId);
+   });
+  }, 60);
+ }
+
+ // Modal creador de grupo. prodId: preseleccionado (opcional).
+ function _openGrupoCreator(prodId) {
+  var productos = (State.get.productos() || []).filter(function(p){ return p && !p.deleted; });
+  productos.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+  var selected = new Set(prodId ? [prodId] : []);
+  var html = ''
+   + '<div class="modal-header-dark"><div class="mhd-row"><div>'
+   + '<div class="mhd-title">Nuevo grupo</div>'
+   + '<div class="mhd-sub">Agrupa artículos similares para análisis</div>'
+   + '</div><button class="mhd-close" onclick="App.ui.closeFs()">✕</button></div></div>'
+   + '<div style="padding:16px">'
+   + '<label style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;font-weight:var(--fw-bold);display:block;margin-bottom:4px">Nombre del grupo *</label>'
+   + '<input id="grupo-name-input" type="text" placeholder="Ej: Bebidas Frías" maxlength="50" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);margin-bottom:14px">'
+   + '<label style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;font-weight:var(--fw-bold);display:block;margin-bottom:4px">Nombre en Loyverse <span style="text-transform:none;color:var(--ink-soft);font-weight:var(--fw-reg)">(opcional, exacto)</span></label>'
+   + '<input id="grupo-lv-input" type="text" placeholder="Ej: Refrescos" maxlength="80" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);margin-bottom:14px">'
+   + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:10px;text-transform:uppercase;letter-spacing:.6px;font-weight:var(--fw-bold)">Artículos (<span id="grupo-sel-count">' + selected.size + '</span> seleccionados)</div>'
+   + '<div id="grupo-art-list" style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r-sm2);padding:4px;margin-bottom:12px">';
+  productos.forEach(function(p){
+   var isSel = selected.has(p.id);
+   var hasOther = p.grupoId && !isSel;
+   var otherG = hasOther ? (State.get.grupo ? State.get.grupo(p.grupoId) : null) : null;
+   html += '<div data-pid="' + p.id + '" class="grupo-art-row" style="display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid var(--border);-webkit-tap-highlight-color:transparent;cursor:pointer">'
+     + '<div class="grupo-art-cb" style="width:22px;height:22px;border-radius:6px;border:2px solid ' + (isSel ? 'var(--accent)' : 'var(--border)') + ';background:' + (isSel ? 'var(--accent)' : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+     +  (isSel ? '<svg width="14" height="14" fill="none" stroke="#fff" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' : '')
+     + '</div>'
+     + '<div style="flex:1;min-width:0">'
+     +  '<div style="font-size:var(--fs-sm);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(p.nombre || '') + '</div>'
+     +  (hasOther ? '<div style="font-size:var(--fs-2xs);color:#F97316;margin-top:2px">Ya en: ' + esc((otherG && otherG.nombre) || '?') + ' (se moverá)</div>' : '')
+     + '</div>'
+     + '</div>';
+  });
+  html += '</div>'
+   + '<button id="grupo-save-btn" class="btn-ok" style="width:100%;padding:14px;font-size:var(--fs-base)">Crear grupo</button>'
+   + '<div style="height:24px"></div>'
+   + '</div>';
+  ui.setFs(html);
+  ui.openFs('full');
+
+  setTimeout(function(){
+   var root = document.getElementById('fs-overlay-content') || document;
+   var rows = root.querySelectorAll('.grupo-art-row');
+   var countEl = document.getElementById('grupo-sel-count');
+   var updateRow = function(row){
+    var pid = row.dataset.pid;
+    var isSel = selected.has(pid);
+    var cb = row.querySelector('.grupo-art-cb');
+    if (cb) {
+     cb.style.borderColor = isSel ? 'var(--accent)' : 'var(--border)';
+     cb.style.background = isSel ? 'var(--accent)' : 'transparent';
+     cb.innerHTML = isSel ? '<svg width="14" height="14" fill="none" stroke="#fff" stroke-width="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' : '';
+    }
+    if (countEl) countEl.textContent = selected.size;
+   };
+   rows.forEach(function(row){
+    row.addEventListener('click', function(){
+     var pid = row.dataset.pid;
+     if (!pid) return;
+     if (selected.has(pid)) selected.delete(pid); else selected.add(pid);
+     try { Utils.triggerHaptic('light'); } catch(_) {}
+     updateRow(row);
+    });
+   });
+   var saveBtn = document.getElementById('grupo-save-btn');
+   if (saveBtn) saveBtn.addEventListener('click', function(){
+    var nameEl = document.getElementById('grupo-name-input');
+    var lvEl = document.getElementById('grupo-lv-input');
+    var nombre = (nameEl && nameEl.value || '').trim();
+    var lvName = (lvEl && lvEl.value || '').trim();
+    if (!nombre) { showToast('⚠️ Introduce un nombre'); return; }
+    var ids = Array.from(selected);
+    var g = (App && App.GruposVenta && App.GruposVenta.crear) ? App.GruposVenta.crear(nombre, lvName, ids) : null;
+    if (!g) { showToast('⚠️ No se pudo crear el grupo'); return; }
+    try { Utils.triggerHaptic('medium'); } catch(_) {}
+    showToast('✅ Grupo creado · ' + ids.length + ' artículo' + (ids.length !== 1 ? 's' : ''));
+    ui.closeFs();
+    // Si venía de picker, re-abrir para mostrar el nuevo grupo
+    if (prodId) setTimeout(function(){ _openGrupoPicker(prodId); }, 250);
+   });
+  }, 60);
  }
 
  function _catDeleteConfirm(id) {
@@ -41627,7 +42260,7 @@ window._DashweyDeviceId = (() => {
 })();
 
 // Exponer módulos públicos
-return { State, KPI, FinEngine, CierreEngine, Utils, ui, nav, dash, tpv, alm, canAccess };
+return { State, KPI, FinEngine, CierreEngine, GruposVenta, Utils, ui, nav, dash, tpv, alm, canAccess };
 
 // Fin App
 })();
