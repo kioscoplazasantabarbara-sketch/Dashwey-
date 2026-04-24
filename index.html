@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1141-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1142-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1141-dev</title>
+<title>Dashwey v1.3.1142-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10301,6 +10301,12 @@ const State = (() => {
  loyverse: {
  paymentMap: { CASH: '', CARD: '', OTHER: '' } // vacío = usar cuenta primaria
  },
+ // v1.3.1142 — Cierre de caja (jornada operativa, puede cruzar medianoche)
+ cierreCaja: {
+  maxHorasJornada: 18,      // alerta si jornada abierta >N horas (configurable)
+  aperturaAutoPrimeraVenta: true,  // auto-abrir al primer ingreso del día
+  avisarSiDiferencia: 5.00, // alertar si |diferencia| > N€
+ },
  activeScope: 'negocio', // v1.3.1003 Fase 5: contexto activo (negocio/personal)
  },
  perfil: {
@@ -10331,6 +10337,8 @@ const State = (() => {
  cuentas: [],
  gastosOp: [],
   cierresCaja: [],
+  // v1.3.1142 — ID del cierre en curso (jornada activa). null = no hay jornada abierta
+  _jornadaActivaId: null,
   // v1.3.979: FIFO — lotes de stock por coste histórico (ver FinEngine.crearLotesDesdeItems/consumirLotesFIFO)
   lotesStock: [],
  };
@@ -11238,6 +11246,8 @@ const State = (() => {
  cuentas: () => _nd(_state.cuentas),
  gastosOp: () => _nd(_state.gastosOp),
   cierresCaja: () => _nd(_state.cierresCaja),
+  // v1.3.1142 — ID cierre en curso
+  jornadaActivaId: () => _state._jornadaActivaId || null,
  lotesStock: () => _state.lotesStock || [],
  hiddenCards: () => _state.hiddenCards || [],
  catLabels: () => _state.catLabels || {},
@@ -11368,7 +11378,51 @@ const State = (() => {
    },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
  addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
-  addCierre: (c) => { if(!_state.cierresCaja) _state.cierresCaja=[]; _state.cierresCaja.push(c); save(); },
+  // v1.3.1142 — Cierre de caja: setters robustos (patrón addGasto/setGastos)
+  // Esquema cierre: { id, aperturaTs, cierreTs, jornadaLabel, saldoInicial,
+  //                   saldoEsperado, saldoReal, diferencia, ventas, gastos,
+  //                   movimientos, notas, estado:'abierto'|'cerrado', createdAt, deleted? }
+  addCierre: (c) => {
+   if (c?.id && _state.cierresCaja.some(x => x.id === c.id)) return;
+   if (!_state.cierresCaja) _state.cierresCaja = [];
+   if (c) {
+    c.estado = c.estado || 'abierto';
+    c.scope = c.scope || (_state.settings?.activeScope || 'negocio');
+    c.createdAt = c.createdAt || Date.now();
+   }
+   _state.cierresCaja.push(c);
+   try { if (c?.id) window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', c.id); } catch(_) {}
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
+  },
+  setCierres: (v) => {
+   const _snap = _snapshotMap(_state.cierresCaja);
+   _state.cierresCaja = _preserveDeleted ? _preserveDeleted('cierresCaja', v) : (v || []);
+   _diffMarkDirty && _diffMarkDirty('cierresCaja', _snap, _state.cierresCaja);
+   save();
+  },
+  updateCierre: (id, vals) => {
+   const c = (_state.cierresCaja || []).find(x => x.id === id);
+   if (!c) return;
+   Object.assign(c, vals);
+   try { window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', id); } catch(_) {}
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
+  },
+  deleteCierre: (id) => {
+   const c = (_state.cierresCaja || []).find(x => x.id === id);
+   if (!c) return;
+   c.deleted = true; c.deletedAt = Date.now();
+   if (_state._jornadaActivaId === id) _state._jornadaActivaId = null;
+   try { window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', id); } catch(_) {}
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
+  },
+  setJornadaActiva: (id) => {
+   _state._jornadaActivaId = id || null;
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
+  },
  setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', v); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
  updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
@@ -12744,6 +12798,250 @@ const FinEngine = (() => {
 
 
 /* ═══════════════════════════════════════════════════════════════════
+ * MODULE: CierreEngine — Cierre de caja con jornada operativa (v1.3.1142)
+ * ───────────────────────────────────────────────────────────────────
+ * Propósito: gestionar jornadas operativas (apertura → cierre) que
+ * pueden cruzar medianoche. Todo lo ocurrido entre aperturaTs y
+ * cierreTs pertenece a esa jornada, independiente del día calendario.
+ *
+ * Reglas:
+ *  C1 — Apertura: manual (openJornada) o auto (primera venta si config ON)
+ *  C2 — Cierre: solo manual (closeJornada con saldoReal físico)
+ *  C3 — Saldo inicial: input manual del usuario (cuenta física en caja)
+ *  C4 — Alerta: si jornada abierta >maxHorasJornada (default 18h)
+ *  C5 — Items pertenecen a jornada si aperturaTs <= fecha < cierreTs
+ *  C6 — Solo UNA jornada activa a la vez (_jornadaActivaId global)
+ * ═══════════════════════════════════════════════════════════════════ */
+const CierreEngine = (() => {
+
+ // Generar ID único para jornada
+ function _genId() {
+  return 'cc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+ }
+
+ // Etiqueta legible para la jornada (fecha del día de apertura)
+ // Ej: '2026-04-28' (día lógico, independiente de si cerró el 29)
+ function _jornadaLabel(aperturaTs) {
+  const d = new Date(aperturaTs);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + dd;
+ }
+
+ // Obtener el cierre activo (jornada en curso). null si no hay.
+ function getJornadaActiva() {
+  const id = State.get.jornadaActivaId ? State.get.jornadaActivaId() : null;
+  if (!id) return null;
+  const cierres = State.get.cierresCaja ? State.get.cierresCaja() : [];
+  const c = cierres.find(x => x.id === id);
+  // Solo devolver si sigue abierto. Si está cerrado, limpiar y devolver null.
+  if (!c || c.estado !== 'abierto' || c.deleted) {
+   try { State.set.setJornadaActiva && State.set.setJornadaActiva(null); } catch(_) {}
+   return null;
+  }
+  return c;
+ }
+
+ // Horas transcurridas desde apertura (float). 0 si no hay jornada.
+ function horasDesdeApertura() {
+  const j = getJornadaActiva();
+  if (!j?.aperturaTs) return 0;
+  return (Date.now() - j.aperturaTs) / (1000 * 60 * 60);
+ }
+
+ // ¿Supera el umbral configurado?
+ function superaMaxHoras() {
+  const s = State.get.settings ? State.get.settings() : {};
+  const maxH = s?.cierreCaja?.maxHorasJornada || 18;
+  return horasDesdeApertura() >= maxH;
+ }
+
+ // Filtrar items con fecha dentro del rango [aperturaTs, cierreTs)
+ // cierreTs=null ⇒ usar Date.now() (jornada en curso)
+ function _itemsEnRango(arr, aperturaTs, cierreTs) {
+  if (!Array.isArray(arr) || !aperturaTs) return [];
+  const fin = cierreTs || Date.now();
+  return arr.filter(it => {
+   if (!it || it.deleted) return false;
+   const t = _tsOf(it);
+   return t >= aperturaTs && t < fin;
+  });
+ }
+
+ // Extraer timestamp de un item (tolera fecha ISO o number)
+ function _tsOf(it) {
+  const f = it.fecha || it.ts || it.createdAt;
+  if (typeof f === 'number') return f;
+  if (typeof f === 'string') { const t = Date.parse(f); return isNaN(t) ? 0 : t; }
+  return 0;
+ }
+
+ // Totales de una jornada (o la activa si no se pasa cierre)
+ function totalesJornada(cierre) {
+  const c = cierre || getJornadaActiva();
+  if (!c) return { ventas: 0, gastos: 0, ingresos: 0, nVentas: 0, nGastos: 0, nIngresos: 0 };
+  const aTs = c.aperturaTs;
+  const cTs = c.cierreTs || null;
+  const ventasAll = State.get.ventas ? State.get.ventas() : [];
+  const gastosAll = State.get.gastosOp ? State.get.gastosOp() : [];
+  const ingrAll = State.get.ingresosFin ? State.get.ingresosFin() : [];
+  const vF = _itemsEnRango(ventasAll, aTs, cTs);
+  const gF = _itemsEnRango(gastosAll, aTs, cTs).filter(g => g.metaTipo !== 'transfer');
+  const iF = _itemsEnRango(ingrAll, aTs, cTs).filter(i => i.metaTipo !== 'transfer');
+  let totVentas = 0;
+  for (const v of vF) {
+   // Usar FinEngine si está disponible (ingreso neto real), fallback suma total
+   try {
+    if (typeof FinEngine !== 'undefined' && FinEngine.ventaIngresos) {
+     totVentas += Number(FinEngine.ventaIngresos(v)) || 0;
+    } else {
+     totVentas += Number(v.total) || 0;
+    }
+   } catch(_) { totVentas += Number(v.total) || 0; }
+  }
+  const totGastos = gF.reduce((s, g) => s + (Number(g.importe) || 0), 0);
+  const totIngr = iF.reduce((s, i) => s + (Number(i.importe) || 0), 0);
+  return {
+   ventas: totVentas,
+   gastos: totGastos,
+   ingresos: totIngr,
+   nVentas: vF.length,
+   nGastos: gF.length,
+   nIngresos: iF.length,
+  };
+ }
+
+ // Saldo esperado de la jornada (en caja física)
+ // = saldoInicial + ventas en efectivo + ingresos efectivo − gastos efectivo
+ // Simplificación v1.3.1142 FASE 1: tratamos TODO el flujo (Loyverse no separa
+ // efectivo en movimientos Dashwey todavía). En FASE 2 filtraremos por cuenta.
+ function saldoEsperado(cierre) {
+  const c = cierre || getJornadaActiva();
+  if (!c) return 0;
+  const t = totalesJornada(c);
+  const si = Number(c.saldoInicial) || 0;
+  return si + t.ventas + t.ingresos - t.gastos;
+ }
+
+ // Abrir jornada: crea cierre en estado 'abierto' y lo marca como activo
+ // Retorna el cierre creado, o null si ya hay una jornada abierta
+ function openJornada(opts) {
+  opts = opts || {};
+  const activa = getJornadaActiva();
+  if (activa) {
+   console.warn('[CierreEngine] ya hay jornada activa:', activa.id);
+   return null;
+  }
+  const aperturaTs = opts.aperturaTs || Date.now();
+  const c = {
+   id: _genId(),
+   aperturaTs,
+   cierreTs: null,
+   jornadaLabel: _jornadaLabel(aperturaTs),
+   saldoInicial: Number(opts.saldoInicial) || 0,
+   saldoEsperado: null,
+   saldoReal: null,
+   diferencia: null,
+   ventas: null,
+   gastos: null,
+   movimientos: [],
+   notas: opts.notas || '',
+   estado: 'abierto',
+   origen: opts.origen || 'manual',
+   createdAt: Date.now(),
+  };
+  try {
+   State.set.addCierre(c);
+   State.set.setJornadaActiva(c.id);
+   console.log('[CierreEngine] ✓ jornada abierta:', c.id, '| saldo inicial:', c.saldoInicial);
+   return c;
+  } catch(e) {
+   console.warn('[CierreEngine] openJornada error:', e);
+   return null;
+  }
+ }
+
+ // Cerrar jornada activa: fija cierreTs, calcula totales, guarda saldoReal y diferencia
+ // Retorna el cierre actualizado, o null si no hay jornada activa
+ function closeJornada(opts) {
+  opts = opts || {};
+  const c = getJornadaActiva();
+  if (!c) {
+   console.warn('[CierreEngine] no hay jornada activa para cerrar');
+   return null;
+  }
+  const cierreTs = opts.cierreTs || Date.now();
+  const tot = totalesJornada(Object.assign({}, c, { cierreTs }));
+  const saldoEsp = (Number(c.saldoInicial) || 0) + tot.ventas + tot.ingresos - tot.gastos;
+  const saldoReal = (opts.saldoReal !== undefined) ? (Number(opts.saldoReal) || 0) : saldoEsp;
+  const diff = saldoReal - saldoEsp;
+  const vals = {
+   cierreTs,
+   saldoEsperado: saldoEsp,
+   saldoReal,
+   diferencia: diff,
+   ventas: tot.ventas,
+   gastos: tot.gastos,
+   ingresos: tot.ingresos,
+   nVentas: tot.nVentas,
+   nGastos: tot.nGastos,
+   nIngresos: tot.nIngresos,
+   notas: opts.notas !== undefined ? opts.notas : (c.notas || ''),
+   estado: 'cerrado',
+  };
+  try {
+   State.set.updateCierre(c.id, vals);
+   State.set.setJornadaActiva(null);
+   console.log('[CierreEngine] ✓ jornada cerrada:', c.id, '| diferencia:', diff.toFixed(2) + '€');
+   return Object.assign({}, c, vals);
+  } catch(e) {
+   console.warn('[CierreEngine] closeJornada error:', e);
+   return null;
+  }
+ }
+
+ // Sugiere apertura si se cumple condición:
+ //  - No hay jornada activa
+ //  - Config aperturaAutoPrimeraVenta === true
+ //  - Acabó de llegar una venta (caller pasa el flag)
+ // Retorna true si se abrió automáticamente
+ function sugerirAperturaSiVenta() {
+  const s = State.get.settings ? State.get.settings() : {};
+  if (!s?.cierreCaja?.aperturaAutoPrimeraVenta) return false;
+  if (getJornadaActiva()) return false;
+  // Auto-apertura con saldo inicial 0 (usuario puede ajustar después)
+  const c = openJornada({ saldoInicial: 0, origen: 'auto_venta', notas: 'Apertura automática (primera venta)' });
+  return !!c;
+ }
+
+ // Historial de cierres cerrados (ordenados desc por cierreTs)
+ function historial(opts) {
+  opts = opts || {};
+  const all = State.get.cierresCaja ? State.get.cierresCaja() : [];
+  const cerrados = all.filter(c => c && !c.deleted && c.estado === 'cerrado' && c.cierreTs);
+  cerrados.sort((a, b) => (b.cierreTs || 0) - (a.cierreTs || 0));
+  if (opts.limit) return cerrados.slice(0, opts.limit);
+  return cerrados;
+ }
+
+ // API pública
+ return {
+  getJornadaActiva,
+  horasDesdeApertura,
+  superaMaxHoras,
+  totalesJornada,
+  saldoEsperado,
+  openJornada,
+  closeJornada,
+  sugerirAperturaSiVenta,
+  historial,
+  _jornadaLabel, // exponer para tests/debug
+ };
+})();
+
+
+/* ═══════════════════════════════════════════════════════════════════
  * MODULE: Loyverse — Adaptador ingestion-first (Fase 2 L1)
  * ───────────────────────────────────────────────────────────────────
  * Propósito: normalizar ventas de Loyverse POS al modelo canónico de
@@ -13683,7 +13981,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1141-dev';
+ const _APP_VERSION = 'v1.3.1142-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40239,7 +40537,7 @@ window._DashweyDeviceId = (() => {
 })();
 
 // Exponer módulos públicos
-return { State, KPI, FinEngine, Utils, ui, nav, dash, tpv, alm, canAccess };
+return { State, KPI, FinEngine, CierreEngine, Utils, ui, nav, dash, tpv, alm, canAccess };
 
 // Fin App
 })();
