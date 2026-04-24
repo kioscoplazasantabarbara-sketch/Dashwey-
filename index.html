@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1138-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1139-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1138-dev</title>
+<title>Dashwey v1.3.1139-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -943,7 +943,10 @@ body[data-energy-saver="1"] .ss-panel {
  transition: transform var(--sheet-duration) var(--sheet-spring);
  padding-bottom: env(safe-area-inset-bottom, 16px);
 }
-#whats-new-overlay.open #whats-new-sheet { transform: translateY(0); will-change: transform; }
+#whats-new-overlay.open #whats-new-sheet { transform: translateY(0); }
+/* v1.3.1139 FIX#6: will-change aplicado solo durante animación (clase JS), no permanente
+   Razón: will-change:transform permanente crea stacking context que rompe backdrop-filter
+   en Android WebView. Ya activo en clases .animating. */
 .wn-handle {
  width: 32px; height: 4px; border-radius: 2px;
  background: var(--border); margin: 10px auto 0; flex-shrink: 0;
@@ -1169,7 +1172,8 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
  transition: transform var(--sheet-duration) var(--sheet-spring);
 }
 #dash-period-sheet.open #dash-period-sheet-inner {
- transform: translateY(0); will-change: transform;
+ transform: translateY(0);
+ /* v1.3.1139 FIX#6: will-change removido — se aplica solo durante animación via clase JS */
 }
 .dps-handle {
  width: 32px; height: 4px; border-radius: 2px;
@@ -13572,7 +13576,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1138-dev';
+ const _APP_VERSION = 'v1.3.1139-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18222,7 +18226,7 @@ const dash = (() => {
  try { renderFinanciero(); } catch(e) {}
  try { renderVisitasComerciales(); } catch(e) {}
  try { renderRendimiento(period); } catch(e) {}
- try { renderFlujoCaja(); } catch(e) {}
+ // v1.3.1139 FIX#2: renderFlujoCaja ya ejecutado por renderFinanciero() — eliminar duplicado
  try { renderAgenda(); } catch(e) {} // v1.3.281: DASH-03 — agenda en render() principal
  // legacy — renderTopArticulos mantenido para listeners externos
 try { renderTopArticulos(period); } catch(e) {}
@@ -26933,18 +26937,30 @@ function _confirmBorrarCuenta(id) {
  // v1.3.583: precalcular snapshot una vez para todas las cards
  var _sharedSnap = null;
  try { var _sp = State.get.period ? State.get.period() : {type:'month',offset:0}; _sharedSnap = FinEngine.snapshot(_sp); } catch(_) {}
+ // v1.3.1139 FIX#1: renderizar SOLO la card activa. Las demás se marcan como
+ //                  stale; se renderizan lazy cuando entren al viewport (observer).
+ // Antes: forEach sobre 4 cards cada llamada → 200ms de trabajo aunque 3 no visibles.
  cards.forEach(function(card) {
- var cid = card.dataset.cardId;
- var textEl = document.getElementById('snap-text-' + cid);
- if (textEl && textEl._snapTypewriterCancel) {
- textEl._snapTypewriterCancel();
- textEl._snapTypewriterCancel = null;
- textEl.innerHTML = '';
- }
- // v1.3.397: limpiar carousel al cambiar de tarjeta
- _stopInsightCarousel(cid);
- _snapRenderCard(cid, _sharedSnap);
+  var cid = card.dataset.cardId;
+  if (cid === activeId) {
+   // Card visible — render completo
+   var textEl = document.getElementById('snap-text-' + cid);
+   if (textEl && textEl._snapTypewriterCancel) {
+    textEl._snapTypewriterCancel();
+    textEl._snapTypewriterCancel = null;
+    textEl.innerHTML = '';
+   }
+   _stopInsightCarousel(cid);
+   _snapRenderCard(cid, _sharedSnap);
+  } else {
+   // Card no visible — marcar stale; el scroll observer la renderizará al activarse
+   card.dataset.stale = '1';
+  }
  });
+
+ // v1.3.1139 FIX#1: reset guard para forzar render al entrar al viewport
+ // Sin esto, el observer ve que cid === _snapLastRenderedCardId y no re-renderiza
+ _snapLastRenderedCardId = activeId;
 
  if (activeId) _snapUpdateTitle(activeId);
  _snapAttachSettingsButtons();
@@ -27027,8 +27043,11 @@ function _confirmBorrarCuenta(id) {
  entries.forEach(function(entry) {
  if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
  var cardId = entry.target.dataset.cardId;
- if (cardId && cardId !== _snapLastRenderedCardId) {
+ // v1.3.1139 FIX#1: renderizar si cambió O si la card está stale (_snapDoRenderAll la marcó)
+ var isStale = entry.target.dataset.stale === '1';
+ if (cardId && (cardId !== _snapLastRenderedCardId || isStale)) {
  _snapLastRenderedCardId = cardId;
+ delete entry.target.dataset.stale;
  _snapUpdateTitle(cardId);
  try { _snapRenderCard(cardId); } catch(_e) {}
  // v1.3.1102: trigger cambio de tarjeta ELIMINADO — solo sincronizamos al abrir app + pull-down
@@ -27059,7 +27078,7 @@ function _confirmBorrarCuenta(id) {
  var dist = Math.abs(cardCenter - center);
  if (dist < bestDist) { bestDist = dist; best = card; }
  });
- if (best && best.dataset.cardId && best.dataset.cardId !== _snapLastRenderedCardId) {
+ if (best && best.dataset.cardId) {
  var visRatio = Math.max(0,
  Math.min(best.getBoundingClientRect().bottom, contR.bottom) -
  Math.max(best.getBoundingClientRect().top, contR.top)
@@ -27067,7 +27086,11 @@ function _confirmBorrarCuenta(id) {
  if (visRatio >= 0.55) {
  // v1.3.605: guard race con IntersectionObserver
  var _fbCardId = best.dataset.cardId;
+ // v1.3.1139 FIX#1: respetar flag stale para forzar render tras _snapDoRenderAll
+ var _fbIsStale = best.dataset.stale === '1';
+ if (_fbCardId === _snapLastRenderedCardId && !_fbIsStale) return;
  _snapLastRenderedCardId = _fbCardId;
+ delete best.dataset.stale;
  _snapUpdateTitle(_fbCardId);
  try { _snapRenderCard(_fbCardId); } catch(_e) {}
  // Flush chart pendiente para esta tarjeta
@@ -33710,10 +33733,12 @@ const nPending = (State.get.pendingOrders() || [])
  const carritoVals = typeof _ordenCarrito !== 'undefined' ? Object.values(_ordenCarrito) : [];
  const carritoCount = carritoVals.reduce((s, n) => s + n, 0);
  // TOTAL A PAGAR: suma de precios del carrito activo
+ // v1.3.1139 FIX#5: usar _ivaFactor real en lugar de hardcoded 1.10
+ //                  Sin esto el total del badge difiere del total al confirmar pedido
  const carritoTotal = typeof _ordenCarrito !== 'undefined'
  ? Object.entries(_ordenCarrito).reduce((s,[id,nc]) => {
  const p = State.get.prod(id);
- return s + (nc||1)*(p?.precioCompra||0)*1.10;
+ return s + (nc||1)*(p?.precioCompra||0) * (window._ivaFactor ? window._ivaFactor(p?.iva) : 1.10);
  }, 0)
  : 0;
 
@@ -39476,8 +39501,7 @@ window._DashweyDeviceId = (() => {
  _ventaRafId = requestAnimationFrame(() => {
  _ventaRafId = null;
  try { dash.render(); } catch(e) {}
- // Actualizar snap KPI de la tarjeta activa tras venta
- try { const _aid = dash._getActiveCardId?.(); if (_aid) dash._snapRenderCard(_aid); } catch(_) {}
+ // v1.3.1139 FIX#4: _snapDoRenderAll ya ejecutado por dash.render() — eliminar duplicado
  try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
  });
  }
@@ -39504,8 +39528,8 @@ window._DashweyDeviceId = (() => {
  // Consolida: renderFinanciero×1 + renderAgenda×1 + renderOrden×1 + dash.render()×1
  // Elimina el doble render que ocurría al emitir 'pedido' + 'stock' en el mismo tick
  DashweyBus.on('pedido_stock', () => {
- try { dash.render(); } catch(e) {} // incluye renderFinanciero + renderVentas + kpis
- try { dash.renderAgenda && dash.renderAgenda(); } catch(e) {}
+ try { dash.render(); } catch(e) {} // incluye renderFinanciero + renderAgenda + _snapDoRenderAll
+ // v1.3.1139 FIX#3: renderAgenda ya ejecutado por dash.render() — eliminar duplicado
  try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
  try { alm.updateBadge && alm.updateBadge(); } catch(e) {}
  });
