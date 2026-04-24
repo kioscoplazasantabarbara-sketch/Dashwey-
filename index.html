@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1146-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1147-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1146-dev</title>
+<title>Dashwey v1.3.1147-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9522,6 +9522,11 @@ window._DashweyDrainPendingSnapshots = function() {
    console.info('[Dashwey/SubB] ← drain pending:', k, '(' + (items?.length||0) + ' items)');
    _Bus.emit('_subcollection_snapshot', { stateKey: k, items: items });
   });
+  // v1.3.1147 TRIGGER SNAPSHOT_MERGE: autoHeal tras aplicar merges remotos
+  // Otro device pudo haber traído zombies — canary los purga en <1s (throttle 30s protege).
+  setTimeout(function(){
+   try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('snapshot_merge'); } catch(_) {}
+  }, 2000);
  } catch(e) { console.warn('[Dashwey/SubB] drain error:', e?.message); }
 };
 
@@ -10712,6 +10717,7 @@ const State = (() => {
  //   4. Log estructurado
  // Solo corre si la app está visible (no en background).
  // No bloquea, no rompe — es defensivo puro.
+ // v1.3.1147: añade delta watchdog — si raw.length - visibles.length >= 10, triggers autoHeal
  window._DashweyCanaryScan = function() {
   try {
    const keys = ['ventas', 'gastosOp', 'ingresosFin'];
@@ -10743,6 +10749,73 @@ const State = (() => {
   }
  };
 
+ // ══════════════════════════════════════════════════════════════
+ // v1.3.1147 AUTO-HEAL — dispatcher unificado para reparación automática
+ // ══════════════════════════════════════════════════════════════
+ // Combina canary scan + flush dirty en una sola operación auto-throttled.
+ // Triggers disponibles (llaman a esta función con su nombre):
+ //   - online           : reconexión red
+ //   - visibility       : app vuelve a primer plano
+ //   - loyverse_sync    : tras sincronización Loyverse
+ //   - snapshot_merge   : tras aplicar merge remoto
+ //   - delta_watchdog   : canary detecta delta raw>>visibles
+ //   - boot             : arranque inicial (tras initial sync)
+ //   - canary_tick      : tick periódico 60s
+ //   - manual           : usuario pulsa botón en dashboard
+ //
+ // Garantías:
+ //   - Throttle 30s (ignora triggers que llegan muy seguidos)
+ //   - Single-flight (flag _DashweyAutoHealing)
+ //   - Solo si _DashweyInitialSyncDone
+ //   - No bloquea si Firebase no disponible (solo canary, skip flush)
+ window._DashweyHealth.autoHealRuns = 0;
+ window._DashweyHealth.autoHealLastTrigger = null;
+ window._DashweyHealth.autoHealLastAt = 0;
+ let _autoHealThrottleTs = 0;
+ window._DashweyAutoHeal = async function(trigger) {
+  trigger = trigger || 'unknown';
+  try {
+   if (window._DashweyAutoHealing) {
+    console.log('[Dashwey/AutoHeal] skip (in_progress):', trigger);
+    return { ok: false, skipped: 'in_progress' };
+   }
+   if (!window._DashweyInitialSyncDone) {
+    return { ok: false, skipped: 'initial_sync_pending' };
+   }
+   const now = Date.now();
+   if (now - _autoHealThrottleTs < 30000) {
+    console.log('[Dashwey/AutoHeal] skip (throttle 30s):', trigger);
+    return { ok: false, skipped: 'throttled' };
+   }
+   _autoHealThrottleTs = now;
+   window._DashweyAutoHealing = true;
+   window._DashweyHealth.autoHealRuns++;
+   window._DashweyHealth.autoHealLastTrigger = trigger;
+   window._DashweyHealth.autoHealLastAt = now;
+
+   // 1. Canary scan (siempre)
+   const scanResult = window._DashweyCanaryScan ? window._DashweyCanaryScan() : { purged: 0 };
+
+   // 2. Flush dirty queue (solo si Firebase disponible y dirty>0)
+   let flushResult = { flushed: 0, skipped: 'not_attempted' };
+   try {
+    if (window._DashweyFlushDirty) {
+     flushResult = await window._DashweyFlushDirty();
+    }
+   } catch(eFlush) {
+    console.warn('[Dashwey/AutoHeal] flush error:', eFlush);
+   }
+
+   console.log('[Dashwey/AutoHeal] ✓ trigger=' + trigger + ' | purged=' + (scanResult.purged || 0) + ' | flushed=' + (flushResult.flushed || 0));
+   return { ok: true, trigger, purged: scanResult.purged || 0, flushed: flushResult.flushed || 0 };
+  } catch(e) {
+   console.warn('[Dashwey/AutoHeal] error:', e);
+   return { ok: false, error: e?.message };
+  } finally {
+   window._DashweyAutoHealing = false;
+  }
+ };
+
  // Loop canary: cada 60s, solo si documento visible
  (function _startCanaryLoop(){
   let _canaryStopped = false;
@@ -10751,6 +10824,18 @@ const State = (() => {
    if (_canaryStopped) return;
    try {
     if (document.visibilityState === 'visible' && window._DashweyInitialSyncDone) {
+     // v1.3.1147: delta watchdog antes del canary
+     try {
+      const raw = _state.ventas || [];
+      const visibles = raw.filter(v => v && !v.deleted).length;
+      const delta = raw.length - visibles;
+      if (delta >= 10) {
+       console.warn('[Dashwey/Watchdog] delta raw/visibles=' + delta + ' → autoHeal(delta_watchdog)');
+       window._DashweyAutoHeal('delta_watchdog');
+       setTimeout(_tick, 60000);
+       return;
+      }
+     } catch(_) {}
      window._DashweyCanaryScan();
     }
    } catch(_) {}
@@ -10835,10 +10920,10 @@ const State = (() => {
  }
  }
  _flushQueue();
- // v1.3.1141 FIX#2: auto-flush dirty queue al recuperar conexión
- //                   Items marcados dirty durante offline se suben a subcolecciones.
+ // v1.3.1147: reemplaza flush individual por autoHeal unificado
+ //            Incluye canary scan + flush dirty en una sola operación throttled.
  setTimeout(function() {
-  try { if (window._DashweyFlushDirty) window._DashweyFlushDirty(); } catch(_) {}
+  try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('online'); } catch(_) {}
  }, 1500);
  });
  window.addEventListener('offline', function() {
@@ -14185,7 +14270,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1146-dev';
+ const _APP_VERSION = 'v1.3.1147-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16077,6 +16162,10 @@ const ui = (() => {
    +row('Items última purga', h.lastAutoPurgeCount || 0)
    +row('Checks integridad pre-sync', h.integrityChecks || 0)
    +row('Checks con blocks', h.integrityBlocks || 0, (h.integrityBlocks || 0) > 0)
+   // v1.3.1147: métricas auto-heal
+   +row('Auto-heal ejecutados', h.autoHealRuns || 0)
+   +row('Último trigger', h.autoHealLastTrigger || '—')
+   +row('Última auto-heal', _fmtTs(h.autoHealLastAt))
    // Acciones
    +'<div style="padding:16px">'
    +'<button id="hs-scan-btn" class="btn-ok" style="width:100%">🔍 Escanear + auto-purgar ahora</button>'
@@ -18336,6 +18425,10 @@ const ui = (() => {
      DashweyBus.emit('gasto');
      DashweyBus.emit('venta');
      try { App.dash.render(); } catch(_) {}
+     // v1.3.1147 TRIGGER LOYVERSE_SYNC: autoHeal tras import (throttle 30s protege)
+     setTimeout(function(){
+      try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('loyverse_sync'); } catch(_) {}
+     }, 1500);
     }
     var msg = '✅ ' + receipts.length + ' tickets → ' + totalVentasCreated + ' ventas + ' + totalIngresosCreated + ' mov.';
     if (totalVentasSkipped > 0 || totalIngresosSkipped > 0) {
@@ -40456,6 +40549,16 @@ window._DashweyDeviceId = (() => {
 
  // 3. Render segun tiempo fuera de foco
  if (elapsed < _LIGHT_THRESHOLD) return; // menos de 3s: sin re-render
+
+ // v1.3.1147 TRIGGER VISIBILITY: tras >= 30s fuera, autoHeal (canary + flush dirty)
+ //                                No-op si throttle 30s aún activo desde último trigger
+ try {
+  if (elapsed >= _RESUME_THRESHOLD) {
+   setTimeout(function(){
+    try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('visibility'); } catch(_) {}
+   }, 2000); // esperar a que initialSync re-haya refrescado
+  }
+ } catch(_) {}
 
  requestAnimationFrame(function() {
  try {
