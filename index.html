@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1132-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1133-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1132-dev</title>
+<title>Dashwey v1.3.1133-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10399,15 +10399,23 @@ const State = (() => {
     return false;
    }
    // 3. Para cada subcolección: extraer items dirty del state y hacer batch
+   // v1.3.1133: leer arrays directamente de State.raw, SIN _buildLocalSnapshot
+   // Antes: _buildLocalSnapshot() serializa 1613 KB cada save (CPU + mem wasted)
+   // Ahora: accedemos al array raw directo → solo leemos la key que necesitamos
    const dirty = window._DashweyDirtyItems || {};
-   const rawState = (typeof window._DashweyBuildSnapshot === 'function')
-    ? window._DashweyBuildSnapshot()
-    : _archivePayload(_state);
+   const _S = window.App?.State || State;
+   const _raw = (_S && _S.raw) ? _S.raw : null;
    let totalDirty = 0;
    for (const stateKey of transactionalKeys) {
     const dirtySet = dirty[stateKey];
     if (!(dirtySet instanceof Set) || dirtySet.size === 0) continue;
-    const arr = Array.isArray(rawState[stateKey]) ? rawState[stateKey] : [];
+    // Acceso directo sin construir snapshot completo
+    let arr = [];
+    try {
+     if (_raw && typeof _raw[stateKey] === 'function') arr = _raw[stateKey]();
+     else if (_S?.get?.[stateKey]) arr = _S.get[stateKey]();
+    } catch(_) {}
+    if (!Array.isArray(arr)) arr = [];
     // Recoger items dirty (presentes) + items con deleted:true (para borrado en subcolección)
     const byId = {};
     for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
@@ -10852,9 +10860,11 @@ const State = (() => {
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing');
  }
  // v1.3.1077: usar snapshot completo con facturas/lotesStock/syncCommand/deletedIds/etc.
- // Caps de archivePayload solo aplican al snapshot — resto de campos viajan completos
+ // v1.3.1133: si subcol activa, rootOnly=true — arrays transaccionales se escriben por batches
+ //             desde _writeFirebaseDual leyendo State directamente (ahorra serializar 1.5MB)
+ const _useRootOnly = !!window._DashweyUseSubcollections;
  const _fbPayload = (typeof window._DashweyBuildSnapshot === 'function')
-  ? window._DashweyBuildSnapshot()
+  ? window._DashweyBuildSnapshot(_useRootOnly ? { rootOnly: true } : undefined)
   : _archivePayload(_state);
  // Aplicar caps de archive (ventas/mermas/pedidos/facturas/chat) al payload FB
  const _fbPayloadCapped = _archivePayload(_fbPayload);
@@ -13371,7 +13381,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1132-dev';
+ const _APP_VERSION = 'v1.3.1133-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38344,27 +38354,24 @@ _eaRecalc();
 
  // v1.3.1077: _buildLocalSnapshot usa State.raw para arrays con soft-delete
  // Así los ítems deleted:true viajan a Firebase y otros dispositivos los detectan
- function _buildLocalSnapshot() {
+ // v1.3.1133: opción {rootOnly:true} — excluye arrays transaccionales (ahorra 1.5 MB serialize)
+ //            Usado por save() cuando subcolecciones está activo (arrays viven en subcol)
+ function _buildLocalSnapshot(opts) {
+ const rootOnly = opts && opts.rootOnly === true;
  const now = Date.now();
  const deviceId = window._DashweyDeviceId || 'unknown';
  const R = State.raw || {}; // fallback por si no está expuesto
  const _r = (k) => (R[k] ? R[k]() : (State.get[k] ? State.get[k]() : []));
- return {
+ const snap = {
  user: { ...State.get.user(), lastSyncAt: now, lastDeviceId: deviceId },
  // Arrays CON soft-delete → usar raw para incluir items con deleted:true
  proveedores: _r('proveedores'),
  productos: _r('productos'),
- historialPedidos: _r('historialPedidos'),
- mermas: _r('mermas'),
- ventas: _r('ventas'),
  pendingOrders: _r('pendingOrders'),
  visitasComerciales: _r('visitasComerciales'),
  cuentas: _r('cuentas'),
- gastosOp: _r('gastosOp'),
- ingresosFin: _r('ingresosFin'),
  cierresCaja: _r('cierresCaja'),
  recordatorios: _r('recordatorios'),
- facturas: _r('facturas'),
  lotesStock: _r('lotesStock'),
  // Arrays/objetos sin id → getter normal
  ticketsAbiertos: State.get.ticketsAbiertos(),
@@ -38384,6 +38391,17 @@ _eaRecalc();
  _deletedIds: (function(){ try { return window._DashweyLocalDeletedIds.toArray ? window._DashweyLocalDeletedIds.toArray() : []; } catch(_) { return []; } })(),
  syncCommand: (State.get.syncCommand ? State.get.syncCommand() : null),
  };
+ // v1.3.1133: solo incluir arrays transaccionales si NO es rootOnly
+ // Con subcolecciones activas, estos arrays viven en subcol → no necesitan serializarse aquí
+ if (!rootOnly) {
+  snap.historialPedidos = _r('historialPedidos');
+  snap.mermas = _r('mermas');
+  snap.ventas = _r('ventas');
+  snap.gastosOp = _r('gastosOp');
+  snap.ingresosFin = _r('ingresosFin');
+  snap.facturas = _r('facturas');
+ }
+ return snap;
  }
  // Exponer globalmente para que save() (otro scope) pueda usarlo
  window._DashweyBuildSnapshot = _buildLocalSnapshot;
