@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1166-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1167-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1166-dev</title>
+<title>Dashwey v1.3.1167-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7664,13 +7664,13 @@ html { will-change: auto; }
 
 /* Entrada del icono: sube desde abajo con spring */
 @keyframes splashIconIn {
- from { opacity: 0; transform: translateY(24px) scale(0.82); }
- to { opacity: 1; transform: translateY(0) scale(1); }
+ from { opacity: 0; transform: translate3d(0, 24px, 0) scale(0.82); }
+ to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 /* Entrada del wordmark + tagline: fade in con delay */
 @keyframes splashTextIn {
- from { opacity: 0; transform: translateY(10px); }
- to { opacity: 1; transform: translateY(0); }
+ from { opacity: 0; transform: translate3d(0, 10px, 0); }
+ to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 .splash-icon-wrap {
@@ -7683,7 +7683,16 @@ html { will-change: auto; }
  justify-content: center;
  box-shadow: 0 8px 40px rgba(139,26,47,0.32), 0 2px 10px rgba(139,26,47,0.20);
  margin-bottom: 28px;
+ /* v1.3.1167 FLICKER FIX:
+    - translate3d en keyframes fuerza GPU layer
+    - will-change durante animación; CSS animation lo limpia al terminar via animation-fill-mode:both
+    - backface-visibility:hidden previene parpadeo en Android WebView */
  animation: splashIconIn 0.52s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+ will-change: transform, opacity;
+ -webkit-backface-visibility: hidden;
+ backface-visibility: hidden;
+ -webkit-transform: translateZ(0);
+ transform: translateZ(0);
 }
 .splash-icon-wrap svg {
  width: 58px;
@@ -7698,6 +7707,9 @@ html { will-change: auto; }
  text-transform: uppercase;
  margin-bottom: 10px;
  animation: splashTextIn 0.38s ease 0.20s both;
+ will-change: transform, opacity;
+ -webkit-backface-visibility: hidden;
+ backface-visibility: hidden;
 }
 .splash-rule {
  width: 32px;
@@ -7706,6 +7718,8 @@ html { will-change: auto; }
  border-radius: 2px;
  margin-bottom: 40px;
  animation: splashTextIn 0.38s ease 0.26s both;
+ -webkit-backface-visibility: hidden;
+ backface-visibility: hidden;
 }
 .splash-tagline {
  font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif;
@@ -7715,6 +7729,15 @@ html { will-change: auto; }
  color: rgba(26,26,26,0.38);
  text-transform: uppercase;
  animation: splashTextIn 0.38s ease 0.32s both;
+ will-change: transform, opacity;
+ -webkit-backface-visibility: hidden;
+ backface-visibility: hidden;
+}
+/* v1.3.1167: liberar will-change tras animación (memoria) */
+#app-splash.fade-out .splash-icon-wrap,
+#app-splash.fade-out .splash-wordmark,
+#app-splash.fade-out .splash-tagline {
+ will-change: auto;
 }
 </style>
 
@@ -14603,22 +14626,18 @@ window.Utils = Utils; // v9.5.104: exponer al scope global desde donde Utils sí
 // Aliases globales — compatibilidad con llamadas directas en HTML inline
 
 // ── _hideSplash — ocultar splash con fade suave ─────────────────────
-// antes de iniciar el fade-out. Evita que el splash desaparezca mientras
-// el icono aún está entrando (icono: 520ms, tagline: 320ms + 320ms delay = 640ms).
+// v1.3.1167 PERF: eliminado MIN_VISIBLE artificial (era 2200ms).
+//   Regla: splash desaparece cuando la app está lista, sin delays.
+//   La animación de entrada del icono (520ms spring) se completa en su
+//   propio ciclo CSS y queda en estado final aunque se inicie el fade.
 function _hideSplash() {
  const splash = document.getElementById('app-splash');
  if (!splash || splash.classList.contains('hidden')) return;
- // Tiempo mínimo visible: animaciones de entrada completas + 100ms de pausa
- const MIN_VISIBLE = 2200; // ms — tiempo mínimo visible del splash HTML
- const elapsed = Date.now() - (window._splashStartTime || Date.now());
- const delay = Math.max(0, MIN_VISIBLE - elapsed);
- setTimeout(() => {
- if (!splash || splash.classList.contains('hidden')) return;
+ // Fade-out inmediato sin delay artificial. El fade dura 400ms (CSS transition).
  splash.classList.add('fade-out');
- setTimeout(() => splash.classList.add('hidden'), 420);
- }, delay);
+ setTimeout(() => { if (splash) splash.classList.add('hidden'); }, 420);
 }
-// Registrar tiempo de inicio del splash
+// Registrar tiempo de inicio del splash (telemetría no bloqueante)
 window._splashStartTime = Date.now();
 // Sobrescribir stub del HEAD con la función real
 window._hideSplash = _hideSplash;
@@ -14816,7 +14835,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1166-dev';
+ const _APP_VERSION = 'v1.3.1167-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41215,7 +41234,10 @@ _eaRecalc();
  // _onAuthGate reacciona a dashwey:auth-changed(!hasUser) y la muestra correctamente.
  // Mostrarla antes provocaría flash visual si Firebase restaura sesión rápidamente.
 
- // Timeout de seguridad: 2.5s — reducido para evitar freeze en APK
+ // v1.3.1167 PERF: timeout 8s → 1.5s. Si Firebase no responde rápido,
+ //   se muestra UI local (splash off + dashboard con datos localStorage).
+ //   Nunca pantalla en blanco. Si llega evento auth tarde, _onAuthGate
+ //   actualiza UI sin parpadeo (auth-screen oculta, dashboard sigue).
  let _gateResolved = false;
  const _gateTimeout = setTimeout(() => {
  if (_gateResolved) return;
@@ -41233,7 +41255,7 @@ _eaRecalc();
   if (_authElT) { _authElT.style.display = 'none'; _authElT.classList.add('hidden'); _authElT.classList.remove('visible'); }
   if (!_hasSess) console.warn('[Dashwey] Auth timeout — modo local');
  }
- }, 8000);
+ }, 1500);
 
  // Listener permanente en auth-changed
  // Se registra AHORA aunque Firebase no esté listo aún.
