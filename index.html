@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1163-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1164-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1163-dev</title>
+<title>Dashwey v1.3.1164-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1194,7 +1194,8 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
  background: var(--surface);
  border-radius: var(--sheet-radius);
  display: flex; flex-direction: column;
- padding-bottom: env(safe-area-inset-bottom, 16px);
+ /* v1.3.1164: padding inferior = altura navbar (sin doble safe-area-inset, ya en --tab-real) */
+ padding-bottom: calc(var(--tab-real, 60px) + env(safe-area-inset-bottom, 0px));
  transform: translateY(100%);
  transition: transform var(--sheet-duration) var(--sheet-spring);
 }
@@ -8052,7 +8053,7 @@ function _authTabSafe(tab) {
  </div>
 
  <!-- ═══ TAB 1: DASHBOARD ═══ -->
- <div class="tab-page">
+ <div class="tab-page" id="tab-dashboard">
  <!-- PAGE HEADER DASHBOARD v9.5.47
  Clonado de TPV: misma clase, mismo padding, mismo DOM.
  Línea 1: .dash-page-title (30px/900 = tpv-page-title)
@@ -8350,7 +8351,7 @@ function _authTabSafe(tab) {
  </div>
 
  <!-- ═══ TAB 2: ALMACÉN ═══ -->
- <div class="tab-page" style="overflow:hidden;">
+ <div class="tab-page" id="tab-almacen" style="overflow:hidden;">
  <div id="tab-alm" style="display:flex;flex-direction:column;height:100%;min-height:0">
 
  <!-- v9.5.81: ALM header unificado — título + proveedor activo clickable
@@ -14814,7 +14815,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1163-dev';
+ const _APP_VERSION = 'v1.3.1164-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19432,6 +19433,12 @@ const ui = (() => {
 // v1.3.386: helper — ancho real del swipe-wrap (no window.innerWidth)
 // En PC el scrollbar resta px; window.innerWidth != offsetWidth → corte visual
 function _getTabWidth() {
+ // v1.3.1164: NAVBAR INVERTIDA (Almacén-izq, Dashboard-centro)
+ // Sin reordenar DOM (alto riesgo), usamos mapping lógico→físico.
+ // Track real: [TPV(0), Dashboard(1), Almacén(2)]
+ // Visual deseado: [TPV(0), Almacén(2), Dashboard(1)]
+ // Por eso: tab 1 (Dashboard) → posición física 2; tab 2 (Almacén) → posición física 1
+ // Aplicamos en el momento de escribir translateX (ver _logicalToPhysical más abajo).
  var wrap = document.getElementById('swipe-wrap');
  if (wrap && wrap.offsetWidth > 100) return wrap.offsetWidth;
  return window.innerWidth || document.documentElement.clientWidth || 390;
@@ -19446,6 +19453,38 @@ const nav = (() => {
  let _cTab = _startTab;
  const track = document.getElementById('swipe-track');
  const TITLES = ['TPV','DASHBOARD','ALMACÉN'];
+
+ // v1.3.1164: NAVBAR INVERTIDA — reordenar DOM children del swipe-track
+ // Orden visual deseado en navbar: [Almacén-izq, Dashboard-centro, Ajustes-der]
+ // Para que la animación translateX coincida con la dirección visual:
+ //   physical[0] = TPV (oculto, posición fija)
+ //   physical[1] = Almacén (tab 2 lógico) → al pulsar Almacén desde Dashboard:
+ //                  translateX -200% → -100% → contenido entra desde la izquierda ✓
+ //   physical[2] = Dashboard (tab 1 lógico)
+ // El index lógico (0/1/2) se mantiene en todo el código; solo cambia la
+ // posición FÍSICA en el DOM. Esto invierte la dirección de animación
+ // sin tocar gesture handlers, _modeAllowed, _TAB_NAMES, etc.
+ try {
+  if (track) {
+   var elTpv = document.getElementById('tab-tpv');
+   var elDash = document.getElementById('tab-dashboard');
+   var elAlm = document.getElementById('tab-almacen');
+   if (elTpv && elDash && elAlm) {
+    // Reordenar: TPV (0), Almacén (1 físico), Dashboard (2 físico)
+    track.appendChild(elTpv);
+    track.appendChild(elAlm);
+    track.appendChild(elDash);
+    console.info('[nav] DOM reordered: TPV → Almacén → Dashboard');
+   }
+  }
+ } catch(e) { console.warn('[nav reorder]', e); }
+
+ // v1.3.1164: mapping logical tab index → physical position en el track
+ // logical 0 (TPV) → physical 0
+ // logical 1 (Dashboard) → physical 2
+ // logical 2 (Almacén) → physical 1
+ const _LOGICAL_TO_PHYSICAL = { 0: 0, 1: 2, 2: 1 };
+ function _logicalToPhysical(i) { return _LOGICAL_TO_PHYSICAL[i] !== undefined ? _LOGICAL_TO_PHYSICAL[i] : i; }
 
  // Estado del gesto
  let _sx = 0, _sy = 0, _tx = 0, _vw = 0;
@@ -19484,7 +19523,7 @@ const nav = (() => {
  _sx = e.touches[0].clientX;
  _sy = e.touches[0].clientY;
  _vw = _getTabWidth();
- _tx = -_cTab * _vw;
+ _tx = -_logicalToPhysical(_cTab) * _vw;
  _drag = false;
  _vetoed = false;
  _touchStartTime = Date.now();
@@ -19533,11 +19572,15 @@ const nav = (() => {
  effectiveDx = sign * (SNAP_THRESHOLD * 0.08 + (adxNow - SNAP_THRESHOLD) * 0.6);
  }
  const NTABS = 3;
- // v1.3.1025: respetar tab mínimo del modo activo — bloquear arrastre a tab oculto
+ // v1.3.1164: swipe usa posición FÍSICA del track, no índice lógico.
+ // El _cTab lógico se mantiene; convertimos a physical sólo para limitar
+ // el rango del gesto y aplicar translateX (consistente con _logicalToPhysical).
+ var _physTab = _logicalToPhysical(_cTab);
  var _mmMin = { pos: 0, alm: 2, cfo: 1, hub: 1 };
  var _tmMin = (_mmMin[window._DASHWEY_MODE || 'hub'] !== undefined) ? _mmMin[window._DASHWEY_MODE || 'hub'] : 0;
- const minX = _cTab < NTABS - 1 ? -(_cTab + 1) * _vw : -_cTab * _vw;
- const maxX = _cTab > _tmMin ? -(_cTab - 1) * _vw : -_cTab * _vw;
+ var _physMin = _logicalToPhysical(_tmMin);
+ const minX = _physTab < NTABS - 1 ? -(_physTab + 1) * _vw : -_physTab * _vw;
+ const maxX = _physTab > _physMin ? -(_physTab - 1) * _vw : -_physTab * _vw;
  const newX = Math.max(minX, Math.min(maxX, _tx + effectiveDx));
  track.style.transform = `translateX(${newX}px)`;
  _rafId = null;
@@ -19573,13 +19616,19 @@ const nav = (() => {
  // v1.3.92: snap threshold 55→90px (drag lento) | flick 0.3→0.5px/ms (más intencional)
  // 90px ≈ 25% de pantalla típica Android — el usuario debe "ganarse" el cambio
  const shouldSnap = Math.abs(dx) > 90 || vel > 0.5;
- // v1.3.1025: clampear destino — evita swipe a tab oculto en modo hub
-    var _snapDest = shouldSnap
- ? (dx < 0 ? Math.min(2, _cTab + 1) : Math.max(0, _cTab - 1))
- : _cTab;
+ // v1.3.1164: swipe direction respeta orden FÍSICO del track.
+ // Usuario ve [TPV, Almacén, Dashboard] → swipe izq desde Almacén = Dashboard.
+ // Pero el snap se calcula sobre _cTab lógico → mapear via physical.
+ // _physToLogical: invierte _LOGICAL_TO_PHYSICAL para resolver target.
+ var _PHYS_TO_LOGICAL = { 0: 0, 1: 2, 2: 1 }; // physical → logical
+ var _physCurr = _logicalToPhysical(_cTab);
+ var _physDest = shouldSnap
+  ? (dx < 0 ? Math.min(2, _physCurr + 1) : Math.max(0, _physCurr - 1))
+  : _physCurr;
+ var _snapDest = _PHYS_TO_LOGICAL[_physDest] !== undefined ? _PHYS_TO_LOGICAL[_physDest] : _cTab;
     var _modeMin = { pos: 0, alm: 2, cfo: 1, hub: 1 };
     var _tabMin = (_modeMin[window._DASHWEY_MODE || 'hub'] !== undefined) ? _modeMin[window._DASHWEY_MODE || 'hub'] : 0;
-    if (_snapDest < _tabMin) _snapDest = _cTab;
+    if (_snapDest < _tabMin && _snapDest !== 0) _snapDest = _cTab;
     goTab(_snapDest);
  }, { passive: true }); 
  track.addEventListener('touchcancel', () => {
@@ -19610,7 +19659,7 @@ const nav = (() => {
  // v1.3.587: no interrumpir animación activa de goTab — teclado virtual dispara resize
  if (_animating) { _resizeRaf = null; return; }
  track.style.transition = 'none';
- track.style.transform = `translateX(${-_cTab * _getTabWidth()}px)`;
+ track.style.transform = `translateX(${-_logicalToPhysical(_cTab) * _getTabWidth()}px)`;
  _resizeRaf = null;
  });
  });
@@ -19653,7 +19702,7 @@ const nav = (() => {
  _syncNavActive(i);
     // Restaurar posición visual — puede estar desplazado por gesto incompleto
     track.style.transition = 'transform .38s var(--ease-standard)';
-    track.style.transform = 'translateX(' + (-i * _getTabWidth()) + 'px)';
+    track.style.transform = 'translateX(' + (-_logicalToPhysical(i) * _getTabWidth()) + 'px)';
  return;
  }
  // Android keeps the keyboard open for any focused <input> even when off-screen.
@@ -19721,7 +19770,7 @@ const nav = (() => {
  // (~15 callsites en _modeAllowed, _TAB_NAMES, _syncNavState, gesture handlers).
  // Riesgo alto vs beneficio. Pendiente release dedicada con QA completo.
  track.style.transition = 'transform .38s var(--ease-standard)';
- track.style.transform = `translateX(${-i * _getTabWidth()}px)`;
+ track.style.transform = `translateX(${-_logicalToPhysical(i) * _getTabWidth()}px)`;
  // v1.3.389: tab-fade-in eliminado — la animación opacity causaba flash en WebView
  // La transición translateX del track es suficiente para una navegación fluida
  nav._fromSwipe = false;
@@ -31124,6 +31173,29 @@ window.openCuentaSideSheet = function() {
  '</div>' +
  '<select id="sd-pf2-zona" class="fi" style="width:100%">' + zonaOpts + '</select>' +
  '</div>' +
+ // v1.3.1164: HORARIO DE NEGOCIO — fuente única para auto-cierre + lógica jornada
+ '<div class="sd-row" style="flex-direction:column;align-items:flex-start;padding:14px 16px;gap:10px">' +
+ '<div style="display:flex;align-items:center;gap:10px;width:100%">' +
+ '<div class="sd-icon" style="background:#FEF3C7;flex-shrink:0">🕐</div>' +
+ '<div class="sd-info" style="flex:1">' +
+ '<div class="sd-title">Horario de negocio</div>' +
+ '<div class="sd-sub">Usado para cierre de caja</div>' +
+ '</div>' +
+ '</div>' +
+ '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%">' +
+ '<div><div style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-bold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Apertura</div>' +
+ '<input id="sd-pf2-h-open" type="time" class="fi" value="' + e2(p.horarioApertura||'') + '" style="width:100%"></div>' +
+ '<div><div style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-bold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Cierre</div>' +
+ '<input id="sd-pf2-h-close" type="time" class="fi" value="' + e2(p.horarioCierre||'') + '" style="width:100%"></div>' +
+ '</div>' +
+ '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;-webkit-tap-highlight-color:transparent;width:100%">' +
+ '<input id="sd-pf2-cierre-auto" type="checkbox" ' + (p.cierreAutomatico?'checked':'') + ' style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">' +
+ '<span style="font-size:var(--fs-sm);color:var(--ink);flex:1">Cerrar caja automáticamente</span></label>' +
+ '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;-webkit-tap-highlight-color:transparent;width:100%">' +
+ '<input id="sd-pf2-notif-cierre" type="checkbox" ' + (p.notifCierre?'checked':'') + ' style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">' +
+ '<span style="font-size:var(--fs-sm);color:var(--ink);flex:1">Notificar cuando sea hora de cerrar</span></label>' +
+ '<button onclick="window._sdAbrirJornadaAhora()" style="width:100%;height:42px;border-radius:var(--r-md);background:var(--accent);color:#fff;border:none;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">🔓 Abrir jornada ahora</button>' +
+ '</div>' +
  '<div style="padding:0 14px 14px">' +
  '<button class="btn-ok" style="width:100%" onclick="window._sdCuentaGuardarPerfil()">Guardar perfil</button>' +
  '</div>' +
@@ -31161,9 +31233,27 @@ window._sdCuentaGuardarPerfil = function() {
  try {
  // v1.3.290: SET-05 — incluir moneda del chip activo en el guardado
  var activeChip = document.querySelector('.sd-chip-group .sd-chip-active[data-moneda]');
+ // v1.3.1164: HORARIO de negocio
+ var hOpen = (document.getElementById('sd-pf2-h-open')||{}).value || '';
+ var hClose = (document.getElementById('sd-pf2-h-close')||{}).value || '';
+ var cAuto = !!(document.getElementById('sd-pf2-cierre-auto')||{}).checked;
+ var nCierre = !!(document.getElementById('sd-pf2-notif-cierre')||{}).checked;
+ // Validar rango (apertura distinta de cierre — 09:00→03:00 cruza día = válido)
+ if (hOpen && hClose && hOpen === hClose) {
+  showToast('⚠️ Apertura y cierre no pueden ser iguales');
+  return;
+ }
+ if (cAuto && !hClose) {
+  showToast('⚠️ Define hora de cierre para usar cierre automático');
+  return;
+ }
  var p = Object.assign(State.get.perfil ? State.get.perfil() : {}, {
  nombre: nombre.trim(),
  zona: zona,
+ horarioApertura: hOpen,
+ horarioCierre: hClose,
+ cierreAutomatico: cAuto,
+ notifCierre: nCierre,
  });
  if (activeChip) {
  p.moneda = activeChip.dataset.moneda;
@@ -31174,6 +31264,24 @@ window._sdCuentaGuardarPerfil = function() {
  } catch(e) {
  showToast('⚠️ Error al guardar');
  }
+};
+
+// v1.3.1164: abrir jornada desde sidesheet Cuenta — reutiliza CierreEngine
+window._sdAbrirJornadaAhora = function() {
+ try { Utils.triggerHaptic('medium'); } catch(_) {}
+ try {
+  if (window.SideSheet && window.SideSheet.closeAll) window.SideSheet.closeAll();
+ } catch(_) {}
+ setTimeout(function(){
+  try {
+   if (window.App && App.dash && App.dash._openCierreCajaSheet) {
+    App.dash._openCierreCajaSheet();
+   } else if (window.App && App.CierreEngine && App.CierreEngine.openJornada) {
+    var c = App.CierreEngine.openJornada();
+    if (c) showToast('✅ Jornada abierta');
+   }
+  } catch(e) { console.warn('[abrir jornada]', e); }
+ }, 220);
 };
 
 window._sdCuentaCerrarSesiones = function() {
@@ -34236,15 +34344,13 @@ const marginLine = mg === null ? '' :
    return;
   }
   var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
+  // v1.3.1164: SIN inline handlers (fallan en WebView con dataset/comillas anidadas).
+  // Listeners programáticos tras render. Long-press 500ms via timer.
   var html = provs.map(function(p){
    var isSel = sel === p.id;
    var dp = p.diasPedido || [];
    var sub = dp.length ? ('Pedido: ' + dp.map(function(d){return DNAMES[d]||'?';}).join(', ')) : 'Sin días fijos';
-   return '<div class="dps-opt' + (isSel ? ' sel' : '') + '" data-pid="' + esc(p.id) + '"'
-    + ' ontouchstart="App.alm._provPickerLpStart(event,event.currentTarget.dataset.pid)"'
-    + ' ontouchmove="App.alm._provPickerLpMove(event)"'
-    + ' ontouchend="App.alm._provPickerLpEnd(event,event.currentTarget.dataset.pid)"'
-    + ' ontouchcancel="App.alm._provPickerLpCancel()">'
+   return '<div class="dps-opt' + (isSel ? ' sel' : '') + '" data-pid="' + esc(p.id) + '">'
     +  '<div class="dps-opt-icon">' + esc(p.icon || '🏪') + '</div>'
     +  '<div style="flex:1;min-width:0">'
     +   '<div class="dps-opt-lbl">' + esc(p.nombre || '—') + '</div>'
@@ -34256,20 +34362,66 @@ const marginLine = mg === null ? '' :
     + '</div>';
   }).join('');
   scroll.innerHTML = html;
-  // v1.3.1162: delegation click solo si no hubo long-press
-  //   _provPickerLpFired: si el long-press ya disparó menú, bloquear click nativo.
-  scroll.onclick = function(e){
-   if (_provPickerLpFired) { _provPickerLpFired = false; return; }
-   var opt = e.target.closest('[data-pid]');
-   if (!opt) return;
-   var pid = opt.dataset.pid;
-   try { Utils.triggerHaptic('light'); } catch(_) {}
-   _almSaveLastProv(pid);
-   selProv(pid);
-   _closeProvPickerSheet();
-   // Asegurar vista catálogo del proveedor seleccionado
-   try { _almSlideToCat(true); } catch(_) {}
-  };
+
+  // v1.3.1164: attach long-press + click programáticamente por fila
+  scroll.querySelectorAll('.dps-opt').forEach(function(row){
+   var pid = row.getAttribute('data-pid');
+   if (!pid) return;
+   var lpTimer = null;
+   var lpStartX = 0, lpStartY = 0;
+   var lpFired = false;
+
+   row.addEventListener('touchstart', function(ev){
+    lpFired = false;
+    var t = ev.touches && ev.touches[0];
+    lpStartX = t ? t.clientX : 0;
+    lpStartY = t ? t.clientY : 0;
+    if (lpTimer) clearTimeout(lpTimer);
+    lpTimer = setTimeout(function(){
+     lpFired = true;
+     try { Utils.triggerHaptic('medium'); } catch(_) {}
+     _openProvContextMenu(pid, row);
+    }, 500);
+   }, { passive: true });
+
+   row.addEventListener('touchmove', function(ev){
+    if (!lpTimer) return;
+    var t = ev.touches && ev.touches[0];
+    if (!t) return;
+    var dx = Math.abs(t.clientX - lpStartX);
+    var dy = Math.abs(t.clientY - lpStartY);
+    if (dx > 10 || dy > 10) { clearTimeout(lpTimer); lpTimer = null; }
+   }, { passive: true });
+
+   row.addEventListener('touchend', function(ev){
+    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+    if (lpFired) {
+     ev.preventDefault();
+     ev.stopPropagation();
+     return;
+    }
+    // Click normal → seleccionar proveedor
+    try { Utils.triggerHaptic('light'); } catch(_) {}
+    _almSaveLastProv(pid);
+    selProv(pid);
+    _closeProvPickerSheet();
+    try { _almSlideToCat(true); } catch(_) {}
+   }, { passive: false });
+
+   row.addEventListener('touchcancel', function(){
+    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+   });
+
+   // Fallback ratón (desktop) — sin long-press, click directo
+   row.addEventListener('click', function(ev){
+    if (ev.pointerType === 'touch') return; // tactil ya gestionado por touchend
+    try { Utils.triggerHaptic('light'); } catch(_) {}
+    _almSaveLastProv(pid);
+    selProv(pid);
+    _closeProvPickerSheet();
+    try { _almSlideToCat(true); } catch(_) {}
+   });
+  });
  }
 
  // ══════════════════════════════════════════════════════════════════════
@@ -38205,14 +38357,17 @@ _eaRecalc();
   ui.setFs(html);
   ui.openFs('full');
 
-  // Render dinámico con filtro y agrupación por proveedor
+  // Render dinámico con filtro y agrupación por proveedor (collapse)
+  // v1.3.1164: cada sección proveedor es desplegable. Estado por provId.
+  var _collapsedProvs = new Set(); // provIds colapsados (default: todos colapsados al cargar)
+  var _firstRender = true;
+
   function _renderArts(filter) {
    filter = (filter || '').toLowerCase().trim();
    var listEl = document.getElementById('grp-arts-list');
    if (!listEl) return;
-   // Agrupar por proveedor
-   var byProv = {}; // provId → [productos]
-   var orphans = []; // sin proveedor
+   var byProv = {};
+   var orphans = [];
    productos.forEach(function(p){
     if (filter && !(p.nombre||'').toLowerCase().includes(filter) && !(p.ventaNombre||'').toLowerCase().includes(filter)) return;
     var pid = p.prov;
@@ -38223,34 +38378,75 @@ _eaRecalc();
      orphans.push(p);
     }
    });
-   // Ordenar proveedores por nombre
    var provIds = Object.keys(byProv).sort(function(a,b){
     return (provMap[a].nombre||'').localeCompare(provMap[b].nombre||'');
    });
-   // Si hay orphans, añadirlos al final como sección "Sin proveedor"
+   // En primer render: colapsar todos los proveedores. Si hay filtro activo, expandir todos.
+   if (_firstRender && !filter) {
+    provIds.forEach(function(pid){ _collapsedProvs.add(pid); });
+    _collapsedProvs.add('__orphans__');
+    _firstRender = false;
+   }
+   // Si hay filtro: expandir automáticamente para que se vean los matches
+   if (filter) {
+    _collapsedProvs.clear();
+   }
    var html = '';
    var totalShown = 0;
    provIds.forEach(function(provId){
     var prov = provMap[provId];
     var arts = byProv[provId].sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
-    html += '<div style="padding:8px 4px 4px;font-size:var(--fs-2xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-bold)">'
-     + _esc(prov.icon || '🏪') + ' ' + _esc(prov.nombre || '—')
-     + ' <span style="font-weight:var(--fw-reg);text-transform:none;color:var(--ink-soft)">· ' + arts.length + '</span></div>';
-    arts.forEach(function(p){
-     html += _renderProdRow(p);
-     totalShown++;
-    });
+    var nSel = arts.filter(function(a){ return selected.has(a.id); }).length;
+    var collapsed = _collapsedProvs.has(provId);
+    html += '<button data-prov-toggle="'+_esc(provId)+'" type="button" style="width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;margin:6px 0 4px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm2);cursor:pointer;font-family:var(--font);text-align:left;-webkit-tap-highlight-color:transparent">'
+     + '<span style="font-size:14px;color:var(--ink-soft);transition:transform .18s ease;display:inline-block'+(collapsed?'':';transform:rotate(90deg)')+'">▸</span>'
+     + '<span style="font-size:18px">'+_esc(prov.icon || '🏪')+'</span>'
+     + '<span style="flex:1;font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(prov.nombre || '—')+'</span>'
+     + '<span style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-semi)">'+arts.length+(nSel?' · <span style="color:#16A34A">'+nSel+' ✓</span>':'')+'</span>'
+     + '</button>';
+    if (!collapsed) {
+     html += '<div data-prov-content="'+_esc(provId)+'" style="padding-left:8px">';
+     arts.forEach(function(p){ html += _renderProdRow(p); totalShown++; });
+     html += '</div>';
+    }
    });
    if (orphans.length) {
-    html += '<div style="padding:8px 4px 4px;font-size:var(--fs-2xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-bold)">📦 Sin proveedor · ' + orphans.length + '</div>';
-    orphans.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
-    orphans.forEach(function(p){ html += _renderProdRow(p); totalShown++; });
+    var orphCollapsed = _collapsedProvs.has('__orphans__');
+    var orphSel = orphans.filter(function(a){ return selected.has(a.id); }).length;
+    html += '<button data-prov-toggle="__orphans__" type="button" style="width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;margin:6px 0 4px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm2);cursor:pointer;font-family:var(--font);text-align:left;-webkit-tap-highlight-color:transparent">'
+     + '<span style="font-size:14px;color:var(--ink-soft);display:inline-block'+(orphCollapsed?'':';transform:rotate(90deg)')+'">▸</span>'
+     + '<span style="font-size:18px">📦</span>'
+     + '<span style="flex:1;font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink)">Sin proveedor</span>'
+     + '<span style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-semi)">'+orphans.length+(orphSel?' · <span style="color:#16A34A">'+orphSel+' ✓</span>':'')+'</span>'
+     + '</button>';
+    if (!orphCollapsed) {
+     html += '<div data-prov-content="__orphans__" style="padding-left:8px">';
+     orphans.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+     orphans.forEach(function(p){ html += _renderProdRow(p); totalShown++; });
+     html += '</div>';
+    }
    }
-   if (totalShown === 0) {
+   if (provIds.length === 0 && orphans.length === 0) {
     html = '<div style="padding:24px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin coincidencias</div>';
    }
    listEl.innerHTML = html;
+   _attachProvToggle();
    _attachRowHandlers();
+  }
+
+  function _attachProvToggle() {
+   var listEl = document.getElementById('grp-arts-list');
+   if (!listEl) return;
+   listEl.querySelectorAll('[data-prov-toggle]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+     var pid = btn.getAttribute('data-prov-toggle');
+     if (_collapsedProvs.has(pid)) _collapsedProvs.delete(pid);
+     else _collapsedProvs.add(pid);
+     try { Utils.triggerHaptic('light'); } catch(_) {}
+     var search = document.getElementById('grp-arts-search');
+     _renderArts(search ? search.value : '');
+    });
+   });
   }
 
   function _renderProdRow(p) {
