@@ -12042,7 +12042,6 @@ const State = (() => {
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
  addPedido: (p) => { // v1.3.594: deduplicación por ID — consistente con addVenta
- p = _normalizePedidoFinanciero(p);
  if (p?.id && _state.historialPedidos.some(x => x.id === p.id)) return;
  _state.historialPedidos.push(p);
  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
@@ -12060,9 +12059,13 @@ const State = (() => {
  // El único save() queda al final de esta función → write único, sin race conditions.
  try {
   if (Array.isArray(p?.items) && p.items.length > 0) {
-   var _pedCoste = p.totalFinal || 0;
-   var _pedBase = p.base || 0;
-   var _pedImpuestos = _pedidoImpuestos(p);
+   // 1. Calcular coste total del pedido
+   var _pedCoste = 0;
+   try {
+    _pedCoste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste)
+     ? FinEngine.pedidoCoste(p)
+     : p.items.reduce(function(s, it){ return s + (it.ncajas||1)*(it.precio||0); }, 0);
+   } catch(_) {}
 
    if (_pedCoste > 0) {
     // 2. Cuenta destino: primaria de negocio (fallback al 1er elemento)
@@ -12081,38 +12084,28 @@ const State = (() => {
     var _provNombre = (_prov && _prov.nombre) || p.provNombre || 'Proveedor';
 
     // 4. Crear gastoOp — inserción directa en _state (sin setter — evita save() doble)
-    var _gastoId = 'gped_' + (p.id || Date.now());
-    var _gastoPrev = (_state.gastosOp || []).find(function(g){
-     return g && ((p.id && g.pedidoId === p.id) || g.id === _gastoId);
-    }) || null;
+    var _gastoId = 'gped_' + (p.id || Date.now()) + '_' + Math.random().toString(36).slice(2,6);
     var _gasto = {
-     id: (_gastoPrev && _gastoPrev.id) || _gastoId,
+     id: _gastoId,
      nombre: _provNombre,
      concepto: _provNombre,
      importe: _pedCoste,
-     total: _pedCoste,
-     tipo: 'gastoOp',
      fecha: p.fecha || new Date().toISOString(),
      fechaPago: (p.fecha || new Date().toISOString()).slice(0,10),
      origen: 'pedido',
      pedidoId: p.id,
      provId: p.provId || null,
      cuentaId: _cuentaId,
-     base: _pedBase,
-     impuestos: _pedImpuestos,
      metaTipo: 'normal',
      scope: 'negocio',
      estado: 'confirmado',
      categoria: 'Compras',
      createdAt: Date.now(),
     };
-    if (!_state.gastosOp) _state.gastosOp = [];
-    if (_gastoPrev) {
-     Object.assign(_gastoPrev, _gasto, { updatedAt: new Date().toISOString() });
-     try { window._DashweyMarkDirty && window._DashweyMarkDirty('gastosOp', _gastoPrev.id); } catch(_) {}
-    } else {
+    if (!(_state.gastosOp || []).some(function(g){ return g.id === _gastoId; })) {
+     if (!_state.gastosOp) _state.gastosOp = [];
      _state.gastosOp.push(_gasto);
-     try { window._DashweyMarkDirty && window._DashweyMarkDirty('gastosOp', _gasto.id); } catch(_) {}
+     try { window._DashweyMarkDirty && window._DashweyMarkDirty('gastosOp', _gastoId); } catch(_) {}
     }
 
     // 5. Restar saldo de la cuenta — inserción directa en _state (sin setter)
@@ -12989,60 +12982,7 @@ const FinEngine = (() => {
  }
 
  // ── Utilidad: coste total de un pedido de almacén (+IVA) ─────────
- function _pedidoBase(ped) {
- if (!ped) return 0;
- if (ped.base != null) return Math.round((+ped.base || 0) * 100) / 100;
- if (!ped.items) return 0;
- var _base = 0;
- for (var _pi = 0; _pi < ped.items.length; _pi++) {
-  var it = ped.items[_pi];
-  var _ncajas = it.ncajas || 1;
-  var _precio = it.precio || 0;
-  var _base1 = _ncajas * _precio;
-  var _ivaRaw = it.iva != null ? it.iva : null;
-  if (!_ivaRaw) {
-   var _prod = State.get.prod ? State.get.prod(it.prodId) : null;
-   _ivaRaw = (_prod && _prod.iva) ? _prod.iva : null;
-  }
-  _base += _base1 * _ivaFactor(_ivaRaw);
- }
- return Math.round(_base * 100) / 100;
- }
-
- function _pedidoImpuestos(ped) {
- var _imp = (ped && ped.impuestos) || {};
- var _ce = (ped && ped.cargosExtra) || {};
- var _custom = (_ce.custom && _ce.custom.importe) || 0;
- return {
-  recargoEquivalencia: Math.round((((_imp.recargoEquivalencia != null ? _imp.recargoEquivalencia : _imp.re) || _ce.re || 0) * 100)) / 100,
-  puntoVerde: Math.round((((_imp.puntoVerde != null ? _imp.puntoVerde : _imp.pv) || _ce.puntoVerde || 0) * 100)) / 100,
-  extra: Math.round((((_imp.extra != null ? _imp.extra : _custom) || 0) * 100)) / 100,
- };
- }
-
- function _pedidoTotalFinal(ped) {
- if (!ped) return 0;
- var _base = _pedidoBase(ped);
- var _imp = _pedidoImpuestos(ped);
- return Math.round((_base + (_imp.recargoEquivalencia || 0) + (_imp.puntoVerde || 0) + (_imp.extra || 0)) * 100) / 100;
- }
-
- function _normalizePedidoFinanciero(ped) {
- if (!ped) return ped;
- var _imp = _pedidoImpuestos(ped);
- var _base = _pedidoBase(ped);
- var _totalFinal = _pedidoTotalFinal(Object.assign({}, ped, { base: _base, impuestos: _imp }));
- return Object.assign({}, ped, {
-  base: _base,
-  impuestos: _imp,
-  totalFinal: _totalFinal,
-  total: _totalFinal,
- });
- }
-
-function pedidoCoste(ped) {
- if (!ped) return 0;
- if (ped.totalFinal != null) return Math.round((+ped.totalFinal || 0) * 100) / 100;
+ function pedidoCoste(ped) {
  if (!ped || !ped.items) return 0;
  var _base = 0;
  for (var _pi = 0; _pi < ped.items.length; _pi++) {
@@ -36927,12 +36867,11 @@ const nPending = (State.get.pendingOrders() || [])
  provId: sel,
  items: items.map(o => ({prodId:o.prodId, ncajas:o.ncajas, udscaja:o.udscaja, precio:o.precio, pvp:o.pvp}))
  };
- const pedidoNorm = _normalizePedidoFinanciero(pedido);
 
  // v1.3.442: try/finally garantiza que _confirmandoPedido se libera siempre
  try {
  // Guardar en historial local
- State.set.addPedido(pedidoNorm);
+ State.set.addPedido(pedido);
 
  // Subir stock de cada producto recibido
  items.forEach(o => {
@@ -36950,7 +36889,7 @@ const nPending = (State.get.pendingOrders() || [])
  // v1.3.442: try/catch -- triggerHaptic no debe bloquear el flujo
  try { Utils.triggerHaptic('success'); } catch(_) {}
 
- DashweyBus.emit('pedido_stock', { pedido: pedidoNorm });
+ DashweyBus.emit('pedido_stock', { pedido });
 
  // Actualizar badge y banner inmediatamente (carrito ya limpio)
  updateBadge();
@@ -40439,19 +40378,18 @@ _eaRecalc();
  }
 
  // ── Guardar pedido en historial ─────────────────────────────
-const pedido = {
-id: 'ped_' + Date.now(),
-fecha: new Date().toISOString(),
-provId: sel,
-items: items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja, precio: o.precio, pvp: o.pvp })),
-};
- const pedidoNorm = _normalizePedidoFinanciero(pedido);
+ const pedido = {
+ id: 'ped_' + Date.now(),
+ fecha: new Date().toISOString(),
+ provId: sel,
+ items: items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja, precio: o.precio, pvp: o.pvp })),
+ };
 
  try {
- State.set.addPedido(pedidoNorm);
- try { window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido: pedidoNorm } })); } catch(_) {}
+ State.set.addPedido(pedido);
+ try { window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido } })); } catch(_) {}
  // FIX v1.2.11: emitir pedido_stock para sincronizar Dashboard Agenda en tiempo real
- try { DashweyBus.emit('pedido_stock', { pedido: pedidoNorm }); } catch(_) {}
+ try { DashweyBus.emit('pedido_stock', { pedido }); } catch(_) {}
  } catch (err) {
  console.error('[CONFIRM] addPedido FAILED:', err.message);
  }
@@ -40472,7 +40410,7 @@ items: items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja,
 
  setTimeout(() => {
  try {
- _mostrarResumenPedido(pedidoNorm, prov);
+ _mostrarResumenPedido(pedido, prov);
 
  } catch (err) {
  console.error('[CONFIRM] _mostrarResumenPedido FAILED:', err.message);
@@ -41135,9 +41073,8 @@ items: items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja,
  }
  }
 
-function _mostrarResumenPedido(pedido, prov) {
+ function _mostrarResumenPedido(pedido, prov) {
  if (!pedido) return;
- pedido = _normalizePedidoFinanciero(pedido);
  const items = pedido.items.map(o => {
  const p = State.get.prod(o.prodId);
  const inv = (o.ncajas||1)*(o.precio||0)*1.10;
@@ -41146,7 +41083,7 @@ function _mostrarResumenPedido(pedido, prov) {
  const mc = mg>=40?'var(--green)':mg>=15?'#16A34A':'var(--orange)';
  return { p, o, inv, vta, mg, mc };
  });
- const totalInv = pedido.totalFinal || items.reduce((s,x)=>s+x.inv,0);
+ const totalInv = items.reduce((s,x)=>s+x.inv,0);
  const totalVta = items.reduce((s,x)=>s+x.vta,0);
  const ganancia = totalVta - totalInv;
  const margenG = totalInv>0?Math.round(ganancia/totalVta*100):0;
@@ -41886,7 +41823,7 @@ function _mostrarResumenPedido(pedido, prov) {
  // v1.3.1135 FIX#3: activar flag ANTES del merge (por si _mergeById llama setters)
  var _prevApp_preMerge = window._DashweyApplyingRemote;
  window._DashweyApplyingRemote = true;
- var _mKeys = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','gastosOp','ingresosFin','facturas'];
+ var _mKeys = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja'];
  // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
  var _skipTrans_mk = window._DashweyShouldSkipTransactionalInRoot?.();
  _mKeys.forEach(function(k) {
@@ -45361,10 +45298,10 @@ window._almCarritoOptions = function() {
  ? orderId.replace('pord_', 'ped_')
  : ('ped_' + Date.now());
 
-var pedido = {
-id: pedidoId,
-fecha: new Date().toISOString(),
-provId: sel,
+ var pedido = {
+ id: pedidoId,
+ fecha: new Date().toISOString(),
+ provId: sel,
  items: items.map(function(o) {
  return {
  prodId: o.prodId,
@@ -45373,11 +45310,10 @@ provId: sel,
  precio: o.precio,
  pvp: o.pvpActual || 0,
  };
-}),
-cargosExtra: S._cargosExtra || null, // v1.3.642: ALM-F6
-};
- pedido = _normalizePedidoFinanciero(pedido);
-S._cargosExtra = null;
+ }),
+ cargosExtra: S._cargosExtra || null, // v1.3.642: ALM-F6
+ };
+ S._cargosExtra = null;
 
  try {
  St.set.addPedido(pedido);
@@ -45444,7 +45380,9 @@ S._cargosExtra = null;
  try { if (window.Utils) Utils.triggerHaptic('medium'); } catch(_) {}
  try {
  var n = items.length;
- var total = pedido.totalFinal || 0;
+ var total = items.reduce(function(s, o) {
+ return s + (o.ncajas || 1) * (o.precio || 0) * 1.10;
+ }, 0);
  var fmt = (+(total || 0)).toFixed(2).replace('.', ',') + ' €';
  var pNom = (meta.prov && meta.prov.nombre) || 'Proveedor';
  if (window.Utils) Utils.showToast(
