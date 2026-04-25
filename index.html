@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1169-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1170-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1169-dev</title>
+<title>Dashwey v1.3.1170-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7655,12 +7655,23 @@ html { will-change: auto; }
  align-items: center;
  justify-content: center;
  gap: 0;
- /* Salida: fade-out suave */
- transition: opacity 0.40s var(--ease-standard);
+ /* v1.3.1170: fade-out 500ms (ligeramente más lento, premium feel) con ease-in-out */
+ transition: opacity 0.50s cubic-bezier(0.4, 0.0, 0.2, 1);
  pointer-events: none;
 }
 #app-splash.fade-out { opacity: 0; }
 #app-splash.hidden { display: none; }
+
+/* v1.3.1170 CROSSFADE: el #app está oculto hasta que body[data-app-ready="true"].
+   El splash hace fade-out 500ms en paralelo al fade-in del #app → crossfade real,
+   sin "salto" del dashboard apareciendo detrás. */
+#app {
+ opacity: 0;
+ transition: opacity 0.50s cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+body[data-app-ready="true"] #app {
+ opacity: 1;
+}
 
 /* Entrada del icono: sube desde abajo con spring */
 @keyframes splashIconIn {
@@ -14626,19 +14637,27 @@ window.Utils = Utils; // v9.5.104: exponer al scope global desde donde Utils sí
 // Aliases globales — compatibilidad con llamadas directas en HTML inline
 
 // ── _hideSplash — ocultar splash con fade suave ─────────────────────
-// v1.3.1168: tiempo mínimo visible 1000ms para que la animación de entrada
-//   del icono (520ms spring) + tagline (delay 320ms + fade 380ms = 700ms)
-//   se complete antes del fade-out. Sin este mínimo el splash desaparece
-//   antes de terminar su propia animación → percepción de "salto".
-//   No es delay artificial: es respetar la duración de la entrada.
+// v1.3.1170 ROOT CAUSE FIX:
+//   - Guard idempotente: si ya se llamó (incluso si está en mitad del fade),
+//     no reiniciar nada. Previene "doble animación" si auth-changed dispara
+//     múltiples veces (token refresh, multi-listener, etc.).
+//   - Crossfade real con #app: al iniciar fade-out, marcamos body con
+//     `data-app-ready="true"` que activa fade-in del Dashboard. Sin esto,
+//     el Dashboard "aparece de golpe" detrás del splash.
+//   - Animación: 1000ms entrada + 1000ms min visible + 400ms fade-out
+//     = ~2000ms total (premium feel sin sobrecargar).
 function _hideSplash() {
  const splash = document.getElementById('app-splash');
- if (!splash || splash.classList.contains('hidden')) return;
+ if (!splash) return;
+ // Guard estricto: ya hidden o ya en proceso de fade-out → no-op
+ if (splash.classList.contains('hidden') || splash.classList.contains('fade-out')) return;
  const MIN_VISIBLE = 1000; // animación entrada + 100ms respiro
  const elapsed = Date.now() - (window._splashStartTime || Date.now());
  const delay = Math.max(0, MIN_VISIBLE - elapsed);
  setTimeout(() => {
-  if (!splash || splash.classList.contains('hidden')) return;
+  if (!splash || splash.classList.contains('hidden') || splash.classList.contains('fade-out')) return;
+  // Activar fade-in del app SIMULTÁNEO al fade-out del splash → crossfade
+  document.body.setAttribute('data-app-ready', 'true');
   splash.classList.add('fade-out');
   setTimeout(() => { if (splash) splash.classList.add('hidden'); }, 420);
  }, delay);
@@ -14841,7 +14860,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1169-dev';
+ const _APP_VERSION = 'v1.3.1170-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41314,17 +41333,18 @@ _eaRecalc();
  }
 
  // ── Safety net: si splash sigue visible a los 8s, forzar ocultación ──
+ // v1.3.1170: usar _hideSplash idempotente (no manipular clases directo)
  setTimeout(() => {
  try {
- const splash = document.getElementById('app-splash');
- if (splash && !splash.classList.contains('hidden')) {
- splash.classList.add('fade-out');
- setTimeout(() => splash.classList.add('hidden'), 420);
- }
- const auth = document.getElementById('auth-screen');
- if (auth && auth.style.display !== 'flex' && !auth.classList.contains('visible')) {
-  if (auth.parentNode) auth.parentNode.removeChild(auth);
- }
+  if (window._hideSplash) window._hideSplash();
+  // También asegurar fade-in del app por si _hideSplash no llegó a marcarlo
+  if (!document.body.getAttribute('data-app-ready')) {
+   document.body.setAttribute('data-app-ready', 'true');
+  }
+  const auth = document.getElementById('auth-screen');
+  if (auth && auth.style.display !== 'flex' && !auth.classList.contains('visible')) {
+   if (auth.parentNode) auth.parentNode.removeChild(auth);
+  }
  } catch(_) {}
  }, 8000);
 
