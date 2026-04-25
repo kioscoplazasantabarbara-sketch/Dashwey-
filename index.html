@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1162-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1163-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1162-dev</title>
+<title>Dashwey v1.3.1163-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1186,7 +1186,11 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
 }
 #prov-picker-sheet.open { opacity: 1; pointer-events: auto; }
 #prov-picker-sheet-inner {
- width: 100%; max-height: 50vh; /* v1.3.1160: límite 50% */
+ width: 100%;
+ /* v1.3.1163 FIX: max-height 50vh PERO permite altura natural si el contenido es menor.
+    height:auto + max-height resuelve el espacio muerto inferior cuando hay pocos items. */
+ max-height: 50vh;
+ height: auto;
  background: var(--surface);
  border-radius: var(--sheet-radius);
  display: flex; flex-direction: column;
@@ -1195,9 +1199,10 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
  transition: transform var(--sheet-duration) var(--sheet-spring);
 }
 #prov-picker-sheet.open #prov-picker-sheet-inner { transform: translateY(0); }
-/* v1.3.1160: scroll interno — el scroll vive dentro del sheet, no en body */
+/* Scroll interno solo cuando se requiere; con poco contenido la lista se ajusta */
 #prov-picker-sheet #prov-picker-scroll {
- flex: 1 1 auto; min-height: 0; max-height: 100%;
+ flex: 0 1 auto; /* v1.3.1163: 0 1 auto = no expandir, solo si necesita */
+ min-height: 0;
  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
 /* v1.3.1162: long-press en filas proveedor — user-select off evita text selection */
@@ -13497,7 +13502,21 @@ const CierreEngine = (() => {
    console.warn('[CierreEngine] ya hay jornada activa:', activa.id);
    return null;
   }
-  const aperturaTs = opts.aperturaTs || Date.now();
+  // v1.3.1163 HORARIO NEGOCIO: si perfil.horarioApertura definido, alinear aperturaTs
+  // a esa hora del día actual. Esto garantiza que el cierre cubra el rango horario
+  // configurado (ej: 09:00 → 03:00 al día siguiente). Si la hora actual es < apertura,
+  // mantener Date.now() (apertura adelantada/pre-jornada).
+  let aperturaTs = opts.aperturaTs || Date.now();
+  try {
+   const perfil = State.get.perfil ? State.get.perfil() : null;
+   if (!opts.aperturaTs && perfil && perfil.horarioApertura && /^\d{2}:\d{2}$/.test(perfil.horarioApertura)) {
+    const [hh, mm] = perfil.horarioApertura.split(':').map(Number);
+    const today = new Date();
+    const apTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0, 0).getTime();
+    // Solo aplicar si la hora actual ya pasó la apertura — evita aperturas con timestamp futuro
+    if (Date.now() >= apTs) aperturaTs = apTs;
+   }
+  } catch(_) {}
   const c = {
    id: _genId(),
    aperturaTs,
@@ -14795,7 +14814,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1162-dev';
+ const _APP_VERSION = 'v1.3.1163-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19693,6 +19712,14 @@ const nav = (() => {
  if (_animTimeout) clearTimeout(_animTimeout);
  _animating = true;
  _animTimeout = setTimeout(_releaseAnimLock, 420); // 380ms transición + 40ms margen
+ // v1.3.1163 NAVBAR ANIMACIÓN — pendiente refactor estructural.
+ // Track actual: [TPV(0), Dashboard(1), Almacén(2)] → translateX(-tab × 100%)
+ // Navbar v1.3.1160: [Almacén-izq, Dashboard-centro, Ajustes-der] (visual ≠ track)
+ // Discrepancia visual: pulsar Almacén (botón izq) hace que el track se desplace
+ // MÁS hacia la izquierda → el contenido entra desde la derecha del viewport.
+ // Fix correcto = reordenar .tab-page divs y reescribir todos los índices hardcoded
+ // (~15 callsites en _modeAllowed, _TAB_NAMES, _syncNavState, gesture handlers).
+ // Riesgo alto vs beneficio. Pendiente release dedicada con QA completo.
  track.style.transition = 'transform .38s var(--ease-standard)';
  track.style.transform = `translateX(${-i * _getTabWidth()}px)`;
  // v1.3.389: tab-fade-in eliminado — la animación opacity causaba flash en WebView
@@ -34263,11 +34290,13 @@ const marginLine = mg === null ? '' :
   var t = ev && ev.touches && ev.touches[0];
   _provPickerLpStartX = t ? t.clientX : 0;
   _provPickerLpStartY = t ? t.clientY : 0;
+  // v1.3.1163: capturar elemento source para posicionar el menú
+  var srcEl = ev && ev.currentTarget;
   if (_provPickerLpTimer) clearTimeout(_provPickerLpTimer);
   _provPickerLpTimer = setTimeout(function(){
    _provPickerLpFired = true;
    try { Utils.triggerHaptic('medium'); } catch(_) {}
-   _openProvContextMenu(pid);
+   _openProvContextMenu(pid, srcEl);
   }, 500);
  }
  function _provPickerLpMove(ev) {
@@ -34296,61 +34325,103 @@ const marginLine = mg === null ? '' :
   }
  }
 
- // Popover minimalista: 2 iconos (editar / borrar)
- function _openProvContextMenu(pid) {
+ // v1.3.1163: usa el MISMO componente cat-float-menu del long-press de catálogo.
+ // Cero duplicación: mismo layout (.cat-float-menu), animaciones, estilos.
+ // Solo cambia el set de actions (Editar / Borrar para proveedor).
+ function _openProvContextMenu(pid, sourceEl) {
   if (!pid) return;
   var p = State.get.prov ? State.get.prov(pid) : null;
   if (!p) return;
-  // Eliminar cualquier menú previo
-  var old = document.getElementById('prov-ctx-menu');
-  if (old) old.remove();
-  var ov = document.createElement('div');
-  ov.id = 'prov-ctx-menu';
-  ov.style.cssText = 'position:fixed;inset:0;z-index:11020;background:rgba(0,0,0,0.36);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .18s';
-  ov.onclick = function(e){ if (e.target === ov) _closeProvContextMenu(); };
-  var box = document.createElement('div');
-  box.style.cssText = 'background:var(--surface);border-radius:var(--r-card);box-shadow:0 14px 42px rgba(0,0,0,.22);padding:14px 18px;min-width:220px;display:flex;flex-direction:column;gap:4px;transform:translateY(8px);transition:transform .2s var(--ease-decelerate)';
-  box.innerHTML = ''
-   + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;font-weight:var(--fw-bold);padding:4px 4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">' + esc(p.nombre || '—') + '</div>'
-   + '<button data-act="edit" style="display:flex;align-items:center;gap:10px;padding:12px;border:none;background:transparent;color:var(--ink);font-size:var(--fs-base);font-family:var(--font);cursor:pointer;border-radius:var(--r-sm2);-webkit-tap-highlight-color:transparent;text-align:left"><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Editar</span></button>'
-   + '<button data-act="delete" style="display:flex;align-items:center;gap:10px;padding:12px;border:none;background:transparent;color:var(--red);font-size:var(--fs-base);font-family:var(--font);cursor:pointer;border-radius:var(--r-sm2);-webkit-tap-highlight-color:transparent;text-align:left"><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg><span>Borrar</span></button>';
-  ov.appendChild(box);
-  document.body.appendChild(ov);
-  requestAnimationFrame(function(){
-   ov.style.opacity = '1';
-   box.style.transform = 'translateY(0)';
-  });
-  // Wiring
-  box.querySelectorAll('button[data-act]').forEach(function(btn){
-   btn.addEventListener('click', function(){
-    var act = btn.dataset.act;
-    _closeProvContextMenu();
-    if (act === 'edit') {
+  // Eliminar previo
+  var prev = document.getElementById('cat-ctx-menu');
+  if (prev) prev.remove();
+  var rect = sourceEl ? sourceEl.getBoundingClientRect() : null;
+
+  var menu = document.createElement('div');
+  menu.id = 'cat-ctx-menu';
+  menu.className = 'cat-float-menu';
+  menu.style.cssText = 'display:flex;flex-direction:row;gap:4px;padding:6px 8px;border-radius:var(--r-lg);';
+
+  var actions = [
+   {
+    icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+    label: 'Editar', cls: '',
+    fn: function(){
+     menu.remove();
      _closeProvPickerSheet();
-     setTimeout(function(){
-      try { openEditProv(pid); } catch(e) { console.warn('[edit prov]', e); }
-     }, 200);
-    } else if (act === 'delete') {
+     setTimeout(function(){ try { openEditProv(pid); } catch(e) {} }, 200);
+    }
+   },
+   {
+    icon: '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
+    label: 'Borrar', cls: 'danger',
+    fn: function(){
+     menu.remove();
      window._showDestructiveConfirm && window._showDestructiveConfirm({
       title: 'Eliminar proveedor',
-      message: '¿Eliminar "' + (p.nombre || 'este proveedor') + '"? Esta acción no se puede deshacer.',
+      message: '¿Eliminar "' + (p.nombre || 'este proveedor') + '"?',
       confirmText: 'Eliminar',
       onConfirm: function(){
        try { Utils.triggerHaptic('medium'); } catch(_) {}
-       try { borrarProv(pid); } catch(e) { console.warn('[del prov]', e); }
+       try { borrarProv(pid); } catch(e) {}
        _renderProvPickerSheet();
       }
      });
     }
-   });
+   },
+  ];
+
+  actions.forEach(function(a){
+   var btn = document.createElement('button');
+   btn.className = 'cat-float-btn' + (a.cls ? ' ' + a.cls : '');
+   btn.style.cssText = 'flex-direction:column;gap:3px;min-width:52px;padding:8px 6px;';
+   btn.innerHTML = a.icon + '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-semi);letter-spacing:0.2px">' + a.label + '</span>';
+   var _started = false;
+   btn.addEventListener('touchstart', function(e){ e.stopPropagation(); e.preventDefault(); _started = true; }, { passive:false });
+   btn.addEventListener('touchend', function(e){
+    e.stopPropagation(); e.preventDefault();
+    if (_started) { _started = false; a.fn(); }
+   }, { passive:false });
+   btn.addEventListener('touchcancel', function(){ _started = false; });
+   btn.addEventListener('click', function(e){ if (e.pointerType !== 'touch') a.fn(); });
+   menu.appendChild(btn);
+  });
+
+  // Posicionamiento (idéntico patrón al de catálogo)
+  var estW = 132; // 2 botones × ~52 + padding
+  var estH = 80;
+  var safeTop = 60;
+  var safeBottom = window.innerHeight - 8;
+  var left = rect ? rect.left + rect.width / 2 - estW / 2 : window.innerWidth / 2 - estW / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - estW - 8));
+  var top;
+  if (rect && rect.top - estH - 8 >= safeTop) {
+   top = rect.top - estH - 8;
+  } else if (rect) {
+   top = Math.min(rect.bottom + 8, safeBottom - estH);
+  } else {
+   top = window.innerHeight / 2 - estH / 2;
+  }
+  top = Math.max(safeTop, Math.min(top, safeBottom - estH));
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  document.body.appendChild(menu);
+
+  function _closeAnim() {
+   if (!menu.parentNode) return;
+   menu.classList.add('closing');
+   setTimeout(function(){ if (menu.parentNode) menu.remove(); }, 180);
+  }
+  function _close(e) { if (!menu.contains(e.target)) _closeAnim(); }
+  requestAnimationFrame(function(){
+   document.addEventListener('touchstart', _close, { capture:true, passive:true, once:true });
+   document.addEventListener('click', _close, { capture:true, once:true });
   });
  }
 
  function _closeProvContextMenu() {
-  var ov = document.getElementById('prov-ctx-menu');
-  if (!ov) return;
-  ov.style.opacity = '0';
-  setTimeout(function(){ try { ov.remove(); } catch(_) {} }, 200);
+  var ov = document.getElementById('cat-ctx-menu');
+  if (ov) ov.remove();
  }
 
 
@@ -38096,12 +38167,13 @@ _eaRecalc();
  }
 
  // Creator — crea grupo nuevo con nombre + loyverseName + artículos seleccionados
- // v1.3.1156 UX FIX: si hay artículo preseleccionado con ventaNombre, sugerirlo
- //                   como loyverseName del grupo (matching Loyverse). Esto permite
- //                   vincular grupo ↔ nombre exacto vendido en TPV sin escribir nada.
+ // v1.3.1156 UX: si artículo preseleccionado tiene ventaNombre, lo sugerimos como loyverseName
+ // v1.3.1163 UX: buscador en tiempo real + agrupación por proveedor
  function _openGrupoCreator(preselectedIds) {
   preselectedIds = Array.isArray(preselectedIds) ? preselectedIds : [];
   const productos = (State.get.productos ? State.get.productos() : []).filter(x => x && !x.deleted);
+  const proveedores = (State.get.proveedores ? State.get.proveedores() : []) || [];
+  const provMap = {}; proveedores.forEach(function(p){ if(p && p.id) provMap[p.id] = p; });
   const selected = new Set(preselectedIds);
   // Sugerencia loyverseName desde primer artículo preseleccionado con ventaNombre
   const _firstPre = preselectedIds[0] ? State.get.prod(preselectedIds[0]) : null;
@@ -38121,23 +38193,11 @@ _eaRecalc();
    + (_lvNameSuggestion ? ' <span style="color:#16A34A">✓ Sugerido desde el artículo</span>' : '')
    +'</div>'
    +'</div>'
-   // Lista artículos
+   // Header lista + buscador
    +'<div style="padding:0 16px 8px;display:flex;justify-content:space-between;align-items:center"><div style="font-size:var(--fs-xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px">Artículos del grupo</div>'
    +'<div id="grp-sel-count" style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink)">'+selected.size+' seleccionados</div></div>'
-   +'<div id="grp-arts-list" style="padding:0 12px;max-height:50vh;overflow-y:auto">'
-   +(productos.length
-    ? productos.map(p => {
-      const isSel = selected.has(p.id);
-      const hasGroup = p.grupoId && !selected.has(p.id); // pertenece a otro grupo
-      return '<label data-pid="'+_esc(p.id)+'" class="grp-art-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:'+(isSel?'rgba(22,163,74,.08)':'var(--bg)')+';border:1px solid '+(isSel?'#16A34A':'var(--border)')+';border-radius:var(--r-md);margin-bottom:6px;cursor:pointer">'
-       +'<input type="checkbox" '+(isSel?'checked':'')+' style="width:18px;height:18px;accent-color:#16A34A">'
-       +'<span style="font-size:18px">'+_esc(p.e||'📦')+'</span>'
-       +'<span style="flex:1;font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi)">'+_esc(p.nombre)+(p.ventaNombre?'<br><span style="font-size:var(--fs-2xs);font-weight:var(--fw-reg);color:var(--ink-soft)">TPV: '+_esc(p.ventaNombre)+'</span>':'')+'</span>'
-       +(hasGroup ? '<span style="font-size:var(--fs-2xs);color:#F97316">en otro grupo</span>' : '')
-       +'</label>';
-     }).join('')
-    : '<div style="padding:12px;color:var(--ink-soft);font-size:var(--fs-sm);text-align:center">Sin artículos</div>')
-   +'</div>'
+   +'<div style="padding:0 16px 8px"><input id="grp-arts-search" type="text" placeholder="🔍 Buscar artículo…" autocomplete="off" style="width:100%;box-sizing:border-box;height:38px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--bg);color:var(--ink);font-size:var(--fs-sm);padding:0 12px;font-family:var(--font)"></div>'
+   +'<div id="grp-arts-list" style="padding:0 12px;max-height:50vh;overflow-y:auto"></div>'
    // Acciones
    +'<div style="padding:16px"><button id="grp-save-btn" class="btn-ok" style="width:100%">Crear grupo</button></div>'
    +'<div style="height:24px"></div>';
@@ -38145,31 +38205,99 @@ _eaRecalc();
   ui.setFs(html);
   ui.openFs('full');
 
+  // Render dinámico con filtro y agrupación por proveedor
+  function _renderArts(filter) {
+   filter = (filter || '').toLowerCase().trim();
+   var listEl = document.getElementById('grp-arts-list');
+   if (!listEl) return;
+   // Agrupar por proveedor
+   var byProv = {}; // provId → [productos]
+   var orphans = []; // sin proveedor
+   productos.forEach(function(p){
+    if (filter && !(p.nombre||'').toLowerCase().includes(filter) && !(p.ventaNombre||'').toLowerCase().includes(filter)) return;
+    var pid = p.prov;
+    if (pid && provMap[pid]) {
+     if (!byProv[pid]) byProv[pid] = [];
+     byProv[pid].push(p);
+    } else {
+     orphans.push(p);
+    }
+   });
+   // Ordenar proveedores por nombre
+   var provIds = Object.keys(byProv).sort(function(a,b){
+    return (provMap[a].nombre||'').localeCompare(provMap[b].nombre||'');
+   });
+   // Si hay orphans, añadirlos al final como sección "Sin proveedor"
+   var html = '';
+   var totalShown = 0;
+   provIds.forEach(function(provId){
+    var prov = provMap[provId];
+    var arts = byProv[provId].sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    html += '<div style="padding:8px 4px 4px;font-size:var(--fs-2xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-bold)">'
+     + _esc(prov.icon || '🏪') + ' ' + _esc(prov.nombre || '—')
+     + ' <span style="font-weight:var(--fw-reg);text-transform:none;color:var(--ink-soft)">· ' + arts.length + '</span></div>';
+    arts.forEach(function(p){
+     html += _renderProdRow(p);
+     totalShown++;
+    });
+   });
+   if (orphans.length) {
+    html += '<div style="padding:8px 4px 4px;font-size:var(--fs-2xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-bold)">📦 Sin proveedor · ' + orphans.length + '</div>';
+    orphans.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
+    orphans.forEach(function(p){ html += _renderProdRow(p); totalShown++; });
+   }
+   if (totalShown === 0) {
+    html = '<div style="padding:24px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin coincidencias</div>';
+   }
+   listEl.innerHTML = html;
+   _attachRowHandlers();
+  }
+
+  function _renderProdRow(p) {
+   var isSel = selected.has(p.id);
+   var hasGroup = p.grupoId && !isSel;
+   return '<label data-pid="'+_esc(p.id)+'" class="grp-art-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:'+(isSel?'rgba(22,163,74,.08)':'var(--bg)')+';border:1px solid '+(isSel?'#16A34A':'var(--border)')+';border-radius:var(--r-md);margin-bottom:6px;cursor:pointer">'
+    +'<input type="checkbox" '+(isSel?'checked':'')+' style="width:18px;height:18px;accent-color:#16A34A">'
+    +'<span style="font-size:18px">'+_esc(p.e||'📦')+'</span>'
+    +'<span style="flex:1;font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi)">'+_esc(p.nombre)+(p.ventaNombre?'<br><span style="font-size:var(--fs-2xs);font-weight:var(--fw-reg);color:var(--ink-soft)">TPV: '+_esc(p.ventaNombre)+'</span>':'')+'</span>'
+    +(hasGroup ? '<span style="font-size:var(--fs-2xs);color:#F97316">en otro grupo</span>' : '')
+    +'</label>';
+  }
+
+  function _attachRowHandlers() {
+   var list = document.getElementById('grp-arts-list');
+   if (!list) return;
+   list.querySelectorAll('.grp-art-row').forEach(function(row){
+    row.onclick = function(e){
+     var pid = row.getAttribute('data-pid');
+     if (!pid) return;
+     var cb = row.querySelector('input[type=checkbox]');
+     if (e.target !== cb && cb) { e.preventDefault(); cb.checked = !cb.checked; }
+     if (cb && cb.checked) selected.add(pid); else selected.delete(pid);
+     row.style.background = (cb && cb.checked) ? 'rgba(22,163,74,.08)' : 'var(--bg)';
+     row.style.borderColor = (cb && cb.checked) ? '#16A34A' : 'var(--border)';
+     var cnt = document.getElementById('grp-sel-count');
+     if (cnt) cnt.textContent = selected.size + ' seleccionados';
+    };
+   });
+  }
+
   setTimeout(function(){
-   const list = document.getElementById('grp-arts-list');
-   const updateCount = function(){
-    const el = document.getElementById('grp-sel-count');
-    if (el) el.textContent = selected.size + ' seleccionados';
-   };
-   if (list) {
-    list.querySelectorAll('[data-pid]').forEach(row => {
-     const pid = row.getAttribute('data-pid');
-     const cb = row.querySelector('input[type=checkbox]');
-     row.addEventListener('click', function(e){
-      if (e.target !== cb) { e.preventDefault(); cb.checked = !cb.checked; }
-      if (cb.checked) selected.add(pid); else selected.delete(pid);
-      row.style.background = cb.checked ? 'rgba(22,163,74,.08)' : 'var(--bg)';
-      row.style.borderColor = cb.checked ? '#16A34A' : 'var(--border)';
-      updateCount();
-     });
+   _renderArts('');
+   var search = document.getElementById('grp-arts-search');
+   if (search) {
+    var debounceTimer = null;
+    search.addEventListener('input', function(){
+     if (debounceTimer) clearTimeout(debounceTimer);
+     debounceTimer = setTimeout(function(){ _renderArts(search.value); }, 120);
     });
    }
-   const save = document.getElementById('grp-save-btn');
+   var save = document.getElementById('grp-save-btn');
    if (save) save.addEventListener('click', function(){
-    const nameEl = document.getElementById('grp-new-name');
-    const lvEl = document.getElementById('grp-new-lvname');
-    const nombre = (nameEl && nameEl.value || '').trim();
-    const loyverseName = (lvEl && lvEl.value || '').trim();
+    var nameEl = document.getElementById('grp-new-name');
+    var lvEl = document.getElementById('grp-new-lvname');
+    var nombre = (nameEl && nameEl.value || '').trim();
+    var loyverseName = (lvEl && lvEl.value || '').trim();
     if (!nombre) {
      try { Utils.showToast('⚠️ Ponle nombre al grupo'); } catch(_) {}
      if (nameEl) nameEl.focus();
@@ -38179,7 +38307,7 @@ _eaRecalc();
      try { Utils.showToast('⚠️ Selecciona al menos 1 artículo'); } catch(_) {}
      return;
     }
-    const gid = 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    var gid = 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
     State.set.addGrupo({
      id: gid,
      nombre: nombre,
