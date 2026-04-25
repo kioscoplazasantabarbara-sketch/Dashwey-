@@ -151,7 +151,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1170-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1171-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -170,7 +170,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1170-dev</title>
+<title>Dashwey v1.3.1171-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14860,7 +14860,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1170-dev';
+ const _APP_VERSION = 'v1.3.1171-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -34399,12 +34399,46 @@ const marginLine = mg === null ? '' :
   var sheet = document.getElementById('prov-picker-sheet');
   var scroll = document.getElementById('prov-picker-scroll');
   if (!sheet || !scroll) {
-   // Fallback al panel slide antiguo si el DOM no está disponible
    _almSlideToList(false);
    return;
   }
   _renderProvPickerSheet();
-  // abrir con rAF para que la transición se dispare bien
+  // v1.3.1171: BACKDROP CLOSE robusto contra overscroll.
+  //   - touchstart en backdrop guarda flag
+  //   - touchmove >5px cancela flag (overscroll del scroll interno)
+  //   - touchend solo cierra si flag sigue activo y target es backdrop
+  //   - Sin onclick directo (Android WebView dispara click tras overscroll
+  //     incluso si el touchend ocurrió fuera del backdrop)
+  if (!sheet._closeBound) {
+   sheet._closeBound = true;
+   var _bdStart = false;
+   var _bdStartY = 0;
+   sheet.addEventListener('touchstart', function(e){
+    if (e.target === sheet) {
+     _bdStart = true;
+     _bdStartY = e.touches[0] ? e.touches[0].clientY : 0;
+    } else {
+     _bdStart = false;
+    }
+   }, { passive: true });
+   sheet.addEventListener('touchmove', function(e){
+    if (!_bdStart) return;
+    var y = e.touches[0] ? e.touches[0].clientY : 0;
+    if (Math.abs(y - _bdStartY) > 5) _bdStart = false;
+   }, { passive: true });
+   sheet.addEventListener('touchend', function(e){
+    if (_bdStart && e.target === sheet) {
+     _closeProvPickerSheet();
+    }
+    _bdStart = false;
+   }, { passive: true });
+   // Click fallback solo desktop (mouse)
+   sheet.addEventListener('click', function(e){
+    if (e.target === sheet && !('ontouchstart' in window)) {
+     _closeProvPickerSheet();
+    }
+   });
+  }
   requestAnimationFrame(function(){
    sheet.classList.add('open');
    document.body.style.overflow = 'hidden';
@@ -34440,15 +34474,15 @@ const marginLine = mg === null ? '' :
   if (!scroll) return;
   var sel = State.get.selectedProv();
   var provs = State.get.proveedores() || [];
-  // Ordenar alfabéticamente por nombre
   provs.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
   if (!provs.length) {
    scroll.innerHTML = '<div style="padding:24px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">No hay proveedores aún. Añade uno abajo.</div>';
    return;
   }
   var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
-  // v1.3.1164: SIN inline handlers (fallan en WebView con dataset/comillas anidadas).
-  // Listeners programáticos tras render. Long-press 500ms via timer.
+  // v1.3.1171: cada fila tiene icono pincel inline a la derecha (botón edición).
+  //   Eliminado long-press (no funcionaba estable en WebView). Tap en fila = seleccionar.
+  //   Tap en icono pincel = editar (con stopPropagation para no seleccionar).
   var html = provs.map(function(p){
    var isSel = sel === p.id;
    var dp = p.diasPedido || [];
@@ -34459,6 +34493,9 @@ const marginLine = mg === null ? '' :
     +   '<div class="dps-opt-lbl">' + esc(p.nombre || '—') + '</div>'
     +   '<div class="dps-opt-sub">' + esc(sub) + '</div>'
     +  '</div>'
+    +  '<button data-edit-pid="' + esc(p.id) + '" aria-label="Editar proveedor" style="background:transparent;border:none;padding:8px;margin-right:4px;cursor:pointer;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);-webkit-tap-highlight-color:transparent;flex-shrink:0">'
+    +   '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+    +  '</button>'
     +  '<div class="dps-opt-chk">'
     +   '<svg width="11" height="11" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>'
     +  '</div>'
@@ -34466,58 +34503,26 @@ const marginLine = mg === null ? '' :
   }).join('');
   scroll.innerHTML = html;
 
-  // v1.3.1164: attach long-press + click programáticamente por fila
-  scroll.querySelectorAll('.dps-opt').forEach(function(row){
-   var pid = row.getAttribute('data-pid');
-   if (!pid) return;
-   var lpTimer = null;
-   var lpStartX = 0, lpStartY = 0;
-   var lpFired = false;
-
-   row.addEventListener('touchstart', function(ev){
-    lpFired = false;
-    var t = ev.touches && ev.touches[0];
-    lpStartX = t ? t.clientX : 0;
-    lpStartY = t ? t.clientY : 0;
-    if (lpTimer) clearTimeout(lpTimer);
-    lpTimer = setTimeout(function(){
-     lpFired = true;
-     try { Utils.triggerHaptic('medium'); } catch(_) {}
-     _openProvContextMenu(pid, row);
-    }, 500);
-   }, { passive: true });
-
-   row.addEventListener('touchmove', function(ev){
-    if (!lpTimer) return;
-    var t = ev.touches && ev.touches[0];
-    if (!t) return;
-    var dx = Math.abs(t.clientX - lpStartX);
-    var dy = Math.abs(t.clientY - lpStartY);
-    if (dx > 10 || dy > 10) { clearTimeout(lpTimer); lpTimer = null; }
-   }, { passive: true });
-
-   row.addEventListener('touchend', function(ev){
-    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
-    if (lpFired) {
-     ev.preventDefault();
-     ev.stopPropagation();
-     return;
-    }
-    // Click normal → seleccionar proveedor
+  // Wiring: pincel = editar, fila = seleccionar
+  scroll.querySelectorAll('[data-edit-pid]').forEach(function(btn){
+   btn.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    ev.preventDefault();
+    var pid = btn.getAttribute('data-edit-pid');
+    if (!pid) return;
     try { Utils.triggerHaptic('light'); } catch(_) {}
-    _almSaveLastProv(pid);
-    selProv(pid);
     _closeProvPickerSheet();
-    try { _almSlideToCat(true); } catch(_) {}
-   }, { passive: false });
-
-   row.addEventListener('touchcancel', function(){
-    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+    setTimeout(function(){
+     try { openEditProv(pid); } catch(e) { console.warn('[edit prov]', e); }
+    }, 200);
    });
-
-   // Fallback ratón (desktop) — sin long-press, click directo
+  });
+  scroll.querySelectorAll('.dps-opt').forEach(function(row){
    row.addEventListener('click', function(ev){
-    if (ev.pointerType === 'touch') return; // tactil ya gestionado por touchend
+    // Si el target es el botón pincel o su SVG hijo, no seleccionar
+    if (ev.target.closest('[data-edit-pid]')) return;
+    var pid = row.getAttribute('data-pid');
+    if (!pid) return;
     try { Utils.triggerHaptic('light'); } catch(_) {}
     _almSaveLastProv(pid);
     selProv(pid);
@@ -38565,7 +38570,12 @@ _eaRecalc();
    var listEl = document.getElementById('grp-arts-list');
    if (!listEl) return;
    listEl.querySelectorAll('[data-prov-toggle]').forEach(function(btn){
-    btn.addEventListener('click', function(){
+    btn.addEventListener('click', function(ev){
+     // v1.3.1171 BUG FIX: stopPropagation evita que el click bubble llegue
+     //   a #fs-overlay (que tiene closeFsOvl). Sin esto, el re-render de
+     //   _renderArts destruye el botón ANTES de que termine el bubble,
+     //   y closeFsOvl detecta target detached → cierra todo el modal.
+     if (ev) { ev.stopPropagation(); ev.preventDefault(); }
      var pid = btn.getAttribute('data-prov-toggle');
      if (_collapsedProvs.has(pid)) _collapsedProvs.delete(pid);
      else _collapsedProvs.add(pid);
@@ -38592,6 +38602,8 @@ _eaRecalc();
    if (!list) return;
    list.querySelectorAll('.grp-art-row').forEach(function(row){
     row.onclick = function(e){
+     // v1.3.1171: stopPropagation evita cierre fs-overlay por re-render race
+     if (e) e.stopPropagation();
      var pid = row.getAttribute('data-pid');
      if (!pid) return;
      var cb = row.querySelector('input[type=checkbox]');
@@ -38617,7 +38629,9 @@ _eaRecalc();
    }
    // v1.3.1166: chips grupos existentes — tap añade artículo seleccionado al grupo
    document.querySelectorAll('[data-grp-id]').forEach(function(chip){
-    chip.addEventListener('click', function(){
+    chip.addEventListener('click', function(ev){
+     // v1.3.1171: stopPropagation evita cierre fs-overlay
+     if (ev) { ev.stopPropagation(); ev.preventDefault(); }
      var gid = chip.getAttribute('data-grp-id');
      if (!gid) return;
      try { Utils.triggerHaptic('light'); } catch(_) {}
@@ -44574,8 +44588,10 @@ window._almCarritoOptions = function() {
      Estructura idéntica (handle + header + scroll). Opciones generadas
      por App.alm.openProvPicker. Selección → App.alm.selProv(id).
      v1.3.1160: altura 50% + scroll interno + botón "Editar proveedores"
+     v1.3.1171: anti-cierre por overscroll — el backdrop solo cierra si
+       el touchstart Y el touchend ocurren ambos en él (sin movimiento).
      ══════════════════════════════════════════════════════════════════ -->
-<div id="prov-picker-sheet" class="dps-sheet" onclick="if(event.target===this)App.alm._closeProvPickerSheet()">
+<div id="prov-picker-sheet" class="dps-sheet">
  <div id="prov-picker-sheet-inner" class="dps-sheet-inner">
  <div class="dps-handle"></div>
  <div class="dps-header">Seleccionar proveedor</div>
