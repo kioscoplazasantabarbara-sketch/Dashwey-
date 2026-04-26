@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1168-dev
+**Versión:** v1.3.1167-dev
 **Plataforma:** APK Android via Capacitor + WebView (+ acceso web)
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -259,33 +259,6 @@ arcname = 'dashwey/' + relpath
 **Impacto:** todas las rutas de escritura al root pasan por el dispatcher dual → root nunca excede 1MB, subcolecciones drenan correctamente, `invalid-argument` eliminado.
 
 **NO tocado:** L9465 (escribe arrays vacíos intencionalmente — `_forceRootClean`), L9609 (migración schema), L10443 (es `_writeFirebase` interno del dispatcher).
-
-### v1.3.1168 — SPLASH MIN VISIBLE 1000ms
-
-**Problema reportado:** v1.3.1167 eliminó por completo el `MIN_VISIBLE`. La app está lista en ~200ms con datos en localStorage → el splash desaparece antes de terminar su propia animación de entrada (icono 520ms spring + tagline cascade hasta 700ms).
-
-**Resultado:** transición instantánea sin tiempo para que el usuario vea el branding. "Salto" visual.
-
-**Fix:** restaurar `MIN_VISIBLE = 1000ms`.
-
-**Justificación (no es delay artificial):**
-- Animación icono spring: 520ms
-- Tagline cascade: delay 320ms + 380ms = 700ms total
-- 100ms de respiro tras animación completa
-- **1000ms es el tiempo mínimo que la animación necesita para existir**
-
-Diferencia clave vs 2200ms anterior:
-- 2200ms = delay PROHIBIDO (la app llevaba 1500ms lista esperando por nada)
-- 1000ms = duración de la animación + respiro mínimo
-
-```js
-const MIN_VISIBLE = 1000; // animación entrada + 100ms respiro
-const elapsed = Date.now() - (window._splashStartTime || Date.now());
-const delay = Math.max(0, MIN_VISIBLE - elapsed);
-setTimeout(() => { ... fade-out ... }, delay);
-```
-
-Si la app tarda >1000ms en estar lista (red lenta, primera carga sin cache), `delay = 0` → fade-out inmediato. No hay penalización en ningún escenario.
 
 ### v1.3.1167 — STARTUP PERFORMANCE + FLICKER FIX
 
