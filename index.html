@@ -113,9 +113,7 @@
  var _validModes = ['hub','pos','alm','cfo'];
  if (_validModes.indexOf(_mode) === -1) _mode = 'hub';
  window._DASHWEY_MODE = _mode;
- // Escribir en <html> AHORA — body aún no existe
  document.documentElement.setAttribute('data-app-mode', _mode);
- // Copiar a <body> cuando esté disponible
  document.addEventListener('DOMContentLoaded', function() {
  if (document.body) document.body.setAttribute('data-app-mode', _mode);
  }, { once: true });
@@ -123,6 +121,15 @@
  window._DASHWEY_MODE = 'hub';
  }
  })();
+
+ // ── v1.3.1202: FEATURE FLAGS — control centralizado de módulos ────────
+ // TPV desactivado en hub mode (cold module: sin render, sin listeners, sin writes)
+ // Para reactivar: cambiar tpv a true (solo en modo pos)
+ window._DASHWEY_FEATURES = {
+ tpv: window._DASHWEY_MODE === 'pos', // true solo en modo POS dedicado
+ almacen: true,
+ dashboard: true,
+ };
 
  /* Stub vacío — splash eliminado del HEAD, función real definida en body */
  window._hideSplash = function() {};
@@ -170,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1202-dev</title>
+<title>Dashwey v1.3.1204-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15074,14 +15081,14 @@ const ui = (() => {
  try { App.alm.renderOrden?.(); } catch(_) {}
  try { App.alm.renderCatInline?.(); } catch(_) {}
  try { App.alm.updateBadge?.(); } catch(_) {}
- try { App.tpv.render?.(); } catch(_) {}
+ if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render?.(); } catch(_) {} }
  try { App.dash.render?.(); } catch(_) {}
  }, 320);
  showToast('✅ Datos restaurados', 'success');
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1202-dev';
+ const _APP_VERSION = 'v1.3.1204-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15416,7 +15423,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1202');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1204');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -19958,6 +19965,8 @@ const nav = (() => {
  // v1.3.382: bloquear navegación a tabs fuera del modo activo
  var _modeAllowed = { pos: [0], alm: [2], cfo: [1], hub: [1,2] }; // v1.3.1025: TPV oculto en hub — tab 0 inaccesible via swipe y navbar
  var _allowed = _modeAllowed[window._DASHWEY_MODE || 'hub'] || [0,1,2];
+ // v1.3.1202: feature flag TPV — excluir tab 0 si TPV desactivado
+ if (!window._DASHWEY_FEATURES?.tpv) _allowed = _allowed.filter(function(t){ return t !== 0; });
  if (_allowed.indexOf(i) === -1) return;
  // v1.3.596: guard _animating — taps rápidos en navbar durante transición causan salto visual
  // Excepción: si el destino es el tab actual → permitir (restaura posición)
@@ -20123,13 +20132,11 @@ const nav = (() => {
  _track.style.transform = 'translateX(' + (-physTi * vw) + 'px)';
  requestAnimationFrame(function() {
   _track.style.transition = '';
-  // v1.3.1201: re-render del módulo activo DESPUÉS de posicionar el track
-  // El render de _renderAll() ocurre antes del layout — las snap cards
-  // obtienen getBoundingClientRect()=0. Este segundo render garantiza
-  // que el Dashboard se pinte con el layout real calculado.
+  // v1.3.1203: re-render local tras posicionar el track con layout real.
+  // USAR render() — NO refresh() (refresh dispara fb.read + save → bucle REMOTE_BLOCKED)
   if (_ti === 1) {
    requestAnimationFrame(function() {
-    try { if (window.App && App.dash) App.dash.refresh(); } catch(_) {}
+    try { if (window.App && App.dash && App.dash.render) App.dash.render(); } catch(_) {}
    });
   } else if (_ti === 2) {
    requestAnimationFrame(function() {
@@ -31743,7 +31750,7 @@ window._sdCuentaImportar = function() {
  // Re-render global
  try { if (window.App && App.alm) App.alm.renderOrden(); } catch(e) {}
  try { if (window.App && App.dash) App.dash.render(); } catch(e) {}
- try { if (window.App && App.tpv) App.tpv.render(); } catch(e) {}
+ if (window._DASHWEY_FEATURES?.tpv) { try { if (window.App && App.tpv) App.tpv.render(); } catch(e) {} }
  } catch(e) {
  showToast('\u26a0\ufe0f Error durante la importación');
  }
@@ -33064,7 +33071,10 @@ function confirmManualSale() {
  // v1.3.377: cargar hot pins desde localStorage en init
  _loadHotPins();
  // v1.3.234: init quick grid
- setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
+ // v1.3.1202: TPV cold module — solo inicializar quick grid si feature activo
+ if (window._DASHWEY_FEATURES?.tpv) {
+  setTimeout(() => { try { tpvQG.init(); } catch(_) {} }, 150);
+ }
 
  // v1.3.235: menú contextual long press en lista de productos TPV
  // ── v1.3.377: Hot Grid Pin helpers ─────────────────────────────────────
@@ -34570,7 +34580,7 @@ const marginLine = mg === null ? '' :
  // v1.3.648: ordenItems legacy — no requiere limpieza (siempre [])
  _editPhoto = null;
  ui.closeModal(); ui.closeFs();
- requestAnimationFrame(function() { renderOrden(); updateBadge(); try { tpv.render(); } catch(_) {} renderCatInline(); try { dash.render(); } catch(_) {} });
+ requestAnimationFrame(function() { renderOrden(); updateBadge(); if (window._DASHWEY_FEATURES?.tpv) { try { tpv.render(); } catch(_) {} } renderCatInline(); try { dash.render(); } catch(_) {} });
  try { document.dispatchEvent(new CustomEvent('item:deleted', { detail: { id: id } })); } catch(_) {}
  showToast('🗑️ Artículo eliminado');
  }
@@ -41791,7 +41801,7 @@ _eaRecalc();
   try { DashweyBus.emit('ingreso'); } catch(_) {}
   setTimeout(function(){
    try { App.dash.render(); } catch(_) {}
-   try { App.tpv.render(); } catch(_) {}
+   if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render(); } catch(_) {} }
    try { App.alm.renderOrden?.(); } catch(_) {}
   }, 300);
   return true;
@@ -41878,7 +41888,10 @@ _eaRecalc();
  // Re-renderiza todos los módulos (usado tras sync y limpieza de BD)
  function _renderAll() {
  try { dash.render(); } catch(e) { console.warn('[Dashwey] dash.render:', e); }
- try { if (document.body.dataset.tab === '0') tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
+ // v1.3.1202: TPV cold module — solo renderiza si feature flag activo
+ if (window._DASHWEY_FEATURES?.tpv) {
+  try { if (document.body.dataset.tab === '0') tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
+ }
  try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
  try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
  try { alm.updateProvBar?.(); } catch(e) {}
@@ -42486,7 +42499,7 @@ _eaRecalc();
          }
          DashweyBus.emit('cuenta');
          try { App.dash.render(); } catch(_) {}
-         try { App.tpv.render(); } catch(_) {}
+         if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render(); } catch(_) {} }
          try { App.alm.renderOrden?.(); } catch(_) {}
          return; // NO mostrar onboarding
         }
@@ -42763,7 +42776,7 @@ window._DashweyDeviceId = (() => {
  } else {
  // Entre 3s y 30s: solo el tab activo
  var _cT = (App && App.nav && typeof App.nav._cTab === 'number') ? App.nav._cTab : 1;
- if (_cT === 0) { try { App.tpv.render(); } catch(_) {} }
+ if (_cT === 0) { if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render(); } catch(_) {} } }
  else if (_cT === 1) { try { App.dash.render(); } catch(_) {} }
  else if (_cT === 2) {
  try { App.alm.updateBadge(); App.alm.renderCatInline(); App.alm.updateProvBar(); } catch(_) {}
@@ -42947,7 +42960,7 @@ window._DashweyDeviceId = (() => {
  // TPV y Dashboard reaccionan aquí sin acoplamiento directo.
  document.addEventListener('item:created', () => {
  try { dash.render(); } catch(e) {}
- try { tpv.render(); } catch(e) {}
+ if (window._DASHWEY_FEATURES?.tpv) { try { tpv.render(); } catch(e) {} }
  _syncAppState();
  });
 
