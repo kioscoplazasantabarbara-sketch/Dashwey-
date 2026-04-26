@@ -1,43 +1,49 @@
 # DASHWEY — RESTART (SESSION CONTEXT)
 
 ## ÚLTIMA VERSIÓN
-v1.3.1174-dev
+**v1.3.1213** (estabilizada post-cambios UI/UX masivos)
 
 ## ESTADO ACTUAL
 
 Sistema en producción, estable, con:
 
 - Loyverse integrado (ventas realtime polling 15s)
-- Budgetbakers integrado (import CSV manual desde Ajustes)
+- Budgetbakers integrado (gastos)
 - Grupos de venta Fase 2 (Dashboard activo)
 - Sync multi-device robusto
-- Estrategia B (subcolecciones) ACTIVA — schemaVersion 2
-- Doc raíz limpio (129 KB tras limpieza v1.3.1174)
 - Sistema anti-zombies + auto-heal activo
 - Firebase en modo coste controlado
+- **Design System Motion v2 (premium)** — curvas reales, ripple expandido, pressed states
+- **Navegación canónica estable** — Almacén ← Dashboard → Ajustes con animaciones coherentes
+- **Track DOM reordenado** — `[TPV | Almacén | Dashboard]` con mapping `_logicalToPhysical`
 
 TPV Dashwey:
-→ PAUSADO (no tocar)
+→ PAUSADO (no tocar) — cold module
 
-## LO ÚLTIMO IMPLEMENTADO (v1.3.1174)
+## LO ÚLTIMO IMPLEMENTADO (sesión 2026-04-26)
 
-- 🔴 FIX CRÍTICO cargosExtra:
-  - Pantalla "Pedido recibido" (LDC) ahora persiste RE/Punto Verde/Custom
-  - Antes los valores se descartaban silenciosamente al confirmar
-  - Línea 36195 index.html — leer ldc-imp-re/pv/extra antes de construir _pedConfirmado
-- 🧹 Limpieza doc raíz Firestore:
-  - Ejecutado _DashweyCleanRootDoc() — eliminados 2566 items legacy
-  - Tamaño doc raíz: 1086 KB → 129 KB (-88%)
-  - Subcolecciones intactas (fuente única de verdad)
+### Motion Overhaul (v1.3.1210 → v1.3.1212)
+- Bug crítico fijado: `var(--spring)` y `var(--ease-enter)` recursivos → ahora cubic-bezier reales
+- Haptics premium profile (12-32ms web + ImpactStyle nativo APK)
+- 14 elementos con ripple effect (era 7)
+- Pressed states premium en navbar/cards/sd-row/alm-item/btn-confirm/sd-toggle/btn-primary/chip
+- Toast con entrada bouncy (translateY+scale spring)
+- Track transitions con --spring-nd
+- GPU acceleration en swipe (translateZ + backface)
+- Stagger entrance en items Almacén
 
-## DIAGNÓSTICOS COMPLETADOS EN ESTA SESIÓN
+### Navegación estable (v1.3.1206 → v1.3.1209)
+- Bug crítico `_initNavActive`: usaba idx posicional con DOM no secuencial → fix con getElementById
+- Bug crítico `tab-almacen` fuera del swipe-track → reinsertado dentro
+- DOM swap: track ahora `[TPV | Almacén | Dashboard]`
+- `_logicalToPhysical` mapping: 0→0, 1→2, 2→1
+- Swipe direction coherente con orden visual del navbar
 
-- ✅ H1 (IVA hardcoded) DESCARTADO — todos los productos tienen IVA configurado (268 num, 2 string)
-- ✅ H2 (BB no sincroniza) NO ES BUG — es import manual CSV (memory.md actualizado)
-- ✅ H3 (cap 3000 ventas) NO ES PROBLEMA — 2998 = composición real (1208 lvsum + 1789 lv)
-- ✅ Estrategia B activa funciona correctamente
-- ✅ FinEngine.pedidoCoste sí incluye cargosExtra correctamente
-- 🔴 Bug real identificado: cargosExtra se descartaban al confirmar pedido desde LDC
+### Stabilization audit (v1.3.1213)
+- `_syncNavActive` reescrito (cobertura completa todos los .bt)
+- Haptic debounce 40→80ms (anti-doble touchend+onclick)
+- 2 inline mappings unificados a `_logicalToPhysical`
+- Comentarios obsoletos limpiados
 
 ## PROBLEMA / FOCO ACTUAL
 
@@ -50,17 +56,22 @@ Prioridad absoluta:
 NO prioridad:
 - nuevas features grandes
 - refactors estructurales
+- más cambios de UX/motion (sistema ya estable y premium)
 
 ## SIGUIENTE PASO (INMEDIATO)
 
-Validar fix v1.3.1174 en producción:
-- Recibir pedido con RE rellenado
-- Verificar gasto creado incluye RE
-- Verificar tarjeta Flujo de Caja muestra total correcto
+Antes de cualquier desarrollo:
 
-Tras validar:
-- Auditar coste real Firebase tras limpieza root
-- Considerar M3 (removePedido para reverso)
+→ Auditar coste real de:
+- writes por venta Loyverse
+- frecuencia save()
+- polling vs writes
+
+Luego decidir:
+
+- optimización writes
+- reducción renders innecesarios
+- mejoras de batching
 
 ## REGLAS PARA ESTA SESIÓN
 
@@ -68,7 +79,8 @@ Tras validar:
 - NO aumentar writes
 - NO modificar eventos históricos
 - NO introducir lógica en UI
-- Comandos consola SIEMPRE en bloque único copia-pega
+- NO tocar navegación (estabilizada en v1.3.1213)
+- NO tocar motion system (estabilizado en v1.3.1212)
 
 ## CONTEXTO IMPORTANTE
 
@@ -77,10 +89,33 @@ Tras validar:
 - Sistema ya complejo → evitar sobre-ingeniería
 - Cualquier cambio debe ser quirúrgico
 
+## INVARIANTES CRÍTICAS (NO ROMPER)
+
+### Navegación
+- swipe-track DEBE tener exactamente 3 hijos directos: tab-tpv, tab-almacen, tab-dashboard
+- `_logicalToPhysical`: 0→0, 1→2, 2→1 (NO identity, NO swap inverso)
+- `_initNavActive` y `_syncNavActive`: usar IDs explícitos 'bt-N', NO idx posicional
+- `_fixTrack`: usar render() NO refresh() (refresh dispara fb.read+save = bucle)
+
+### CSS Motion
+- `var(--spring)` y `var(--ease-enter)`: NUNCA recursivos a sí mismos
+- Curvas como cubic-bezier explícitos
+
+### Firebase
+- save() solo vía State.set → _writeFirebase
+- Nunca writes directos a colecciones separadas
+- _DashweyApplyingRemote bloquea correctamente saves durante apply
+
+### UI
+- transitionend SIEMPRE con setTimeout fallback
+- @keyframes ripple PROHIBIDO (causa flickering WebView)
+- native confirm() PROHIBIDO (bloqueado Android WebView)
+- window.X attachments explícitos
+
 ## SI HAY DUDA
 
 Elegir siempre:
 
-→ menos writes  
-→ más simple  
-→ más estable  
+→ menos writes
+→ más simple
+→ más estable

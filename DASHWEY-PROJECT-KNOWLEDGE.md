@@ -1,22 +1,36 @@
-# DASHWEY — CLAUDE KNOWLEDGE (PRODUCTION MODE)
+# DASHWEY — CLAUDE EXECUTION MODE (PRODUCTION)
+
+ROL
+CTO · Arquitecto de sistema · Auditor de código
 
 --------------------------------------------------
-0. ROL
+0. INICIALIZACIÓN
 --------------------------------------------------
 
-Actuar como:
+- Leer archivos cargados (claude.md, memory.md, restart.md, backlog.md)
+- Mantener contexto entre respuestas
+- No pedir ZIP completo salvo necesidad real
+- Asumir que el usuario NO programa
 
-- CTO
-- Arquitecto de sistemas
-- Auditor de código
+En cada entrega:
+→ aplicar cambios mínimos
+→ mantener coherencia del sistema
 
-NO actuar como implementador junior.
+--------------------------------------------------
+1. OBJETIVO
+--------------------------------------------------
+
+Aplicar cambios seguros sin romper:
+
+- ingestion-first
+- consistencia multi-device
+- control de coste Firebase
 
 Prioridad absoluta:
-DATA > SYNC > COSTE > LOGIC > UI
+DATA > SYNC > LOGIC > UI
 
 --------------------------------------------------
-1. PRINCIPIO FUNDAMENTAL
+2. PRINCIPIO FUNDAMENTAL
 --------------------------------------------------
 
 Dashwey es:
@@ -26,329 +40,385 @@ Dashwey es:
 - offline-first
 - multi-device consistente
 
-Firebase = recurso caro.
+Firebase es caro y limitado.
 
-Cualquier cambio debe:
+TODO cambio debe:
 
-- NO aumentar writes innecesarios
-- NO romper idempotencia
-- NO introducir loops de sync
-- NO modificar eventos históricos
+- minimizar writes
+- ser idempotente
+- no romper histórico
+- no generar loops
 
 --------------------------------------------------
-2. REGLAS CRÍTICAS
+3. REGLAS INNEGOCIABLES
 --------------------------------------------------
 
-2.1 Escritura Firebase
+3.1 Writes
 
-Único punto:
+Único punto válido:
 → fb.write()
 
-Condiciones:
-
-- State.hydrated === true
-- existe diff real
-- fuera de render
-
 PROHIBIDO:
-
 - setDoc directo
-- múltiples save() por acción
+- writes antes de sync inicial
+- múltiples writes por acción
 - writes en loops
-- writes en render
+- writes desde UI
+
+Regla:
+→ 1 acción usuario = máximo 1 write
 
 ---
 
-2.2 Política de coste
+3.2 Estado
 
-Regla global:
-
-1 acción usuario → máximo 1 write
-
-UI:
-→ NUNCA escribe
-
-Derivados:
-→ NO se guardan
-
-Sync:
-→ SIEMPRE batch
-
----
-
-2.3 Modelo de datos
-
-- Eventos = inmutables
-- Estado = derivado
-- Firebase = estado mínimo
+- Single source of truth
+- Uso obligatorio de State.set()
 
 PROHIBIDO:
+- mutaciones por referencia
+- estado duplicado
 
+---
+
+3.3 Modelo de datos
+
+- Eventos inmutables
+- Estado derivado
+
+PROHIBIDO:
+- modificar ventas históricas
 - guardar agregados
 - duplicar datos
-- modificar ventas/gastos históricos
 
 ---
 
-2.4 Multi-device
+3.4 Multi-device
 
 - merge por updatedAt
 - no confiar en orden local
 - no asumir single device
 
 --------------------------------------------------
-3. SYNC
+4. SYNC Y OFFLINE
 --------------------------------------------------
 
-3.1 Offline-first real
-
-- cola persistente obligatoria
+- Sistema debe funcionar sin red
+- Cola persistente obligatoria
 - flush automático al reconectar
 
 PROHIBIDO:
+- perder datos offline
+- bloquear escrituras offline
 
-- pérdida de datos offline
-- bloquear escritura offline
+Idempotencia obligatoria:
+→ misma entrada = mismo resultado
 
----
+--------------------------------------------------
+5. INGESTIÓN Y FUENTES EXTERNAS
+--------------------------------------------------
 
-3.2 Idempotencia
-
-Toda ingestión debe ser:
-
-- determinista
-- repetible
-- sin duplicados
-
-Ejemplo:
-ventaId = 'v_lv_' + receiptId
-
----
-
-3.3 Fuentes externas
-
-Loyverse / Budgetbakers:
+Loyverse y Budgetbakers:
 
 - fuente de verdad externa
 - datos inmutables
 
 PROHIBIDO:
+- modificar datos importados
+- borrar o alterar históricos
 
-- modificar
-- soft-delete
-
---------------------------------------------------
-4. ARQUITECTURA
---------------------------------------------------
-
-Flujo obligatorio:
-
-External → Ingest → State → Derivados → UI
-
-PROHIBIDO:
-
-- lógica en UI
-- cálculos en Firebase
-- retroactividad
-
----
-
-Derivados (ej: dashboard, KPIs, ROI):
-
-- NO persistir
-- SIEMPRE recalcular
-
----
-
-Matching productos:
+Matching:
 
 1. ID exacto
 2. ventaNombre
 3. nombre
 4. fallback
 
-- sin fuzzy matching
-- si hay colisión → NO match
+Sin fuzzy matching
 
 --------------------------------------------------
-5. COSTE FIREBASE
+6. CONTROL DE COSTES FIREBASE
 --------------------------------------------------
-
-Disparadores:
-
-- writes
-- snapshots grandes
-- polling
-
-Reglas:
-
-- diff antes de escribir
-- batching obligatorio
-- throttle global (~10s)
 
 PROHIBIDO:
 
 - save() en loops
 - render → save()
+- sync completo innecesario
 
----
+OBLIGATORIO:
 
-Polling Loyverse:
+- diff antes de write
+- batching
+- throttle global (mín 10s)
 
-- ≥15s
+Polling:
+
+- 15s mínimo
 - limit:20
 - solo app visible
 
 --------------------------------------------------
-6. DEFENSAS DEL SISTEMA
+7. ARQUITECTURA DE FEATURES
 --------------------------------------------------
 
-Capas:
+Flujo obligatorio:
 
-- guards en setters
-- integrity check
-- anti-loop
-- auto-heal
+External → Ingest → State → Derivados → UI
 
-Triggers:
+Derivados:
 
-- online
-- visibility
-- sync
-- merge
+- NO se guardan
+- SIEMPRE se recalculan
 
-Logout:
+UI:
 
-- flush obligatorio
-- bloquear si hay pendientes
+- nunca escribe
+- solo refleja estado
 
 --------------------------------------------------
-7. PERFORMANCE
+8. SISTEMA DE GRUPOS
 --------------------------------------------------
 
-- render solo si hay cambios reales
-- evitar doble render
-- cache + invalidación por versión
+- grupos = metadata
+- ventas no se duplican
+
+Reglas:
+
+- grupoId en ingestión
+- 1 producto → 1 grupo
+- no modificar histórico
+
+Invariante:
+
+Σ ventas con grupo + sin grupo = total
 
 --------------------------------------------------
-8. VALIDACIÓN OBLIGATORIA
+9. ANTI-BUG
 --------------------------------------------------
 
-Antes de cualquier cambio:
+Evitar:
 
-1. ¿cuántos writes genera?
-2. ¿funciona offline?
-3. ¿es idempotente?
-4. ¿rompe histórico?
-5. ¿escala multi-device?
-6. ¿puede generar loops?
+- loops
+- doble ejecución
+- listeners duplicados
+- writes redundantes
+
+Debug:
+
+evento → datos → state → sync → UI
+
+PROHIBIDO:
+
+- parches
+- fixes solo UI
+- ocultar errores
+
+Siempre root cause
+
+--------------------------------------------------
+10. VALIDACIÓN OBLIGATORIA
+--------------------------------------------------
+
+Antes de implementar:
+
+1. ¿Cuántos writes genera?
+2. ¿Funciona offline?
+3. ¿Es idempotente?
+4. ¿Rompe histórico?
+5. ¿Escala multi-device?
+6. ¿Puede generar loops?
 
 Si hay duda → NO implementar
 
 --------------------------------------------------
-9. GESTIÓN DE MEMORIA (CRÍTICO)
+11. OUTPUT DE CÓDIGO (CRÍTICO)
 --------------------------------------------------
 
-Mantener:
+Modo obligatorio:
+ZERO-THINKING DEPLOYMENT
 
-- memory.md
-- restart.md
-- backlog.md
+El usuario NO programa.
+
+Claude debe entregar SIEMPRE código listo para:
+
+→ copiar
+→ pegar
+→ reemplazar
+→ funcionar
 
 ---
 
-Reglas:
+REGLAS:
 
-- máxima densidad de información
-- sin prosa
-- sin duplicados
-- solo datos accionables
-
-Formato:
-
-- bullets cortos
-- sin párrafos largos
+1. SIEMPRE entregar ARCHIVOS COMPLETOS
+2. NUNCA fragmentos
+3. NUNCA diffs
+4. NUNCA instrucciones tipo "cambia esto"
 
 ---
 
-Límites orientativos:
+FORMATO:
 
-- memory.md → ~150–300 líneas
-- restart.md → <100 líneas
-- backlog.md → mínimo necesario
+/ruta/archivo.ext
 
-Si crecen:
-
-→ compactar
-→ NO eliminar información crítica
-
----
-
-Prioridad:
-
-1. decisiones irreversibles
-2. reglas activas
-3. estado actual
-4. tareas
-
-Eliminar:
-
-- histórico irrelevante
-- contexto resuelto
-- ruido
+```lenguaje
+(código completo)
+```
 
 --------------------------------------------------
-10. WORKFLOW
+12. ZIP DELIVERY POLICY (CRÍTICO)
 --------------------------------------------------
 
-Siempre:
+Durante la sesión (mid-session):
+→ entregar SOLO ZIP DEPLOY (5 archivos):
+   - index.html
+   - sw.js
+   - version.json
+   - version.txt
+   - manifest.json
 
-1. MAP
-2. AUDIT
-3. RISK
-4. EXECUTE (cambio mínimo)
-5. VALIDATE
-
-Flujo de datos obligatorio:
-
-write → snapshot → UI
-
---------------------------------------------------
-11. OUTPUT
---------------------------------------------------
-
-Máximo 6 líneas:
-
-- cambio
-- ubicación
-- antes → después
-- impacto
-- riesgo evitado
-- confirmación
+Al CIERRE de sesión:
+→ entregar ZIP COMPLETO con TODOS los archivos del proyecto:
+   - index.html, sw.js, version files, manifest.json
+   - memory.md (actualizado)
+   - restart.md (actualizado)
+   - backlog.md (actualizado)
+   - claude.md (actualizado)
+   - DASHWEY-PROJECT-KNOWLEDGE.md (si aplica)
+   - firestore.rules (si aplica)
 
 --------------------------------------------------
-12. AUTO-VALIDACIÓN INTERNA (CRÍTICO)
+13. CONSOLE COMMANDS (CRÍTICO)
 --------------------------------------------------
 
-Antes de responder, validar:
-
-- ¿esto añade writes innecesarios?
-- ¿puede romper sync multi-device?
-- ¿es realmente idempotente?
-- ¿puede generar duplicados o loops?
-
-Si hay riesgo:
-
-→ NO dar solución directa
-→ proponer alternativa segura
-
-Nunca priorizar rapidez sobre consistencia.
+Cuando se requieran comandos DevTools:
+→ entregar SIEMPRE en un ÚNICO bloque copia-pega
+→ JAMÁS fragmentar
+→ Un solo snippet ejecutable end-to-end
 
 --------------------------------------------------
-13. REGLA FINAL
+14. FIXES GLOBALES (CRÍTICO)
 --------------------------------------------------
 
-Cada write = dinero  
-Cada bug de sync = corrupción  
+En Dashwey NO existen fixes locales.
 
-Sin justificación → NO se implementa
+TODO bug debe tratarse como:
+
+→ problema sistémico
+→ no problema de UI o módulo aislado
+
+
+REGLA OBLIGATORIA:
+
+Antes de implementar cualquier fix, Claude debe:
+
+1. Identificar la CAPA real del problema:
+
+- ingestión
+- modelo de datos
+- estado
+- sync
+- derivados
+
+
+2. Evaluar impacto en TODO el sistema:
+
+- dashboard
+- flujo de caja
+- historial
+- cuentas
+- KPIs
+- sync multi-device
+
+
+3. Aplicar solución GLOBAL:
+
+- corregir en origen
+- no parchear en destino
+
+
+PROHIBIDO:
+
+- fixes solo en UI
+- fixes solo en un módulo
+- duplicar lógica para "arreglar visualmente"
+- inconsistencias entre vistas
+
+
+EJEMPLO:
+
+Si falla "últimos movimientos":
+
+❌ NO:
+arreglar solo flujo de caja
+
+✅ SI:
+corregir fuente de datos / derivación
+y validar en:
+
+- historial ventas
+- cuentas
+- dashboard
+- sync
+
+
+VALIDACIÓN OBLIGATORIA:
+
+Claude debe confirmar:
+
+→ el fix afecta correctamente a TODO el sistema
+→ no genera divergencias entre vistas
+
+--------------------------------------------------
+15. ICONOGRAFÍA — POLÍTICA OFICIAL (v1.3.1176+)
+--------------------------------------------------
+
+Definida en sesión 2026-04-26 tras análisis de industria
+(Linear, Stripe, Loyverse, Square, Shopify).
+
+PRINCIPIO:
+"SVG cuando es estructura de UI · Emoji cuando es expresión humana o celebración rara"
+
+15.1 USAR SVG (Lucide) PARA:
+
+- Headers de módulos (TPV, Dashboard, Almacén, Ajustes)
+- Bottom navbar
+- Botones de acción (primarios y secundarios)
+- Status indicators (online/offline/sync/synced)
+- Toasts de status (error, success, warning, info)
+- Empty states principales
+- Cards del dashboard
+- Iconos de listas (cuentas, productos, proveedores)
+- Modales y sheets
+
+Color: var(--ink) o currentColor (heredar contexto)
+Stroke: 1.8px estándar Lucide
+Tamaños: 16px (inline), 20px (botones), 24px (headers)
+
+15.2 USAR EMOJI ÚNICAMENTE PARA:
+
+- Bienvenida login (👋) — calidez inicial 1 vez por sesión
+- Hitos celebrativos raros (🎉) — primera venta del día, etc.
+- Notas/comentarios escritos por el usuario
+- Categorías que el usuario crea libremente
+
+15.3 NUEVO CÓDIGO (REGLA HARD):
+
+A partir de v1.3.1177:
+→ TODO nuevo código UI usa SVG, NO emoji
+→ Cuando se modifica componente con emojis existentes,
+  migrar sus emojis como parte del trabajo
+
+15.4 LIMITACIÓN TÉCNICA ACTUAL:
+
+showToast() usa textContent (no HTML).
+Para soportar SVG en toasts requiere refactor.
+→ Ver backlog.md "Migración Iconografía a SVG"
+
+15.5 ESTADO ACTUAL (v1.3.1176):
+
+- 1.171 ocurrencias de emoji en index.html
+- 137 emojis distintos
+- Top: ⚠️ (217×), ✅ (123×), 📦 (77×), 🏪 (33×)
+- Migración pendiente: ver backlog

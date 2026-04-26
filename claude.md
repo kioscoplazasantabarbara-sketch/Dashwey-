@@ -1,266 +1,138 @@
-# DASHWEY — CLAUDE EXECUTION MODE (PRODUCTION)
+# DASHWEY — BACKLOG (PRIORITIZED)
 
-ROL
-CTO · Arquitecto de sistema · Auditor de código
+## 🔴 CRÍTICO — COSTE / RIESGO REAL
 
---------------------------------------------------
-0. INICIALIZACIÓN
---------------------------------------------------
+### FIREBASE (DINERO DIRECTO)
 
-- Leer archivos cargados (claude.md, memory.md, restart.md, backlog.md)
-- Mantener contexto entre respuestas
-- No pedir ZIP completo salvo necesidad real
-- Asumir que el usuario NO programa
+- [ ] Auditar writes por flujo real:
+  - venta Loyverse
+  - creación/edición producto
+  - cambios grupos
+  → output: writes/acción
 
-En cada entrega:
-→ aplicar cambios mínimos
-→ mantener coherencia del sistema
+- [ ] Detectar múltiples save() por acción
+  → instrumentar logs:
+  `[SAVE] ts + origen + count`
 
---------------------------------------------------
-1. OBJETIVO
---------------------------------------------------
-
-Aplicar cambios seguros sin romper:
-
-- ingestion-first
-- consistencia multi-device
-- control de coste Firebase
-
-Prioridad absoluta:
-DATA > SYNC > LOGIC > UI
-
---------------------------------------------------
-2. PRINCIPIO FUNDAMENTAL
---------------------------------------------------
-
-Dashwey es:
-
-- event-driven
-- ingestion-first
-- offline-first
-- multi-device consistente
-
-Firebase es caro y limitado.
-
-TODO cambio debe:
-
-- minimizar writes
-- ser idempotente
-- no romper histórico
-- no generar loops
-
---------------------------------------------------
-3. REGLAS INNEGOCIABLES
---------------------------------------------------
-
-3.1 Writes
-
-Único punto válido:
-→ fb.write()
-
-PROHIBIDO:
-- setDoc directo
-- writes antes de sync inicial
-- múltiples writes por acción
-- writes en loops
-- writes desde UI
-
-Regla:
-→ 1 acción usuario = máximo 1 write
+- [ ] Verificar throttle global save() (10s)
+  → confirmar que NO hay bypass
 
 ---
 
-3.2 Estado
+### SYNC / CONSISTENCIA
 
-- Single source of truth
-- Uso obligatorio de State.set()
+- [ ] Detectar loops de save()
+  → patrón:
+  write → snapshot → write
 
-PROHIBIDO:
-- mutaciones por referencia
-- estado duplicado
+- [ ] Verificar idempotencia Loyverse:
+  - dedup por `receiptId`
+  - no recreación de ventas
 
----
-
-3.3 Modelo de datos
-
-- Eventos inmutables
-- Estado derivado
-
-PROHIBIDO:
-- modificar ventas históricas
-- guardar agregados
-- duplicar datos
+- [ ] Test multi-device real:
+  - 2 dispositivos activos
+  - cambios simultáneos
+  - validar convergencia
 
 ---
 
-3.4 Multi-device
+## 🟠 ALTO IMPACTO — PERFORMANCE / ESCALABILIDAD
 
-- merge por updatedAt
-- no confiar en orden local
-- no asumir single device
+### RENDER
 
---------------------------------------------------
-4. SYNC Y OFFLINE
---------------------------------------------------
+- [ ] Throttle global `App.dash.render()`
+  → evitar 40+ callsites sin control
+  → implementar scheduler (RAF + flag)
 
-- Sistema debe funcionar sin red
-- Cola persistente obligatoria
-- flush automático al reconectar
-
-PROHIBIDO:
-- perder datos offline
-- bloquear escrituras offline
-
-Idempotencia obligatoria:
-→ misma entrada = mismo resultado
-
---------------------------------------------------
-5. INGESTIÓN Y FUENTES EXTERNAS
---------------------------------------------------
-
-Loyverse y Budgetbakers:
-
-- fuente de verdad externa
-- datos inmutables
-
-PROHIBIDO:
-- modificar datos importados
-- borrar o alterar históricos
-
-Matching:
-
-1. ID exacto
-2. ventaNombre
-3. nombre
-4. fallback
-
-Sin fuzzy matching
-
---------------------------------------------------
-6. CONTROL DE COSTES FIREBASE
---------------------------------------------------
-
-PROHIBIDO:
-
-- save() en loops
-- render → save()
-- sync completo innecesario
-
-OBLIGATORIO:
-
-- diff antes de write
-- batching
-- throttle global (mín 10s)
-
-Polling:
-
-- 15s mínimo
-- limit:20
-- solo app visible
-
---------------------------------------------------
-7. ARQUITECTURA DE FEATURES
---------------------------------------------------
-
-Flujo obligatorio:
-
-External → Ingest → State → Derivados → UI
-
-Derivados:
-
-- NO se guardan
-- SIEMPRE se recalculan
-
-UI:
-
-- nunca escribe
-- solo refleja estado
-
---------------------------------------------------
-8. SISTEMA DE GRUPOS
---------------------------------------------------
-
-- grupos = metadata
-- ventas no se duplican
-
-Reglas:
-
-- grupoId en ingestión
-- 1 producto → 1 grupo
-- no modificar histórico
-
-Invariante:
-
-Σ ventas con grupo + sin grupo = total
-
---------------------------------------------------
-9. ANTI-BUG
---------------------------------------------------
-
-Evitar:
-
-- loops
-- doble ejecución
-- listeners duplicados
-- writes redundantes
-
-Debug:
-
-evento → datos → state → sync → UI
-
-PROHIBIDO:
-
-- parches
-- fixes solo UI
-- ocultar errores
-
-Siempre root cause
-
---------------------------------------------------
-10. VALIDACIÓN OBLIGATORIA
---------------------------------------------------
-
-Antes de implementar:
-
-1. ¿Cuántos writes genera?
-2. ¿Funciona offline?
-3. ¿Es idempotente?
-4. ¿Rompe histórico?
-5. ¿Escala multi-device?
-6. ¿Puede generar loops?
-
-Si hay duda → NO implementar
-
---------------------------------------------------
-11. OUTPUT DE CÓDIGO (CRÍTICO)
---------------------------------------------------
-
-Modo obligatorio:
-ZERO-THINKING DEPLOYMENT
-
-El usuario NO programa.
-
-Claude debe entregar SIEMPRE código listo para:
-
-→ copiar
-→ pegar
-→ reemplazar
-→ funcionar
+- [ ] Evitar renders sin cambios reales
+  → hash/diff antes de render
 
 ---
 
-REGLAS:
+### FIRESTORE
 
-1. SIEMPRE entregar ARCHIVOS COMPLETOS
-2. NUNCA fragmentos
-3. NUNCA diffs
-4. NUNCA instrucciones tipo “cambia esto”
+- [ ] Subcolecciones:
+  - añadir `limit`
+  - añadir `orderBy`
+  → evitar snapshots completos
+
+- [ ] Revisar listeners activos
+  → evitar duplicados
 
 ---
 
-FORMATO:
+### LOYVERSE
 
-/ruta/archivo.ext
+- [ ] Validar `created_at` vs `receipt_date`
+  → evitar drift por timezone
 
-```lenguaje
-(código completo)
+- [ ] Evaluar reducción payload sync
+  → si API lo permite
+
+---
+
+## 🟡 INTEGRIDAD FUNCIONAL
+
+- [ ] Test `validarIntegridad()` grupos:
+  - escenarios edge
+  - rounding
+  - grandes volúmenes
+
+- [ ] Test FIFO con ventas Loyverse:
+  - consumo correcto lotes
+  - coste real aplicado
+
+---
+
+## 🟢 OPTIMIZACIÓN (SIN PRISA)
+
+- [ ] Índices cacheados adicionales (solo si necesario)
+- [ ] Optimización de cálculo ROI
+- [ ] Reducir recalculos dashboard
+
+---
+
+## 🔵 PAUSADO (NO TOCAR)
+
+- [ ] TPV Dashwey
+- [ ] Features nuevas grandes
+- [ ] Refactors estructurales
+
+---
+
+## ✅ COMPLETADO ESTA SESIÓN (2026-04-26)
+
+### Navegación (v1.3.1206 → v1.3.1209)
+- ✅ Fix `_initNavActive` con getElementById (no idx posicional)
+- ✅ Reinserción `tab-almacen` dentro de `swipe-track`
+- ✅ DOM swap track → `[TPV | Almacén | Dashboard]`
+- ✅ `_logicalToPhysical` mapping coherente
+- ✅ Swipe direction alineado con navbar visual
+
+### Motion System (v1.3.1210 → v1.3.1212)
+- ✅ Fix bug crítico: variables CSS recursivas
+- ✅ Haptics premium profile
+- ✅ Ripple expandido a 14 elementos
+- ✅ Pressed states premium en 8 componentes
+- ✅ Toast bouncy entrance
+- ✅ Track transitions con --spring-nd
+- ✅ GPU acceleration swipe
+- ✅ Stagger entrance Almacén items
+
+### Stabilization (v1.3.1213)
+- ✅ `_syncNavActive` cobertura completa (incluye bt-3)
+- ✅ Haptic debounce 40→80ms
+- ✅ Mappings físicos unificados a `_logicalToPhysical`
+- ✅ Comentarios obsoletos limpiados
+
+---
+
+## ⚠️ REGLA DE BACKLOG
+
+Nada entra en desarrollo si no responde:
+
+1. ¿Reduce coste Firebase?
+2. ¿Mejora estabilidad sync?
+3. ¿Evita un bug crítico?
+
+Si NO cumple al menos uno → NO se hace.
