@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1212-dev</title>
+<title>Dashwey v1.3.1213-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14495,7 +14495,7 @@ const Utils = (() => {
 
  // Debounce state — 1 vibración por acción real
  let _hapticLastFired = 0;
- const _HAPTIC_DEBOUNCE = 40; // ms — M3: respuesta en el frame del toque
+ const _HAPTIC_DEBOUNCE = 80; // v1.3.1213: 40→80ms — garantía contra duplicados touchend+onclick
 
  // Desktop guard — solo Android WebView o dispositivos con vibration API real
  function _isHapticAllowed() {
@@ -15122,7 +15122,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1212-dev';
+ const _APP_VERSION = 'v1.3.1213-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15457,7 +15457,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1212');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1213');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -19867,8 +19867,8 @@ const nav = (() => {
  effectiveDx = sign * (SNAP_THRESHOLD * 0.08 + (adxNow - SNAP_THRESHOLD) * 0.6);
  }
  const NTABS = 3;
- // v1.3.1209: bounds en espacio físico — _cTab es lógico, _tx ya está en físico
- var _physC = (function(i){ if(i===1) return 2; if(i===2) return 1; return i; })(_cTab);
+ // v1.3.1213: usar _logicalToPhysical (single source of truth)
+ var _physC = _logicalToPhysical(_cTab);
  var _mmMin = { pos: 0, alm: 2, cfo: 1, hub: 1 };
  var _tmMin = (_mmMin[window._DASHWEY_MODE || 'hub'] !== undefined) ? _mmMin[window._DASHWEY_MODE || 'hub'] : 0;
  // Permite mover el track entre las posiciones físicas adyacentes
@@ -19909,11 +19909,11 @@ const nav = (() => {
  // v1.3.92: snap threshold 55→90px (drag lento) | flick 0.3→0.5px/ms (más intencional)
  // 90px ≈ 25% de pantalla típica Android — el usuario debe "ganarse" el cambio
  const shouldSnap = Math.abs(dx) > 90 || vel > 0.5;
- // v1.3.1209: swipe usa posición FÍSICA del track para determinar destino
+ // v1.3.1213: usar _logicalToPhysical (single source of truth)
  // Track DOM: [TPV(phys 0) | Almacén(phys 1) | Dashboard(phys 2)]
  // dx>0 = dedo va a la derecha = track va a la derecha = físico DISMINUYE (más a la izquierda)
  // dx<0 = dedo va a la izquierda = track va a la izquierda = físico AUMENTA (más a la derecha)
- var _physCurr = (function(i){ if(i===1) return 2; if(i===2) return 1; return i; })(_cTab);
+ var _physCurr = _logicalToPhysical(_cTab);
  var _snapDest;
  if (shouldSnap) {
   var _physDest = dx > 0 ? Math.max(0, _physCurr - 1) : Math.min(2, _physCurr + 1);
@@ -19964,12 +19964,13 @@ const nav = (() => {
  });
 
  // FIX v9.5.23: sincronizar clases .active sin re-render completo
+ // v1.3.1213 STABILIZATION: id explícito + cobertura completa (incluye bt-3)
  function _syncNavActive(i) {
- // v1.3.436: usar id en lugar de indice -- robusto frente a .bt extras o display:none
- ['bt-0','bt-1','bt-2'].forEach(function(id, idx) {
- var el = document.getElementById(id);
- if (el) el.classList.toggle('active', idx === i);
- });
+ // i es el índice LÓGICO (0=TPV, 1=Dashboard, 2=Almacén)
+ // Activar SOLO el botón cuyo id == 'bt-' + i; resetear todos los demás.
+ document.querySelectorAll('.bt').forEach(function(b) { b.classList.remove('active'); });
+ var _el = document.getElementById('bt-' + i);
+ if (_el) _el.classList.add('active');
  }
 
  // ── v1.2.24: window.navState — mirror reactivo de navegación ────────
@@ -20062,14 +20063,8 @@ const nav = (() => {
  if (_animTimeout) clearTimeout(_animTimeout);
  _animating = true;
  _animTimeout = setTimeout(_releaseAnimLock, 420); // 380ms transición + 40ms margen
- // v1.3.1163 NAVBAR ANIMACIÓN — pendiente refactor estructural.
- // Track actual: [TPV(0), Dashboard(1), Almacén(2)] → translateX(-tab × 100%)
- // Navbar v1.3.1160: [Almacén-izq, Dashboard-centro, Ajustes-der] (visual ≠ track)
- // Discrepancia visual: pulsar Almacén (botón izq) hace que el track se desplace
- // MÁS hacia la izquierda → el contenido entra desde la derecha del viewport.
- // Fix correcto = reordenar .tab-page divs y reescribir todos los índices hardcoded
- // (~15 callsites en _modeAllowed, _TAB_NAMES, _syncNavState, gesture handlers).
- // Riesgo alto vs beneficio. Pendiente release dedicada con QA completo.
+ // v1.3.1209: navbar visual = [Almacén | Dashboard | Ajustes], track DOM = [TPV | Almacén | Dashboard]
+ // _logicalToPhysical(i) mapea índice lógico → posición física en el track.
  track.style.transition = 'transform .38s var(--spring-nd)';
  track.style.transform = `translateX(${-_logicalToPhysical(i) * _getTabWidth()}px)`;
  // v1.3.389: tab-fade-in eliminado — la animación opacity causaba flash en WebView
