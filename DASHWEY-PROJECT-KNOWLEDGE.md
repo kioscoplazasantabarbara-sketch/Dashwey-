@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1166-dev
+**Versión:** v1.3.1165-dev
 **Plataforma:** APK Android via Capacitor + WebView (+ acceso web)
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -259,73 +259,6 @@ arcname = 'dashwey/' + relpath
 **Impacto:** todas las rutas de escritura al root pasan por el dispatcher dual → root nunca excede 1MB, subcolecciones drenan correctamente, `invalid-argument` eliminado.
 
 **NO tocado:** L9465 (escribe arrays vacíos intencionalmente — `_forceRootClean`), L9609 (migración schema), L10443 (es `_writeFirebase` interno del dispatcher).
-
-### v1.3.1166 — UNIFICACIÓN GRUPOS + REVERT NAVBAR + MODAL FIX
-
-## 1. Long-press "Grupo" → directo al creator
-
-**Antes:** long-press artículo → menú flotante → "Grupo" → `_openGrupoPicker` (lista grupos existentes para asociar) → "Crear nuevo" → `_openGrupoCreator`
-
-**Ahora:** long-press artículo → menú flotante → "Grupo" → `_openGrupoCreator` directamente
-
-Eliminado el paso intermedio `_openGrupoPicker`. La función sigue exportada por compatibilidad pero ya no se invoca desde el menú.
-
-## 2. Creator: chips de grupos existentes
-
-Bajo el campo "Nombre exacto en Loyverse" se añade una línea horizontal scrollable con chips de los grupos existentes:
-
-```
-Grupos existentes
-[✓ Bebidas frías ·5] [Snacks ·12] [Refrescos ·8] →
-```
-
-- Tap chip → añade los artículos seleccionados al grupo existente (`addArticulosAGrupo`) + cerrar fs
-- Chip del grupo actual del artículo se marca con `✓` verde
-- Si no hay artículos seleccionados → toast pidiendo seleccionar primero
-- Si no hay grupos → línea omitida (sin overhead)
-
-## 3. BUG "Crear nuevo" cierra modal — RESUELTO POR DISEÑO
-
-El bug existía en el flujo `picker → "Crear nuevo" → setTimeout(closeFs+open)`. Como el flujo ahora es directo (`Grupo → creator`), el bug desaparece naturalmente. Sin saltos entre overlays, sin race conditions.
-
-## 4. Modal proveedores: padding inferior CORREGIDO
-
-**Antes (v1.3.1164):** `padding-bottom: calc(var(--tab-real, 60px) + env(safe-area-inset-bottom, 0px))` — el padding INTERNO del modal era 84px, creando un espacio gigante entre la última fila y el borde.
-
-**Diagnóstico:** el modal flota encima de la navbar (z-index 11010 > 200), la navbar visible TAPA esos 60px del fondo. El padding-bottom del modal NO debe compensar la navbar — son capas distintas.
-
-**Fix:** `padding-bottom: env(safe-area-inset-bottom, 0px)` — sólo el safe-area iOS para gestures (~24px), 0 si Android.
-
-## 5. Animación navbar — REVERT a v1.3.1163
-
-**El intento v1.3.1164 fue al contrario:** usuario reporta que pulsar Almacén entra desde la izquierda y swipe izq Almacén va a Dashboard, ambos al revés de lo deseado.
-
-**Decisión:** revertir todo el reorden DOM + mappings. La función `_logicalToPhysical(i)` se queda como identity (`return i`). 4 callsites usan la función pero ahora no transforma — comportamiento exactamente igual al de v1.3.1163.
-
-**Estado final:**
-- DOM: `[TPV(0), Dashboard(1), Almacén(2)]` (orden original)
-- translateX = `-i * width`
-- Pulsar Almacén desde Dashboard: track desliza -100% → -200%, contenido entra desde la derecha (estándar mobile)
-- Swipe izquierda en Almacén: ya está en max (i=2), no se mueve. Swipe derecha → Dashboard.
-
-Si el usuario quiere otra dirección, requiere conversación dedicada para entender exactamente la geometría visual deseada (posiblemente con video grabado).
-
-## Validación
-
-- ✅ 30 bloques JS OK
-- ✅ Long-press → Grupo → creator directo (1 click menos)
-- ✅ Chips horizontales grupos existentes funcionales
-- ✅ BUG "Crear nuevo cierra modal" eliminado por diseño
-- ✅ Padding modal proveedores reducido a safe-area
-- ✅ Navbar animación revertida a estado v1.3.1163
-
-## Riesgos prevenidos
-
-- **Tap chip sin artículos seleccionados** → toast de aviso
-- **`_openGrupoPicker` huérfano** → exportado intacto, sin usuarios
-- **Mapping identity introduce overhead** → función inline, JIT optimiza
-- **Modal proveedor con poco contenido** → height auto + padding mínimo
-- **Refactor track invertido pendiente** → revertido sin tocar gesture handlers
 
 ### v1.3.1165 — HISTORIAL CUENTA: REWORK (5 cambios UX)
 
