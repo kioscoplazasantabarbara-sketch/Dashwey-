@@ -6,7 +6,7 @@
 
 ## ESTADO ACTUAL
 
-**Versión:** v1.3.1167-dev
+**Versión:** v1.3.1166-dev
 **Plataforma:** APK Android via Capacitor + WebView (+ acceso web)
 **Deploy:** GitHub Pages → `server.url` en `capacitor.config.json`
 **Usuarios:** Reales en producción — cero regresiones toleradas
@@ -259,61 +259,6 @@ arcname = 'dashwey/' + relpath
 **Impacto:** todas las rutas de escritura al root pasan por el dispatcher dual → root nunca excede 1MB, subcolecciones drenan correctamente, `invalid-argument` eliminado.
 
 **NO tocado:** L9465 (escribe arrays vacíos intencionalmente — `_forceRootClean`), L9609 (migración schema), L10443 (es `_writeFirebase` interno del dispatcher).
-
-### v1.3.1167 — STARTUP PERFORMANCE + FLICKER FIX
-
-**Scope estricto:** solo arranque y animación logo. Sistema tipográfico/spacing/menús queda para sesión dedicada con alcance amplio (no es fix incremental seguro).
-
-## 1. Eliminado delay artificial splash
-
-**Antes:** `MIN_VISIBLE = 2200ms` mantenía splash visible 2.2s aunque la app estuviera lista en 200ms. Violación explícita de spec ("PROHIBIDO delays artificiales").
-
-**Ahora:** `_hideSplash()` ejecuta fade-out inmediato. La animación CSS del icono (`animation-fill-mode:both`) queda en estado final aunque empiece el fade en mitad.
-
-## 2. Auth gate timeout: 8s → 1.5s
-
-**Bug previo:** comentario decía "2.5s" pero código tenía `8000`. Violación spec ("PROHIBIDO bloquear render por datos remotos").
-
-**Ahora:** `1500ms`. Si Firebase tarda más, UI local visible con datos localStorage. Evento `auth-changed` posterior actualiza sin parpadeo (dashboard ya pintado).
-
-## 3. Flicker logo — GPU compositor
-
-**Causas:**
-- `translateY()` no fuerza GPU layer en WebView Android
-- Sin `will-change` → repaint cada frame de animación
-- Sin `backface-visibility:hidden` → flicker WebView con scale
-
-**Fixes CSS:**
-- `translate3d(0,X,0)` en lugar de `translateY(X)` (fuerza GPU layer)
-- `will-change: transform, opacity` en `.splash-icon-wrap`, `.splash-wordmark`, `.splash-tagline`
-- `backface-visibility: hidden` en todos los elementos animados
-- `transform: translateZ(0)` en `.splash-icon-wrap` (compositor layer permanente)
-- `will-change: auto` cuando `.fade-out` (libera GPU al terminar)
-
-## Validación
-
-- ✅ 30 bloques JS OK
-- ✅ Splash desaparece sin delay artificial
-- ✅ App lista en <1.5s (vs 8s timeout previo)
-- ✅ Animación logo en GPU layer
-- ✅ Sin pantalla en blanco (auth-screen `display:none` inline)
-- ⏳ Validar en APK real (WebView Android sensible a translate3d)
-
-## Riesgos prevenidos
-
-- **Splash desaparece antes que animación termine**: `animation-fill-mode:both` mantiene estado final
-- **Firebase tarda >1.5s**: evento `auth-changed` aún oculta auth-screen sin parpadeo
-- **`will-change` permanente memory leak**: liberado en `.fade-out`
-- **Flickering WebView**: `translate3d` + `backface-visibility:hidden` + GPU layer triple anti-flicker
-- **Sin Firebase**: `_isLoggedOut` flag en localStorage muestra auth-screen apropiada
-
-## Pendiente (sesión dedicada)
-
-- Sistema tipográfico global (consolidar `--fs-*` a 6-7 tamaños canónicos)
-- Sistema spacing (auditar paddings/margins inline → usar tokens `--sp-*`)
-- Layout/Grid (auditar elementos flotantes, jerarquía)
-- Reorganización menús (eliminar duplicados, máx 2 niveles)
-- Componentes unificados (botones, inputs, modales, headers)
 
 ### v1.3.1166 — UNIFICACIÓN GRUPOS + REVERT NAVBAR + MODAL FIX
 
