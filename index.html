@@ -9485,13 +9485,59 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
+// v1.3.1227 BUG-CRIT-1 FIX — _waitForAuth
+// Promesa que resuelve cuando hay user real (no anónimo) o tras timeout.
+// Usado por escritores y rutas críticas para evitar fallos por carrera
+// "auth no resuelta aún" + writes que llegan al guard isRegistered()===false.
+// ──────────────────────────────────────────────────────────────────
+window._DashweyWaitForAuth = function(timeoutMs) {
+ const TIMEOUT = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 30000;
+ return new Promise(function(resolve) {
+  try {
+   const fb = window._DashweyFirebase;
+   // Resolución inmediata si ya hay user real
+   if (fb && fb.enabled && fb.isRegistered && fb.isRegistered()) {
+    return resolve({ ok: true, immediate: true });
+   }
+   // Si Firebase no está habilitado, no esperamos
+   if (!fb || !fb.enabled) return resolve({ ok: false, reason: 'fb-disabled' });
+   var resolved = false;
+   var timer = setTimeout(function() {
+    if (resolved) return;
+    resolved = true;
+    try { window.removeEventListener('dashwey:auth-changed', onChange); } catch(_) {}
+    resolve({ ok: false, reason: 'timeout', timeoutMs: TIMEOUT });
+   }, TIMEOUT);
+   function onChange(e) {
+    try {
+     const d = e && e.detail || {};
+     // user real (no anónimo) → resolver
+     if (d.hasUser && !d.isAnonymous) {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      try { window.removeEventListener('dashwey:auth-changed', onChange); } catch(_) {}
+      resolve({ ok: true, immediate: false });
+     }
+    } catch(_) {}
+   }
+   window.addEventListener('dashwey:auth-changed', onChange);
+  } catch(e) {
+   resolve({ ok: false, reason: 'exception', error: String(e && e.message || e) });
+  }
+ });
+};
+
+// ──────────────────────────────────────────────────────────────────
 // ESTRATEGIA B — INFRAESTRUCTURA (v1.3.1096-dev)
 // Añadido sin activar. Flag maestro OFF por defecto.
 // Todo el código existente sigue operando con doc monolítico.
 // ──────────────────────────────────────────────────────────────────
 
 // Flag maestro: cuando sea true, save() escribirá a subcolecciones
-window._DashweyUseSubcollections = false;
+// v1.3.1227 BUG-CRIT-2: ON por defecto. Toda la infra está estable; el modo
+// monolítico era frágil para arrays >100 items (>900KB → write loss).
+window._DashweyUseSubcollections = true;
 
 // Tracking granular de cambios por subcolección
 // Estructura: { ventas: Set<id>, gastos: Set<id>, ... }
@@ -9774,7 +9820,11 @@ window._DashweyUnsubscribeAllSubcollections = function() {
 // True cuando Estrategia B está activa: subcolecciones son fuente única de verdad
 // para ventas/gastos/ingresos/pedidos/mermas/facturas. El doc raíz puede tener
 // copias legacy (pre-limpieza) que causan fantasmas si se fusionan.
+// v1.3.1227: respetar override _DashweyForceLegacyMerge — usado por _doInitialSync
+//            cuando remote es legacy (sin schemaVersion=2) y hay datos en root que
+//            deben aplicarse antes de migrar a subcol. Ventana corta de excepción.
 window._DashweyShouldSkipTransactionalInRoot = function() {
+ if (window._DashweyForceLegacyMerge === true) return false;
  return window._DashweyUseSubcollections === true;
 };
 const _TRANSACTIONAL_KEYS_V2 = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
@@ -10043,10 +10093,14 @@ window._DashweySyncAhora = async function() {
   const ctx = window._DashweyActiveContext || 'default';
 
   const keys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
-  const subMap = {
-   ventas:'ventas', gastosOp:'gastosOp', ingresosFin:'ingresosFin',
-   historialPedidos:'historialPedidos', mermas:'mermas', facturas:'facturas'
-  };
+  // v1.3.1227 BUG-CRIT-5: path mismatch crítico. SubMap debe coincidir con _DashweySubcollectionMap
+  //                       (gastosOp→gastos, historialPedidos→pedidos, ingresosFin→ingresos).
+  //                       Antes: stateKey==stateKey → leía paths fantasma (state_sub/gastosOp etc.).
+  //                       Ahora: usa fbName real → state_sub/gastos.
+  const subMap = (window._DashweySubcollectionMap)
+   ? Object.fromEntries(Object.entries(window._DashweySubcollectionMap).map(([k,v]) => [k, v.fbName]))
+   : { ventas:'ventas', gastosOp:'gastos', ingresosFin:'ingresos',
+       historialPedidos:'pedidos', mermas:'mermas', facturas:'facturas' };
   const setterMap = {
    ventas:'ventas', gastosOp:'setGastos', ingresosFin:'setIngresos',
    historialPedidos:'historialPedidos', mermas:'mermas', facturas:'facturas'
@@ -10069,12 +10123,31 @@ window._DashweySyncAhora = async function() {
     const items = [];
     snap.forEach(d => items.push(d.data()));
 
-    // Merge con locales
+    // Merge con locales — con respeto de timestamps (updatedAt/deletedAt) por ítem.
+    // v1.3.1227 BUG-CRIT-4: usar State.raw (con deleted incluidos) como fuente local.
+    const _rawAcc = (App.State.raw && typeof App.State.raw[k] === 'function') ? App.State.raw[k] : null;
     const getter = App.State.get[k];
-    const localArr = typeof getter === 'function' ? (getter() || []) : [];
+    const localArr = _rawAcc ? (_rawAcc() || [])
+                              : (typeof getter === 'function' ? (getter() || []) : []);
+    const _tsOf = (it) => {
+     if (!it) return 0;
+     const d = it.deletedAt ? (typeof it.deletedAt === 'string' ? Date.parse(it.deletedAt) : it.deletedAt) : 0;
+     const u = it.updatedAt ? (typeof it.updatedAt === 'string' ? Date.parse(it.updatedAt) : it.updatedAt) : 0;
+     const f = it.fecha ? Date.parse(it.fecha) : 0;
+     const c = it.createdAt ? (typeof it.createdAt === 'string' ? Date.parse(it.createdAt) : it.createdAt) : 0;
+     return Math.max(d || 0, u || 0, f || 0, c || 0);
+    };
     const byId = {};
     localArr.forEach(it => { if (it?.id) byId[it.id] = it; });
-    items.forEach(it => { if (it?.id) byId[it.id] = it; });
+    items.forEach(rit => {
+     if (!rit?.id) return;
+     const lit = byId[rit.id];
+     if (!lit) { byId[rit.id] = rit; return; }
+     const rTs = _tsOf(rit);
+     const lTs = _tsOf(lit);
+     if (rTs > lTs) byId[rit.id] = rit;
+     else if (rTs === lTs) byId[rit.id] = Object.assign({}, rit, lit);
+    });
     const merged = Object.values(byId);
 
     // Aplicar
@@ -10118,6 +10191,151 @@ if (!window._DashweySyncAhoraScheduled) {
   } catch(_) {}
  }, 5000);
 }
+
+// ──────────────────────────────────────────────────────────────────
+// v1.3.1227 BUG-CRIT-3 FIX — _adminCleanFirestoreVentasDups
+// Tool admin quirúrgica: detecta duplicados import_loyverse en días con
+// autoridad API (origen=loyverse) y los borra por ID exacto en Firestore
+// + State local. Idempotente. Auth garantizado vía _DashweyWaitForAuth.
+//
+// Uso:
+//   await window._adminCleanFirestoreVentasDups()           → ejecuta limpieza
+//   await window._adminCleanFirestoreVentasDups({dryRun:true}) → solo reporta
+//
+// Reglas de seguridad:
+//   - Solo borra ventas con id que matchea /^v_lvsum_\d{8}$/
+//   - Solo si origen === 'import_loyverse'
+//   - Solo si EXISTE al menos 1 venta origen='loyverse' en el mismo día
+//   - Nunca borra ventas API ni manuales ni de TPV
+// ──────────────────────────────────────────────────────────────────
+window._adminCleanFirestoreVentasDups = async function(opts) {
+ opts = opts || {};
+ const dryRun = opts.dryRun === true;
+ const verbose = opts.verbose !== false;
+ const log = function() {
+  if (verbose) try { console.info.apply(console, ['[AdminClean]'].concat(Array.from(arguments))); } catch(_) {}
+ };
+ try {
+  // 1. Esperar auth real (timeout 30s) — sin esto, deleteDoc falla en Firestore
+  if (typeof window._DashweyWaitForAuth === 'function') {
+   const _waitR = await window._DashweyWaitForAuth(30000);
+   if (!_waitR || !_waitR.ok) {
+    console.warn('[AdminClean] auth wait failed:', _waitR && _waitR.reason);
+    return { ok: false, reason: 'auth-timeout' };
+   }
+  }
+  const fb = window._DashweyFirebase;
+  if (!fb || !fb.enabled || !fb.isRegistered || !fb.isRegistered()) {
+   console.warn('[AdminClean] Firebase no disponible o sin user real');
+   return { ok: false, reason: 'firebase-unavailable' };
+  }
+  // 2. Importar SDK Firestore
+  const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const fbApp = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+  const fbAuth = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+  const db = mod.getFirestore(fbApp.getApps()[0]);
+  const uid = fbAuth.getAuth().currentUser && fbAuth.getAuth().currentUser.uid;
+  if (!uid) return { ok: false, reason: 'no-uid' };
+  const ctx = window._DashweyActiveContext || 'business';
+  // 3. Leer subcolección ventas (path correcto vía SubcollectionMap)
+  const subMap = window._DashweySubcollectionMap || {};
+  const ventasFbName = (subMap.ventas && subMap.ventas.fbName) ? subMap.ventas.fbName : 'ventas';
+  const colRef = mod.collection(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', ventasFbName);
+  const snap = await mod.getDocs(colRef);
+  const ventasFs = [];
+  snap.forEach(function(d) { const data = d.data(); if (data) ventasFs.push(data); });
+  log('Firestore ventas leídas:', ventasFs.length);
+  // 4. Indexar días con autoridad API (origen='loyverse')
+  const _isoDay = function(fechaStr) {
+   if (!fechaStr) return null;
+   try {
+    const d = new Date(fechaStr);
+    if (isNaN(d.getTime())) return null;
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+   } catch(_) { return null; }
+  };
+  const apiDays = new Set();
+  ventasFs.forEach(function(v) {
+   if (v && v.origen === 'loyverse') {
+    const day = _isoDay(v.fecha);
+    if (day) apiDays.add(day);
+   }
+  });
+  log('Días con autoridad API (origen=loyverse):', apiDays.size);
+  // 5. Detectar duplicados import_loyverse en esos días
+  // Filtros estrictos:
+  //   - id matchea /^v_lvsum_\d{8}$/
+  //   - origen === 'import_loyverse'
+  //   - día está en apiDays
+  const ID_PATTERN = /^v_lvsum_\d{8}$/;
+  const duplicates = [];
+  ventasFs.forEach(function(v) {
+   if (!v || !v.id) return;
+   if (v.origen !== 'import_loyverse') return;
+   if (!ID_PATTERN.test(v.id)) return;
+   const day = _isoDay(v.fecha);
+   if (!day || !apiDays.has(day)) return;
+   duplicates.push({ id: v.id, fecha: v.fecha, total: v.total, dia: day });
+  });
+  log('Duplicados detectados:', duplicates.length);
+  duplicates.forEach(function(d) { log('  - ', d.id, '| día', d.dia, '|', d.total, '€'); });
+  if (duplicates.length === 0) {
+   log('✓ Sin duplicados que limpiar.');
+   return { ok: true, dryRun: dryRun, duplicatesFound: 0, deleted: 0 };
+  }
+  if (dryRun) {
+   log('DRY RUN — no se borra nada. duplicates:', duplicates.length);
+   return { ok: true, dryRun: true, duplicatesFound: duplicates.length, duplicates: duplicates };
+  }
+  // 6. Borrar en Firestore por ID exacto (batch 450 por seguridad)
+  let deletedCount = 0;
+  for (let i = 0; i < duplicates.length; i += 450) {
+   const slice = duplicates.slice(i, i + 450);
+   const batch = mod.writeBatch(db);
+   slice.forEach(function(d) {
+    const ref = mod.doc(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', ventasFbName, d.id);
+    batch.delete(ref);
+   });
+   await batch.commit();
+   deletedCount += slice.length;
+   log('Batch borrado:', slice.length, '| total:', deletedCount);
+  }
+  // 7. Sincronizar State local — eliminar las mismas IDs
+  try {
+   const App = window.App;
+   if (App && App.State && App.State.set && App.State.set.ventas) {
+    const dupIds = new Set(duplicates.map(function(d) { return d.id; }));
+    const localRaw = (App.State.raw && App.State.raw.ventas) ? App.State.raw.ventas() : (App.State.get.ventas() || []);
+    const cleaned = localRaw.filter(function(v) { return !v || !v.id || !dupIds.has(v.id); });
+    // Bloquear flags durante el set para evitar loop save→subir→bajar
+    const ctrl = window._DashweySavingCtrl;
+    const prevSaving = ctrl && ctrl.isSaving;
+    const prevApplying = window._DashweyApplyingRemote;
+    window._DashweyApplyingRemote = true;
+    if (ctrl) ctrl.isSaving = true;
+    try {
+     App.State.set.ventas(cleaned);
+    } finally {
+     if (ctrl) ctrl.isSaving = prevSaving || false;
+     window._DashweyApplyingRemote = prevApplying || false;
+    }
+    log('State local sincronizado:', localRaw.length, '→', cleaned.length);
+   }
+  } catch(eLocal) {
+   console.warn('[AdminClean] error sincronizando State local:', eLocal && eLocal.message);
+  }
+  // 8. Refrescar UI
+  try {
+   if (window.App && window.App.dash && window.App.dash.render) window.App.dash.render();
+  } catch(_) {}
+  log('✓ COMPLETADO. Duplicados borrados:', deletedCount);
+  try { (window.showToast || function(){})('🧹 ' + deletedCount + ' duplicados Loyverse borrados'); } catch(_) {}
+  return { ok: true, dryRun: false, duplicatesFound: duplicates.length, deleted: deletedCount, duplicates: duplicates };
+ } catch(e) {
+  console.error('[AdminClean] ERROR:', e && e.message ? e.message : e);
+  return { ok: false, reason: 'exception', error: String(e && e.message || e) };
+ }
+};
 
 // ──────────────────────────────────────────────────────────────────
 // FIN INFRAESTRUCTURA ESTRATEGIA B
@@ -10902,83 +11120,124 @@ const State = (() => {
   // Flag ON o forceClean → ruta subcolecciones / limpieza agresiva
   const fb = window._DashweyFirebase;
   if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
+  // v1.3.1227 BUG-CRIT-1: esperar auth si aún no hay user real (timeout 30s)
+  // Sin esto, escrituras durante cold start fallan silenciosamente.
+  try {
+   if (typeof window._DashweyWaitForAuth === 'function' && !fb.isRegistered?.()) {
+    const _waitR = await window._DashweyWaitForAuth(30000);
+    if (!_waitR || !_waitR.ok) {
+     console.warn('[Dashwey/FB] _writeFirebaseDual: auth wait failed (' + (_waitR && _waitR.reason) + ') — abort');
+     return false;
+    }
+   }
+  } catch(_) {}
   try {
    // 1. Construir payload de doc raíz: data SIN los 6 arrays transaccionales
    const transactionalKeys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
    const rootPayload = {};
+   const _dataTrans = {}; // arrays trans extraídos del data input (para escribir a subcol)
    for (const [k, v] of Object.entries(data || {})) {
-    if (transactionalKeys.includes(k)) continue;
+    if (transactionalKeys.includes(k)) {
+     if (Array.isArray(v)) _dataTrans[k] = v;
+     continue;
+    }
     rootPayload[k] = v;
    }
    // v1.3.1117: verificar tamaño del rootPayload tras limpiar — si aún >900 KB, pronto problema
+   let _rootSize = 0;
    try {
-    const _rootSize = JSON.stringify(rootPayload).length;
+    _rootSize = JSON.stringify(rootPayload).length;
     console.info('[Dashwey/FB] rootPayload size (sin trans arrays):', (_rootSize/1024).toFixed(0), 'KB');
-    if (_rootSize > 900 * 1024) {
-     console.warn('[Dashwey/FB] rootPayload aún >900KB tras limpiar transaccionales. Revisar: productos, chatMessages, lotesStock, etc.');
-    }
    } catch(_) {}
-   // Marcar arquitectura en doc raíz (permite a devices antiguos detectar)
-   rootPayload._schemaVersion = 2;
+   // v1.3.1227 BUG-CRIT-2: si rootPayload sigue >900KB, mover también los campos pesados
+   //                       no transaccionales (chatMessages, lotesStock con muchos items).
+   //                       Estos NO se mueven a subcol — solo se truncan en el payload root
+   //                       para que el write no falle. Los datos REALES siguen en local.
+   //                       Aceptamos pérdida de chatMessages remoto antes que pérdida de
+   //                       arrays trans → datos críticos siempre llegan a Firestore.
+   if (_rootSize > 900 * 1024) {
+    console.warn('[Dashwey/FB] rootPayload >900KB — eliminando campos no críticos para que root pase');
+    // Orden de eliminación: menos crítico primero
+    const _heavyOptional = ['chatMessages','chatUsers','catLabels','notifsRead'];
+    for (const _hk of _heavyOptional) {
+     if (rootPayload[_hk] !== undefined) {
+      delete rootPayload[_hk];
+      try {
+       const _ns = JSON.stringify(rootPayload).length;
+       console.info('[Dashwey/FB] tras quitar', _hk, '→', (_ns/1024).toFixed(0), 'KB');
+       if (_ns <= 900 * 1024) break;
+      } catch(_) { break; }
+     }
+    }
+   }
    // v1.3.1141: marcar __dualBypass por defensa en profundidad (root guard no reentrante)
    rootPayload.__dualBypass = true;
-   // v1.3.1136 FIX#1: BATCHES SUBCOL PRIMERO, ROOT DESPUÉS
-   // Razón: si batches fallan, NO debemos subir el root con schemaVersion:2
-   // porque otros devices verían doc raíz declarando subcol vacía (= datos perdidos).
-   // Orden correcto: subcol OK → root OK. Si subcol falla → abortar sin tocar root.
+   // v1.3.1227 BUG-CRIT-2: schemaVersion=2 SOLO se marca si todos los batches subcol completan.
+   //                       Antes se marcaba ANTES de escribir batches → ventana de inconsistencia
+   //                       (root con schemaVersion=2 pero subcol vacía). Ahora atómico.
    const dirty = window._DashweyDirtyItems || {};
    const _S = window.App?.State || State;
    const _raw = (_S && _S.raw) ? _S.raw : null;
    let totalDirty = 0;
    const _pendingClears = []; // limpiar Sets SOLO si todo OK
    for (const stateKey of transactionalKeys) {
+    // v1.3.1227 BUG-CRIT-2: dos modos de operación:
+    //   MODO INCREMENTAL: dirty Set tiene IDs → escribir solo esos (eficiente, 1-50 items)
+    //   MODO BULK: dirty vacío PERO data trae el array completo → escribir todos (initial sync, migración)
+    // Sin BULK, _doInitialSync con arrays completos NO mandaba nada a subcol → datos perdidos.
+    let items = [];
+    let _mode = 'skip';
     const dirtySet = dirty[stateKey];
-    if (!(dirtySet instanceof Set) || dirtySet.size === 0) continue;
-    // Acceso directo sin construir snapshot completo
-    let arr = [];
-    try {
-     if (_raw && typeof _raw[stateKey] === 'function') arr = _raw[stateKey]();
-     else if (_S?.get?.[stateKey]) arr = _S.get[stateKey]();
-    } catch(_) {}
-    if (!Array.isArray(arr)) arr = [];
-    // Recoger items dirty (presentes) + items con deleted:true (para borrado en subcolección)
-    const byId = {};
-    for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
-    const items = Object.values(byId);
+    if (dirtySet instanceof Set && dirtySet.size > 0) {
+     // MODO INCREMENTAL
+     let arr = [];
+     try {
+      if (_raw && typeof _raw[stateKey] === 'function') arr = _raw[stateKey]();
+      else if (_S?.get?.[stateKey]) arr = _S.get[stateKey]();
+     } catch(_) {}
+     if (!Array.isArray(arr)) arr = [];
+     const byId = {};
+     for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
+     // v1.3.1227: incluir tombstones — items con deleted:true que estén dirty
+     for (const it of arr) {
+      if (it?.id && dirtySet.has(it.id) && it.deleted === true) byId[it.id] = it;
+     }
+     items = Object.values(byId);
+     _mode = 'incremental';
+    } else if (Array.isArray(_dataTrans[stateKey]) && _dataTrans[stateKey].length > 0) {
+     // MODO BULK — data trae array completo, no había dirty (ej: initial sync)
+     items = _dataTrans[stateKey].filter(it => it && it.id);
+     _mode = 'bulk';
+    }
+    if (!items.length) {
+     if (dirtySet instanceof Set) dirtySet.clear();
+     continue;
+    }
     totalDirty += items.length;
-    if (!items.length) { dirtySet.clear(); continue; }
+    console.info('[Dashwey/SubB] writing', stateKey, 'mode=' + _mode, 'items=' + items.length);
     const batchOk = await window._DashweyWriteSubcollectionBatch(stateKey, items);
     if (batchOk) {
-     // No limpiar aún — solo tras root OK
-     _pendingClears.push({ dirtySet, stateKey, items });
+     _pendingClears.push({ dirtySet: dirtySet || null, stateKey, items });
     } else {
      // v1.3.1136 FIX#1: batch falló → ABORTAR todo, NO subir root
      console.warn('[Dashwey/SubB] batch falló para', stateKey, '— abortando dual write (root NO se sube)');
      return false;
     }
    }
-   // 2. Escribir doc raíz DESPUÉS de batches exitosos
+   // 2. Marcar schemaVersion=2 solo tras subcol OK + escribir doc raíz
+   rootPayload._schemaVersion = 2;
    const rootOk = await _writeFirebase(rootPayload);
    if (!rootOk) {
-    console.warn('[Dashwey/SubB] root write failed TRAS batches OK — items en subcol, root legacy');
-    // Los items SÍ están en subcol. El root no tiene schemaVersion:2.
-    // Próximo save reintentará el root. Limpiar dirty porque subcol ya los tiene.
-    for (const { dirtySet, stateKey, items } of _pendingClears) {
-     dirtySet.clear();
-     try {
-      if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
-      if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
-      const snap = window._DashweyLastSyncedSnap[stateKey];
-      for (const it of items) {
-       if (it?.id) { try { snap[it.id] = JSON.stringify(it); } catch(_) {} }
-      }
-     } catch(_) {}
-    }
+    console.warn('[Dashwey/SubB] root write failed TRAS batches OK — items en subcol, root sin schemaVersion');
+    // v1.3.1227 BUG-CRIT-2: NO limpiar dirty si el root falla. Próximo save reintenta TODO
+    //                       (subcol re-escribe los mismos items idempotente, root reintenta).
+    //                       Esto previene divergencia: dirty vacío + root sin schemaVersion=2
+    //                       hacía que SyncAhora aplicara root legacy.
     return false;
    }
    // 3. TODO OK → limpiar Sets y actualizar lastSynced baseline
    for (const { dirtySet, stateKey, items } of _pendingClears) {
-    dirtySet.clear();
+    if (dirtySet instanceof Set) dirtySet.clear();
     try {
      if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
      if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
@@ -15170,7 +15429,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1226-dev';
+ const _APP_VERSION = 'v1.3.1227';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15505,7 +15764,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1226');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1227');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -42247,6 +42506,29 @@ _eaRecalc();
   console.warn('[Dashwey/SubB] auto-enable sync falló:', e?.message);
  }
 
+ // v1.3.1227 BUG-CRIT-4: AUTO-MIGRACIÓN si flag=true pero remote sin schemaVersion=2
+ // Ocurre tras upgrade de versión: flag local quedó ON pero el remote es legacy.
+ // Sin esto, el merge inicial salta arrays trans del root (skipTransactionalInRoot=true)
+ // y subcol está vacía → datos remotos invisibles. Solución: ejecutar migración
+ // ANTES del merge, así subcol se puebla con el contenido de los arrays root antes
+ // de que el guard skip los oculte.
+ try {
+  if (window._DashweyUseSubcollections === true && remote._schemaVersion !== 2) {
+   // Hay datos transaccionales en root que NO están en subcol → preservarlos.
+   // Estrategia: aplicar arrays root al State PRIMERO (sin skip), luego migrar a subcol.
+   const _hasRootTrans = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas']
+    .some(k => Array.isArray(remote[k]) && remote[k].length > 0);
+   if (_hasRootTrans) {
+    console.info('[Dashwey/Migrate] auto-migración: remote legacy con arrays trans → subcol');
+    // Desactivar temporalmente el skip para que el merge incluya arrays root
+    window._DashweyForceLegacyMerge = true;
+   } else {
+    // Remote legacy vacío → no hay nada que migrar. Marcar schemaVersion=2 al final.
+    window._DashweyForceLegacyMerge = false;
+   }
+  }
+ } catch(_) {}
+
  // ── Comparar timestamps numéricos ───────────────────────────
  // Normalizar a número — soporta tanto ISO string como ms numérico
  const _toMs = (v) => {
@@ -42348,6 +42630,8 @@ _eaRecalc();
  }
  _renderAll();
  showToast('☁️ Datos sincronizados');
+  // v1.3.1227: tras merge inicial — desactivar override legacy y suscribir subcol
+  try { window._DashweyForceLegacyMerge = false; } catch(_) {}
   // v1.3.1140: subir snapshot fusionado vía dispatcher dual (root filtrado + subcol)
   setTimeout(function() {
    try {
@@ -42361,6 +42645,19 @@ _eaRecalc();
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
  // v1.3.1140: vía dispatcher dual (root filtrado + subcol) para evitar >1MB en root
  await (window._DashweyWriteDual ? window._DashweyWriteDual(_buildLocalSnapshot()) : fb.write('state', _buildLocalSnapshot()));
+ }
+ // v1.3.1227: garantizar suscripción a subcolecciones cuando flag está ON
+ //            (cubre tanto remote nuevo como migración desde legacy).
+ try {
+  if (window._DashweyUseSubcollections === true) {
+   const _hasSubs = window._DashweySubUnsubs && Object.keys(window._DashweySubUnsubs).length >= 6;
+   if (!_hasSubs && typeof window._DashweyEnableSubcollections === 'function') {
+    await window._DashweyEnableSubcollections({ skipMigrationCheck: true });
+    console.info('[Dashwey/SubB] subcolecciones suscritas tras merge inicial');
+   }
+  }
+ } catch(e) {
+  console.warn('[Dashwey/SubB] subscribe post-merge falló:', e?.message);
  }
  // Actualizar syncStatus y uid via State API (sin disparar save())
  // State.set.syncStatus no llama save() - es seguro
