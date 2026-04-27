@@ -9485,7 +9485,7 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
-// v1.3.1229 BUG-CRIT-1 FIX — _waitForAuth
+// v1.3.1230 BUG-CRIT-1 FIX — _waitForAuth
 // Promesa que resuelve cuando hay user real (no anónimo) o tras timeout.
 // Usado por escritores y rutas críticas para evitar fallos por carrera
 // "auth no resuelta aún" + writes que llegan al guard isRegistered()===false.
@@ -9535,7 +9535,7 @@ window._DashweyWaitForAuth = function(timeoutMs) {
 // ──────────────────────────────────────────────────────────────────
 
 // Flag maestro: cuando sea true, save() escribirá a subcolecciones
-// v1.3.1229 BUG-CRIT-2: ON por defecto. Toda la infra está estable; el modo
+// v1.3.1230 BUG-CRIT-2: ON por defecto. Toda la infra está estable; el modo
 // monolítico era frágil para arrays >100 items (>900KB → write loss).
 window._DashweyUseSubcollections = true;
 
@@ -9710,7 +9710,7 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
  if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
  if (!Array.isArray(items) || !items.length) return true;
  // ──────────────────────────────────────────────────────────────────
- // v1.3.1229 BUG-CRIT-6 FIX — Guard InitialSync en batch writer subcol
+ // v1.3.1230 BUG-CRIT-6 FIX — Guard InitialSync en batch writer subcol
  // SIN ESTE GUARD: cualquier device puede escribir subcol con state local
  // VIEJO antes de haber bajado el estado real desde Firestore. Resultado:
  // un device sin sync inicial sobreescribe los borrados/cambios que otros
@@ -9833,7 +9833,7 @@ window._DashweyUnsubscribeAllSubcollections = function() {
 // True cuando Estrategia B está activa: subcolecciones son fuente única de verdad
 // para ventas/gastos/ingresos/pedidos/mermas/facturas. El doc raíz puede tener
 // copias legacy (pre-limpieza) que causan fantasmas si se fusionan.
-// v1.3.1229: respetar override _DashweyForceLegacyMerge — usado por _doInitialSync
+// v1.3.1230: respetar override _DashweyForceLegacyMerge — usado por _doInitialSync
 //            cuando remote es legacy (sin schemaVersion=2) y hay datos en root que
 //            deben aplicarse antes de migrar a subcol. Ventana corta de excepción.
 window._DashweyShouldSkipTransactionalInRoot = function() {
@@ -10106,7 +10106,7 @@ window._DashweySyncAhora = async function() {
   const ctx = window._DashweyActiveContext || 'default';
 
   const keys = ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'];
-  // v1.3.1229 BUG-CRIT-5: path mismatch crítico. SubMap debe coincidir con _DashweySubcollectionMap
+  // v1.3.1230 BUG-CRIT-5: path mismatch crítico. SubMap debe coincidir con _DashweySubcollectionMap
   //                       (gastosOp→gastos, historialPedidos→pedidos, ingresosFin→ingresos).
   //                       Antes: stateKey==stateKey → leía paths fantasma (state_sub/gastosOp etc.).
   //                       Ahora: usa fbName real → state_sub/gastos.
@@ -10137,7 +10137,7 @@ window._DashweySyncAhora = async function() {
     snap.forEach(d => items.push(d.data()));
 
     // Merge con locales — con respeto de timestamps (updatedAt/deletedAt) por ítem.
-    // v1.3.1229 BUG-CRIT-4: usar State.raw (con deleted incluidos) como fuente local.
+    // v1.3.1230 BUG-CRIT-4: usar State.raw (con deleted incluidos) como fuente local.
     const _rawAcc = (App.State.raw && typeof App.State.raw[k] === 'function') ? App.State.raw[k] : null;
     const getter = App.State.get[k];
     const localArr = _rawAcc ? (_rawAcc() || [])
@@ -10184,7 +10184,7 @@ window._DashweySyncAhora = async function() {
    console.info('[Dashwey/SyncAhora] ✓ render disparado');
   } catch(e) { console.warn('[SyncAhora] render error:', e.message); }
 
-  // v1.3.1229 BUG-CRIT-8: SyncAhora trajo el state real de Firestore →
+  // v1.3.1230 BUG-CRIT-8: SyncAhora trajo el state real de Firestore →
   // declarar InitialSync OK. Permite recovery manual desde consola para
   // devices colgados con InitialSyncDone=false. Sin esto, el guard subcol
   // (BUG-CRIT-6) seguiría bloqueando writes incluso tras pull exitoso.
@@ -10215,7 +10215,7 @@ if (!window._DashweySyncAhoraScheduled) {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// v1.3.1229 BUG-CRIT-3 FIX — _adminCleanFirestoreVentasDups
+// v1.3.1230 BUG-CRIT-3 FIX — _adminCleanFirestoreVentasDups
 // Tool admin quirúrgica: detecta duplicados import_loyverse en días con
 // autoridad API (origen=loyverse) y los borra por ID exacto en Firestore
 // + State local. Idempotente. Auth garantizado vía _DashweyWaitForAuth.
@@ -10357,6 +10357,219 @@ window._adminCleanFirestoreVentasDups = async function(opts) {
   console.error('[AdminClean] ERROR:', e && e.message ? e.message : e);
   return { ok: false, reason: 'exception', error: String(e && e.message || e) };
  }
+};
+
+// ──────────────────────────────────────────────────────────────────
+// v1.3.1230 — _dashweyRunSyncCertification()
+// Herramienta de certificación runtime. Ejecutar en cada device, comparar
+// resultados. Cualquier divergencia = bug de sync identificable.
+//
+// Categorías reportadas:
+//   1. HEALTH       — flags arquitecturales (InitialSync, Subcol, Auth, Watchdog)
+//   2. CLOCK        — desviación reloj device vs servidor (si > 60s = peligro)
+//   3. INVENTARIO   — counts por entidad (ventas, gastos, pedidos, productos…)
+//   4. INTEGRIDAD   — duplicados, tombstones huérfanos, items deleted en API
+//   5. FIRESTORE    — counts en root + subcol vs local (divergencia=problema)
+//   6. SYNC LATENCY — latencia última escritura
+//
+// Uso:
+//   const r = await window._dashweyRunSyncCertification();
+//   console.log(JSON.stringify(r.summary, null, 2));
+// ──────────────────────────────────────────────────────────────────
+window._dashweyRunSyncCertification = async function(opts) {
+ opts = opts || {};
+ const verbose = opts.verbose !== false;
+ const log = function() {
+  if (verbose) try { console.info.apply(console, ['[SyncCert]'].concat(Array.from(arguments))); } catch(_) {}
+ };
+ const report = {
+  device: window._DashweyDeviceId || 'unknown',
+  version: (typeof _APP_VERSION === 'string') ? _APP_VERSION : 'unknown',
+  timestamp: new Date().toISOString(),
+  health: {},
+  clock: {},
+  inventario: {},
+  integridad: {},
+  firestore: {},
+  syncLatency: {},
+  flags: {},
+  summary: { green: 0, yellow: 0, red: 0, items: [] }
+ };
+ const _addItem = function(category, status, msg, detail) {
+  report.summary.items.push({ category, status, msg, detail });
+  if (status === 'green') report.summary.green++;
+  else if (status === 'yellow') report.summary.yellow++;
+  else if (status === 'red') report.summary.red++;
+ };
+ try {
+  // ── 1. HEALTH ─────────────────────────────────────────────────
+  const fb = window._DashweyFirebase;
+  report.health = {
+   initialSyncDone: !!window._DashweyInitialSyncDone,
+   subcolEnabled: !!window._DashweyUseSubcollections,
+   firebaseEnabled: !!(fb && fb.enabled),
+   firebaseReady: !!(fb && fb.ready),
+   firebaseRegistered: !!(fb && fb.isRegistered && fb.isRegistered()),
+   uid: fb && fb.uid ? fb.uid.slice(0, 10) + '...' : null,
+   contextActive: window._DashweyActiveContext || 'business',
+   onLine: navigator.onLine,
+   subscriptionsActive: window._DashweySubUnsubs ? Object.keys(window._DashweySubUnsubs).length : 0,
+  };
+  if (report.health.initialSyncDone && report.health.firebaseRegistered && report.health.subcolEnabled) {
+   _addItem('HEALTH', 'green', 'Sync layer healthy', report.health);
+  } else if (!report.health.initialSyncDone) {
+   _addItem('HEALTH', 'red', 'InitialSync NO completado — device aislado', report.health);
+  } else if (!report.health.firebaseRegistered) {
+   _addItem('HEALTH', 'red', 'Auth no registrado — sync bloqueado', report.health);
+  } else {
+   _addItem('HEALTH', 'yellow', 'Health parcial', report.health);
+  }
+  // ── 2. CLOCK SKEW ─────────────────────────────────────────────
+  // Compara reloj local con un fetch HEAD a Firebase (Date header)
+  try {
+   const t0 = Date.now();
+   const r = await fetch('https://firebasestorage.googleapis.com/v0/', { method: 'HEAD' });
+   const t1 = Date.now();
+   const serverDate = r.headers.get('date');
+   if (serverDate) {
+    const serverTs = new Date(serverDate).getTime();
+    const localTs = (t0 + t1) / 2;
+    const skew = Math.abs(localTs - serverTs);
+    report.clock = { skewMs: skew, localTs: localTs, serverTs: serverTs, rttMs: t1 - t0 };
+    if (skew < 5000) _addItem('CLOCK', 'green', 'Reloj OK (skew=' + skew + 'ms)', report.clock);
+    else if (skew < 60000) _addItem('CLOCK', 'yellow', 'Reloj desviado leve (skew=' + skew + 'ms)', report.clock);
+    else _addItem('CLOCK', 'red', 'Reloj MUY desviado — last-write-wins comprometido (skew=' + skew + 'ms)', report.clock);
+   } else {
+    _addItem('CLOCK', 'yellow', 'No se pudo medir skew', null);
+   }
+  } catch(eClock) {
+   _addItem('CLOCK', 'yellow', 'Clock check falló: ' + (eClock && eClock.message), null);
+  }
+  // ── 3. INVENTARIO LOCAL ───────────────────────────────────────
+  const App = window.App;
+  if (!App || !App.State) {
+   _addItem('INVENTARIO', 'red', 'App.State no disponible', null);
+   return report;
+  }
+  const _r = App.State.raw || {};
+  const _g = App.State.get;
+  const inv = {};
+  ['ventas', 'gastosOp', 'ingresosFin', 'historialPedidos', 'mermas', 'facturas', 'productos', 'proveedores', 'cuentas', 'lotesStock'].forEach(function(k) {
+   try {
+    let arr = (_r && typeof _r[k] === 'function') ? _r[k]() : (_g && _g[k] ? _g[k]() : []);
+    if (!Array.isArray(arr)) arr = [];
+    inv[k] = {
+     total: arr.length,
+     deleted: arr.filter(function(x){ return x && x.deleted === true; }).length,
+     active: arr.filter(function(x){ return x && x.deleted !== true; }).length,
+    };
+   } catch(_) { inv[k] = { error: true }; }
+  });
+  report.inventario = inv;
+  _addItem('INVENTARIO', 'green', 'Local inventario tomado', inv);
+  // ── 4. INTEGRIDAD ─────────────────────────────────────────────
+  const integ = { duplicateIds: 0, tombstoneOrphans: 0, deletedExternal: 0, missingId: 0 };
+  ['ventas', 'gastosOp', 'historialPedidos'].forEach(function(k) {
+   const arr = (_r && typeof _r[k] === 'function') ? _r[k]() : [];
+   const seen = new Map();
+   arr.forEach(function(it) {
+    if (!it) return;
+    if (!it.id) { integ.missingId++; return; }
+    if (seen.has(it.id)) integ.duplicateIds++;
+    else seen.set(it.id, true);
+    // External origin con deleted=true es un zombie potencial
+    if (it.deleted === true && (it.origen === 'loyverse' || it.origen === 'budgetbakers')) integ.deletedExternal++;
+   });
+  });
+  if (integ.duplicateIds === 0 && integ.missingId === 0 && integ.deletedExternal === 0) {
+   _addItem('INTEGRIDAD', 'green', 'Sin issues de integridad detectables', integ);
+  } else if (integ.duplicateIds > 0 || integ.deletedExternal > 0) {
+   _addItem('INTEGRIDAD', 'red', 'Integridad comprometida', integ);
+  } else {
+   _addItem('INTEGRIDAD', 'yellow', 'Issues menores integridad', integ);
+  }
+  // ── 5. FIRESTORE COMPARISON ───────────────────────────────────
+  // Lee subcol counts y compara con local
+  if (report.health.firebaseReady && report.health.firebaseRegistered) {
+   try {
+    const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    const fbApp = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+    const db = mod.getFirestore(fbApp.getApps()[0]);
+    const uid = fb.uid;
+    const ctx = window._DashweyActiveContext || 'business';
+    const subs = { ventas: 'ventas', gastosOp: 'gastos', ingresosFin: 'ingresos', historialPedidos: 'pedidos', mermas: 'mermas', facturas: 'facturas' };
+    const fsCounts = {};
+    let divergencias = 0;
+    for (const localKey in subs) {
+     const fbName = subs[localKey];
+     const colRef = mod.collection(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', fbName);
+     const snap = await mod.getDocs(colRef);
+     const fsCount = snap.size;
+     const localCount = inv[localKey] ? inv[localKey].total : 0;
+     fsCounts[localKey] = { firestore: fsCount, local: localCount, diff: localCount - fsCount };
+     if (Math.abs(localCount - fsCount) > 0) divergencias++;
+    }
+    report.firestore = fsCounts;
+    if (divergencias === 0) {
+     _addItem('FIRESTORE', 'green', 'Local y Firestore coinciden', fsCounts);
+    } else {
+     _addItem('FIRESTORE', 'red', 'DIVERGENCIA: ' + divergencias + ' colecciones difieren entre local y Firestore', fsCounts);
+    }
+   } catch(eFs) {
+    _addItem('FIRESTORE', 'yellow', 'Firestore comparison falló: ' + (eFs && eFs.message), null);
+   }
+  } else {
+   _addItem('FIRESTORE', 'yellow', 'Firestore no listo — comparison skipped', null);
+  }
+  // ── 6. SYNC LATENCY ───────────────────────────────────────────
+  try {
+   const ctrl = window._DashweySavingCtrl;
+   const lastSaveAt = window._DashweyLastSaveAt || 0;
+   const sinceLastSave = lastSaveAt > 0 ? (Date.now() - lastSaveAt) : -1;
+   const isSaving = !!(ctrl && ctrl.isSaving);
+   report.syncLatency = { isSaving: isSaving, sinceLastSaveMs: sinceLastSave };
+   if (sinceLastSave === -1) _addItem('SYNC_LATENCY', 'yellow', 'Sin info de último save', null);
+   else if (sinceLastSave < 60000) _addItem('SYNC_LATENCY', 'green', 'Save reciente (' + Math.round(sinceLastSave/1000) + 's)', report.syncLatency);
+   else _addItem('SYNC_LATENCY', 'yellow', 'Sin save reciente (' + Math.round(sinceLastSave/1000) + 's)', report.syncLatency);
+  } catch(_) {}
+  // ── FLAGS DETALLE ──────────────────────────────────────────────
+  report.flags = {
+   tombstonesLocal: (window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.size) || 0,
+   dirtyVentas: (window._DashweyDirtyItems && window._DashweyDirtyItems.ventas && window._DashweyDirtyItems.ventas.size) || 0,
+   dirtyGastos: (window._DashweyDirtyItems && window._DashweyDirtyItems.gastosOp && window._DashweyDirtyItems.gastosOp.size) || 0,
+   pendingSnapshots: window._DashweySubPending ? Object.keys(window._DashweySubPending).length : 0,
+   queueLength: (window._DashweyOfflineQueue && window._DashweyOfflineQueue.length) || 0,
+  };
+ } catch(e) {
+  console.error('[SyncCert] FATAL:', e);
+  _addItem('SYSTEM', 'red', 'Excepción no controlada: ' + (e && e.message), null);
+ }
+ // Banner final
+ const total = report.summary.green + report.summary.yellow + report.summary.red;
+ console.log('═══════════════════════════════════════════');
+ console.log('   DASHWEY SYNC CERTIFICATION');
+ console.log('   Device: ' + report.device);
+ console.log('   Versión: ' + report.version);
+ console.log('   Timestamp: ' + report.timestamp);
+ console.log('───────────────────────────────────────────');
+ console.log('   ✅ Verde:    ' + report.summary.green + ' / ' + total);
+ console.log('   ⚠️  Amarillo: ' + report.summary.yellow + ' / ' + total);
+ console.log('   🚨 Rojo:     ' + report.summary.red + ' / ' + total);
+ console.log('───────────────────────────────────────────');
+ report.summary.items.forEach(function(i) {
+  const icon = i.status === 'green' ? '✅' : i.status === 'yellow' ? '⚠️ ' : '🚨';
+  console.log('   ' + icon + ' [' + i.category + '] ' + i.msg);
+ });
+ console.log('═══════════════════════════════════════════');
+ if (report.summary.red === 0 && report.summary.yellow <= 1) {
+  console.log('   🟢 CERTIFICACIÓN: PASS');
+ } else if (report.summary.red === 0) {
+  console.log('   🟡 CERTIFICACIÓN: PASS CON OBSERVACIONES');
+ } else {
+  console.log('   🔴 CERTIFICACIÓN: FAIL — revisar items rojos');
+ }
+ console.log('═══════════════════════════════════════════');
+ return report;
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -11142,7 +11355,7 @@ const State = (() => {
   // Flag ON o forceClean → ruta subcolecciones / limpieza agresiva
   const fb = window._DashweyFirebase;
   if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
-  // v1.3.1229 BUG-CRIT-1: esperar auth si aún no hay user real (timeout 30s)
+  // v1.3.1230 BUG-CRIT-1: esperar auth si aún no hay user real (timeout 30s)
   // Sin esto, escrituras durante cold start fallan silenciosamente.
   try {
    if (typeof window._DashweyWaitForAuth === 'function' && !fb.isRegistered?.()) {
@@ -11171,7 +11384,7 @@ const State = (() => {
     _rootSize = JSON.stringify(rootPayload).length;
     console.info('[Dashwey/FB] rootPayload size (sin trans arrays):', (_rootSize/1024).toFixed(0), 'KB');
    } catch(_) {}
-   // v1.3.1229 BUG-CRIT-2: si rootPayload sigue >900KB, mover también los campos pesados
+   // v1.3.1230 BUG-CRIT-2: si rootPayload sigue >900KB, mover también los campos pesados
    //                       no transaccionales (chatMessages, lotesStock con muchos items).
    //                       Estos NO se mueven a subcol — solo se truncan en el payload root
    //                       para que el write no falle. Los datos REALES siguen en local.
@@ -11194,7 +11407,7 @@ const State = (() => {
    }
    // v1.3.1141: marcar __dualBypass por defensa en profundidad (root guard no reentrante)
    rootPayload.__dualBypass = true;
-   // v1.3.1229 BUG-CRIT-2: schemaVersion=2 SOLO se marca si todos los batches subcol completan.
+   // v1.3.1230 BUG-CRIT-2: schemaVersion=2 SOLO se marca si todos los batches subcol completan.
    //                       Antes se marcaba ANTES de escribir batches → ventana de inconsistencia
    //                       (root con schemaVersion=2 pero subcol vacía). Ahora atómico.
    const dirty = window._DashweyDirtyItems || {};
@@ -11203,7 +11416,7 @@ const State = (() => {
    let totalDirty = 0;
    const _pendingClears = []; // limpiar Sets SOLO si todo OK
    for (const stateKey of transactionalKeys) {
-    // v1.3.1229 BUG-CRIT-2: dos modos de operación:
+    // v1.3.1230 BUG-CRIT-2: dos modos de operación:
     //   MODO INCREMENTAL: dirty Set tiene IDs → escribir solo esos (eficiente, 1-50 items)
     //   MODO BULK: dirty vacío PERO data trae el array completo → escribir todos (initial sync, migración)
     // Sin BULK, _doInitialSync con arrays completos NO mandaba nada a subcol → datos perdidos.
@@ -11220,7 +11433,7 @@ const State = (() => {
      if (!Array.isArray(arr)) arr = [];
      const byId = {};
      for (const it of arr) { if (it?.id && dirtySet.has(it.id)) byId[it.id] = it; }
-     // v1.3.1229: incluir tombstones — items con deleted:true que estén dirty
+     // v1.3.1230: incluir tombstones — items con deleted:true que estén dirty
      for (const it of arr) {
       if (it?.id && dirtySet.has(it.id) && it.deleted === true) byId[it.id] = it;
      }
@@ -11251,7 +11464,7 @@ const State = (() => {
    const rootOk = await _writeFirebase(rootPayload);
    if (!rootOk) {
     console.warn('[Dashwey/SubB] root write failed TRAS batches OK — items en subcol, root sin schemaVersion');
-    // v1.3.1229 BUG-CRIT-2: NO limpiar dirty si el root falla. Próximo save reintenta TODO
+    // v1.3.1230 BUG-CRIT-2: NO limpiar dirty si el root falla. Próximo save reintenta TODO
     //                       (subcol re-escribe los mismos items idempotente, root reintenta).
     //                       Esto previene divergencia: dirty vacío + root sin schemaVersion=2
     //                       hacía que SyncAhora aplicara root legacy.
@@ -12023,6 +12236,8 @@ const State = (() => {
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
  console.log('[SAVE] SUCCESS'); // v1.3.1130
+ // v1.3.1230: tracking para _dashweyRunSyncCertification SYNC_LATENCY
+ try { window._DashweyLastSaveAt = Date.now(); } catch(_) {}
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  // Auto-fade badge after 3s
  setTimeout(function() {
@@ -13577,7 +13792,7 @@ const FinEngine = (() => {
    return s + (g.mensualEq !== undefined ? g.mensualEq : (g.importe || 0));
   }, 0) * _frac);
   // Gastos puntuales DENTRO del rango (no recurrentes)
-  // v1.3.1229 BUG-DC-2: excluir gastos origen='pedido' (auto-creados desde addPedido).
+  // v1.3.1230 BUG-DC-2: excluir gastos origen='pedido' (auto-creados desde addPedido).
   //                     Estos ya se contabilizan en `compras` vía comprasPeriodo() →
   //                     pedidoCoste(p). Sin este filtro se sumaban DOS veces:
   //                     1) como gasto puntual con importe = pedidoCoste (con cargos)
@@ -15458,7 +15673,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1229';
+ const _APP_VERSION = 'v1.3.1230';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15793,7 +16008,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1229');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1230');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -17861,6 +18076,42 @@ const ui = (() => {
      //    (los otros lo reciben, ejecutan el reset local y marcan _lastSyncCommandSeen)
      showToast('🌐 Propagando a otros dispositivos (3s)...');
      await new Promise(function(r){ setTimeout(r, 3000); });
+     // ──────────────────────────────────────────────────────────────────
+     // v1.3.1230 BUG-CRIT-7 FIX — Purgar SUBCOLECCIONES Firestore
+     // SIN ESTO: las subcol (state_sub/ventas, gastos, ingresos, pedidos,
+     // mermas, facturas) sobrevivían al reset. Otros devices aplicaban el
+     // syncCommand 'total' (limpiaban State local), pero los onSnapshot de
+     // subcol seguían recibiendo TODOS los datos viejos → re-popúlan State
+     // → reset "total" duraba unos segundos.
+     // Ahora: purga explícita post-syncCommand pero ANTES de purge root.
+     // ──────────────────────────────────────────────────────────────────
+     try {
+      showToast('🧹 Purgando subcolecciones Firestore...');
+      var mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      var fb1230 = window._DashweyFirebase;
+      var uid1230 = fb1230 && fb1230.uid;
+      if (uid1230) {
+       var ctx1230 = window._DashweyActiveContext || 'business';
+       var db1230 = mod.getFirestore();
+       var subs1230 = ['ventas','gastos','ingresos','pedidos','mermas','facturas'];
+       var totalDel1230 = 0;
+       for (var si1230 = 0; si1230 < subs1230.length; si1230++) {
+        var subName1230 = subs1230[si1230];
+        var colRef1230 = mod.collection(db1230, 'usuarios', uid1230, 'contextos', ctx1230, 'datos', 'state_sub', subName1230);
+        var snap1230 = await mod.getDocs(colRef1230);
+        if (snap1230.empty) continue;
+        var docs1230 = snap1230.docs;
+        for (var di1230 = 0; di1230 < docs1230.length; di1230 += 450) {
+         var batch1230 = mod.writeBatch(db1230);
+         var slice1230 = docs1230.slice(di1230, di1230 + 450);
+         slice1230.forEach(function(d){ batch1230.delete(d.ref); });
+         await batch1230.commit();
+         totalDel1230 += slice1230.length;
+        }
+       }
+       console.info('[Reset] Subcolecciones purgadas:', totalDel1230, 'docs');
+      }
+     } catch(eSub) { console.warn('[Reset] purge subcol:', eSub); }
      // 3. Ahora sí, purgar el documento Firebase
      //    Para este punto los otros dispositivos ya aplicaron el reset y tienen _lastSyncCommandSeen
      //    Cuando re-sincronicen tras la purga, su save() subirá state vacío (sin hacer nada destructivo)
@@ -17876,6 +18127,15 @@ const ui = (() => {
      try { localStorage.removeItem('dashwey_tombstones'); } catch(_) {}
      // 5. Limpiar hash de save (forzar nuevo write en próximo cambio)
      try { window._DashweySavingCtrl && window._DashweySavingCtrl.resetHash && window._DashweySavingCtrl.resetHash(); } catch(_) {}
+     // v1.3.1230: limpiar baseline de subcol para que próximo snapshot detecte estado real
+     try { window._DashweyLastSyncedSnap = {}; } catch(_) {}
+     try {
+      if (window._DashweyDirtyItems) {
+       Object.keys(window._DashweyDirtyItems).forEach(function(k){
+        try { window._DashweyDirtyItems[k] && window._DashweyDirtyItems[k].clear && window._DashweyDirtyItems[k].clear(); } catch(_) {}
+       });
+      }
+     } catch(_) {}
      showToast('🧨 Reset TOTAL completado en todos los dispositivos');
     } catch(e) {
      if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = false;
@@ -17888,20 +18148,59 @@ const ui = (() => {
 
  // v1.3.1009: Limpiar solo transacciones — mantiene productos, proveedores, cuentas
  // v1.3.1075: emite comando global — se sincroniza a todos los dispositivos
+ // v1.3.1230: ahora también purga subcolecciones de trans en Firestore
  function _cleanTransactionsDashwey() {
   if (typeof window._showDestructiveConfirm !== 'function') { showToast('⚠️ Confirmación no disponible', 'warning'); return; }
   window._showDestructiveConfirm({
    title: 'Limpiar transacciones',
    message: '⚠️ Se borrarán: ventas, pedidos, mermas, gastos, ingresos, lotes, facturas. Se mantienen: productos, proveedores, cuentas, settings.\n\n🌐 Se aplicará en TODOS los dispositivos.\n\n¿Continuar?',
    confirmText: 'Limpiar transacciones',
-   onConfirm: function() {
+   onConfirm: async function() {
     try {
      if (typeof window._DashweyEmitSyncCommand === 'function') {
       window._DashweyEmitSyncCommand('clean-trans');
-      showToast('🧹 Transacciones limpiadas — sincronizando a otros dispositivos...');
+      showToast('🧹 Limpiando local — propagando a otros dispositivos...');
      } else {
       showToast('⚠️ Sistema de sync no disponible', 'warning');
+      return;
      }
+     // v1.3.1230: esperar 3s y purgar subcolecciones Firestore explícitamente
+     await new Promise(function(r){ setTimeout(r, 3000); });
+     try {
+      var modCT = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      var fbCT = window._DashweyFirebase;
+      var uidCT = fbCT && fbCT.uid;
+      if (uidCT) {
+       var ctxCT = window._DashweyActiveContext || 'business';
+       var dbCT = modCT.getFirestore();
+       var subsCT = ['ventas','gastos','ingresos','pedidos','mermas','facturas'];
+       var totCT = 0;
+       for (var ciCT = 0; ciCT < subsCT.length; ciCT++) {
+        var refCT = modCT.collection(dbCT, 'usuarios', uidCT, 'contextos', ctxCT, 'datos', 'state_sub', subsCT[ciCT]);
+        var snapCT = await modCT.getDocs(refCT);
+        if (snapCT.empty) continue;
+        var docsCT = snapCT.docs;
+        for (var diCT = 0; diCT < docsCT.length; diCT += 450) {
+         var batCT = modCT.writeBatch(dbCT);
+         var sliceCT = docsCT.slice(diCT, diCT + 450);
+         sliceCT.forEach(function(d){ batCT.delete(d.ref); });
+         await batCT.commit();
+         totCT += sliceCT.length;
+        }
+       }
+       console.info('[CleanTrans] Subcolecciones trans purgadas:', totCT, 'docs');
+      }
+     } catch(eCT) { console.warn('[CleanTrans] purge subcol:', eCT); }
+     // Limpiar baseline + dirty para coherencia
+     try { window._DashweyLastSyncedSnap = {}; } catch(_) {}
+     try {
+      if (window._DashweyDirtyItems) {
+       Object.keys(window._DashweyDirtyItems).forEach(function(k){
+        try { window._DashweyDirtyItems[k] && window._DashweyDirtyItems[k].clear && window._DashweyDirtyItems[k].clear(); } catch(_) {}
+       });
+      }
+     } catch(_) {}
+     showToast('✅ Transacciones limpiadas en todos los dispositivos');
     } catch(e) {
      console.error('[Dashwey] _cleanTransactionsDashwey:', e);
      showToast('⚠️ Error limpiando transacciones: ' + (e.message||e));
@@ -22948,7 +23247,7 @@ function _toggleCardFromManager(id, btn) {
  }));
 
  // Gastos operativos → expense (editables) — v1.3.982 excluir transfers
- // v1.3.1229 BUG-DC-1: excluir gastos origen='pedido' (auto-creados desde addPedido).
+ // v1.3.1230 BUG-DC-1: excluir gastos origen='pedido' (auto-creados desde addPedido).
  //                     Sin esto se duplicaban: 1 fila como gasto + 1 fila como compra almacén.
  //                     pedidoCoste(p) ya incluye cargosExtra → la fila "🏪 ..." es la canónica.
  gastos.filter(g => !window._isTransfer?.(g) && !g.closureId && g.origen !== 'pedido').forEach(g => moves.push({
@@ -42538,7 +42837,7 @@ _eaRecalc();
   console.warn('[Dashwey/SubB] auto-enable sync falló:', e?.message);
  }
 
- // v1.3.1229 BUG-CRIT-4: AUTO-MIGRACIÓN si flag=true pero remote sin schemaVersion=2
+ // v1.3.1230 BUG-CRIT-4: AUTO-MIGRACIÓN si flag=true pero remote sin schemaVersion=2
  // Ocurre tras upgrade de versión: flag local quedó ON pero el remote es legacy.
  // Sin esto, el merge inicial salta arrays trans del root (skipTransactionalInRoot=true)
  // y subcol está vacía → datos remotos invisibles. Solución: ejecutar migración
@@ -42662,7 +42961,7 @@ _eaRecalc();
  }
  _renderAll();
  showToast('☁️ Datos sincronizados');
-  // v1.3.1229: tras merge inicial — desactivar override legacy y suscribir subcol
+  // v1.3.1230: tras merge inicial — desactivar override legacy y suscribir subcol
   try { window._DashweyForceLegacyMerge = false; } catch(_) {}
   // v1.3.1140: subir snapshot fusionado vía dispatcher dual (root filtrado + subcol)
   setTimeout(function() {
@@ -42678,7 +42977,7 @@ _eaRecalc();
  // v1.3.1140: vía dispatcher dual (root filtrado + subcol) para evitar >1MB en root
  await (window._DashweyWriteDual ? window._DashweyWriteDual(_buildLocalSnapshot()) : fb.write('state', _buildLocalSnapshot()));
  }
- // v1.3.1229: garantizar suscripción a subcolecciones cuando flag está ON
+ // v1.3.1230: garantizar suscripción a subcolecciones cuando flag está ON
  //            (cubre tanto remote nuevo como migración desde legacy).
  try {
   if (window._DashweyUseSubcollections === true) {
@@ -43331,7 +43630,7 @@ window._DashweyDeviceId = (() => {
  }
 
  // ──────────────────────────────────────────────────────────────────
- // v1.3.1229 BUG-CRIT-8 FIX — Auto-retry InitialSync
+ // v1.3.1230 BUG-CRIT-8 FIX — Auto-retry InitialSync
  // Si _DashweyInitialSyncDone sigue false tras 30s con conexión disponible,
  // re-disparar _doInitialSync hasta éxito (máx 5 intentos, backoff lineal).
  //
