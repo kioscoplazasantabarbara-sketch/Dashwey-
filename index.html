@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1222-dev</title>
+<title>Dashwey v1.3.1223-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15158,7 +15158,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1222-dev';
+ const _APP_VERSION = 'v1.3.1223-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15493,7 +15493,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1222');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1223');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -19450,29 +19450,102 @@ const ui = (() => {
   });
  }
 
- // ── v1.3.1043: Lote P3 — Import receipts Loyverse (sin filtro fecha API) ──
-  // Loyverse Free NO acepta created_at_min → siempre 402 Payment Required.
-  // Estrategia: paginar por cursor desde el más reciente hacia atrás,
-  // cortar en cliente cuando ticket.receipt_date < rango configurable.
-  function _importLoyverseReceipts() {
-   var token = localStorage.getItem('dashwey_lv_token') || '';
-   if (!token) { showToast('⚠️ Configura el token Loyverse primero', 'warning'); return; }
-   // Corte por defecto: 6 meses. Si ticket es anterior → parar paginación.
-   var _MESES_ATRAS = 6;
-   var _cutoff = new Date();
-   _cutoff.setMonth(_cutoff.getMonth() - _MESES_ATRAS);
-   var _cutoffISO = _cutoff.toISOString().slice(0, 10);
+ // ── v1.3.1223: Import histórico Loyverse — rango configurable ───────
+ //   Estrategia:
+ //   - Usa _lvFetchHistPaginated (created_at_min nativo Pro, fallback 402 → Free)
+ //   - Default desde 2023-01-01 (catch-all desde apertura del negocio)
+ //   - Idempotente: dedup por v_lv_<receiptId>
+ //   - Pro plan: rapidísimo (filtro server-side)
+ //   - Free plan: 402 → fallback paginar todo + corte cliente
+ function _importLoyverseReceipts() {
+  var token = localStorage.getItem('dashwey_lv_token') || '';
+  if (!token) { showToast('⚠️ Configura el token Loyverse primero', 'warning'); return; }
+
+  // Sheet con input de fecha — default 2023-01-01
+  var _defaultStart = '2023-01-01';
+  var _todayISO = new Date().toISOString().slice(0, 10);
+
+  var _bodyHtml =
+   '<div style="padding:0 16px 12px">' +
+   '<div style="font-size:var(--fs-sm);color:var(--ink-soft);line-height:var(--lh-snug);margin-bottom:14px">' +
+   'Selecciona la fecha desde la que importar receipts.<br>' +
+   '<strong>Plan Free:</strong> máx ~6 meses (Loyverse devuelve 402 al pasar el límite — el import se detendrá automáticamente).<br>' +
+   '<strong>Plan Pro:</strong> sin límite — cualquier fecha desde apertura.' +
+   '</div>' +
+   '<label style="display:block;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Fecha inicio</label>' +
+   '<input id="lvHistStartDate" type="date" value="' + _defaultStart + '" max="' + _todayISO + '" ' +
+   'style="width:100%;padding:12px 14px;border-radius:var(--r-md);border:1px solid var(--border);background:var(--surface);color:var(--ink);font-size:var(--fs-md);font-family:var(--font);margin-bottom:8px">' +
+   '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:14px">Hasta hoy: ' + _todayISO + '</div>' +
+   '<div style="font-size:var(--fs-xs);color:var(--ink-soft);background:var(--bg);padding:10px 12px;border-radius:var(--r-sm);line-height:var(--lh-snug)">' +
+   '✓ Idempotente: tickets ya importados se omiten automáticamente.<br>' +
+   '✓ Si el plan Free corta antes de tu fecha inicio, se importa lo disponible.' +
+   '</div>' +
+   '<button id="lvHistImportBtn" style="width:100%;height:50px;margin-top:14px;border-radius:var(--r-md);border:none;background:var(--red);color:#fff;font-size:var(--fs-md);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">Importar histórico</button>' +
+   '</div>';
+
+  // Reusar destructive confirm si está disponible (mejor UX que sub-page)
+  if (typeof window._showDestructiveConfirm === 'function') {
    window._showDestructiveConfirm({
-    title: 'Importar ventas Loyverse',
-    message: 'Se importarán receipts desde hoy hacia atrás hasta ' + _cutoffISO + ' (últimos ' + _MESES_ATRAS + ' meses).\n\nIdempotente: tickets ya importados se omiten.\n\n¿Continuar?',
-    confirmText: 'Importar',
+    title: 'Importar histórico Loyverse',
+    message: 'Selecciona desde qué fecha importar receipts.\n\n' +
+             'PLAN FREE: máx ~6 meses (Loyverse devuelve 402 al pasar — el import se detiene solo).\n' +
+             'PLAN PRO: sin límite — cualquier fecha desde apertura.\n\n' +
+             '✓ Idempotente: tickets ya importados se omiten.',
+    confirmText: 'Configurar fechas',
     onConfirm: function() {
-     var st = document.getElementById('lv-token-status');
-     if (st) { st.textContent = '⏳ Descargando ventas…'; st.style.color = 'var(--ink-soft)'; }
-     _lvImportReceiptsPaginated(token, [], null, _cutoff);
+     // Pedir fecha en un prompt simple (compatible con webview)
+     setTimeout(function(){
+      var startISO = prompt('Fecha INICIO (YYYY-MM-DD)\nDefault: ' + _defaultStart, _defaultStart);
+      if (!startISO) return;
+      startISO = startISO.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startISO)) {
+       showToast('⚠️ Formato inválido — usa YYYY-MM-DD');
+       return;
+      }
+      _lvDoHistImport(startISO, _todayISO, token);
+     }, 350);
     }
    });
+  } else {
+   showToast('⚠️ Confirmación no disponible', 'warning');
   }
+ }
+
+ // Ejecutor del import histórico (delegado para reusar setup de prompt)
+ function _lvDoHistImport(startISO, endISO, token) {
+  try {
+   var st = document.getElementById('lv-token-status');
+   if (st) { st.textContent = '⏳ Descargando histórico…'; st.style.color = 'var(--ink-soft)'; }
+   showToast('⏳ Descargando histórico Loyverse desde ' + startISO + '…');
+   var cutoffStart = new Date(startISO + 'T00:00:00');
+   var endMs = new Date(endISO + 'T23:59:59').getTime();
+   _lvFetchHistPaginated(token, [], null, cutoffStart, endMs, function(receipts, limitePlan, aborted) {
+    try {
+     if (aborted) {
+      if (st) { st.textContent = '❌ Error: import abortado'; st.style.color = 'var(--red)'; }
+      showToast('⚠️ Import abortado');
+      return;
+     }
+     var ventasAntes = (State.get.ventas ? State.get.ventas().length : 0);
+     _lvCommitReceipts(receipts, st, limitePlan || false, false);
+     var ventasDespues = (State.get.ventas ? State.get.ventas().length : 0);
+     var nuevas = Math.max(0, ventasDespues - ventasAntes);
+     var msg = '✅ ' + nuevas + ' venta' + (nuevas===1?'':'s') + ' importada' + (nuevas===1?'':'s') +
+               ' (' + receipts.length + ' descargada' + (receipts.length===1?'':'s') + ')';
+     if (limitePlan) msg += ' · ⚠️ Plan Free cortó antes de ' + startISO;
+     showToast(msg);
+     if (st) { st.textContent = msg; st.style.color = 'var(--ink-soft)'; }
+     setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 200);
+    } catch(eC) {
+     console.error('[Dashwey/LVHistImport] commit:', eC);
+     showToast('⚠️ Error commit: ' + (eC.message||eC));
+    }
+   });
+  } catch(e) {
+   console.error('[Dashwey/LVHistImport]', e);
+   showToast('⚠️ Error import: ' + (e.message||e));
+  }
+ }
 
   function _lvImportReceiptsPaginated(token, acc, cursor, cutoffDate) {
    var st = document.getElementById('lv-token-status');
