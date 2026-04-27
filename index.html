@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1225-dev</title>
+<title>Dashwey v1.3.1226-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15170,7 +15170,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1225-dev';
+ const _APP_VERSION = 'v1.3.1226-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15505,7 +15505,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1225');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1226');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -18166,6 +18166,17 @@ const ui = (() => {
    var ventasKeep = ventasPrev.filter(function(v){ return v && v.origen !== 'import_loyverse'; });
    var nBorradas = ventasPrev.length - ventasKeep.length;
 
+   // v1.3.1226 HARDENING: dias con autoridad API (origen=loyverse) son inmutables.
+   // El CSV summary es 1 venta agregada/dia; si ese dia ya tiene ventas API,
+   // importarlo crearia un duplicado fantasma. Skip silencioso.
+   var diasConAPI = new Set();
+   ventasKeep.forEach(function(v){
+    if ((v.origen||'') === 'loyverse') {
+     var d = new Date(v.fecha);
+     diasConAPI.add(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
+    }
+   });
+
    // Cuenta destino: primary (Kiosco)
    var cuentasDashwey = State.get.cuentas() || [];
    var primary = cuentasDashwey.find(function(c){ return c.isPrimary; });
@@ -18173,8 +18184,15 @@ const ui = (() => {
 
    // Construir nuevas ventas
    var nuevas = [];
+   var nSkipped = 0;
    rows.forEach(function(r){
     var yyyymmdd = r.iso.replace(/-/g, '');
+    // v1.3.1226: skip si ese dia ya tiene autoridad API
+    var keyDia = r.iso; // formato YYYY-MM-DD
+    if (diasConAPI.has(keyDia)) {
+     nSkipped++;
+     return;
+    }
     var id = 'v_lvsum_' + yyyymmdd;
     var fechaISO = r.fecha.toISOString();
     var netas = Math.round(r.netas * 100) / 100;
@@ -18217,7 +18235,9 @@ const ui = (() => {
    try { DashweyBus.emit('venta'); } catch(_) {}
    try { DashweyBus.emit('full'); } catch(_) {}
 
-   showToast('✅ ' + nuevas.length + ' ventas importadas (' + nBorradas + ' previas sustituidas)');
+   var msg = '✅ ' + nuevas.length + ' ventas importadas (' + nBorradas + ' previas sustituidas)';
+   if (nSkipped > 0) msg += ' · ' + nSkipped + ' días skip (autoridad API)';
+   showToast(msg);
    setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 400);
   } catch(e) {
    console.error('[Dashwey/LVSum] commit:', e);
