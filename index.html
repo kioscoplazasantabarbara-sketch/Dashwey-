@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1265-dev</title>
+<title>Dashwey v1.3.1266-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12796,7 +12796,11 @@ const State = (() => {
  save(); // WRITE ÚNICO — incluye historialPedidos + gastosOp + cuentas + lotesStock
  try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {}
- try { window.DashweyBus && window.DashweyBus.emit('cuenta'); } catch(_) {} // v1.3.1265 W-A-27: emitir cuenta tras descontar saldo
+ // v1.3.1266 NOTA: NO emitir 'cuenta' aquí — el listener de 'cuenta' solo
+ //   re-renderiza dash.renderFinanciero, igual que el listener de 'gasto' que
+ //   YA se emite arriba. Emitir ambos provocaba renderFinanciero × 2 en el
+ //   mismo tick (más renderFinanciero del listener 'pedido' = ×3 total).
+ //   El cambio de saldo se refleja en KPIs vía dash.renderFinanciero al recibir 'gasto'.
  },
  removeHistorialPedido: (id) => {
   if (!_state.historialPedidos) return;
@@ -16139,7 +16143,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1265-dev';
+ const _APP_VERSION = 'v1.3.1266-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18394,6 +18398,15 @@ const ui = (() => {
     if (!c || !c.id) return;
     var provId = 'prov_lv_' + c.id;
     var existing = prevProvById[provId];
+    // v1.3.1266 FIX W-A-43: respeto tombstone proveedor LV (simétrico a W-A-17/18 en productos).
+    //   Si el usuario borró manualmente un proveedor LV, el tombstone YA está en mergedProvs
+    //   desde el loop1 (L18387). Si seguimos al lvCats.forEach y recreamos con mismo provId,
+    //   creamos un DUPLICADO (tombstone + zombi) y _preserveDeleted ve el zombi y no reinjecta
+    //   el tombstone → proveedor reaparece tras re-import.
+    if (existing && existing.deleted) {
+      catIdToProvId[c.id] = provId; // mantener mapeo para items
+      return;
+    }
     // ──────────────────────────────────────────────────────────────────
     // v1.3.1237 — SEPARACIÓN CONCEPTUAL nombre vs sourceName
     // PRESERVAR `nombre` editado por usuario (ej. "Nestlé España").
@@ -18490,7 +18503,10 @@ const ui = (() => {
    // v1.3.1084: proveedores Loyverse ANTIGUOS que ya no están en lvCats → soft-delete
    // (caso: categoría borrada en Loyverse desde la última sync)
    var _newLvProvIds = {};
-   mergedProvs.forEach(function(p){ if (p && p.id && !p.deleted) _newLvProvIds[p.id] = true; });
+   // v1.3.1266: incluir TAMBIÉN tombstones — un id ya en mergedProvs (deleted o no)
+   //   no debe re-procesarse aquí. Sin esto, un proveedor LV borrado manualmente
+   //   recibe DOBLE tombstone (uno del loop1 + otro de aquí).
+   mergedProvs.forEach(function(p){ if (p && p.id) _newLvProvIds[p.id] = true; });
    prevProvs.forEach(function(p){
     if (!p || !p.id || p.deleted) return;
     if (p.origen === 'loyverse' && !_newLvProvIds[p.id]) {
@@ -18670,7 +18686,10 @@ const ui = (() => {
    //   el producto huérfano que borrar trabajo del usuario.
    //   "Editado" = nombre ≠ sourceName, o ventaNombre/cat presente, o updatedAt > createdAt.
    var _newLvProdIds = {};
-   mergedProds.forEach(function(p){ if (p && p.id && !p.deleted) _newLvProdIds[p.id] = true; });
+   // v1.3.1266: incluir TAMBIÉN tombstones — un id ya en mergedProds (deleted o no)
+   //   no debe re-procesarse aquí. Sin esto, un producto LV borrado manualmente que
+   //   ya tiene tombstone del loop1 recibía DOBLE tombstone aquí.
+   mergedProds.forEach(function(p){ if (p && p.id) _newLvProdIds[p.id] = true; });
    prevProds.forEach(function(p){
     if (!p || !p.id || p.deleted) return;
     if (p.origen === 'loyverse' && !_newLvProdIds[p.id]) {
