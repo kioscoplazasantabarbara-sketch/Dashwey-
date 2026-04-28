@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1252-dev</title>
+<title>Dashwey v1.3.1253-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13852,6 +13852,155 @@ const FinEngine = (() => {
  return money((State.get.cuentas() || []).filter(c => _matchesScope(c)).reduce((s, c) => s + (c.saldo || 0), 0));
  }
 
+ // ── 6.b VISTA GLOBAL UNIFICADA v1.3.1253 ─────────────────────────
+ //   La "Cuenta Global" es 100% derivada — no se persiste, no entra en
+ //   State.set.cuentas, no se sincroniza a Firestore como entidad.
+ //   Todo se calcula on-the-fly desde gastosOp + ingresosFin existentes.
+ //
+ // unifiedSaldo(): saldo total = suma de saldos de cuentas activas
+ //   Mismo cálculo que saldoCuentas() — alias semántico para vista global.
+ function unifiedSaldo() {
+  return saldoCuentas();
+ }
+
+ // unifiedTransactions(): historial unificado ordenado newest→oldest.
+ //   Retorna array de objetos { kind, id, src, concepto, importe, fecha,
+ //                              cuentaId, cuentaNombre, cuentaColor,
+ //                              transferId, isTransfer, esPar, peerCuentaId,
+ //                              peerCuentaNombre, peerCuentaColor, ... }
+ //
+ //   Tratamiento transferencias: dos eventos con mismo transferId se fusionan
+ //   en UNA sola fila (kind='transfer-pair', delta neto 0). Si solo existe
+ //   una mitad (huérfano), se render como single (kind='transfer-orphan',
+ //   delta sí afecta saldo acumulado).
+ function unifiedTransactions() {
+  const cuentas = State.get.cuentas() || [];
+  const cuentasActivas = cuentas.filter(c => !c.deleted);
+  // Map cuentaId → {nombre, color} para enriquecer movimientos
+  const cuentaIdx = {};
+  cuentasActivas.forEach(c => { cuentaIdx[c.id] = c; });
+  const _cuentaInfo = (cid) => cuentaIdx[cid] || null;
+  const idsCuentasActivas = new Set(cuentasActivas.map(c => c.id));
+
+  const gastos = (State.get.gastosOp() || []).filter(g => g && g.cuentaId && idsCuentasActivas.has(g.cuentaId));
+  const ingresos = (State.get.ingresosFin() || []).filter(i => i && i.cuentaId && idsCuentasActivas.has(i.cuentaId));
+
+  // Indexar transfers por transferId (siempre 2 partes: 1 gasto saliendo + 1 ingreso entrando)
+  const transferGroups = {}; // transferId → { out: gastoObj, in: ingresoObj }
+  gastos.forEach(g => {
+   if (g.transferId) {
+    if (!transferGroups[g.transferId]) transferGroups[g.transferId] = {};
+    transferGroups[g.transferId].out = g;
+   }
+  });
+  ingresos.forEach(i => {
+   if (i.transferId) {
+    if (!transferGroups[i.transferId]) transferGroups[i.transferId] = {};
+    transferGroups[i.transferId].in = i;
+   }
+  });
+
+  const movs = [];
+  const transferIdsConsumidos = new Set();
+
+  // 1. Pares completos de transferencia → 1 fila virtual
+  Object.keys(transferGroups).forEach(tid => {
+   const grp = transferGroups[tid];
+   if (grp.out && grp.in) {
+    transferIdsConsumidos.add(tid);
+    const fromCta = _cuentaInfo(grp.out.cuentaId);
+    const toCta = _cuentaInfo(grp.in.cuentaId);
+    movs.push({
+     kind: 'transfer-pair',
+     id: 'tx_' + tid,
+     transferId: tid,
+     concepto: 'Transferencia interna',
+     importe: Math.abs(grp.out.importe || 0), // valor absoluto, informativo
+     delta: 0, // neto cero para acumulado global
+     fecha: grp.out.fecha || grp.in.fecha || '',
+     fromCuentaId: grp.out.cuentaId,
+     fromCuentaNombre: fromCta ? fromCta.nombre : '?',
+     fromCuentaColor: fromCta ? fromCta.color : '#999',
+     toCuentaId: grp.in.cuentaId,
+     toCuentaNombre: toCta ? toCta.nombre : '?',
+     toCuentaColor: toCta ? toCta.color : '#999',
+     isTransfer: true,
+    });
+   }
+  });
+
+  // 2. Gastos no-transfer + transfers huérfanas (solo lado out) → afectan saldo
+  gastos.forEach(g => {
+   if (g.transferId && transferIdsConsumidos.has(g.transferId)) return;
+   const c = _cuentaInfo(g.cuentaId);
+   const isOrphan = !!g.transferId; // tiene transferId pero el otro lado no se vio
+   movs.push({
+    kind: isOrphan ? 'transfer-orphan' : 'gasto',
+    id: g.id,
+    src: 'gasto',
+    concepto: g.nombre || (isOrphan ? 'Transferencia (huérfana)' : 'Gasto'),
+    importe: -(g.importe || 0),
+    delta: -(g.importe || 0),
+    fecha: g.fecha || g.fechaPago || '',
+    cuentaId: g.cuentaId,
+    cuentaNombre: c ? c.nombre : '?',
+    cuentaColor: c ? c.color : '#999',
+    metaTipo: g.metaTipo,
+    transferId: g.transferId || null,
+    isTransfer: !!g.transferId,
+   });
+  });
+
+  // 3. Ingresos no-transfer + transfers huérfanas (solo lado in)
+  ingresos.forEach(i => {
+   if (i.transferId && transferIdsConsumidos.has(i.transferId)) return;
+   const c = _cuentaInfo(i.cuentaId);
+   const isOrphan = !!i.transferId;
+   movs.push({
+    kind: isOrphan ? 'transfer-orphan' : 'ingreso',
+    id: i.id,
+    src: 'ingreso',
+    concepto: i.concepto || (isOrphan ? 'Transferencia (huérfana)' : 'Ingreso'),
+    importe: +(i.importe || 0),
+    delta: +(i.importe || 0),
+    fecha: i.fecha || '',
+    cuentaId: i.cuentaId,
+    cuentaNombre: c ? c.nombre : '?',
+    cuentaColor: c ? c.color : '#999',
+    metaTipo: i.metaTipo,
+    transferId: i.transferId || null,
+    isTransfer: !!i.transferId,
+   });
+  });
+
+  // Ordenar newest→oldest
+  movs.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+  return movs;
+ }
+
+ // unifiedMetrics(): métricas agregadas (excluye transferencias internas del neto)
+ //   Returns { saldo, nMovs, ingresosTotal, gastosTotal, neto, nCuentas }
+ function unifiedMetrics() {
+  const txs = unifiedTransactions();
+  let ingresosT = 0, gastosT = 0, nMovs = 0;
+  txs.forEach(m => {
+   if (m.kind === 'transfer-pair') return; // no cuenta como ingreso ni gasto
+   nMovs++;
+   if (m.delta > 0) ingresosT += m.delta;
+   else gastosT += Math.abs(m.delta);
+  });
+  // Pairs sí cuentan como movimientos visibles, pero no en sumas
+  const nMovsTotal = txs.length;
+  return {
+   saldo: unifiedSaldo(),
+   nMovs: nMovsTotal,
+   ingresosTotal: money(ingresosT),
+   gastosTotal: money(gastosT),
+   neto: money(ingresosT - gastosT),
+   nCuentas: (State.get.cuentas() || []).filter(c => !c.deleted).length,
+  };
+ }
+
  // runway(): meses de operación con el saldo actual dado el gasto mensual promedio
  // v1.3.1053: devolver null si no hay base real de cálculo (en lugar del "999" legacy)
  // Render: mostrará '—' cuando null, evita confusión con "infinito".
@@ -14151,6 +14300,9 @@ const FinEngine = (() => {
 
  // Cash
  saldoCuentas, runway, ratioLiquidez,
+
+ // v1.3.1253: Vista global unificada (Cuenta Global)
+ unifiedSaldo, unifiedTransactions, unifiedMetrics,
 
  // Stock
  valorStock, valorStockBulto, // v1.3.593: bulto = referencia sin prorratear
@@ -15679,7 +15831,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1252-dev';
+ const _APP_VERSION = 'v1.3.1253-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30794,6 +30946,29 @@ function _confirmBorrarCuenta(id) {
     hdr2.innerHTML = '<span style="font-size:var(--fs-h2)">💳</span><div style="flex:1;font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.3px">Cuentas</div><button id="snap-cuentas-close" style="width:28px;height:28px;border-radius:50%;border:none;background:var(--bg-mid);color:var(--ink-mid);cursor:pointer;font-size:var(--fs-h3);display:flex;align-items:center;justify-content:center;flex-shrink:0">\xd7</button>';
     var body2 = document.createElement('div');
     body2.style.cssText = 'flex:1;overflow-y:auto;padding:var(--sp-2) 0 8px';
+
+    // v1.3.1253: Vista Global (cuenta virtual derivada — primera fila)
+    //   Solo si hay 2+ cuentas reales. Con 1 cuenta no aporta valor.
+    if (cs.length >= 2) {
+     try {
+      var globRow = document.createElement('button');
+      globRow.style.cssText = 'display:flex;align-items:center;width:100%;padding:var(--sp-3_5) 20px;border:none;background:linear-gradient(90deg,rgba(37,99,235,0.06) 0%,transparent 100%);font-size:var(--fs-base);font-weight:var(--fw-semi);color:var(--ink);font-family:inherit;cursor:pointer;text-align:left;touch-action:manipulation;-webkit-tap-highlight-color:transparent;border-bottom:1px solid rgba(0,0,0,0.05);gap:var(--sp-2_5)';
+      var globIcon = '<span style="width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#2563EB 0%,#8B5CF6 100%);flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:bold">\u2295</span>';
+      var globMeta = '<span style="display:flex;flex-direction:column;flex:1;min-width:0">' +
+       '<span style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">Vista global</span>' +
+       '<span style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-med)">Todas las cuentas \u00b7 ' + cs.length + ' activas</span>' +
+       '</span>';
+      var globBadge = '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--blue);background:rgba(37,99,235,0.10);padding:var(--sp-0_5) var(--sp-1_5);border-radius:var(--r-chip)">Derivada</span>';
+      globRow.innerHTML = globIcon + globMeta + globBadge;
+      globRow.addEventListener('click', function() {
+       closeOv2();
+       setTimeout(function() {
+        try { App.dash._openDetalleCuentaGlobal && App.dash._openDetalleCuentaGlobal(); } catch(_) {}
+       }, 220);
+      });
+      body2.appendChild(globRow);
+     } catch(_) {}
+    }
     cs.forEach(function(c) {
      var row = document.createElement('button');
      row.style.cssText = 'display:flex;align-items:center;width:100%;padding:var(--sp-3_5) 20px;border:none;background:none;font-size:var(--fs-base);font-weight:var(--fw-med);color:var(--ink);font-family:inherit;cursor:pointer;text-align:left;touch-action:manipulation;-webkit-tap-highlight-color:transparent;border-bottom:1px solid rgba(0,0,0,0.05);gap:var(--sp-2_5)';
@@ -31986,6 +32161,232 @@ function _confirmBorrarCuenta(id) {
  }
 
 
+ // ════════════════════════════════════════════════════════════════
+ // v1.3.1253 — VISTA GLOBAL UNIFICADA (cuenta virtual derivada)
+ // ════════════════════════════════════════════════════════════════
+ //   No es una cuenta real. No persiste. No se sincroniza como entidad.
+ //   Saldo y movimientos derivados on-the-fly de FinEngine.unified*().
+ //   Reusa el layout dc-layout (header fijo, lista scrollable única).
+ //   Trata transferencias internas como movimiento neutral (delta 0).
+ //   Listener DashweyBus para repintar al haber cambios en cuentas/gastos/ingresos.
+ function _openDetalleCuentaGlobal() {
+  if (!window.FinEngine || !FinEngine.unifiedTransactions) {
+   try { showToast('⚠️ Vista global no disponible'); } catch(_) {}
+   return;
+  }
+  var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var _fmtFechaCorta = function(iso) {
+   try { var d = new Date(iso); return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()]; }
+   catch(_){ return ''; }
+  };
+  var _monthLabel = function(iso) {
+   try { var d = new Date(iso); return MON[d.getMonth()] + ' ' + d.getFullYear(); }
+   catch(_){ return ''; }
+  };
+
+  var _renderGlobal = function() {
+   var metrics = FinEngine.unifiedMetrics();
+   var movs = FinEngine.unifiedTransactions();
+
+   // Saldo acumulado descendente: parte del saldo actual y resta el delta
+   //   de cada movimiento al ir más antiguo. Pares de transferencia tienen
+   //   delta=0 → saldoTras se mantiene. Esto da extracto consistente con
+   //   apps de banca para vista consolidada.
+   var saldoTras = [];
+   var acc = metrics.saldo;
+   movs.forEach(function(m){
+    saldoTras.push(acc);
+    acc -= (m.delta || 0);
+   });
+
+   // Render filas
+   var movsHtml;
+   if (!movs.length) {
+    movsHtml = '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en ninguna cuenta</div>';
+   } else {
+    var lastMonth = '';
+    var rows = [];
+    movs.forEach(function(m, i) {
+     var mLabel = _monthLabel(m.fecha);
+     if (mLabel && mLabel !== lastMonth) {
+      rows.push(
+       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">'
+       + esc(mLabel)
+       + '</div>'
+      );
+      lastMonth = mLabel;
+     }
+
+     var saldoTrasEste = saldoTras[i];
+
+     if (m.kind === 'transfer-pair') {
+      // Fila especial: transferencia interna unificada (no afecta neto)
+      rows.push(
+       '<div class="fc-move-row gv-row gv-tx-pair" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);background:rgba(139,92,246,0.04)">'
+       + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
+       +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:var(--lh-tight)">' + _fmtFechaCorta(m.fecha) + '</div>'
+       + '</div>'
+       + '<div style="flex:1;min-width:0">'
+       +  '<div style="display:flex;align-items:center;gap:var(--sp-1_5);margin-bottom:2px">'
+       +   '<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#8B5CF6;color:#fff;font-size:11px">\u21C4</span>'
+       +   '<span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Transferencia interna</span>'
+       +  '</div>'
+       +  '<div style="display:flex;align-items:center;gap:var(--sp-1);font-size:var(--fs-2xs);color:var(--ink-soft);flex-wrap:wrap">'
+       +   '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:' + (m.fromCuentaColor||'#999') + '"></span>' + esc(m.fromCuentaNombre) + '</span>'
+       +   '<span style="color:var(--ink-soft);font-weight:bold">\u2192</span>'
+       +   '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:' + (m.toCuentaColor||'#999') + '"></span>' + esc(m.toCuentaNombre) + '</span>'
+       +  '</div>'
+       +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">Saldo total: <strong>' + _feur(saldoTrasEste) + '</strong></div>'
+       + '</div>'
+       + '<div style="flex-shrink:0;text-align:right;font-size:var(--fs-sm);font-weight:var(--fw-bold);color:#8B5CF6">'
+       +  _feur(m.importe)
+       + '</div>'
+       + '</div>'
+      );
+      return;
+     }
+
+     // Filas normales (gasto / ingreso / huérfana)
+     var col = m.delta >= 0 ? 'var(--success)' : 'var(--red)';
+     var sign = m.delta >= 0 ? '+' : '\u2212';
+     var cuentaBadge = '<span style="display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-med)">'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:' + (m.cuentaColor||'#999') + ';flex-shrink:0"></span>'
+      + esc(m.cuentaNombre || '?')
+      + '</span>';
+
+     rows.push(
+      '<div class="fc-move-row gv-row" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border)">'
+      + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
+      +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:var(--lh-tight)">' + _fmtFechaCorta(m.fecha) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:0">'
+      +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.concepto) + '</div>'
+      +  '<div style="margin-top:2px">' + cuentaBadge + '</div>'
+      +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">Saldo total: ' + _feur(saldoTrasEste) + '</div>'
+      + '</div>'
+      + '<div style="flex-shrink:0;text-align:right;font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + col + '">'
+      +  sign + ' ' + _feur(Math.abs(m.delta || 0))
+      + '</div>'
+      + '</div>'
+     );
+    });
+    movsHtml = rows.join('');
+   }
+
+   // KPIs ingresos/gastos
+   var kpiHtml =
+    '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:var(--sp-3)">'
+    + '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center;border-right:1px solid var(--border)">'
+    +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Ingresos</div>'
+    +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--success)">' + _feur(metrics.ingresosTotal) + '</div>'
+    + '</div>'
+    + '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center">'
+    +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Gastos</div>'
+    +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--red)">' + _feur(metrics.gastosTotal) + '</div>'
+    + '</div>'
+    + '</div>';
+
+   var html =
+    '<div class="dc-layout">'
+    + '<div class="dc-header" style="position:relative;background:var(--surface);border-bottom:1px solid var(--border);padding:var(--sp-4) 16px 14px;flex-shrink:0">'
+    + '<div style="display:flex;align-items:center;gap:var(--sp-2_5);margin-bottom:var(--sp-3)">'
+    + '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#2563EB 0%,#8B5CF6 100%);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:bold;flex-shrink:0">\u2295</div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink)">Vista global</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">' + metrics.nCuentas + ' cuentas \u00b7 derivada</div>'
+    + '</div>'
+    + '<button id="dc-close" class="mhd-close" style="flex-shrink:0">\u2715</button>'
+    + '</div>'
+    // Saldo hero
+    + '<div style="display:flex;align-items:baseline;gap:var(--sp-2)">'
+    +  '<div style="font-size:38px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _feur(metrics.saldo) + '</div>'
+    +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo total</div>'
+    + '</div>'
+    + kpiHtml
+    + '</div>'
+    + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
+    + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
+    + '</div>';
+
+   App.ui.setFs(html);
+  };
+
+  _renderGlobal();
+  App.ui.openFs('full');
+
+  // Activar layout fijo (mismo patrón que _openDetalleCuenta)
+  try {
+   var _fsCnt = document.getElementById('fs-content');
+   if (_fsCnt) _fsCnt.classList.add('has-dc-layout');
+  } catch(_) {}
+
+  requestAnimationFrame(function() {
+   var closeEl = document.getElementById('dc-close');
+   var _suscriptos = []; // [{ event, handler }]
+   var _cleanup = function() {
+    try {
+     var _fs = document.getElementById('fs-content');
+     if (_fs) _fs.classList.remove('has-dc-layout');
+    } catch(_) {}
+    // Desuscribir DashweyBus listeners (DashweyBus.off requiere event+handler)
+    try {
+     if (window.DashweyBus && DashweyBus.off) {
+      _suscriptos.forEach(function(s){
+       try { DashweyBus.off(s.event, s.handler); } catch(_) {}
+      });
+     }
+    } catch(_) {}
+    _suscriptos = [];
+   };
+   if (closeEl) closeEl.addEventListener('click', function() {
+    _cleanup();
+    App.ui.closeFs();
+   }, { once: true });
+
+   // Cleanup también al cerrar por backdrop tap, swipe-down, back Android
+   //   El closeFs central ya limpia has-dc-layout (v1.3.1249), pero nuestros
+   //   listeners DashweyBus deben removerse también — observamos cierre del overlay.
+   try {
+    var _ovObs = document.getElementById('fs-overlay');
+    if (_ovObs) {
+     var _checkClosed = function() {
+      if (!_ovObs.classList.contains('open')) {
+       _cleanup();
+       _ovObs.removeEventListener('transitionend', _checkClosed);
+      }
+     };
+     _ovObs.addEventListener('transitionend', _checkClosed);
+    }
+   } catch(_) {}
+
+   // Reactividad: repintar al haber cambios relevantes (multi-device incluido)
+   try {
+    if (window.DashweyBus && DashweyBus.on && DashweyBus.off) {
+     var _rerender = function() {
+      try {
+       var fsBox = document.getElementById('fs-box');
+       var ov = document.getElementById('fs-overlay');
+       if (!fsBox || !ov || !ov.classList.contains('open')) return;
+       // Verificar que el contenido sigue siendo nuestra vista global
+       //   (fs-overlay se reusa para múltiples sheets — debemos asegurar
+       //   que no estamos pisando otra UI que se abrió encima)
+       if (!fsBox.querySelector('#dc-movs')) return;
+       // Heurística específica: nuestro header tiene el carácter ⊕ (U+2295)
+       var hdrIcon = fsBox.querySelector('.dc-header div[style*="2563EB"]');
+       if (!hdrIcon) return;
+       _renderGlobal();
+      } catch(_) {}
+     };
+     ['gasto','ingreso','venta','cuenta','full'].forEach(function(ev){
+      DashweyBus.on(ev, _rerender);
+      _suscriptos.push({ event: ev, handler: _rerender });
+     });
+    }
+   } catch(_) {}
+  });
+ }
+
+
  function _openDetalleCuenta(cuentaId) {
   var c = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
   if (!c) return;
@@ -32339,7 +32740,7 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope};
 })();
 
 // ══════════════════════════════════════════
