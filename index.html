@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1266-dev</title>
+<title>Dashwey v1.3.1267-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16143,7 +16143,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1266-dev';
+ const _APP_VERSION = 'v1.3.1267-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37361,27 +37361,72 @@ const marginLine = mg === null ? '' :
  }
 
  // ── Proveedores ──
+
+ // v1.3.1267 FIX W-A-19/20: warning antes de descartar carrito al cambiar proveedor.
+ //   Bug previo: shiftProv (flechas ‹ ›) y selProv (picker) borraban el carrito
+ //   silenciosamente. Usuario perdía 5-10min de trabajo sin warning.
+ //   Ahora: si el carrito tiene items, modal de confirmación destructiva con
+ //   nombre del proveedor actual y nº de artículos. Si está vacío → directo.
+ //
+ //   Fallback robusto: si _showDestructiveConfirm no está disponible (caso edge
+ //   de WebView), usar window.confirm nativo. Aunque confirm() está bloqueado
+ //   en algunos Android WebView, es preferible a la pérdida silenciosa.
+ //   Si confirm también falla, se ejecuta el descarte (comportamiento legacy).
+ function _confirmSwitchProvider(targetProvId, onConfirm) {
+  // Si el carrito está vacío → ejecutar directamente
+  var _items = Object.keys(_ordenCarrito || {});
+  if (_items.length === 0) { onConfirm(); return; }
+  // Calcular contadores para el mensaje
+  var _nArticulos = _items.length;
+  var _provActual = State.get.prov(State.get.selectedProv());
+  var _provDestino = State.get.prov(targetProvId);
+  var _provActualNombre = (_provActual && _provActual.nombre) || 'el proveedor actual';
+  var _provDestinoNombre = (_provDestino && _provDestino.nombre) || 'otro proveedor';
+  var _msg = 'Tienes ' + _nArticulos + ' artículo' + (_nArticulos !== 1 ? 's' : '') +
+             ' en el pedido de "' + _provActualNombre + '". Cambiar a "' + _provDestinoNombre +
+             '" descartará el pedido en curso.';
+  if (typeof window._showDestructiveConfirm === 'function') {
+   window._showDestructiveConfirm({
+    title: 'Descartar pedido en curso',
+    message: _msg,
+    confirmText: 'Descartar y cambiar',
+    onConfirm: function() { onConfirm(); }
+   });
+  } else {
+   // Fallback de seguridad — al menos preguntar antes que perder silenciosamente
+   try {
+    if (window.confirm(_msg + '\n\n¿Continuar?')) onConfirm();
+   } catch(_) {
+    // Último recurso: comportamiento legacy (descartar)
+    onConfirm();
+   }
+  }
+ }
+
  function shiftProv(dir) {
  const ids = State.get.proveedores().map(p => p.id);
  if (!ids.length) return; // sin proveedores — nada que navegar
  let idx = ids.indexOf(State.get.selectedProv()) + dir;
  idx = ((idx % ids.length) + ids.length) % ids.length;
- // Limpiar cesta del proveedor anterior siempre al navegar con ‹ ›
- if (Object.keys(_ordenCarrito).length > 0) {
- _pedidoPendiente = null; // snapshot invalidado al cambiar proveedor
- _ordenCarrito = {};
- _ordenEstado = 0;
- try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
- }
- // Cerrar popup de confirmar si estuviera abierto
- document.getElementById('aceptar-popup-overlay')?.remove();
- try { _almSaveLastProv(ids[idx]); } catch(_) {} // v1.3.662
- State.set.selectedProv(ids[idx]);
- _catInlineQ = '';
- const ci = document.getElementById('alm-perm-search'); if (ci) ci.value = '';
- const snavEl = document.getElementById('snav-label');
- if (snavEl) snavEl.textContent = State.get.prov(ids[idx])?.nombre || '—';
- requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); _updateAcceptBtn(); });
+ const _targetId = ids[idx];
+ // v1.3.1267 W-A-19/20: si hay carrito, confirmar descarte antes
+ _confirmSwitchProvider(_targetId, function() {
+  if (Object.keys(_ordenCarrito).length > 0) {
+   _pedidoPendiente = null; // snapshot invalidado al cambiar proveedor
+   _ordenCarrito = {};
+   _ordenEstado = 0;
+   try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
+  }
+  // Cerrar popup de confirmar si estuviera abierto
+  document.getElementById('aceptar-popup-overlay')?.remove();
+  try { _almSaveLastProv(_targetId); } catch(_) {} // v1.3.662
+  State.set.selectedProv(_targetId);
+  _catInlineQ = '';
+  const ci = document.getElementById('alm-perm-search'); if (ci) ci.value = '';
+  const snavEl = document.getElementById('snav-label');
+  if (snavEl) snavEl.textContent = State.get.prov(_targetId)?.nombre || '—';
+  requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); _updateAcceptBtn(); });
+ });
  }
 
  // v1.3.1158: openProvPicker migrado a bottom sheet (patrón period picker).
@@ -37959,25 +38004,27 @@ const marginLine = mg === null ? '' :
  }
 
  function selProv(id) {
- // Limpiar cesta del proveedor anterior — la cesta es SIEMPRE dependiente del proveedor
- if (Object.keys(_ordenCarrito).length > 0) {
- _pedidoPendiente = null; // snapshot invalidado al cambiar proveedor
- _ordenCarrito = {};
- _ordenEstado = 0;
- try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
- }
- // Cerrar popup de aceptar si estaba abierto
- document.getElementById('aceptar-popup-overlay')?.remove();
+ // v1.3.1267 W-A-19/20: si hay carrito, confirmar descarte antes
+ _confirmSwitchProvider(id, function() {
+  if (Object.keys(_ordenCarrito).length > 0) {
+   _pedidoPendiente = null; // snapshot invalidado al cambiar proveedor
+   _ordenCarrito = {};
+   _ordenEstado = 0;
+   try { localStorage.removeItem(_CARRITO_KEY); } catch(e) {}
+  }
+  // Cerrar popup de aceptar si estaba abierto
+  document.getElementById('aceptar-popup-overlay')?.remove();
 
- try { _almSaveLastProv(id); } catch(_) {} // v1.3.662: persistir selección
- State.set.selectedProv(id);
- const snavEl = document.getElementById('snav-label');
- if (snavEl) snavEl.textContent = State.get.prov(id)?.nombre || '—';
-_catInlineQ = ''; // reset filtro al cambiar proveedor
- const _ci = document.getElementById('alm-perm-search'); if (_ci) _ci.value = '';
- // v1.3.1218: actualizar header del módulo Almacén (nombre del proveedor activo)
- try { updateProvBar(); } catch(_) {}
- requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); });
+  try { _almSaveLastProv(id); } catch(_) {} // v1.3.662: persistir selección
+  State.set.selectedProv(id);
+  const snavEl = document.getElementById('snav-label');
+  if (snavEl) snavEl.textContent = State.get.prov(id)?.nombre || '—';
+  _catInlineQ = ''; // reset filtro al cambiar proveedor
+  const _ci = document.getElementById('alm-perm-search'); if (_ci) _ci.value = '';
+  // v1.3.1218: actualizar header del módulo Almacén (nombre del proveedor activo)
+  try { updateProvBar(); } catch(_) {}
+  requestAnimationFrame(() => { renderOrden(); renderCatInline(); updateBadge(); });
+ });
  }
 
  function addNuevoProv() {
