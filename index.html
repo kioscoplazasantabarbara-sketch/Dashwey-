@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1267-dev</title>
+<title>Dashwey v1.3.1268-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16143,7 +16143,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1267-dev';
+ const _APP_VERSION = 'v1.3.1268-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22008,6 +22008,14 @@ const nav = (() => {
  const fabSysIn = document.getElementById('alm-fab-system');
  if (fabSysIn) fabSysIn.style.display = 'block';
  }
+
+ // v1.3.1268 FIX W-D-28: parar carousels de insights al salir de Dashboard.
+ //   Sin esto, los setInterval de 8s seguían corriendo en otros tabs.
+ try {
+  if (i !== 1 && typeof window._dashStopAllCarousels === 'function') {
+   window._dashStopAllCarousels();
+  }
+ } catch(_) {}
  const fsOvl = document.getElementById('fs-overlay');
  const modOvl = document.getElementById('modal-overlay');
  const fsBd = document.getElementById('fs-backdrop');
@@ -22308,8 +22316,10 @@ const dash = (() => {
  try { renderRendimiento(period); } catch(e) {}
  // v1.3.1139 FIX#2: renderFlujoCaja ya ejecutado por renderFinanciero() — eliminar duplicado
  try { renderAgenda(); } catch(e) {} // v1.3.281: DASH-03 — agenda en render() principal
- // legacy — renderTopArticulos mantenido para listeners externos
-try { renderTopArticulos(period); } catch(e) {}
+ // v1.3.1268 FIX W-D-03: renderTopArticulos eliminado del flujo de render.
+ //   Es stub vacío desde v1.3.599 (#dash-top-articulos eliminado del DOM).
+ //   La función queda en return{} para listeners externos legacy, pero no se
+ //   ejecuta más en el ciclo de render principal — ahorra CPU por cada render.
 
  // ── Beneficio Neto (bn-card) — siempre actualizado ───────────
  // v1.3.1246 FIX P0 BUG-D: snapshot devuelve `compras` (no `inv`). Antes _finSnap.inv era
@@ -29005,6 +29015,27 @@ function _confirmBorrarCuenta(id) {
  }
  }
 
+ // v1.3.1268 FIX W-D-28: helper para parar TODOS los carousels al salir de Dashboard.
+ //   Sin esto, al cambiar de tab los setInterval de 8s seguían corriendo en background
+ //   llamando a getElementById de elementos posiblemente invisibles. Auto-curan cuando
+ //   DOM se elimina pero mientras tanto = trabajo desperdiciado + posibles renders fantasma.
+ //   Llamado desde goTab cuando se abandona el tab Dashboard (i !== 1).
+ function _stopAllInsightCarousels() {
+  try {
+   Object.keys(_carouselTimers || {}).forEach(function(key) {
+    // Saltar las flags _cancelled (string append)
+    if (key.indexOf('_cancelled') !== -1) return;
+    if (_carouselTimers[key]) {
+     clearInterval(_carouselTimers[key]);
+     _carouselTimers[key + '_cancelled'] = true;
+     delete _carouselTimers[key];
+    }
+   });
+  } catch(_) {}
+ }
+ // Exponer al window para uso desde goTab (fuera del scope de la IIFE dash)
+ if (typeof window !== 'undefined') window._dashStopAllCarousels = _stopAllInsightCarousels;
+
  function _snapTypewriter(el, text, onDone) {
  if (!el) return;
  // v1.3.284: DASH-10 — skip si el texto es idéntico al último renderizado
@@ -31737,6 +31768,20 @@ function _confirmBorrarCuenta(id) {
  const navH = Math.ceil(nav ? nav.getBoundingClientRect().height : 56);
  // dvh garantiza altura real sin barra de URL en Android Chrome
  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+ // v1.3.1268 FIX W-D-24: skip si teclado virtual está abierto.
+ //   visualViewport.height baja drasticamente cuando teclado activo en Android.
+ //   Si medimos en ese momento, snapH queda muy pequeño y cards quedan recortadas
+ //   tras cerrar teclado (no siempre se redispara resize en WebView).
+ //   Heurística: viewport <70% de innerHeight = teclado abierto → skip.
+ try {
+   if (window.visualViewport && window.innerHeight > 0) {
+     var _ratio = vh / window.innerHeight;
+     if (_ratio < 0.70) {
+       // Teclado abierto — postergar medición hasta que se cierre
+       return;
+     }
+   }
+ } catch(_) {}
  const snapH = Math.floor(vh - headerH - navH);
  document.documentElement.style.setProperty('--snap-area-h', snapH + 'px');
  // Sync container height directly for immediate effect
