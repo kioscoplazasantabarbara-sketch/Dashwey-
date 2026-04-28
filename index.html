@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1253-dev</title>
+<title>Dashwey v1.3.1254-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15831,7 +15831,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1253-dev';
+ const _APP_VERSION = 'v1.3.1254-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15868,7 +15868,15 @@ const ui = (() => {
  }
 
  function _applyVersionResult(remoteVer, txt, bar) {
- if (remoteVer && remoteVer !== _APP_VERSION) {
+ // v1.3.1254 FIX: normalizar versiones antes de comparar para evitar banner
+ //   perpetuo. _APP_VERSION='v1.3.1253-dev' vs remote='v1.3.1253' generaba
+ //   diferencia falsa (mismatch sufijo -dev). Ahora se comparan núcleos.
+ var _norm = function(s) {
+  return (s || '').toString().replace(/^v/i, '').replace(/-dev$/i, '').trim();
+ };
+ var _appNorm = _norm(_APP_VERSION);
+ var _remNorm = _norm(remoteVer);
+ if (_remNorm && _remNorm !== _appNorm) {
  if (txt) {
  txt.textContent = '🆕 Nueva versión: ' + remoteVer;
  txt.style.color = '#2563EB';
@@ -16597,6 +16605,21 @@ const ui = (() => {
  const _prodVer = window._DashweyProductVersion || _ver;
  if (el('sd-ver')) el('sd-ver').textContent = 'Dashwey ' + _prodVer;
  if (el('sd-ver-status')) el('sd-ver-status').textContent = 'Versión ' + _prodVer + ' (build ' + _ver + ')';
+
+ // v1.3.1254 FIX: refrescar estado de versión al abrir Ajustes — sin esto,
+ //   el texto del card "Actualizaciones" persistía con un estado viejo
+ //   (banner azul "Nueva versión") incluso cuando ya estaba actualizado.
+ //   Ahora se refresca automáticamente en cada apertura del drawer.
+ if (navigator.onLine && typeof checkForUpdate === 'function') {
+  setTimeout(function() { try { checkForUpdate(); } catch(_) {} }, 100);
+ } else {
+  // Sin red: mostrar estado local
+  var _txOff = el('update-status-txt');
+  if (_txOff) {
+   _txOff.textContent = 'Versión actual: ' + _ver;
+   _txOff.style.color = 'var(--ink-soft)';
+  }
+ }
 
  drawer.style.willChange = 'transform';
  // open
@@ -46472,6 +46495,43 @@ window._almCarritoOptions = function() {
  if (navigator.onLine && window.App?.ui?.checkForUpdate) {
  // Silencioso: solo muestra banner si hay nueva versión, no actualiza el Settings
  _silentCheckUpdate();
+ // v1.3.1254 AUTO-RECOVERY: si _APP_VERSION local != version.json remoto
+ //   tras normalizar, significa que el HTML cargado está atrás del deploy.
+ //   Causa típica: SW cache + WebView HTTP cache sirven HTML viejo aunque
+ //   version.json ya está fresco. Forzar limpieza una vez por sesión.
+ //   Guard: sessionStorage 'dashwey_auto_recovered' previene bucle.
+ try {
+  if (sessionStorage.getItem('dashwey_auto_recovered') === '1') return;
+  fetch(location.href.split('?')[0].replace(/[^/]+$/, '') + 'version.json?_t=' + Date.now(), { cache: 'no-store' })
+   .then(function(r){ return r.ok ? r.json() : null; })
+   .then(function(data){
+    if (!data || !data.version) return;
+    var _norm = function(s){ return (s||'').toString().replace(/^v/i,'').replace(/-dev$/i,'').trim(); };
+    var localN = _norm(_APP_VERSION);
+    var remoteN = _norm(data.version);
+    if (!remoteN || remoteN === localN) return;
+    // Mismatch real: el HTML cargado es viejo. Auto-recover una sola vez.
+    console.warn('[Dashwey/AutoRecover] HTML viejo detectado: local=' + localN + ' vs remoto=' + remoteN + '. Limpiando caches y recargando…');
+    sessionStorage.setItem('dashwey_auto_recovered', '1');
+    // Mensaje al SW para limpiar caches HTTP + reload
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+     navigator.serviceWorker.controller.postMessage({ action: 'FORCE_REFRESH' });
+    }
+    // Backup: si SW no responde en 1.5s, limpiar cache JS-side y reload manual
+    setTimeout(function(){
+     try {
+      if ('caches' in window) {
+       caches.keys().then(function(keys){
+        return Promise.all(keys.map(function(k){ return caches.delete(k); }));
+       }).then(function(){ location.reload(true); });
+      } else {
+       location.reload(true);
+      }
+     } catch(_) { try { location.reload(true); } catch(__) {} }
+    }, 1500);
+   })
+   .catch(function(){});
+ } catch(_) {}
  }
  }, 8000); // 8s tras arranque — no interferir con carga inicial
 
@@ -46501,8 +46561,14 @@ window._almCarritoOptions = function() {
  const remoteVer = data.version ? 'v' + data.version : data.build;
  const localVer = (typeof App !== 'undefined') ? App.ui?._getAppVersion?.() : null;
  if (!remoteVer || !localVer) return;
+ // v1.3.1254 FIX: normalizar versiones — strip "v" prefix y "-dev" suffix.
+ //   _APP_VERSION='v1.3.1253-dev' vs version.json='1.3.1253' generaba
+ //   diferencia falsa eterna → banner perpetuo + notif Android repetida.
+ const _normVer = (s) => (s || '').toString().replace(/^v/i, '').replace(/-dev$/i, '').trim();
+ const _remoteN = _normVer(remoteVer);
+ const _localN = _normVer(localVer);
  // Si versión remota == local: resetear guard y limpiar pendiente
- if (remoteVer === localVer) {
+ if (_remoteN === _localN) {
  _lastRemoteVer = null;
  sessionStorage.removeItem('dashwey_pending_ver');
  return;
