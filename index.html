@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1246-dev</title>
+<title>Dashwey v1.3.1247-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15522,7 +15522,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1246-dev';
+ const _APP_VERSION = 'v1.3.1247-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29768,18 +29768,84 @@ function _confirmBorrarCuenta(id) {
  // Saldo total de cuentas
  var _saldoTotal = cuentas.reduce(function(s,c){ return s+(c.saldo||0); }, 0);
 
- // Donut SVG — 3 segmentos: saldo (azul cuenta), ingresos (verde), gastos (rojo)
+ // v1.3.1247 FIX P0 BUG-DONUT: donut + leyenda 100% coherentes.
+ //   Antes: donut mostraba 3 segmentos globales (saldo total, ingresos, gastos) pero la
+ //          leyenda mostraba cuentas individuales (Santander verde, Kiosco azul). Los
+ //          colores de la leyenda NO existían en el donut → bug visual de confianza P0.
+ //   Ahora: donut único con 1 segmento por cuenta (con su c.color real) + 2 segmentos
+ //          de flujo del periodo (ingresos verde / gastos rojo). Leyenda incluye TODO
+ //          lo del donut con el color exacto.
+ //   Escala: ingresos/gastos del periodo (~440€) son ~1% del saldo total (~40k€) y
+ //          quedarían invisibles. Aplicamos mínimo visual 4% a segmentos no-cero,
+ //          reescalando proporcionalmente los grandes (estándar Mint/YNAB).
+ var _DONUT_MIN_PCT = 0.04;
+
+ // Construir lista de segmentos del donut: [{label, value, color, type}]
+ // type: 'cuenta' | 'ingresos' | 'gastos' — usado para la leyenda
+ var _donutSegments = [];
+ cuentas.forEach(function(c){
+  var saldo = Math.max(0, c.saldo || 0); // saldos negativos no se grafican (sin sentido en distribución)
+  if (saldo > 0) {
+   _donutSegments.push({
+    label: c.nombre || 'Cuenta',
+    value: saldo,
+    color: c.color || '#2563EB',
+    type: 'cuenta',
+    saldoReal: c.saldo || 0, // para mostrar negativo en leyenda
+   });
+  }
+ });
+ if (_ingPeriodo > 0) {
+  _donutSegments.push({ label: 'Ingresos', value: _ingPeriodo, color: 'var(--success)', type: 'ingresos' });
+ }
+ if (_gastoPeriodo > 0) {
+  _donutSegments.push({ label: 'Gastos', value: _gastoPeriodo, color: 'var(--red)', type: 'gastos' });
+ }
+
+ // Aplicar escala mínima visual (4% a segmentos no-cero, reescala proporcional)
+ var _applyMinScale = function(segs) {
+  if (!segs.length) return [];
+  var total = segs.reduce(function(s,x){ return s + x.value; }, 0);
+  if (total <= 0) return segs.map(function(x){ return Object.assign({}, x, { pct: 0 }); });
+  // Si solo hay 1 segmento, asignarle 100%
+  if (segs.length === 1) return [Object.assign({}, segs[0], { pct: 1 })];
+  // % real
+  var withPct = segs.map(function(x){ return Object.assign({}, x, { pctReal: x.value/total }); });
+  // Identificar segmentos pequeños (< MIN) y grandes
+  var smalls = withPct.filter(function(x){ return x.pctReal < _DONUT_MIN_PCT; });
+  var bigs   = withPct.filter(function(x){ return x.pctReal >= _DONUT_MIN_PCT; });
+  // Total mínimo a "donar" desde los grandes
+  var donated = 0;
+  smalls.forEach(function(x){ donated += (_DONUT_MIN_PCT - x.pctReal); });
+  // Si los grandes no pueden donar (donated >= sum of bigs - n*MIN), usar reparto uniforme
+  var bigsSum = bigs.reduce(function(s,x){ return s + x.pctReal; }, 0);
+  var bigsMin = bigs.length * _DONUT_MIN_PCT;
+  if (bigsSum - donated < bigsMin || !bigs.length) {
+   // Fallback: distribución uniforme
+   var equal = 1 / withPct.length;
+   return withPct.map(function(x){ return Object.assign({}, x, { pct: equal }); });
+  }
+  // Reescalar grandes: cada uno cede proporcionalmente
+  var bigsTarget = bigsSum - donated;
+  var scale = bigsTarget / bigsSum;
+  return withPct.map(function(x){
+   if (x.pctReal < _DONUT_MIN_PCT) return Object.assign({}, x, { pct: _DONUT_MIN_PCT });
+   return Object.assign({}, x, { pct: x.pctReal * scale });
+  });
+ };
+
+ var _scaledSegments = _applyMinScale(_donutSegments);
+
+ // Donut SVG — múltiples segmentos
  var _buildDonut = function() {
   var R = 44, r = 28, cx = 52, cy = 52;
-  var total = _saldoTotal + _ingPeriodo + _gastoPeriodo;
-  if (total <= 0) {
+  if (!_scaledSegments.length) {
    // Donut vacío
    return '<svg width="104" height="104" viewBox="0 0 104 104">'
     + '<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="none" stroke="var(--border)" stroke-width="' + (R-r) + '"/>'
     + '<circle cx="' + cx + '" cy="' + cy + '" r="' + (r+((R-r)/2)) + '" fill="none" stroke="var(--surface)" stroke-width="1"/>'
     + '</svg>';
   }
-
   var _arc = function(startAngle, endAngle, color) {
    var circ = 2 * Math.PI * (r + (R-r)/2);
    var mid = r + (R-r)/2;
@@ -29793,50 +29859,56 @@ function _confirmBorrarCuenta(id) {
     + ' transform="rotate(' + rot.toFixed(2) + ' ' + cx + ' ' + cy + ')"'
     + ' stroke-linecap="butt"/>';
   };
-
   var PI2 = 2 * Math.PI;
-  var sSaldo  = _saldoTotal  / total * PI2;
-  var sIng    = _ingPeriodo  / total * PI2;
-  var sGasto  = _gastoPeriodo / total * PI2;
-
-  var a0 = 0;
-  var a1 = a0 + sSaldo;
-  var a2 = a1 + sIng;
-  var a3 = a2 + sGasto;
-
-  var segSaldo = sSaldo > 0.01  ? _arc(a0, a1, '#2563EB') : '';
-  var segIng   = sIng   > 0.01  ? _arc(a1, a2, 'var(--success)') : '';
-  var segGasto = sGasto > 0.01  ? _arc(a2, a3, 'var(--red)') : '';
-
-  // Centro: saldo total
-  var _fShort = function(n) {
-   if (Math.abs(n) >= 1000) return (n/1000).toFixed(1).replace('.',',') + 'k';
-   return n.toFixed(0);
-  };
-
+  var arcs = '';
+  var aStart = 0;
+  _scaledSegments.forEach(function(seg){
+   if (seg.pct <= 0) return;
+   var aEnd = aStart + seg.pct * PI2;
+   arcs += _arc(aStart, aEnd, seg.color);
+   aStart = aEnd;
+  });
   return '<svg width="104" height="104" viewBox="0 0 104 104">'
-   + segSaldo + segIng + segGasto
+   + arcs
    + '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="var(--surface)"/>'
    + '</svg>';
  };
 
- // Lista de cuentas compacta
+ // Lista (leyenda): top cuentas + ingresos + gastos del periodo.
+ // CRÍTICO: cada fila usa el MISMO color que el segmento del donut.
  var sorted = cuentas.slice().sort(function(a,b){ return (b.saldo||0)-(a.saldo||0); });
  var top5 = sorted.slice(0, 5);
 
- var _listaHtml = top5.length === 0
-  ? '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">Sin cuentas</div>'
-  : top5.map(function(c) {
-   var saldo = c.saldo || 0;
-   var colS = saldo >= 0 ? 'var(--ink)' : 'var(--red)';
-   return '<div style="display:flex;align-items:center;gap:var(--sp-1_5);padding:5px 0;border-bottom:1px solid var(--border)">'
-    + '<div style="width:7px;height:7px;border-radius:50%;background:' + (c.color||'#2563EB') + ';flex-shrink:0"></div>'
-    + '<span style="flex:1;min-width:0;font-size:var(--fs-xs);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(c.nombre||'Cuenta') + '</span>'
-    + '<span style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:' + colS + ';flex-shrink:0;margin-left:var(--sp-1)">' + feur(saldo) + '</span>'
-    + '</div>';
-  }).join('');
+ var _filaLeyenda = function(label, importe, color, opts) {
+  opts = opts || {};
+  var colVal = opts.colorVal || (importe >= 0 ? 'var(--ink)' : 'var(--red)');
+  var prefix = opts.prefix || '';
+  return '<div style="display:flex;align-items:center;gap:var(--sp-1_5);padding:5px 0;border-bottom:1px solid var(--border)">'
+   + '<div style="width:7px;height:7px;border-radius:50%;background:' + color + ';flex-shrink:0"></div>'
+   + '<span style="flex:1;min-width:0;font-size:var(--fs-xs);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(label) + '</span>'
+   + '<span style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:' + colVal + ';flex-shrink:0;margin-left:var(--sp-1)">' + prefix + feur(importe) + '</span>'
+   + '</div>';
+ };
 
- // Layout: lista centrada (nombre izq, saldo der) + donut derecha
+ var _listaHtml;
+ if (top5.length === 0 && _ingPeriodo === 0 && _gastoPeriodo === 0) {
+  _listaHtml = '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">Sin datos</div>';
+ } else {
+  var _filas = '';
+  top5.forEach(function(c){
+   _filas += _filaLeyenda(c.nombre || 'Cuenta', c.saldo || 0, c.color || '#2563EB');
+  });
+  // Sección flujo del periodo (solo si hay movimiento)
+  if (_ingPeriodo > 0) {
+   _filas += _filaLeyenda('Ingresos', _ingPeriodo, 'var(--success)', { colorVal: 'var(--success)', prefix: '+' });
+  }
+  if (_gastoPeriodo > 0) {
+   _filas += _filaLeyenda('Gastos', _gastoPeriodo, 'var(--red)', { colorVal: 'var(--red)', prefix: '−' });
+  }
+  _listaHtml = _filas;
+ }
+
+ // Layout: lista (nombre + importe) + donut derecha
  cuentasEl.innerHTML =
   '<div style="display:flex;align-items:center;gap:var(--sp-2)">'
   + '<div style="flex:1;min-width:0;align-self:center">' + _listaHtml + '</div>'
