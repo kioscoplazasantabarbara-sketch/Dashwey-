@@ -12496,11 +12496,11 @@ const State = (() => {
    try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
   },
  setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', _guardExt(v)); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
- updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals); save(); } },
+ updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals, { updatedAt: Date.now() }); save(); } }, // v1.3.1243 FIX 8A: sellar updatedAt para que _mergeById preserve edición local sobre Firebase viejo
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
  clearTickets: () => { _state.ticketsAbiertos = []; save(); },
- updateProv: (id, vals) => { const p = get.prov(id); if(p) Object.assign(p, vals); save(); },
+ updateProv: (id, vals) => { const p = get.prov(id); if(p) { Object.assign(p, vals, { updatedAt: Date.now() }); } save(); }, // v1.3.1243 FIX 8A
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('merma'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO
@@ -15487,7 +15487,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1242-dev';
+ const _APP_VERSION = 'v1.3.1243-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38855,25 +38855,36 @@ const nPending = (State.get.pendingOrders() || [])
  }
 
  function _sacMakeItem(emoji, nameHtml, sub, cb) {
+ // v1.3.1243 FIX 8C: añadido touchend con preventDefault + flag anti-double.
+ // Antes: en Android WebView, el blur del input cerraba el dropdown vía setTimeout(180)
+ // ANTES de que llegara el click sintético del touch → tap no se registraba.
+ // Ahora: touchend dispara cb directamente, preventDefault evita el click sintético posterior.
  const d = document.createElement('div');
  d.className = 'sac-item';
  d.innerHTML = '<span class="sac-item-e">' + emoji + '</span>'
  + '<div class="sac-item-main"><div class="sac-item-name">' + nameHtml + '</div>'
  + (sub ? '<div class="sac-item-sub">' + sub + '</div>' : '') + '</div>';
+ var _touched = false;
  d.addEventListener('mousedown', function(e){ e.preventDefault(); });
- d.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
- d.addEventListener('click', cb);
+ d.addEventListener('touchstart', function(e){ e.stopPropagation(); }, { passive: true });
+ d.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+ d.addEventListener('touchend', function(e){ _touched = true; e.preventDefault(); try { cb(e); } catch(_) {} }, { passive: false });
+ d.addEventListener('click', function(e){ if (_touched) { _touched = false; return; } try { cb(e); } catch(_) {} });
  return d;
  }
 
  function _sacMakeAdd(label, cb) {
+ // v1.3.1243 FIX 8C: mismo patrón touch-fix que _sacMakeItem
  const d = document.createElement('div');
  d.className = 'sac-add-row';
  d.innerHTML = '<div class="sac-add-plus">+</div>'
  + '<div class="sac-add-text">A\u00f1adir \u201c' + esc(label) + '\u201d</div>';
+ var _touched = false;
  d.addEventListener('mousedown', function(e){ e.preventDefault(); });
- d.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
- d.addEventListener('click', cb);
+ d.addEventListener('touchstart', function(e){ e.stopPropagation(); }, { passive: true });
+ d.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+ d.addEventListener('touchend', function(e){ _touched = true; e.preventDefault(); try { cb(e); } catch(_) {} }, { passive: false });
+ d.addEventListener('click', function(e){ if (_touched) { _touched = false; return; } try { cb(e); } catch(_) {} });
  return d;
  }
 
@@ -44256,7 +44267,11 @@ window._DashweyDeviceId = (() => {
  // fire-and-forget: write() tiene su propio try/catch
  try {
   var _fb = window._DashweyFirebase;
-  if (_fb && _fb.ready && navigator.onLine && !window._DashweySavingCtrl?.isSaving) {
+  // v1.3.1243 FIX 8B: flush forzado al ir a background SIN bypass por isSaving.
+  // Antes: si había save en vuelo, NO flusheaba → ediciones recientes podían perderse
+  // si el usuario cerraba la app antes de que terminara el save anterior.
+  // Ahora: siempre intenta flush con el state más actual. Coste extra: 1 write idempotente.
+  if (_fb && _fb.ready && navigator.onLine) {
    var _snap = _buildLocalSnapshot();
    if (window._DashweyWriteDual) { window._DashweyWriteDual(_snap); }
    else { _fb.write('state', _snap); }
