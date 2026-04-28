@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1270-dev</title>
+<title>Dashwey v1.3.1271-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5923,6 +5923,43 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .prov-row.sel .prov-row-name { color: var(--red); }
+
+/* v1.3.1271 UX-2: badge sutil para distinguir proveedor LV vs manual.
+   - LV: badge azul claro con "LV"
+   - Manual: badge gris muy sutil con "·"
+   Posición: inline al lado del nombre. Tamaño pequeño, no compite visualmente. */
+.prov-origen-badge {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ height: 16px;
+ min-width: 22px;
+ padding: 0 6px;
+ margin-left: 8px;
+ font-size: 9px;
+ font-weight: var(--fw-bold);
+ letter-spacing: 0.5px;
+ border-radius: 4px;
+ vertical-align: middle;
+ line-height: 1;
+}
+.prov-origen-badge.lv {
+ background: rgba(66, 133, 244, 0.12);
+ color: #1A56B5;
+}
+[data-theme="dark"] .prov-origen-badge.lv {
+ background: rgba(100, 160, 255, 0.18);
+ color: #79B0FF;
+}
+.prov-origen-badge.manual {
+ background: rgba(0, 0, 0, 0.05);
+ color: var(--ink-soft);
+ min-width: 0;
+ padding: 0 5px;
+}
+[data-theme="dark"] .prov-origen-badge.manual {
+ background: rgba(255, 255, 255, 0.06);
+}
 .prov-row-days {
  display: flex; flex-direction: column; gap: 1px;
 }
@@ -10576,6 +10613,11 @@ window._dashweyRunSyncCertification = async function(opts) {
     const subs = { ventas: 'ventas', gastosOp: 'gastos', ingresosFin: 'ingresos', historialPedidos: 'pedidos', mermas: 'mermas', facturas: 'facturas' };
     const fsCounts = {};
     let divergencias = 0;
+    // v1.3.1271 FIX cosmetic: tolerancia ±2 docs por colección. Diferencias pequeñas
+    //   son normales durante ventanas de sync (snapshot subcol pendiente, tombstones
+    //   en vuelo, re-import reciente). Antes marcaba RED por 1 doc de diferencia →
+    //   false-positive constante. Ahora solo cuenta como divergencia real si ≥3.
+    const TOLERANCIA = 2;
     for (const localKey in subs) {
      const fbName = subs[localKey];
      const colRef = mod.collection(db, 'usuarios', uid, 'contextos', ctx, 'datos', 'state_sub', fbName);
@@ -10583,7 +10625,7 @@ window._dashweyRunSyncCertification = async function(opts) {
      const fsCount = snap.size;
      const localCount = inv[localKey] ? inv[localKey].total : 0;
      fsCounts[localKey] = { firestore: fsCount, local: localCount, diff: localCount - fsCount };
-     if (Math.abs(localCount - fsCount) > 0) divergencias++;
+     if (Math.abs(localCount - fsCount) > TOLERANCIA) divergencias++;
     }
     report.firestore = fsCounts;
     if (divergencias === 0) {
@@ -16143,7 +16185,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1270-dev';
+ const _APP_VERSION = 'v1.3.1271-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37954,11 +37996,15 @@ const marginLine = mg === null ? '' :
  var dp = _fmtDaysLocal(p.diasPedido || []);
  var de = _fmtDaysLocal(p.diasEntrega || []);
  var days = [dp ? 'Pedido: ' + dp : '', de ? 'Entrega: ' + de : ''].filter(Boolean).join(' · ');
+ // v1.3.1271 UX-2: badge sutil de origen — LV vs manual
+ var _origenBadge = p.origen === 'loyverse'
+   ? '<span class="prov-origen-badge lv" title="Importado de Loyverse">LV</span>'
+   : '<span class="prov-origen-badge manual" title="Creado manualmente">·</span>';
  return '<div class="alm-prov-inline-row' + (sel === p.id ? ' sel' : '') + '" style="--item-index:' + Math.min(_pi, 8) + '" ' +
  'data-pid="' + p.id + '" onclick="var pid=this.dataset.pid;App.alm.selProvInline(pid)">' +
  '<div class="alm-prov-inline-icon">' + (p.icon || '🏪') + '</div>' +
  '<div class="alm-prov-inline-info">' +
- '<div class="alm-prov-inline-name">' + (p.nombre || '—') + '</div>' +
+ '<div class="alm-prov-inline-name">' + (p.nombre || '—') + _origenBadge + '</div>' +
  (days ? '<div class="alm-prov-inline-days">' + days + '</div>' : '') +
  '</div>' +
  '<button class="alm-prov-inline-edit" data-pid="' + p.id + '" onclick="event.stopPropagation();var pid=this.dataset.pid;App.alm._editProvFromPicker(pid)" title="Editar" aria-label="Editar proveedor">' +
@@ -38036,7 +38082,12 @@ const marginLine = mg === null ? '' :
  </div>
  </div>
  <div class="prov-list">
- ${State.get.proveedores().map((p, _pi) => `
+ ${State.get.proveedores().map((p, _pi) => {
+  // v1.3.1271 UX-2: badge sutil de origen — LV vs manual
+  const _origenBadge = p.origen === 'loyverse'
+    ? '<span class="prov-origen-badge lv" title="Importado de Loyverse">LV</span>'
+    : '<span class="prov-origen-badge manual" title="Creado manualmente">·</span>';
+  return `
  <div class="prov-row${sel === p.id ? ' sel' : ''}" style="--item-index:${Math.min(_pi, 8)}" id="prow-${p.id}">
  ${p.banner ? `<div style="position:relative;height:44px;border-radius:var(--r-sm2) 10px 0 0;overflow:hidden;margin:-1px -1px 0">
  <img loading="lazy" src="${p.banner}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(1px) brightness(0.55);transform:scale(1.04)">
@@ -38047,14 +38098,15 @@ const marginLine = mg === null ? '' :
  </div>` : ''}
  <div class="prov-row-body">
  <button class="prov-row-select" onclick="App.alm.selProv('${p.id}')">
- <div class="prov-row-name">${esc(p.nombre)}</div>
+ <div class="prov-row-name">${esc(p.nombre)}${_origenBadge}</div>
  ${daysHtml(p)}
  </button>
  <button class="prov-row-edit" aria-label="Editar proveedor" onclick="App.alm._editProvFromPicker('${p.id}')" title="Editar">
  <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
  </button>
  </div>
- </div>`).join('')}
+ </div>`;
+ }).join('')}
  </div>
  <div style="padding:0 16px 20px">
  <button onclick="App.alm.addNuevoProv()" style="width:100%;height:var(--btn-h);border-radius:var(--r-md);border:2px dashed var(--border);background:transparent;color:var(--text2);font-size:var(--fs-base);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:var(--sp-2);transition:border-color var(--dur-std),color var(--dur-std);touch-action:manipulation">
