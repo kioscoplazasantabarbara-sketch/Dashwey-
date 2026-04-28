@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1249-dev</title>
+<title>Dashwey v1.3.1250-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15559,7 +15559,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1249-dev';
+ const _APP_VERSION = 'v1.3.1250-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46144,20 +46144,49 @@ window._almCarritoOptions = function() {
  // Swipe solo desde header/handle — no desde inputs ni contenido
  const hdr = _fsBox && _fsBox.querySelector('.modal-header-dark');
  const hdl = _fsBox && _fsBox.querySelector('.sheet-handle');
- return (hdr && hdr.contains(target)) || (hdl && hdl.contains(target));
+ // v1.3.1250 FIX: incluir el header del Detalle de Cuenta (.dc-header) y la
+ //   etiqueta "Movimientos (N)" (.dc-movs-label) como zonas válidas para swipe-close.
+ //   Estas zonas son fijas y NO scrollean, así que swipe-down ahí siempre es "cerrar".
+ const dcH = _fsBox && _fsBox.querySelector('.dc-header');
+ const dcL = _fsBox && _fsBox.querySelector('.dc-movs-label');
+ return (hdr && hdr.contains(target))
+     || (hdl && hdl.contains(target))
+     || (dcH && dcH.contains(target))
+     || (dcL && dcL.contains(target));
+ }
+
+ // v1.3.1250 FIX: detectar layout Detalle Cuenta (dc-layout) y devolver el contenedor
+ //   scrollable real (.dc-scroll) en vez de #fs-content (que NO scrollea en este layout).
+ //   Sin esto, _isAtTop(#fs-content) siempre devolvía true → cualquier touch en la lista
+ //   activaba swipe-close incluso con scroll a media página → sheet se cerraba al
+ //   intentar hacer scroll. Bug P0 UX.
+ function _getActiveScroller(fsBox) {
+  if (!fsBox) return null;
+  // Si hay layout dc-layout activo, el scroll vive en .dc-scroll
+  const dcScroll = fsBox.querySelector('.dc-scroll');
+  if (dcScroll) return dcScroll;
+  // Fallback legacy: el padre #fs-content scrollea
+  return fsBox.querySelector('#fs-content') || document.getElementById('fs-content');
  }
 
  document.addEventListener('touchstart', function(e) {
  if (!_isSheetOpen()) { _active = false; return; }
  _fsBox = document.getElementById('fs-box');
- const fc = document.getElementById('fs-content');
  if (!_fsBox || !_fsBox.contains(e.target)) { _active = false; return; }
+
+ // v1.3.1250 FIX: usar el scroller activo (dc-scroll en Detalle Cuenta, fs-content legacy)
+ const scroller = _getActiveScroller(_fsBox);
+ // Detectar si el touch está DENTRO del área scrollable (lista de movimientos)
+ const inScroller = scroller && scroller.contains(e.target);
 
  // FIX v1.2.12: Solo activar swipe desde el header/handle
  // Evita conflicto con inputs, checkboxes y scroll interno
  if (!_isInHeader(e.target)) {
- // Si el contenido está al top Y toca fuera del scroll, permitir
- if (!_isAtTop(fc)) { _active = false; return; }
+ // v1.3.1250 FIX: si el touch es dentro del área scrollable, solo permitir
+ //   swipe-close si la lista está EN EL TOP (scrollTop === 0).
+ //   Si la lista tiene scroll hacia arriba pendiente, el gesto debe scrollear,
+ //   no cerrar. Antes: _isAtTop(fs-content) siempre true → cerraba siempre.
+ if (inScroller && !_isAtTop(scroller)) { _active = false; return; }
  // Toca dentro del contenido scroll en posición top — permitir solo si no es input
  const tag = e.target.tagName;
  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'LABEL') {
@@ -46165,8 +46194,8 @@ window._almCarritoOptions = function() {
  }
  }
 
- // Solo activar si el contenido está al top del scroll
- if (!_isAtTop(fc)) { _active = false; return; }
+ // Solo activar si el scroller activo está al top
+ if (!_isAtTop(scroller)) { _active = false; return; }
 
  _y0 = e.touches[0].clientY;
  _x0 = e.touches[0].clientX;
