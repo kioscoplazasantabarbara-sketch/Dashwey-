@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1248-dev</title>
+<title>Dashwey v1.3.1249-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5663,6 +5663,38 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  overscroll-behavior: contain;
 }
 #fs-content::-webkit-scrollbar { display: none; }
+
+/* v1.3.1249 FIX UX-SCROLL — layout banca/finanzas para Detalle de Cuenta.
+   Cuando el contenido de #fs-content empieza con .dc-layout, el contenedor padre
+   deja de scrollear y la única zona scrollable es .dc-scroll (lista de movimientos).
+   El header (saldo + título) queda FIJO arriba como una app de banca. */
+#fs-content:has(> .dc-layout) {
+ overflow: hidden; /* el padre deja de scrollear — el scroll vive en .dc-scroll */
+ display: flex;
+ flex-direction: column;
+}
+.dc-layout {
+ display: flex;
+ flex-direction: column;
+ height: 100%;
+ min-height: 0; /* fix flexbox: permite que el hijo .dc-scroll se confine */
+ width: 100%;
+}
+.dc-scroll {
+ flex: 1 1 auto;
+ min-height: 0; /* crítico en flex: sin esto, el contenido empuja y el padre crece */
+ overflow-y: auto;
+ -webkit-overflow-scrolling: touch;
+ overscroll-behavior: contain;
+}
+.dc-scroll::-webkit-scrollbar { display: none; }
+/* Fallback para navegadores sin :has() — Android WebView <105.
+   Activar con clase .has-dc-layout añadida desde JS al abrir detalle. */
+#fs-content.has-dc-layout {
+ overflow: hidden;
+ display: flex;
+ flex-direction: column;
+}
 
 #modal-overlay {
  position: fixed; inset: 0; z-index: 9001;
@@ -15445,6 +15477,11 @@ const ui = (() => {
  const CLOSE_DUR = 220; // ms — alineado con CSS transition 0.22s
  setTimeout(() => {
  if (box) box.classList.remove('fs-settings', 'sheet-half', 'sheet-true-full');
+ // v1.3.1249 FIX UX-SCROLL: limpiar layout banca/finanzas (Detalle Cuenta)
+ try {
+  var _fsC2 = document.getElementById('fs-content');
+  if (_fsC2) _fsC2.classList.remove('has-dc-layout');
+ } catch(_) {}
  if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
  try { if (App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
  try { Utils.triggerHaptic('edgeRelease'); } catch(_) {}
@@ -15522,7 +15559,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1248-dev';
+ const _APP_VERSION = 'v1.3.1249-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31815,9 +31852,11 @@ function _confirmBorrarCuenta(id) {
     movs.forEach(function(m, i) {
      var mLabel = _monthLabel(m.fecha);
      if (mLabel && mLabel !== lastMonth) {
-      // Separador de mes en línea propia
+      // v1.3.1249 FIX UX-SCROLL: separador sticky dentro del scroll (patrón banca).
+      //   Mientras hay movimientos de ese mes visibles, la etiqueta queda fija arriba
+      //   del scroll. Al pasar al siguiente mes, la etiqueta nueva empuja a la anterior.
       rows.push(
-       '<div style="padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">'
+       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">'
        + esc(mLabel)
        + '</div>'
       );
@@ -31911,8 +31950,15 @@ function _confirmBorrarCuenta(id) {
     + '</div>';
 
    var html =
-    // ── Header estilo banco ──
-    '<div style="position:relative;background:var(--surface);border-bottom:1px solid var(--border);padding:var(--sp-4) 16px 14px;flex-shrink:0">'
+    // ── v1.3.1249 FIX UX-SCROLL: layout banca/finanzas ──
+    //   Wrapper dc-layout: flex column, height 100%, padre #fs-content NO scrollea.
+    //   Header (saldo + título) flex-shrink:0 → FIJO arriba.
+    //   #dc-movs flex:1 + overflow-y:auto → ÚNICO scroll de la pantalla.
+    //   Antes: #fs-content tenía overflow-y:auto y dc-movs intentaba ser scroll
+    //   interno → doble scroll container, jitter, header desaparecía con scroll.
+    '<div class="dc-layout">'
+    // ── Header estilo banco (FIJO arriba) ──
+    + '<div class="dc-header" style="position:relative;background:var(--surface);border-bottom:1px solid var(--border);padding:var(--sp-4) 16px 14px;flex-shrink:0">'
     + menuLlave
     + '<div style="display:flex;align-items:center;gap:var(--sp-2_5);margin-bottom:var(--sp-3)">'
     + '<div style="width:12px;height:12px;border-radius:50%;background:' + cuenta.color + ';flex-shrink:0"></div>'
@@ -31932,17 +31978,36 @@ function _confirmBorrarCuenta(id) {
     + '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo actual</div>'
     + '</div>'
     + '</div>'
-    // ── Extracto de movimientos ──
-    + '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0">Movimientos (' + movs.length + ')</div>'
-    + '<div id="dc-movs" style="overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch">' + movsHtml + '</div>';
+    // ── Etiqueta Movimientos (FIJA bajo el header) ──
+    + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
+    // ── Lista de movimientos (ÚNICO scrollable) ──
+    + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
+    + '</div>'; // /dc-layout
 
    App.ui.setFs(html);
    App.ui.openFs('full');
 
+   // v1.3.1249 FIX UX-SCROLL: marcar fs-content para activar layout sin scroll padre
+   //   Compatibilidad con Android WebView <105 que no soporta :has() selector.
+   //   La clase se limpia al cerrar el sheet (cleanup en _dcCleanupLayout).
+   try {
+    var _fsCnt = document.getElementById('fs-content');
+    if (_fsCnt) _fsCnt.classList.add('has-dc-layout');
+   } catch(_) {}
+
    requestAnimationFrame(function() {
     // ── Cerrar ──
     var closeEl = document.getElementById('dc-close');
-    if (closeEl) closeEl.addEventListener('click', function() { App.ui.closeFs(); }, { once: true });
+    var _dcCleanupLayout = function() {
+     try {
+      var _fs = document.getElementById('fs-content');
+      if (_fs) _fs.classList.remove('has-dc-layout');
+     } catch(_) {}
+    };
+    if (closeEl) closeEl.addEventListener('click', function() {
+     _dcCleanupLayout();
+     App.ui.closeFs();
+    }, { once: true });
 
     // ── Menú llave ──
     var _llaveBtn = document.getElementById('dc-llave-btn');
