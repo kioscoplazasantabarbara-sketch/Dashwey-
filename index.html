@@ -12255,10 +12255,22 @@ const State = (() => {
  save();
  }
  },
- // removePendingOrder: elimina un pedido pendiente (tras convertirlo a historialPedidos)
+ // removePendingOrder: SOFT-DELETE de un pedido pendiente.
+ // v1.3.1242 FIX BUG-4: hard-delete (filter) provocaba que el pedido reapareciera
+ // en multi-device. _mergeById necesita ver el item local con deletedAt > remote.updatedAt
+ // para que el delete se propague correctamente. Sin esto, otro device podía reinyectar
+ // el item via onSnapshot porque no había forma de saber que fue eliminado.
  removePendingOrder: (id) => {
  if (!_state.pendingOrders) return;
- _state.pendingOrders = _state.pendingOrders.filter(o => o.id !== id);
+ const idx = _state.pendingOrders.findIndex(o => o && o.id === id);
+ if (idx === -1) return;
+ // Marcar deleted en lugar de filtrar — _nd() lo oculta de UI, _mergeById respeta deletedAt
+ _state.pendingOrders[idx] = Object.assign({}, _state.pendingOrders[idx], {
+ deleted: true,
+ deletedAt: Date.now()
+ });
+ // Registrar tombstone local (defensa adicional)
+ try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.add && window._DashweyLocalDeletedIds.add(id); } catch(_) {}
  save();
  },
  period: (v) => { _state.period = v; save(); },
@@ -15475,7 +15487,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1241-dev';
+ const _APP_VERSION = 'v1.3.1242-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -39873,7 +39885,15 @@ _eaRecalc();
 
  // ── _calcIAAnalysisRunEa — análisis financiero en formulario Editar ──
  // v1.3.619: misma lógica que _calcIAAnalysisRun pero con IDs de editar artículo
+ // v1.3.1242 FIX BUG-2: debounce 200ms — antes el innerHTML se rewriteaba en cada
+ // keystroke, lo que tras 20-30 ediciones consecutivas saturaba el WebView Android
+ // y se sentía como "scroll bloqueado". El debounce garantiza repaint solo tras pausa.
+ var _eaIaDebounceTimer = null;
  function _calcIAAnalysisRunEa() {
+  if (_eaIaDebounceTimer) clearTimeout(_eaIaDebounceTimer);
+  _eaIaDebounceTimer = setTimeout(_calcIAAnalysisRunEaImpl, 200);
+ }
+ function _calcIAAnalysisRunEaImpl() {
   var box = document.getElementById('ea-ia-analysis');
   if (!box) return;
   var pr = parseFloat(document.getElementById('ea-pc')?.value) || 0;
