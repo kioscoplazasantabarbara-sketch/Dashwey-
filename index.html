@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1255-dev</title>
+<title>Dashwey v1.3.1256-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13881,6 +13881,8 @@ const FinEngine = (() => {
   cuentasActivas.forEach(c => { cuentaIdx[c.id] = c; });
   const _cuentaInfo = (cid) => cuentaIdx[cid] || null;
   const idsCuentasActivas = new Set(cuentasActivas.map(c => c.id));
+  // Cuenta primaria — fallback para ventas con cuentaId vacío
+  const cuentaPrimaria = cuentasActivas.find(c => c.isPrimary) || cuentasActivas[0] || null;
 
   const gastos = (State.get.gastosOp() || []).filter(g => g && g.cuentaId && idsCuentasActivas.has(g.cuentaId));
   const ingresos = (State.get.ingresosFin() || []).filter(i => i && i.cuentaId && idsCuentasActivas.has(i.cuentaId));
@@ -13972,6 +13974,112 @@ const FinEngine = (() => {
     isTransfer: !!i.transferId,
    });
   });
+
+  // v1.3.1256 FIX P0: incluir ventas como ingresos agregados por día+cuenta.
+  //   Razón: desde v1.3.1067 las ventas Loyverse NO crean ingreso contrapartida
+  //   (los ingresos eran redundantes — ver _bbRecalcSaldos L20261-20266 que sí
+  //   usa ventas para calcular saldo). Sin esta sección, la Vista Global
+  //   mostraba Ingresos: 0,00€ a pesar de tener saldo positivo.
+  //
+  //   Estrategia: agrupar receipts del mismo día y misma cuenta en UNA fila
+  //   "Ventas del día — N tickets". Con 4461 receipts/mes mostrarlos uno a uno
+  //   sería inviable. v_lvsum_* ya están pre-agregados; v_lv_* se agrupan al
+  //   vuelo. Importante: esto NO duplica con v_lvsum_*: si en un día existen
+  //   ambas, las v_lv_* (API real) tienen prioridad y los v_lvsum_* del mismo
+  //   día se IGNORAN (la auto-purga v1.3.1252 limpia el state pero mientras
+  //   no se ejecute, esta lógica blinda la vista).
+  try {
+   const ventas = (State.get.ventas() || []).filter(v => {
+    if (!v || v.deleted === true) return;
+    // Excluir ajustes/pendientes (consistente con _isKpiVisible)
+    if (v.metaTipo === 'ajuste') return false;
+    return true;
+   });
+   // Agrupar por (cuentaId resolved + díaISO YYYY-MM-DD)
+   //   cuentaId de venta puede estar vacío → fallback a cuenta primaria.
+   const ventasGroups = {}; // key → { cuentaId, dia, total, count, fechaRepresentativa, sources }
+   const _isoDay = (iso) => {
+    try {
+     const d = new Date(iso);
+     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    } catch(_) { return null; }
+   };
+   const ventasPorDiaApi = new Set(); // diasYYYYMMDD que tienen venta API real (origen='loyverse')
+   ventas.forEach(v => {
+    if (v.origen === 'loyverse') {
+     const day = _isoDay(v.fecha);
+     if (day) ventasPorDiaApi.add(day);
+    }
+   });
+   ventas.forEach(v => {
+    const cidResolved = v.cuentaId || (cuentaPrimaria ? cuentaPrimaria.id : null);
+    if (!cidResolved || !idsCuentasActivas.has(cidResolved)) return;
+    const day = _isoDay(v.fecha);
+    if (!day) return;
+    // Anti-duplicado: si este día tiene API real Y la venta es import_loyverse
+    //   → omitirla (la API es autoritativa, el sintético es duplicado)
+    if (v.origen === 'import_loyverse' && ventasPorDiaApi.has(day)) return;
+    const importe = (typeof FinEngine !== 'undefined' && FinEngine.ventaIngresos)
+     ? FinEngine.ventaIngresos(v)
+     : (v.total || 0);
+    if (importe <= 0) return;
+    const key = cidResolved + '|' + day;
+    if (!ventasGroups[key]) {
+     ventasGroups[key] = {
+      cuentaId: cidResolved,
+      dia: day,
+      total: 0,
+      count: 0,
+      fechaRepresentativa: v.fecha, // primera vista — se reemplaza con la última del día
+      sources: {}, // origen → count
+     };
+    }
+    const grp = ventasGroups[key];
+    grp.total += importe;
+    grp.count++;
+    grp.sources[v.origen || 'manual'] = (grp.sources[v.origen || 'manual'] || 0) + 1;
+    // Mantener la fecha más tardía del día (mejor para sort)
+    if (new Date(v.fecha) > new Date(grp.fechaRepresentativa)) {
+     grp.fechaRepresentativa = v.fecha;
+    }
+   });
+   // Convertir grupos a movimientos
+   Object.keys(ventasGroups).forEach(k => {
+    const grp = ventasGroups[k];
+    const c = _cuentaInfo(grp.cuentaId);
+    // Etiqueta según origen dominante
+    const srcs = Object.keys(grp.sources);
+    let concepto = 'Ventas del día';
+    if (srcs.length === 1) {
+     if (srcs[0] === 'loyverse') concepto = 'Ventas del día (Loyverse)';
+     else if (srcs[0] === 'import_loyverse') concepto = 'Ventas del día (Loyverse)';
+     else if (srcs[0] === 'tpv') concepto = 'Ventas del día (TPV)';
+     else if (srcs[0] === 'manual') concepto = 'Ventas del día';
+    } else {
+     concepto = 'Ventas del día (mixto)';
+    }
+    const importeRound = Math.round(grp.total * 100) / 100;
+    movs.push({
+     kind: 'venta-dia',
+     id: 'vd_' + k,
+     src: 'venta',
+     concepto: concepto,
+     importe: importeRound,
+     delta: importeRound,
+     fecha: grp.fechaRepresentativa,
+     cuentaId: grp.cuentaId,
+     cuentaNombre: c ? c.nombre : '?',
+     cuentaColor: c ? c.color : '#999',
+     ventasCount: grp.count,
+     metaTipo: 'venta-agregada',
+     transferId: null,
+     isTransfer: false,
+    });
+   });
+  } catch(eVentas) {
+   // Si algo falla, no rompemos la vista — las ventas no aparecerán pero el resto sí
+   console.warn('[FinEngine] unifiedTransactions ventas error:', eVentas);
+  }
 
   // Ordenar newest→oldest
   movs.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
@@ -15831,7 +15939,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1255-dev';
+ const _APP_VERSION = 'v1.3.1256-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -32272,13 +32380,17 @@ function _confirmBorrarCuenta(id) {
       return;
      }
 
-     // Filas normales (gasto / ingreso / huérfana)
+     // Filas normales (gasto / ingreso / huérfana / venta-dia)
      var col = m.delta >= 0 ? 'var(--success)' : 'var(--red)';
      var sign = m.delta >= 0 ? '+' : '\u2212';
      var cuentaBadge = '<span style="display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-med)">'
       + '<span style="width:8px;height:8px;border-radius:50%;background:' + (m.cuentaColor||'#999') + ';flex-shrink:0"></span>'
       + esc(m.cuentaNombre || '?')
       + '</span>';
+     // v1.3.1256: subtítulo "× N tickets" para ventas agregadas
+     var subtitleVenta = (m.kind === 'venta-dia' && m.ventasCount > 0)
+      ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">\u00d7 ' + m.ventasCount + ' ' + (m.ventasCount === 1 ? 'ticket' : 'tickets') + '</div>'
+      : '';
 
      rows.push(
       '<div class="fc-move-row gv-row" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border)">'
@@ -32287,6 +32399,7 @@ function _confirmBorrarCuenta(id) {
       + '</div>'
       + '<div style="flex:1;min-width:0">'
       +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.concepto) + '</div>'
+      +  subtitleVenta
       +  '<div style="margin-top:2px">' + cuentaBadge + '</div>'
       +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">Saldo total: ' + _feur(saldoTrasEste) + '</div>'
       + '</div>'
