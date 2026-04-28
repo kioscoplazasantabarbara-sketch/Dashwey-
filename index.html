@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1259-dev</title>
+<title>Dashwey v1.3.1260-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16056,7 +16056,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1259-dev';
+ const _APP_VERSION = 'v1.3.1260-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18446,14 +18446,68 @@ const ui = (() => {
     var provId = (it.category_id && catIdToProvId[it.category_id]) || fallbackProvId;
     var prodId = 'p_lv_' + it.id;
     var existing = prevProdById[prodId];
+
+    // ──────────────────────────────────────────────────────────────────
+    // v1.3.1260 FIX P0 BUG-RENAME — preservar campos editados por usuario
+    //
+    //   Bug: cualquier import LV (boot, sync, manual) sobrescribía:
+    //     - prod.nombre  → siempre vuelve al nombre LV original
+    //     - prod.pvp     → siempre vuelve al precio LV
+    //     - prod.barcode → vuelve al barcode LV
+    //   Aplica el patrón v1.3.1237 que ya protege proveedores:
+    //     - sourceName / sourcePvp / sourceBarcode = valor LV de referencia
+    //     - Si current ≠ sourceX → usuario lo editó → preservar
+    //     - Si current === sourceX o no hay sourceX → refrescar desde LV
+    //   sourceX SIEMPRE se actualiza al valor LV actual (para detectar
+    //   futuras ediciones).
+    //
+    //   Política conservadora: ante duda, preservar (mejor mostrar valor
+    //   editado del usuario que perderlo).
+    // ──────────────────────────────────────────────────────────────────
+    var _lvName = it.item_name || it.name || 'Sin nombre';
+    var _lvPvp = pvp;
+    var _lvBarcode = variant.barcode || '';
+
+    var _existingName = existing && existing.nombre;
+    var _existingSourceName = existing && existing.sourceName;
+    var _nameWasEdited = _existingName && (
+      (_existingSourceName && _existingName !== _existingSourceName) ||
+      (!_existingSourceName && _existingName !== _lvName) ||
+      (_existingSourceName && _existingName === _existingSourceName && _existingName !== _lvName)
+    );
+    var _finalName = _nameWasEdited ? _existingName : (_existingName || _lvName);
+
+    var _existingPvp = existing && existing.pvp;
+    var _existingSourcePvp = existing && existing.sourcePvp;
+    // PVP: comparación con tolerancia 0.001 (floats)
+    var _eq = function(a, b) { return Math.abs((a||0) - (b||0)) < 0.001; };
+    var _pvpWasEdited = (typeof _existingPvp === 'number') && (
+      (typeof _existingSourcePvp === 'number' && !_eq(_existingPvp, _existingSourcePvp)) ||
+      (typeof _existingSourcePvp !== 'number' && !_eq(_existingPvp, _lvPvp)) ||
+      (typeof _existingSourcePvp === 'number' && _eq(_existingPvp, _existingSourcePvp) && !_eq(_existingPvp, _lvPvp))
+    );
+    var _finalPvp = _pvpWasEdited ? _existingPvp : (_lvPvp || _existingPvp || 0);
+
+    var _existingBarcode = existing && existing.barcode;
+    var _existingSourceBarcode = existing && existing.sourceBarcode;
+    var _barcodeWasEdited = _existingBarcode && (
+      (_existingSourceBarcode && _existingBarcode !== _existingSourceBarcode) ||
+      (!_existingSourceBarcode && _existingBarcode !== _lvBarcode) ||
+      (_existingSourceBarcode && _existingBarcode === _existingSourceBarcode && _existingBarcode !== _lvBarcode)
+    );
+    var _finalBarcode = _barcodeWasEdited ? _existingBarcode : (_lvBarcode || _existingBarcode || '');
+
     var prod = {
      id: prodId,
      loyverseItemId: it.id,
      origen: 'loyverse',
-     // Datos que vienen de Loyverse (siempre refrescar)
-     nombre: it.item_name || it.name || (existing && existing.nombre) || 'Sin nombre',
-     pvp: pvp || (existing && existing.pvp) || 0,
-     barcode: variant.barcode || (existing && existing.barcode) || '',
+     // v1.3.1260: campos visibles preservados si fueron editados
+     nombre: _finalName,
+     sourceName: _lvName,        // referencia LV — para detectar próxima edición
+     pvp: _finalPvp,
+     sourcePvp: _lvPvp,          // referencia LV
+     barcode: _finalBarcode,
+     sourceBarcode: _lvBarcode,  // referencia LV
      categoria: it.category_id || (existing && existing.categoria) || '',
      prov: provId,
      // Campos editables por usuario: CONSERVAR si ya existían
@@ -18464,25 +18518,54 @@ const ui = (() => {
      iva: (existing && existing.iva !== undefined) ? existing.iva : 10,
      stock: (existing && existing.stock) || 0,
      // v1.3.1241 FIX BUG-1A: preservar ventaNombre + cat (campos Dashwey-only).
-     // Sin esto, cualquier import Loyverse borraba "Nombre en TPV" y "Categoría" editados.
      ventaNombre: (existing && existing.ventaNombre) || undefined,
      cat: (existing && existing.cat) || undefined,
      // Preservar campos extra que el usuario pueda haber añadido
      e: (existing && existing.e) || undefined,
      foto: (existing && existing.foto) || undefined,
      minimo: (existing && existing.minimo) || undefined,
+     // v1.3.1260: preservar campos editables adicionales que existing pudiera tener
+     stockMinimo: (existing && existing.stockMinimo) || undefined,
+     stockActual: (existing && existing.stockActual !== undefined) ? existing.stockActual : undefined,
+     descuento: (existing && existing.descuento) || undefined,
+     caducidad: (existing && existing.caducidad) || undefined,
+     historialPrecios: (existing && existing.historialPrecios) || undefined,
+     re: (existing && existing.re) || undefined,
+     trackStock: (existing && typeof existing.trackStock === 'boolean') ? existing.trackStock : undefined,
+     // Preservar updatedAt si existing tiene uno (no resetear a undefined)
+     updatedAt: (existing && existing.updatedAt) || undefined,
     };
     // Limpiar undefined para no contaminar Firestore
     Object.keys(prod).forEach(function(k){ if (prod[k] === undefined) delete prod[k]; });
     mergedProds.push(prod);
    });
    // v1.3.1084: productos Loyverse ANTIGUOS que ya no están en lvItems → soft-delete
+   // v1.3.1260 SAFEGUARD: NO soft-delete si el producto tiene edición de usuario.
+   //   Razón: si LV devuelve catálogo incompleto (paginación, error de red, item
+   //   temporalmente oculto en LV), no queremos perder ediciones. Mejor mantener
+   //   el producto huérfano que borrar trabajo del usuario.
+   //   "Editado" = nombre ≠ sourceName, o ventaNombre/cat presente, o updatedAt > createdAt.
    var _newLvProdIds = {};
    mergedProds.forEach(function(p){ if (p && p.id && !p.deleted) _newLvProdIds[p.id] = true; });
    prevProds.forEach(function(p){
     if (!p || !p.id || p.deleted) return;
     if (p.origen === 'loyverse' && !_newLvProdIds[p.id]) {
-     mergedProds.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+     // Salvaguarda v1.3.1260: si el usuario editó algo, preservar el producto
+     var _hasUserEdit = (
+       (p.nombre && p.sourceName && p.nombre !== p.sourceName) ||
+       (p.ventaNombre && p.ventaNombre.trim()) ||
+       (p.cat && p.cat.trim()) ||
+       (p.foto) ||
+       (p.descuento) ||
+       (typeof p.precioCompra === 'number' && p.precioCompra > 0) ||
+       (Array.isArray(p.historialPrecios) && p.historialPrecios.length > 0)
+     );
+     if (_hasUserEdit) {
+      console.warn('[Loyverse] FIX 1260: producto', p.id, '("' + (p.nombre||'?') + '") no en LV pero tiene edición de usuario — PRESERVADO (no soft-delete)');
+      mergedProds.push(p); // mantener tal cual, sin marcar deleted
+     } else {
+      mergedProds.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
+     }
     }
    });
    var newProds = mergedProds; // mantener variable para refs posteriores
