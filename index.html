@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1256-dev</title>
+<title>Dashwey v1.3.1257-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8443,8 +8443,10 @@ function _authTabSafe(tab) {
  <button class="dash-nav-arrow" id="dash-nav-prev" onclick="try{Utils.triggerHaptic('light');}catch(_){}App.dash.shiftPeriod(-1)" aria-label="Periodo anterior">‹</button>
  <button class="dash-title-period-btn hdr-title-main" id="dash-title-period-btn"
  onclick="App.dash.openGlobalPeriodPicker()" aria-label="Cambiar periodo">
- <span id="dash-title-period-lbl">Este mes</span>
- <span id="dash-title-period-chevron" class="dash-title-period-chevron">▾</span>
+ <span style="display:flex;flex-direction:column;align-items:center;line-height:1.1">
+ <span style="display:flex;align-items:center;gap:var(--sp-1)"><span id="dash-title-period-lbl">Este mes</span><span id="dash-title-period-chevron" class="dash-title-period-chevron">▾</span></span>
+ <small id="dash-title-franja-lbl" style="font-size:var(--fs-2xs);font-weight:var(--fw-med);color:var(--ink-soft);margin-top:1px;display:none"></small>
+ </span>
  </button>
  <button class="dash-nav-arrow" id="dash-nav-next" onclick="try{Utils.triggerHaptic('light');}catch(_){}App.dash.shiftPeriod(1)" aria-label="Periodo siguiente">›</button>
  <!-- v1.3.1003 Fase 5: toggle scope negocio/personal -->
@@ -13111,6 +13113,58 @@ const KPI = (() => {
  start = new Date(now.getFullYear(), now.getMonth(), 1);
  end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
  }
+
+ // v1.3.1257 — FRANJA HORARIA GLOBAL TIPO LOYVERSE DASHBOARD
+ //   Si el periodo tiene dayStart/dayEnd (HH:MM), aplicarlos al rango calculado.
+ //   - Custom respeta sus horas exactas (no se sobrescriben).
+ //   - hours (24h móvil) tampoco — es una ventana relativa al ahora.
+ //   - today/week/month/year SÍ se ajustan.
+ //
+ //   Comportamiento esperado (replica de Loyverse Dashboard):
+ //   "25 abril, 15:00-04:00" significa: jornada que ARRANCA el 25 a las 15:00
+ //   y TERMINA el 26 a las 04:00 (madrugada del día siguiente).
+ //
+ //   Cálculo:
+ //     - start = primer día calendario del rango @ dayStart
+ //     - end   = último día calendario del rango @ dayEnd
+ //     - Si dayEnd <= dayStart (nocturno) → end += 1 día (cae en madrugada siguiente)
+ //
+ //   Ejemplo Hoy=27 abr (today, offset=0) con franja 15:00–04:00:
+ //     base: start=27 abr 00:00, end=28 abr 00:00 (último día calendario = 27 abr)
+ //     ajustado: start=27 abr 15:00, end=28 abr 04:00 ✓
+ //
+ //   Ejemplo Mes=Abril (month, offset=0) con franja 15:00–04:00:
+ //     base: start=1 abr 00:00, end=1 may 00:00 (último día = 30 abr)
+ //     ajustado: start=1 abr 15:00, end=1 may 04:00 ✓ (jornada del 30 abr cierra
+ //                                                     en madrugada del 1 may)
+ if (period.type !== 'custom' && period.type !== 'hours' && period.dayStart && period.dayEnd) {
+  // Skip default 00:00–23:59 — equivale a día completo, no necesita reajuste.
+  //   Aplicarlo perdería el último minuto (fix de v1.3.1257 verificado).
+  if (period.dayStart === '00:00' && period.dayEnd === '23:59') {
+   // no-op — base range ya es correcto (start 00:00 → end 00:00 día siguiente)
+  } else {
+   const _parseHM = (s) => {
+    const m = String(s).match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    return { h: +m[1], m: +m[2] };
+   };
+   const ds = _parseHM(period.dayStart);
+   const de = _parseHM(period.dayEnd);
+   if (ds && de) {
+    const dsMin = ds.h * 60 + ds.m;
+    const deMin = de.h * 60 + de.m;
+    const isNocturno = deMin <= dsMin;
+    const newStart = new Date(start);
+    newStart.setHours(ds.h, ds.m, 0, 0);
+    const newEnd = new Date(end.getTime() - MS_PER_DAY);
+    newEnd.setHours(de.h, de.m, 0, 0);
+    if (isNocturno) newEnd.setDate(newEnd.getDate() + 1);
+    start = newStart;
+    end = newEnd;
+   }
+  }
+ }
+
  return { start, end };
  }
 
@@ -15497,6 +15551,45 @@ const Utils = (() => {
   document.getElementById('dash-nav-prev')?.setAttribute('disabled', 'true');
   document.getElementById('dash-nav-next')?.setAttribute('disabled', 'true');
  } catch(_) {}
+
+ // v1.3.1257: hidratar inputs de FRANJA HORARIA con valores actuales del periodo.
+ //   Si no hay franja configurada, defaults 00:00–23:59 (= día completo).
+ //   Listener en los inputs actualiza el hint en vivo y persiste al cerrar.
+ try {
+  const dsInp = document.getElementById('dps-day-start');
+  const deInp = document.getElementById('dps-day-end');
+  const hint = document.getElementById('dps-franja-hint');
+  if (dsInp && deInp) {
+   const _curDS = (config.dayStart && /^\d{1,2}:\d{2}$/.test(config.dayStart)) ? config.dayStart : '00:00';
+   const _curDE = (config.dayEnd && /^\d{1,2}:\d{2}$/.test(config.dayEnd)) ? config.dayEnd : '23:59';
+   dsInp.value = _curDS;
+   deInp.value = _curDE;
+   const _updateHint = () => {
+    if (!hint) return;
+    const v1 = dsInp.value, v2 = deInp.value;
+    if (v1 === '00:00' && v2 === '23:59') {
+     hint.textContent = 'Día completo (00:00–23:59)';
+     hint.style.color = 'var(--ink-soft)';
+    } else {
+     const _toMin = s => { const m = s.match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1]*60 + +m[2]) : 0; };
+     const isNoct = _toMin(v2) <= _toMin(v1);
+     hint.textContent = isNoct
+      ? 'Jornada nocturna: ' + v1 + ' → ' + v2 + ' (día siguiente)'
+      : 'Jornada: ' + v1 + ' → ' + v2;
+     hint.style.color = isNoct ? '#8B5CF6' : 'var(--ink)';
+    }
+   };
+   _updateHint();
+   // Re-bind listeners idempotentemente (clonar elimina handlers viejos)
+   ['change', 'input'].forEach(evt => {
+    dsInp.removeEventListener(evt, _updateHint);
+    deInp.removeEventListener(evt, _updateHint);
+    dsInp.addEventListener(evt, _updateHint);
+    deInp.addEventListener(evt, _updateHint);
+   });
+  }
+ } catch(eFranja) { console.warn('[Dashwey/Period] franja hydrate err:', eFranja); }
+
  sheet.classList.add('open');
  }
 
@@ -15517,6 +15610,16 @@ const Utils = (() => {
  }
  form?.classList.remove('show');
 
+ // v1.3.1257: leer franja horaria activa de los inputs (Loyverse style)
+ //   y propagarla al callback. Default 00:00–23:59 (día completo).
+ let _ds = '00:00', _de = '23:59';
+ try {
+  const dsEl = document.getElementById('dps-day-start');
+  const deEl = document.getElementById('dps-day-end');
+  if (dsEl?.value && /^\d{1,2}:\d{2}$/.test(dsEl.value)) _ds = dsEl.value;
+  if (deEl?.value && /^\d{1,2}:\d{2}$/.test(deEl.value)) _de = deEl.value;
+ } catch(_) {}
+
  if (config?.onSelect) {
  // v1.2.42: guardar callback ANTES de limpiar config — evita race condition
  const cb = config.onSelect;
@@ -15524,10 +15627,11 @@ const Utils = (() => {
  document.getElementById('dash-title-period-chevron')
  ?.style.setProperty?.('transform', '');
  sheet._periodConfig = null;
- cb(t); // ejecutar después de limpiar
+ // v1.3.1257: pasar segundo argumento { dayStart, dayEnd } al callback
+ cb(t, { dayStart: _ds, dayEnd: _de });
  } else {
  // Fallback: comportamiento original del dashboard
- App.dash.selGlobalPeriod(t);
+ App.dash.selGlobalPeriod(t, { dayStart: _ds, dayEnd: _de });
  }
  }
 
@@ -15939,7 +16043,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1256-dev';
+ const _APP_VERSION = 'v1.3.1257-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -27529,13 +27633,18 @@ function _confirmBorrarCuenta(id) {
  const _customHasta = (current === 'custom' && currentPeriod.customEnd)
  ? currentPeriod.customEnd.slice(0,10)
  : toLocal(now);
+ // v1.3.1257: leer franja horaria actual (default 00:00–23:59)
+ const _curDayStart = (currentPeriod.dayStart && /^\d{1,2}:\d{2}$/.test(currentPeriod.dayStart)) ? currentPeriod.dayStart : '00:00';
+ const _curDayEnd = (currentPeriod.dayEnd && /^\d{1,2}:\d{2}$/.test(currentPeriod.dayEnd)) ? currentPeriod.dayEnd : '23:59';
  Utils.openPeriodSheet({
  title: 'Periodo del dashboard',
  opts: _DPS_OPTS,
  current,
  customDesde: _customDesde,
  customHasta: _customHasta,
- onSelect: t => { selGlobalPeriod(t); },
+ dayStart: _curDayStart, // v1.3.1257
+ dayEnd: _curDayEnd,     // v1.3.1257
+ onSelect: (t, franja) => { selGlobalPeriod(t, franja); },
  onCustom: (desde, hasta) => {
  // v1.3.1109: sanear — asegurar strings no vacíos + dates válidas
  if (!desde || !hasta || typeof desde !== 'string' || typeof hasta !== 'string') {
@@ -27615,7 +27724,9 @@ function _confirmBorrarCuenta(id) {
  });
  }
 
- function selGlobalPeriod(t) {
+ function selGlobalPeriod(t, franja) {
+ // v1.3.1257: argumento opcional `franja` = { dayStart, dayEnd }.
+ //   Si se pasa, se persiste en period y aplica a todos los modos no-custom.
  const LABELS = {
  hours:'Hoy', today:'Hoy',
  week:'Esta semana', month:'Este mes',
@@ -27636,6 +27747,20 @@ function _confirmBorrarCuenta(id) {
  // Guardar en State
  const label = LABELS[t] || t;
  const newPeriod = { type: t, label, offset: 0, userSet: true };
+ // v1.3.1257: incluir franja horaria si fue pasada (tipo Loyverse)
+ if (franja && franja.dayStart && franja.dayEnd) {
+  newPeriod.dayStart = franja.dayStart;
+  newPeriod.dayEnd = franja.dayEnd;
+ } else {
+  // Heredar franja del period actual si existe (preserva al cambiar tipo)
+  try {
+   const _cur = State.get.period();
+   if (_cur && _cur.dayStart && _cur.dayEnd) {
+    newPeriod.dayStart = _cur.dayStart;
+    newPeriod.dayEnd = _cur.dayEnd;
+   }
+  } catch(_) {}
+ }
  State.set.period(newPeriod);
 
 
@@ -27769,6 +27894,23 @@ function _confirmBorrarCuenta(id) {
  // Título inline
  const titleLbl = document.getElementById('dash-title-period-lbl');
  if (titleLbl) titleLbl.textContent = label;
+ // v1.3.1257: actualizar línea de franja horaria si está configurada
+ try {
+  const franjaLbl = document.getElementById('dash-title-franja-lbl');
+  if (franjaLbl) {
+   const p = State.get.period();
+   const ds = (p && p.dayStart && /^\d{1,2}:\d{2}$/.test(p.dayStart)) ? p.dayStart : null;
+   const de = (p && p.dayEnd && /^\d{1,2}:\d{2}$/.test(p.dayEnd)) ? p.dayEnd : null;
+   // Solo mostrar si NO es 00:00–23:59 (que es el default = día completo)
+   if (ds && de && !(ds === '00:00' && de === '23:59') && p.type !== 'custom') {
+    franjaLbl.textContent = ds + ' – ' + de;
+    franjaLbl.style.display = '';
+   } else {
+    franjaLbl.style.display = 'none';
+    franjaLbl.textContent = '';
+   }
+  }
+ } catch(_) {}
  // Fila de periodo en hero card (compatibilidad)
  _updateSnavLabel(label);
  // v1.3.651: O01 — periodo visible en cada snap card
@@ -47488,15 +47630,31 @@ window._almCarritoOptions = function() {
  <div class="dps-scroll" id="dps-scroll">
  <!-- Opciones generadas por JS -->
  </div>
- <div class="dps-custom-form" id="dps-custom-form">
- <!-- v1.3.235: rangos rápidos — tap directo sin picker nativo -->
- <div style="display:flex;gap:var(--sp-1_5);flex-wrap:wrap;margin-bottom:var(--sp-2_5)">
- <button class="dps-quick-btn" onclick="App.dash._dpsQuickRange(7)">7d</button>
- <button class="dps-quick-btn" onclick="App.dash._dpsQuickRange(10)">10d</button>
- <button class="dps-quick-btn" onclick="App.dash._dpsQuickRange(15)">15d</button>
- <button class="dps-quick-btn" onclick="App.dash._dpsQuickRange(30)">30d</button>
- <button class="dps-quick-btn" onclick="App.dash._dpsQuickRange(90)">90d</button>
+ <!-- v1.3.1257: FRANJA HORARIA GLOBAL (estilo Loyverse Dashboard).
+      Aplica a today/week/month/year. Soporta wrap-around nocturno
+      (15:00 → 04:00 = jornada típica de bar). 00:00–23:59 = día completo. -->
+ <div id="dps-franja-block" style="padding:var(--sp-3) 16px var(--sp-2);border-top:1px solid var(--border)">
+   <div style="display:flex;align-items:center;gap:var(--sp-1_5);margin-bottom:var(--sp-2);font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">
+     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+     <span>Franja horaria de la jornada</span>
+   </div>
+   <div style="display:flex;gap:var(--sp-2);align-items:flex-end">
+     <div style="flex:1">
+       <div class="dps-custom-lbl">Inicio</div>
+       <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-start" value="00:00">
+     </div>
+     <div style="flex:1">
+       <div class="dps-custom-lbl">Fin</div>
+       <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-end" value="23:59">
+     </div>
+   </div>
+   <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:var(--sp-1_5);line-height:var(--lh-snug)" id="dps-franja-hint">
+     Día completo (00:00–23:59)
+   </div>
  </div>
+ <div class="dps-custom-form" id="dps-custom-form">
+ <!-- v1.3.1257: chips 7d/10d/15d/30d/90d eliminados — redundantes con
+      Esta semana / Este mes y rompían el patrón Loyverse Dashboard -->
  <div class="dps-custom-row">
  <div style="flex:1">
  <div class="dps-custom-lbl">Desde</div>
