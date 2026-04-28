@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1268-dev</title>
+<title>Dashwey v1.3.1269-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16143,7 +16143,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1268-dev';
+ const _APP_VERSION = 'v1.3.1269-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24066,8 +24066,11 @@ function _toggleCardFromManager(id, btn) {
  const pedidos = State.get.historialPedidos() || [];
  const provIds = new Set(provs.map(p => p.id));
  pedidos.forEach(ped => {
- // Skip if provider no longer exists (deleted)
- if (ped.provId && !provIds.has(ped.provId)) return;
+ // v1.3.1269 FIX W-D-19: pedidos con proveedor borrado se muestran con label
+ //   "(proveedor eliminado)" en lugar de filtrarse silenciosamente. Usuario puede
+ //   ver que el pedido existe y decidir si reasignarlo o eliminarlo.
+ //   Antes: pedidos huérfanos desaparecían sin avisar — confusión y pérdida de control.
+ const _provExiste = !ped.provId || provIds.has(ped.provId);
  const fp = new Date(ped.fecha); fp.setHours(0,0,0,0);
  if (fp < addDays(hoy,-3) || fp > addDays(hoy,45)) return;
  const prov = provs.find(p => p.id === ped.provId);
@@ -24080,10 +24083,15 @@ function _toggleCardFromManager(id, btn) {
  if (fe < addDays(hoy,-1)) return;
  const total = fe - fp;
  const pct = total <= 0 ? 98 : Math.min(98, Math.max(2, Math.round(((hoy-fp)/total)*100)));
+ // v1.3.1269 FIX W-D-19: title con marca "(proveedor eliminado)" si aplica
+ const _pedTitle = _provExiste
+   ? (prov?.nombre || ped.provId || '—')
+   : (ped.provId ? '(proveedor eliminado)' : '—');
  eventos.push({ type:'pedido', date:fe, sortKey:fe.getTime(),
- title: prov?.nombre || ped.provId || '—',
- sub: (ped.items?.length||0)+' artículos',
- esPasado: fe < hoy, pct });
+ title: _pedTitle,
+ sub: (ped.items?.length||0)+' artículos' + (_provExiste ? '' : ' · pedido huérfano'),
+ esPasado: fe < hoy, pct,
+ _orphan: !_provExiste });
  });
 
  // ── Visitas: según periodo seleccionado ───────────────────────
@@ -24537,6 +24545,12 @@ function _toggleCardFromManager(id, btn) {
  const _pedidos = State.get.historialPedidos ? State.get.historialPedidos() : [];
  const _mermas = State.get.mermas ? State.get.mermas() : [];
  const _ventas = State.get.ventas ? State.get.ventas() : [];
+ // v1.3.1269 FIX W-D-17: incluir cierresCaja en el hash.
+ //   Sin esto, cuando se cierra caja o se modifica un cierre existente, _fcHash
+ //   no cambiaba y el render se saltaba por dirty-check → "Flujo de caja" mostraba
+ //   datos viejos hasta que otra acción invalidara el hash.
+ //   renderFlujoCaja usa State.get.cierresCaja() para construir movimientos agregados.
+ const _cierres = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
  const _newFcHash = JSON.stringify([
   cuentas.map(c => c.saldo + '|' + c.nombre + '|' + (c.isPrimary ? '1' : '0')),
   gastos.map(g => g.importe + '|' + g.fecha),
@@ -24544,6 +24558,8 @@ function _toggleCardFromManager(id, btn) {
   _pedidos.length + '|' + (_pedidos[_pedidos.length-1]?.id||''),
   _mermas.length + '|' + (_mermas[_mermas.length-1]?.id||''),
   _ventas.length + '|' + (_ventas[_ventas.length-1]?.id||''),
+  // v1.3.1269: cierres firma compacta (id + estado + ventas + ingresos + gastos + updatedAt)
+  _cierres.map(c => (c.id||'') + '|' + (c.estado||'') + '|' + (c.ventas||0) + '|' + (c.ingresos||0) + '|' + (c.gastos||0) + '|' + (c.updatedAt||'')),
   (_fcPeriod.type||'') + '|' + (_fcPeriod.offset||0) + '|' + (_fcPeriod.label||''),
   (State.get.settings?.()?.activeScope || 'negocio') // v1.3.1003 Fase 5
  ])
