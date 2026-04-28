@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1260-dev</title>
+<title>Dashwey v1.3.1262-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12646,11 +12646,27 @@ const State = (() => {
    try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
   },
  setGastos: (v) => { const _snap = _snapshotMap(_state.gastosOp); _state.gastosOp = _preserveDeleted('gastosOp', _guardExt(v)); _diffMarkDirty('gastosOp', _snap, _state.gastosOp); save(); },
- updateProd: (id, vals) => { const p = get.prod(id); if(p) { Object.assign(p, vals, { updatedAt: Date.now() }); save(); } }, // v1.3.1243 FIX 8A: sellar updatedAt para que _mergeById preserve edición local sobre Firebase viejo
+ // v1.3.1262: emit + updatedAt para _mergeById.
+ updateProd: (id, vals) => {
+  const p = get.prod(id);
+  if(p) {
+   Object.assign(p, vals, { updatedAt: Date.now() });
+   try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {}
+  }
+  save();
+ },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
  deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
  clearTickets: () => { _state.ticketsAbiertos = []; save(); },
- updateProv: (id, vals) => { const p = get.prov(id); if(p) { Object.assign(p, vals, { updatedAt: Date.now() }); } save(); }, // v1.3.1243 FIX 8A
+ // v1.3.1262: emit + asegurar updatedAt para _mergeById.
+ updateProv: (id, vals) => {
+  const p = get.prov(id);
+  if(p) {
+   Object.assign(p, vals, { updatedAt: Date.now() });
+   try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {}
+  }
+  save();
+ },
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('merma'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO
@@ -12838,8 +12854,42 @@ const State = (() => {
  //   se vuelven duplicados fantasma → DEBEN poder borrarse. Solo origen='loyverse'
  //   (API real) y 'budgetbakers' (CSV completo) siguen bloqueadas.
  updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen] && v.origen !== 'import_loyverse') { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_V = ['id','total','items','fecha','origen','sourceRefId','cuentaId','metaTipo','ticketId']; let _blocked = []; for (const k of _IMMUTABLE_V) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== v[k]) { _blocked.push(k); delete vals[k]; } } if (_blocked.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: campos inmutables bloqueados en venta', v.id, ':', _blocked.join(',')); } Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
- addProd: (p) => { _state.productos.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {} },
- addProv: (p) => { _state.proveedores.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {} },
+ // v1.3.1262 FIX P0: estampar updatedAt+createdAt al crear producto.
+ //   Sin esto, _mergeById ve _ts=0 → remoto gana → producto local desaparece tras reinicio
+ //   si por algún motivo el remote no tiene el item nuevo (write fallido, sync race, etc.)
+ //   Sello explícito = el local "manda" frente a cualquier remoto stale.
+ //   Dedup por id: evita duplicados accidentales si addProd se llama dos veces.
+ //   Productos van en doc raíz (no subcol), por eso no hay markDirty — viajan
+ //   completos en cada save() vía _writeFirebaseDual.
+ addProd: (p) => {
+  if (!p) return;
+  if (!p.id) { console.warn('[Dashwey/State] addProd sin id — abortado'); return; }
+  if (_state.productos.some(x => x && x.id === p.id)) {
+   console.warn('[Dashwey/State] addProd: id duplicado', p.id, '— ignorado');
+   return;
+  }
+  const _now = Date.now();
+  if (!p.createdAt) p.createdAt = new Date(_now).toISOString();
+  p.updatedAt = _now;
+  _state.productos.push(p);
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {}
+ },
+ // v1.3.1262 FIX P0: idéntico a addProd — sello updatedAt obligatorio + dedup
+ addProv: (p) => {
+  if (!p) return;
+  if (!p.id) { console.warn('[Dashwey/State] addProv sin id — abortado'); return; }
+  if (_state.proveedores.some(x => x && x.id === p.id)) {
+   console.warn('[Dashwey/State] addProv: id duplicado', p.id, '— ignorado');
+   return;
+  }
+  const _now = Date.now();
+  if (!p.createdAt) p.createdAt = new Date(_now).toISOString();
+  p.updatedAt = _now;
+  _state.proveedores.push(p);
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {}
+ },
  // v1.3.1075: syncCommand setter
  syncCommand: (v) => { _state.syncCommand = v; save(); },
  resetStorage: () => { _state = JSON.parse(JSON.stringify(DEFAULTS)); try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {} save(); },
@@ -16056,7 +16106,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1260-dev';
+ const _APP_VERSION = 'v1.3.1262-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18366,6 +18416,9 @@ const ui = (() => {
      banner: (existing && existing.banner) || '',
      origen: 'loyverse',
      loyverseCategoryId: c.id,
+     // v1.3.1262 FIX P0: SELLO updatedAt OBLIGATORIO (ver explicación en productos)
+     createdAt: (existing && existing.createdAt) || new Date(_now).toISOString(),
+     updatedAt: (existing && existing.updatedAt) || _now,
     });
     catIdToProvId[c.id] = provId;
    });
@@ -18532,8 +18585,12 @@ const ui = (() => {
      historialPrecios: (existing && existing.historialPrecios) || undefined,
      re: (existing && existing.re) || undefined,
      trackStock: (existing && typeof existing.trackStock === 'boolean') ? existing.trackStock : undefined,
-     // Preservar updatedAt si existing tiene uno (no resetear a undefined)
-     updatedAt: (existing && existing.updatedAt) || undefined,
+     // v1.3.1262 FIX P0: SELLO updatedAt OBLIGATORIO.
+     //   Si existing tenía updatedAt → preservar (no reset por re-import).
+     //   Si NO tenía o es nuevo → estampar NOW (necesario para _mergeById).
+     //   createdAt: preservar el original o estampar nuevo.
+     createdAt: (existing && existing.createdAt) || new Date(_now).toISOString(),
+     updatedAt: (existing && existing.updatedAt) || _now,
     };
     // Limpiar undefined para no contaminar Firestore
     Object.keys(prod).forEach(function(k){ if (prod[k] === undefined) delete prod[k]; });
@@ -44304,11 +44361,17 @@ _eaRecalc();
    if (item && item.id) map[item.id] = item;
   });
   // Mergear remoto — gana el más reciente. deletedAt pesa como updatedAt.
+  // v1.3.1262 FIX P0: comparación STRICT > (era >=). Cuando _ts ambos = 0
+  //   (items legacy sin sello), antes el remoto pisaba el local sin merit.
+  //   Si el local tenía edición no sellada (rename pre-1262), se perdía.
+  //   Strict > → empates dejan el local intacto. Combinado con sellos
+  //   obligatorios en addProd/addProv/update*/_lvCommitCatalog, los items
+  //   nuevos siempre tendrán _ts > 0 y ganarán a items legacy del remoto.
   remoteArr.forEach(function(item) {
    if (!item || !item.id) return;
    var existing = map[item.id];
    if (!existing) { map[item.id] = item; return; }
-   if (_ts(item) >= _ts(existing)) map[item.id] = item;
+   if (_ts(item) > _ts(existing)) map[item.id] = item;
   });
   return Object.values(map);
  }
@@ -44699,7 +44762,12 @@ _eaRecalc();
  // v1.3.1135 FIX#3: activar flag ANTES del merge (por si _mergeById llama setters)
  var _prevApp_preMerge = window._DashweyApplyingRemote;
  window._DashweyApplyingRemote = true;
- var _mKeys = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja'];
+ // v1.3.1261 FIX P0 BUG-RENAME: incluir productos y proveedores en merge by-id.
+ //   Antes se sobreescribían directamente vía L44729-44732 sin _mergeById, causando
+ //   pérdida de renames locales si el remoto era considerado "más nuevo" por timestamp
+ //   global (incluso aunque el item local tuviera updatedAt más reciente).
+ //   _mergeById usa updatedAt POR ÍTEM → preserva ediciones locales recientes.
+ var _mKeys = ['ventas','historialPedidos','mermas','pendingOrders','cierresCaja','productos','proveedores'];
  // v1.3.1096: con Estrategia B activa, arrays transaccionales vienen de subcolecciones.
  var _skipTrans_mk = window._DashweyShouldSkipTransactionalInRoot?.();
  _mKeys.forEach(function(k) {
@@ -44707,7 +44775,15 @@ _eaRecalc();
    delete merged[k];
    return;
   }
-  var _localArr = typeof State.get[k] === 'function' ? State.get[k]() : null;
+  // v1.3.1262 FIX P0: usar State.raw (incluye deleted) — sin esto, items soft-deleted
+  //   localmente quedan fuera del merge → al chocar con remote sin deleted, se pierde
+  //   el tombstone → zombi en otro device.
+  var _localArr = null;
+  try {
+   _localArr = (State.raw && typeof State.raw[k] === 'function')
+    ? State.raw[k]()
+    : (typeof State.get[k] === 'function' ? State.get[k]() : null);
+  } catch(_) {}
   if (Array.isArray(merged[k]) && Array.isArray(_localArr)) {
    merged[k] = _mergeById(_localArr, merged[k]);
   }
