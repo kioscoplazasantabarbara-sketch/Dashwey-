@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1263-dev</title>
+<title>Dashwey v1.3.1264-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16106,7 +16106,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1263-dev';
+ const _APP_VERSION = 'v1.3.1264-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18486,6 +18486,19 @@ const ui = (() => {
    });
    lvItems.forEach(function(it) {
     if (!it || !it.id) return;
+    var prodId = 'p_lv_' + it.id;
+    var existing = prevProdById[prodId];
+
+    // v1.3.1264 FIX P0 W-A-17/18: respeto de tombstone LV.
+    //   Si existing.deleted === true, el usuario borró el artículo manualmente.
+    //   Antes: el loop recreaba el item LV ignorando el tombstone → DUPLICADO
+    //   con mismo id (uno con deleted:true del loop1, otro sin del loop2).
+    //   El segundo (sin deleted) lideraba en _preserveDeleted → "zombi".
+    //   Ahora: skip total. El tombstone ya está en mergedProds desde el loop1.
+    //   Si el usuario quiere recuperar el artículo, debe restaurarlo manualmente
+    //   o re-importarlo tras eliminar el tombstone (futuro: UI explícita).
+    if (existing && existing.deleted) return;
+
     var variant = (it.variants && it.variants[0]) || {};
     // v1.3.1012: fallback pvp desde stores[].price si default_price está vacío
     var pvp = parseFloat(variant.default_price || 0) || 0;
@@ -18497,8 +18510,6 @@ const ui = (() => {
     }
     var costeBulto = parseFloat(variant.cost || 0) || 0;
     var provId = (it.category_id && catIdToProvId[it.category_id]) || fallbackProvId;
-    var prodId = 'p_lv_' + it.id;
-    var existing = prevProdById[prodId];
 
     // ──────────────────────────────────────────────────────────────────
     // v1.3.1260 FIX P0 BUG-RENAME — preservar campos editados por usuario
@@ -36357,7 +36368,14 @@ const alm = (() => {
  return;
  }
  Object.keys(cartData || {}).forEach(function(id) {
- var _p = State.get.prod(id); if (_p && (!activeProv || _p.prov === activeProv)) _ordenCarrito[id] = cartData[id]; // v1.3.637: BUG-05
+ var _p = State.get.prod(id);
+ // v1.3.1264 FIX P0 W-A-22: validar qty antes de aceptar.
+ //   NaN/Infinity/null/string/negativos rompen cálculos posteriores.
+ var _q = cartData[id];
+ var _qNum = typeof _q === 'number' ? _q : parseFloat(_q);
+ if (_p && (!activeProv || _p.prov === activeProv) && Number.isFinite(_qNum) && _qNum > 0) {
+  _ordenCarrito[id] = _qNum;
+ }
  });
  _updateAcceptBtn(); updateBadge(); renderCatInline();
  }, 100);
@@ -36985,7 +37003,10 @@ const marginLine = mg === null ? '' :
  Object.keys(cartData || {}).forEach(function(id) {
  var _rp = State.get.prod(id);
  if (_rp && (!currentProv || _rp.prov === currentProv)) {
- _ordenCarrito[id] = cartData[id]; // v1.3.637: BUG-05
+  // v1.3.1264 FIX P0 W-A-22: validar qty antes de aceptar (NaN/Infinity-safe)
+  var _q = cartData[id];
+  var _qNum = typeof _q === 'number' ? _q : parseFloat(_q);
+  if (Number.isFinite(_qNum) && _qNum > 0) _ordenCarrito[id] = _qNum;
  } else if (!_rp) {
  hasOrphans = true; // producto eliminado
  }
@@ -37067,6 +37088,17 @@ const marginLine = mg === null ? '' :
  if (_eaSave._running) return; _eaSave._running = true; // v1.3.665 guard
  const nombre = document.getElementById('ea-nombre')?.value.trim();
  if (!nombre) { _eaSave._running = false; showToast('⚠️ Nombre vacío', 'warning'); try { const _f = document.getElementById('fs-content'); if (_f && window._focusFirstError) _focusFirstError(_f); } catch(_) {} return; }
+ // v1.3.1264 FIX P0 W-A-11: validar que el producto existe ANTES de proceder.
+ //   Antes: si el producto fue borrado en otro device entre apertura del form
+ //   y guardado, updateProd silenciosamente no hacía nada pero el toast
+ //   "actualizado" salía igual → usuario cree que guardó pero no.
+ const _prodCheck = State.get.prod(id);
+ if (!_prodCheck) {
+  _eaSave._running = false;
+  showToast('⚠️ Producto no encontrado — pudo ser borrado en otro dispositivo', 'warning');
+  try { ui.closeFs(); } catch(_) {}
+  return;
+ }
  try {
  const prNuevo = parseFloat(document.getElementById('ea-pc')?.value) || 0;
  const pvpNuevo = parseFloat(document.getElementById('ea-pvp')?.value) || 0;
@@ -37078,9 +37110,15 @@ const marginLine = mg === null ? '' :
  const histPrev = prod?.historialPrecios || [];
  const lastH = histPrev[histPrev.length - 1];
  const ahoraH = new Date().toISOString();
- const histNew = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
- ? [...histPrev, { fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }]
+ // v1.3.1264 FIX P0 W-A-12: cap historialPrecios a últimos 50.
+ //   Sin límite: tras 500 ediciones el array contribuía con ~50KB al producto,
+ //   y con 600 productos × historial ≈ 30MB total → rootPayload >1MB → write fail.
+ //   50 entries cubre auditoría histórica suficiente para márgenes/decisiones.
+ const HIST_CAP = 50;
+ var histAppended = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
+ ? histPrev.concat([{ fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }])
  : histPrev;
+ const histNew = histAppended.length > HIST_CAP ? histAppended.slice(-HIST_CAP) : histAppended;
  // v1.3.1263 FIX P0: resolución correcta del proveedor al editar artículo.
  //   Bug previo (L37061): `find().id || prod.prov` → si el nombre nuevo NO existe,
  //   eaProvId caía a prod.prov (proveedor antiguo). Luego el guard
@@ -37114,13 +37152,18 @@ const marginLine = mg === null ? '' :
  const fotoOrig = State.get.prod(id)?.foto || null;
  // v1.3.422: leer ea-stock — campo editable que antes era ignorado
  const stockNuevo = document.getElementById('ea-stock');
+ // v1.3.1264 FIX P0 W-A-06/07: descuento + cat solo aplicar si el campo
+ //   está presente en el DOM. Antes: `trim() || ''` → si el form no
+ //   renderizó el campo, `?.value` era undefined → `?.value.trim()` crash o
+ //   `|| ''` ponía cadena vacía → PISABA descuento/cat existentes.
+ //   Ahora: solo se incluye en updates si el input existe.
+ const _eaDescEl = document.getElementById('ea-desc');
+ const _eaCatEl  = document.getElementById('ea-cat');
  const updates = {
  nombre,
  precioCompra: prNuevo,
  pvp: pvpNuevo,
  iva: ivaNuevo,
- descuento: document.getElementById('ea-desc')?.value.trim() || '',
- cat: document.getElementById('ea-cat')?.value.trim() || '',
  prov: eaProvId,
  stockMinimo: parseInt(document.getElementById('ea-nc')?.value) || prod.stockMinimo || 1,
  udscaja: parseInt(document.getElementById('ea-uc')?.value) || prod.udscaja || 12,
@@ -37132,6 +37175,10 @@ const marginLine = mg === null ? '' :
  re: prod.re || false,
   trackStock: document.getElementById('ea-track') ? document.getElementById('ea-track').classList.contains('on') : true,
  ...(stockNuevo !== null ? { stockActual: Math.max(0, parseInt(stockNuevo.value) || 0) } : {}),
+ // v1.3.1264: solo incluir descuento/cat si el campo existe — si NO está
+ //   en el DOM, NO los pisamos (el setter Object.assign no toca lo no presente).
+ ...(_eaDescEl ? { descuento: _eaDescEl.value.trim() || '' } : {}),
+ ...(_eaCatEl  ? { cat: _eaCatEl.value.trim() || '' } : {}),
  };
  if (_editPhoto !== fotoOrig) updates.foto = _editPhoto;
  State.set.updateProd(id, updates);
@@ -39550,7 +39597,7 @@ const nPending = (State.get.pendingOrders() || [])
    showToast('⚠️ Este artículo es de otro proveedor', 'warning');
    return;
   }
-  _ordenCarrito[prodId] = nc;
+  _ordenCarrito[prodId] = (Number.isFinite(nc) && nc > 0) ? nc : 1; // v1.3.1264 W-A-22
   if (precio > 0 && precio !== p.precioCompra) {
    // Guardar precio actualizado silenciosamente
    State.set.updateProd(prodId, { precioCompra: precio });
@@ -43258,6 +43305,19 @@ _eaRecalc();
  };
  });
 
+ // v1.3.1264 FIX P0 W-A-29: idempotencia — generar id del pedido ANTES del
+ //   stock loop. Si el pedido ya existe en historial (por reentry, retry de
+ //   offline queue, evento DashweyBus que disparó re-confirmación, etc.),
+ //   abortar antes de tocar stock — evita duplicación de stock.
+ //   id incluye random para evitar colisión Date.now() en mismo ms.
+ const _pedId = 'ped_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+ const _historialActual = (State.get.historialPedidos && State.get.historialPedidos()) || [];
+ if (_historialActual.some(function(h){ return h && h.id === _pedId; })) {
+   console.warn('[CONFIRM] pedido ya existe — abort idempotente:', _pedId);
+   _confirmandoPedido = false;
+   return;
+ }
+
  // ── Actualizar stock ────────────────────────────────────────
  // v1.3.421: detectar productos borrados — no bloquear el pedido pero avisar
  const _prodBorrados = [];
@@ -43282,7 +43342,7 @@ _eaRecalc();
 
  // ── Guardar pedido en historial ─────────────────────────────
  const pedido = {
- id: 'ped_' + Date.now(),
+ id: _pedId, // v1.3.1264: id pre-generado para idempotencia
  fecha: new Date().toISOString(),
  provId: sel,
  items: items.map(o => ({ prodId: o.prodId, ncajas: o.ncajas, udscaja: o.udscaja, precio: o.precio, pvp: o.pvp })),
@@ -43291,8 +43351,12 @@ _eaRecalc();
  try {
  State.set.addPedido(pedido);
  try { window.dispatchEvent(new CustomEvent('dashwey:pedido-confirmado', { detail: { pedido } })); } catch(_) {}
- // FIX v1.2.11: emitir pedido_stock para sincronizar Dashboard Agenda en tiempo real
- try { DashweyBus.emit('pedido_stock', { pedido }); } catch(_) {}
+ // v1.3.1264 FIX P0 W-A-33: NO emitir 'pedido_stock' aquí.
+ //   addPedido ya emite 'pedido' (→ dash.renderFinanciero + renderAgenda + renderOrden +
+ //   updateBadge + invalidar snap cards) y 'gasto'. Emitir además 'pedido_stock'
+ //   provocaba TRIPLE re-render del Dashboard por cada confirmación.
+ //   Si en el futuro algún listener específico necesita 'pedido_stock' (no detectado
+ //   en audit), reactivarlo de forma puntual con throttle.
  } catch (err) {
  console.error('[CONFIRM] addPedido FAILED:', err.message);
  }
