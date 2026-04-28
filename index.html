@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1251-dev</title>
+<title>Dashwey v1.3.1252-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10179,6 +10179,116 @@ if (!window._DashweySyncAhoraScheduled) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// v1.3.1252 AUTO-HEAL: limpieza one-shot de v_lvsum_* duplicados
+// ──────────────────────────────────────────────────────────────────
+// Bug observado: Resumen de Ventas Abril mostraba 10.264€ vs Loyverse 7.683€
+// (Δ +2.580€) por coexistencia de v_lv_* (API real) y v_lvsum_* (sintético BB CSV)
+// del mismo día. Este healing escanea State al arrancar (1 sola vez por sesión)
+// y soft-deleta los v_lvsum_* que tienen autoridad API (v_lv_*) en el mismo día.
+//
+// Idempotente: si están deleted, no hace nada.
+// Triggered: 8 segundos tras arranque (después de SyncAhora).
+// Condicionado a: InitialSync completo + State.set.updateVenta disponible.
+window._dashweyHealLvSumDups = function(opts) {
+ opts = opts || {};
+ var verbose = opts.verbose !== false;
+ var dryRun = opts.dryRun === true;
+ var log = function() {
+  if (verbose) try { console.info.apply(console, ['[HealLvSum]'].concat(Array.from(arguments))); } catch(_) {}
+ };
+ try {
+  if (!window.State || !State.set || !State.set.updateVenta) {
+   log('skip: State.set.updateVenta no disponible');
+   return { ok: false, reason: 'no-updateVenta' };
+  }
+  var ventas = (State.raw && State.raw.ventas) ? State.raw.ventas() : (State.get.ventas ? State.get.ventas() : []);
+  if (!Array.isArray(ventas) || ventas.length === 0) {
+   log('skip: sin ventas');
+   return { ok: true, scanned: 0, duplicates: 0, deleted: 0 };
+  }
+  // 1. Indexar días con autoridad API (origen='loyverse', activos)
+  var apiDays = new Set();
+  ventas.forEach(function(v){
+   if (!v || v.deleted === true) return;
+   if (v.origen !== 'loyverse') return;
+   var d = new Date(v.fecha);
+   if (isNaN(d)) return;
+   var ymd = d.getFullYear()
+    + String(d.getMonth()+1).padStart(2,'0')
+    + String(d.getDate()).padStart(2,'0');
+   apiDays.add(ymd);
+  });
+  log('Días con autoridad API:', apiDays.size);
+  if (apiDays.size === 0) {
+   log('No hay autoridad API — nada que limpiar');
+   return { ok: true, scanned: ventas.length, duplicates: 0, deleted: 0 };
+  }
+  // 2. Detectar v_lvsum_<YYYYMMDD> activos en esos días
+  var ID_PATTERN = /^v_lvsum_(\d{8})$/;
+  var idsAEliminar = [];
+  ventas.forEach(function(v){
+   if (!v || !v.id || v.deleted === true) return;
+   if (v.origen !== 'import_loyverse') return;
+   var m = ID_PATTERN.exec(v.id);
+   if (!m) return;
+   if (!apiDays.has(m[1])) return;
+   idsAEliminar.push({ id: v.id, dia: m[1], total: v.total });
+  });
+  log('Duplicados v_lvsum_* detectados:', idsAEliminar.length);
+  if (idsAEliminar.length === 0) {
+   return { ok: true, scanned: ventas.length, duplicates: 0, deleted: 0 };
+  }
+  if (dryRun) {
+   idsAEliminar.forEach(function(d){ log('  - ' + d.id + ' día ' + d.dia + ' = ' + d.total + '€'); });
+   return { ok: true, dryRun: true, scanned: ventas.length, duplicates: idsAEliminar.length, deleted: 0 };
+  }
+  // 3. Soft-delete vía updateVenta (sync multi-device)
+  var nowIso = new Date().toISOString();
+  var deleted = 0;
+  idsAEliminar.forEach(function(d){
+   try {
+    State.set.updateVenta(d.id, { deleted: true, updatedAt: nowIso });
+    deleted++;
+   } catch(_e) {
+    log('error soft-delete', d.id, _e && _e.message);
+   }
+  });
+  log('✓ ' + deleted + '/' + idsAEliminar.length + ' duplicados soft-deleted');
+  // Re-render dashboard si está montado
+  try {
+   if (window.App && App.dash && App.dash.render) {
+    setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 200);
+   }
+  } catch(_) {}
+  // Trigger flush dirty queue para sync inmediato
+  try {
+   if (window._DashweyAutoHeal) window._DashweyAutoHeal('lvsum_heal');
+  } catch(_) {}
+  return { ok: true, scanned: ventas.length, duplicates: idsAEliminar.length, deleted: deleted };
+ } catch(e) {
+  console.warn('[HealLvSum] error:', e);
+  return { ok: false, error: e && e.message };
+ }
+};
+
+// Auto-trigger one-shot al arrancar (8s después, post-SyncAhora)
+if (!window._DashweyHealLvSumScheduled) {
+ window._DashweyHealLvSumScheduled = true;
+ setTimeout(function() {
+  try {
+   if (!window._DashweyInitialSyncDone) {
+    // Reintentar a los 5s si el initial sync tarda
+    setTimeout(function() {
+     try { window._dashweyHealLvSumDups({ verbose: true }); } catch(_) {}
+    }, 5000);
+    return;
+   }
+   window._dashweyHealLvSumDups({ verbose: true });
+  } catch(_) {}
+ }, 8000);
+}
+
+// ──────────────────────────────────────────────────────────────────
 // v1.3.1237 BUG-CRIT-3 FIX — _adminCleanFirestoreVentasDups
 // Tool admin quirúrgica: detecta duplicados import_loyverse en días con
 // autoridad API (origen=loyverse) y los borra por ID exacto en Firestore
@@ -11435,7 +11545,9 @@ const State = (() => {
     if (!Array.isArray(raw)) continue;
     for (let i = raw.length - 1; i >= 0; i--) {
      const it = raw[i];
-     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen]) {
+     // v1.3.1252 FIX: import_loyverse (sintéticas) DEBE preservar tombstone
+     //   para sync multi-device. No purgar físicamente del array.
+     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen] && it.origen !== 'import_loyverse') {
       try { tomb && tomb.delete && tomb.delete(it.id); } catch(_) {}
       raw.splice(i, 1);
       purged++;
@@ -11574,7 +11686,10 @@ const State = (() => {
     if (!Array.isArray(arr)) continue;
     const cleaned = [];
     for (const it of arr) {
-     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen]) {
+     // v1.3.1252 FIX: import_loyverse SÍ permite tombstone hacia Firestore.
+     //   Necesario para que el soft-delete de duplicados v_lvsum_* se propague
+     //   a otros devices.
+     if (it && it.deleted === true && it.origen && _EXT_ORIGINS[it.origen] && it.origen !== 'import_loyverse') {
       totalBlocked++;
       // No incluir — evita subir zombies a Firestore
       continue;
@@ -12243,7 +12358,8 @@ const State = (() => {
   if (!Array.isArray(arr)) return arr;
   let blocked = 0;
   const out = arr.map((x) => {
-   if (x && x.origen && _EXT_ORIGINS[x.origen] && x.deleted === true) {
+   // v1.3.1252 FIX: import_loyverse permite deleted (sintéticas, no autoritativas).
+   if (x && x.origen && _EXT_ORIGINS[x.origen] && x.origen !== 'import_loyverse' && x.deleted === true) {
     blocked++;
     // Neutralizar: devolver copia sin deleted/deletedAt
     const copy = Object.assign({}, x);
@@ -12715,7 +12831,11 @@ const State = (() => {
  // v1.3.1150 EVENT-DRIVEN: solo campos metadata mutables (evento es inmutable)
  //            Permitidos: notas, scope, estado, pendiente, closureId
  //            Bloqueados: total, items, fecha, origen, sourceRefId, cuentaId, id, metaTipo, ticketId
- updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_V = ['id','total','items','fecha','origen','sourceRefId','cuentaId','metaTipo','ticketId']; let _blocked = []; for (const k of _IMMUTABLE_V) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== v[k]) { _blocked.push(k); delete vals[k]; } } if (_blocked.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: campos inmutables bloqueados en venta', v.id, ':', _blocked.join(',')); } Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
+ // v1.3.1252 FIX: import_loyverse (ventas sintéticas BB CSV) PUEDE ser soft-deleted.
+ //   Razón: cuando llega autoridad API loyverse al mismo día, las sintéticas
+ //   se vuelven duplicados fantasma → DEBEN poder borrarse. Solo origen='loyverse'
+ //   (API real) y 'budgetbakers' (CSV completo) siguen bloqueadas.
+ updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen] && v.origen !== 'import_loyverse') { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_V = ['id','total','items','fecha','origen','sourceRefId','cuentaId','metaTipo','ticketId']; let _blocked = []; for (const k of _IMMUTABLE_V) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== v[k]) { _blocked.push(k); delete vals[k]; } } if (_blocked.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: campos inmutables bloqueados en venta', v.id, ':', _blocked.join(',')); } Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
  addProd: (p) => { _state.productos.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {} },
  addProv: (p) => { _state.proveedores.push(p); save(); try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {} },
  // v1.3.1075: syncCommand setter
@@ -15559,7 +15679,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1251-dev';
+ const _APP_VERSION = 'v1.3.1252-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20748,6 +20868,61 @@ const ui = (() => {
       totalVentasCreated++;
      } catch(_e) { totalErrors++; }
     });
+
+    // v1.3.1252 FIX P0: Auto-purga ventas v_lvsum_* duplicadas cuando llega API.
+    //   Bug observado en producción (Abril 2026): Resumen de Ventas Dashwey
+    //   mostraba 10.264€ vs Loyverse 7.683€ (Δ +2.580€) porque coexistían:
+    //     - Ventas API real (origen='loyverse', id='v_lv_<receiptId>')
+    //     - Ventas sintéticas BB CSV (origen='import_loyverse', id='v_lvsum_<YYYYMMDD>')
+    //   El guard en _lvSumCommit (L18754) solo bloquea CSV→API, no API→CSV.
+    //   Causa raíz: meses históricos (Marzo) tienen solo CSV (LV Free no tiene
+    //   histórico >45d) → coinciden. Mes activo recibe API DESPUÉS del CSV
+    //   → ambos se suman. _adminCleanFirestoreVentasDups existe pero es manual.
+    //
+    //   Fix: para cada día con receipts API en este batch, borrar todas las
+    //   ventas con id que matchea ^v_lvsum_<YYYYMMDD>$ de ese día.
+    //   Soft-delete (deleted:true + updatedAt) para sync multi-device.
+    //   Idempotente: si ya están deleted, no hace nada.
+    var ventasBBDuplicadasEliminadas = 0;
+    try {
+     if (receipts.length > 0) {
+      // 1. Indexar días que recibieron receipts API (YYYYMMDD)
+      var diasConApiBatch = new Set();
+      receipts.forEach(function(rc){
+       var d = new Date(rc.receipt_date || rc.created_at);
+       if (isNaN(d)) return;
+       var yyyymmdd = d.getFullYear()
+        + String(d.getMonth()+1).padStart(2,'0')
+        + String(d.getDate()).padStart(2,'0');
+       diasConApiBatch.add(yyyymmdd);
+      });
+      // 2. Localizar v_lvsum_<YYYYMMDD> activos para esos días
+      var ID_LVSUM_PATTERN = /^v_lvsum_(\d{8})$/;
+      var _ventasRaw = (State.raw && State.raw.ventas) ? State.raw.ventas() : (State.get.ventas ? State.get.ventas() : []);
+      var nowIso = new Date().toISOString();
+      var idsAEliminar = [];
+      (_ventasRaw || []).forEach(function(v){
+       if (!v || !v.id || v.deleted === true) return;
+       if (v.origen !== 'import_loyverse') return;
+       var m = ID_LVSUM_PATTERN.exec(v.id);
+       if (!m) return;
+       if (!diasConApiBatch.has(m[1])) return;
+       idsAEliminar.push(v.id);
+      });
+      // 3. Soft-delete vía State.set.updateVenta (sync multi-device)
+      if (idsAEliminar.length > 0) {
+       idsAEliminar.forEach(function(vid){
+        try {
+         if (State.set.updateVenta) {
+          State.set.updateVenta(vid, { deleted: true, updatedAt: nowIso });
+         }
+        } catch(_eU) {}
+       });
+       ventasBBDuplicadasEliminadas = idsAEliminar.length;
+       console.log('[Loyverse] FIX 1252: ' + ventasBBDuplicadasEliminadas + ' ventas v_lvsum_* duplicadas soft-deleted (días con API: ' + Array.from(diasConApiBatch).join(',') + ')');
+      }
+     }
+    } catch(eDup) { console.warn('[Loyverse] Error fix dup v_lvsum_*:', eDup); }
 
     // v1.3.1057: Limpieza automática de ingresos BB solapados con Loyverse
     // Loyverse Free no tiene histórico > ~30-45 días, pero BB sí.
