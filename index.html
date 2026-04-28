@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1262-dev</title>
+<title>Dashwey v1.3.1263-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16106,7 +16106,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1262-dev';
+ const _APP_VERSION = 'v1.3.1263-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18550,6 +18550,27 @@ const ui = (() => {
     );
     var _finalBarcode = _barcodeWasEdited ? _existingBarcode : (_lvBarcode || _existingBarcode || '');
 
+    // v1.3.1263 FIX P0: preservar `prov` editado por usuario.
+    //   Bug: re-import LV pisaba prov reasignado manualmente (ej. usuario movió
+    //   "Coca Cola" del proveedor LV "Coca Cola Europacific Partners" a un
+    //   proveedor manual "Mi Mayorista Local" → siguiente sync → vuelve a LV).
+    //
+    //   Patrón sourceProv (igual que sourceName/sourcePvp/sourceBarcode):
+    //     - sourceProv = referencia al proveedor LV (derivado de category_id)
+    //     - Si existing.prov ≠ sourceProv → usuario lo editó → preservar
+    //     - Si existing.prov === sourceProv (o no hay sourceProv) → refrescar
+    //
+    //   Inicialmente NO existe sourceProv en items legacy → asume coincidencia
+    //   con prov actual (no fue editado). Política conservadora.
+    var _lvProvId = provId; // calculado desde category_id arriba
+    var _existingProv = existing && existing.prov;
+    var _existingSourceProv = existing && existing.sourceProv;
+    var _provWasEdited = _existingProv && (
+      (_existingSourceProv && _existingProv !== _existingSourceProv) ||
+      (!_existingSourceProv && existing && existing.origen === 'loyverse' && _existingProv !== _lvProvId)
+    );
+    var _finalProv = _provWasEdited ? _existingProv : _lvProvId;
+
     var prod = {
      id: prodId,
      loyverseItemId: it.id,
@@ -18562,7 +18583,9 @@ const ui = (() => {
      barcode: _finalBarcode,
      sourceBarcode: _lvBarcode,  // referencia LV
      categoria: it.category_id || (existing && existing.categoria) || '',
-     prov: provId,
+     // v1.3.1263: prov preservado si fue editado, sourceProv siempre actualizado
+     prov: _finalProv,
+     sourceProv: _lvProvId,
      // Campos editables por usuario: CONSERVAR si ya existían
      precioCompra: (existing && existing.precioCompra !== undefined && existing.precioCompra !== null)
                    ? existing.precioCompra
@@ -18608,8 +18631,10 @@ const ui = (() => {
     if (!p || !p.id || p.deleted) return;
     if (p.origen === 'loyverse' && !_newLvProdIds[p.id]) {
      // Salvaguarda v1.3.1260: si el usuario editó algo, preservar el producto
+     // v1.3.1263: añadir prov ≠ sourceProv como evidencia de edición
      var _hasUserEdit = (
        (p.nombre && p.sourceName && p.nombre !== p.sourceName) ||
+       (p.prov && p.sourceProv && p.prov !== p.sourceProv) ||
        (p.ventaNombre && p.ventaNombre.trim()) ||
        (p.cat && p.cat.trim()) ||
        (p.foto) ||
@@ -37056,15 +37081,35 @@ const marginLine = mg === null ? '' :
  const histNew = (prNuevo > 0 && (!lastH || lastH.precio !== prNuevo || lastH.pvp !== pvpNuevo))
  ? [...histPrev, { fecha: ahoraH, precio: prNuevo, pvp: pvpNuevo }]
  : histPrev;
- // Resolver proveedor desde campo texto
+ // v1.3.1263 FIX P0: resolución correcta del proveedor al editar artículo.
+ //   Bug previo (L37061): `find().id || prod.prov` → si el nombre nuevo NO existe,
+ //   eaProvId caía a prod.prov (proveedor antiguo). Luego el guard
+ //   `!State.get.prov(eaProvId)` SIEMPRE era falso (el antiguo existe) → NO se
+ //   creaba el proveedor nuevo y el artículo NO cambiaba de proveedor.
+ //   Caso real: usuario edita artículo Loyverse, escribe "Mi Mayorista Local"
+ //   en el campo proveedor, guarda → el artículo se queda en el proveedor LV.
+ //
+ //   Lógica nueva (3 ramas explícitas):
+ //   1) Texto vacío → mantener prod.prov actual
+ //   2) Texto coincide con proveedor existente → usar ese id
+ //   3) Texto NO coincide → crear proveedor manual nuevo
  const eaProvTxt = document.getElementById('ea-prov-txt')?.value?.trim();
- let eaProvId = State.get.proveedores().find(pv => pv.nombre === eaProvTxt)?.id || prod.prov;
- if (eaProvTxt && !State.get.prov(eaProvId)) {
- eaProvId = 'prov_' + Date.now();
- State.set.addProv({ id: eaProvId, nombre: eaProvTxt, icon: '\uD83C\uDFEA',
- direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
- agente: '', repartidor: '', telReparto: '',
- origen: 'manual', createdAt: new Date().toISOString() });
+ let eaProvId;
+ if (!eaProvTxt) {
+  // Sin cambio en el campo → mantener proveedor actual
+  eaProvId = prod.prov;
+ } else {
+  const _existingMatch = State.get.proveedores().find(pv => pv && !pv.deleted && pv.nombre === eaProvTxt);
+  if (_existingMatch) {
+   eaProvId = _existingMatch.id;
+  } else {
+   // Proveedor NUEVO — crear como manual
+   eaProvId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+   State.set.addProv({ id: eaProvId, nombre: eaProvTxt, icon: '\uD83C\uDFEA',
+    direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
+    agente: '', repartidor: '', telReparto: '',
+    origen: 'manual', createdAt: new Date().toISOString() });
+  }
  }
  const fotoOrig = State.get.prod(id)?.foto || null;
  // v1.3.422: leer ea-stock — campo editable que antes era ignorado
@@ -40576,15 +40621,28 @@ function calcIAAnalysis() {
  const nombre = document.getElementById('fn')?.value?.trim();
  if (!nombre) return null;
 
- // Resolver proveedor: texto → id existente → fallback seleccionado
+ // v1.3.1263 FIX P0: misma corrección que _eaSave — resolución correcta de
+ //   proveedor cuando el nombre escrito NO existe pero hay selectedProv activo.
+ //   Bug previo: `find().id || State.get.selectedProv()` → caía al selectedProv,
+ //   guard `!State.get.prov(provId)` siempre falso → NO creaba el nuevo.
+ //   Resultado: artículo nuevo se asignaba al proveedor que estaba a la vista
+ //   en Almacén, ignorando el texto del campo.
  const provTxt = document.getElementById('fpv-txt')?.value?.trim();
- let provId = State.get.proveedores().find(function(p){ return p.nombre === provTxt; })?.id
- || State.get.selectedProv();
- if (provTxt && !State.get.prov(provId)) {
- provId = 'prov_' + Date.now();
- State.set.addProv({ id: provId, nombre: provTxt, icon:'🏪', direccion:'',
- telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'',
- origen: 'manual', createdAt: new Date().toISOString() });
+ let provId;
+ if (!provTxt) {
+  // Sin texto → usar el seleccionado (comportamiento legacy esperado)
+  provId = State.get.selectedProv();
+ } else {
+  const _existingMatch = State.get.proveedores().find(function(p){ return p && !p.deleted && p.nombre === provTxt; });
+  if (_existingMatch) {
+   provId = _existingMatch.id;
+  } else {
+   // Proveedor NUEVO — crear como manual
+   provId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+   State.set.addProv({ id: provId, nombre: provTxt, icon:'🏪', direccion:'',
+    telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'',
+    origen: 'manual', createdAt: new Date().toISOString() });
+  }
  }
 
  // IVA
