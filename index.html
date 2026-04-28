@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1245-dev</title>
+<title>Dashwey v1.3.1246-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13568,10 +13568,24 @@ const FinEngine = (() => {
 
  // ── 3. COMPRAS (INVERSIÓN EN STOCK) ─────────────────────────────
  // Coste total de pedidos realizados al almacén
+ // v1.3.1246 FIX P0 BUG-B: respetar scope activo y excluir pedidos pendientes/cancelados.
+ //   Antes: comprasPeriodo no filtraba scope ni estado → divergencia con flujo caja
+ //   (que filtra por cuentaId scoped) y con _isKpiVisible aplicado en otros módulos.
+ //   Coherencia financiera: tarjeta "Inversión en mercancía" debe leer la misma verdad
+ //   que getBeneficioNeto, _renderFlujoCaja y getKPIs.
  function comprasPeriodo(range) {
  const pedidos = State.get.historialPedidos();
  const costePedidos = pedidos
-  .filter(p => { const d = new Date(p.fecha); return d >= range.start && d < range.end; })
+  .filter(p => {
+   if (!p) return false;
+   // v1.3.1246: scope activo (default 'negocio' si no definido). Sin esto, scope=personal
+   //            sumaría pedidos de negocio en la tarjeta (inconsistencia con flujo caja).
+   if (typeof _matchesScope === 'function' && !_matchesScope(p)) return false;
+   // v1.3.1246: estado pendiente/cancelado NO suma (alineado con _isAggregable)
+   if (p.estado === 'pendiente' || p.estado === 'cancelado') return false;
+   const d = new Date(p.fecha);
+   return d >= range.start && d < range.end;
+  })
   .reduce((s, p) => s + pedidoCoste(p), 0);
  const reembolsos = (State.get.ingresosFin ? State.get.ingresosFin() : [])
   .filter(i => i.tipo === 'reembolso_proveedor' && (function(){ const d = new Date(i.fecha); return d >= range.start && d < range.end; })())
@@ -15508,7 +15522,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1245-dev';
+ const _APP_VERSION = 'v1.3.1246-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21458,10 +21472,15 @@ const dash = (() => {
 try { renderTopArticulos(period); } catch(e) {}
 
  // ── Beneficio Neto (bn-card) — siempre actualizado ───────────
- const roiMed = _finSnap.inv > 0 ? Math.round((beneficio / _finSnap.inv) * 100) : 0;
+ // v1.3.1246 FIX P0 BUG-D: snapshot devuelve `compras` (no `inv`). Antes _finSnap.inv era
+ //   undefined → roiMed siempre 0 y kpi-inv-s mostraba "—" o "0,00 €". El elemento
+ //   kpi-inv-s ya no existe en el HTML actual (zombie tras refactor); guards mantenidos
+ //   por seguridad pero ahora usan el campo real `compras` para el cálculo de ROI.
+ const _invPeriodo = _finSnap.compras || 0;
+ const roiMed = _invPeriodo > 0 ? Math.round((beneficio / _invPeriodo) * 100) : 0;
 
  const invEl = document.getElementById('kpi-inv-s');
- if(invEl) invEl.textContent = feur(_finSnap.inv);
+ if(invEl) invEl.textContent = feur(_invPeriodo);
  const heroVentas = document.getElementById('kpi-ventas-hero');
  if(heroVentas) heroVentas.textContent = feur(vta);
  const roiEl = document.getElementById('kpi-roi');
@@ -21481,7 +21500,27 @@ try { renderTopArticulos(period); } catch(e) {}
  _applyDashMode();
  // v1.3.517: _updateAcceptBtn no está en scope de dash — se sincroniza via App.alm en goTab
  // v1.3.861: snap cards — re-render al recibir datos nuevos (pedido, gasto, ingreso, venta)
- try { if (document.body.dataset.tab === '1') { _snapLastRenderedCardId = null; _snapDoRenderAll(); } } catch(_) {}
+ // v1.3.1246 FIX P0 BUG-A: marcar todas las cards como stale aunque Dashboard no esté activo.
+ //   Antes: si usuario en Almacén confirmaba pedido, _snapDoRenderAll se saltaba porque
+ //          tab !== '1'. Al volver a Dashboard la tarjeta "Inversión en mercancía" mostraba
+ //          datos viejos (cache _snapLastRenderedCardId). Bug financiero P0.
+ //   Ahora: tab=='1' → render inmediato; tab!='1' → marcar stale + reset cache para que
+ //          el observer scroll/intersección recalcule al entrar Dashboard.
+ try {
+  if (document.body.dataset.tab === '1') {
+   _snapLastRenderedCardId = null;
+   _snapDoRenderAll();
+  } else {
+   // Reset cache + marcar todas las cards stale → próxima visita Dashboard re-renderiza
+   _snapLastRenderedCardId = null;
+   var _cont = document.getElementById('dash-cards-container');
+   if (_cont) {
+    _cont.querySelectorAll('.card[data-card-id]').forEach(function(card){
+     card.dataset.stale = '1';
+    });
+   }
+  }
+ } catch(_) {}
  _refreshScopeBtn(); // v1.3.1003 Fase 5: sync visual scope toggle
  
  
@@ -44428,11 +44467,23 @@ window._DashweyDeviceId = (() => {
  });
 
  // pedido: update agenda, kpis (inv changed), alm badge
+ // v1.3.1246 FIX P0 BUG-A: invalidar cache snap cards. Antes solo refrescaba el modal
+ //   financiero, no la tarjeta "Inversión en mercancía". Ahora marca cards stale para
+ //   que dash.render() (o el observer al entrar Dashboard) las regenere.
  DashweyBus.on('pedido', () => {
  try { dash.renderFinanciero && dash.renderFinanciero(); } catch(e) {}
  try { dash.renderAgenda && dash.renderAgenda(); } catch(e) {}
  try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
  try { alm.updateBadge && alm.updateBadge(); } catch(e) {}
+ // v1.3.1246: forzar refresh snap cards (Inversión en mercancía depende de pedidos)
+ try {
+  if (typeof _snapLastRenderedCardId !== 'undefined') _snapLastRenderedCardId = null;
+  var _c = document.getElementById('dash-cards-container');
+  if (_c) _c.querySelectorAll('.card[data-card-id]').forEach(function(card){ card.dataset.stale = '1'; });
+  if (document.body.dataset.tab === '1' && typeof _snapDoRenderAll === 'function') {
+   _snapDoRenderAll();
+  }
+ } catch(_) {}
  });
 
  // stock: update caducidades, alm catalog (standalone, ej. ajuste manual de stock)
@@ -44443,7 +44494,17 @@ window._DashweyDeviceId = (() => {
  // pedido_stock: evento compuesto v9.5.76 — confirmarPedido emite este único evento
  // Consolida: renderFinanciero×1 + renderAgenda×1 + renderOrden×1 + dash.render()×1
  // Elimina el doble render que ocurría al emitir 'pedido' + 'stock' en el mismo tick
+ // v1.3.1246 FIX P0 BUG-A: invalidar cache snap cards ANTES de dash.render. Sin esto,
+ //   si Dashboard estaba montado pero usuario está en Almacén, dash.render se salta
+ //   _snapDoRenderAll (tab !== '1') y el cache no se invalida → tarjeta "Inversión en
+ //   mercancía" muestra datos viejos al volver a Dashboard.
  DashweyBus.on('pedido_stock', () => {
+ // Reset cache + marcar stale ANTES del render — garantiza que el observer regenere
+ try {
+  if (typeof _snapLastRenderedCardId !== 'undefined') _snapLastRenderedCardId = null;
+  var _c = document.getElementById('dash-cards-container');
+  if (_c) _c.querySelectorAll('.card[data-card-id]').forEach(function(card){ card.dataset.stale = '1'; });
+ } catch(_) {}
  try { dash.render(); } catch(e) {} // incluye renderFinanciero + renderAgenda + _snapDoRenderAll
  // v1.3.1139 FIX#3: renderAgenda ya ejecutado por dash.render() — eliminar duplicado
  try { alm.renderOrden && alm.renderOrden(); } catch(e) {}
