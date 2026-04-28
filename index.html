@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1244-dev</title>
+<title>Dashwey v1.3.1245-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14142,6 +14142,11 @@ const CierreEngine = (() => {
   // a esa hora del día actual. Esto garantiza que el cierre cubra el rango horario
   // configurado (ej: 09:00 → 03:00 al día siguiente). Si la hora actual es < apertura,
   // mantener Date.now() (apertura adelantada/pre-jornada).
+  // v1.3.1245 FIX UX-4: soportar horario nocturno (apertura > cierre).
+  //   Caso nocturno (ej: bar 18:00 → 02:00):
+  //     - now >= apertura  → aperturaTs = hoy a la hora apertura (ej: 20:00 → hoy 18:00)
+  //     - now < cierre     → aperturaTs = AYER a la hora apertura (ej: 01:00 → ayer 18:00)
+  //     - cierre ≤ now < apertura → pre-jornada (mantener Date.now())
   let aperturaTs = opts.aperturaTs || Date.now();
   try {
    const perfil = State.get.perfil ? State.get.perfil() : null;
@@ -14149,8 +14154,24 @@ const CierreEngine = (() => {
     const [hh, mm] = perfil.horarioApertura.split(':').map(Number);
     const today = new Date();
     const apTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0, 0).getTime();
-    // Solo aplicar si la hora actual ya pasó la apertura — evita aperturas con timestamp futuro
-    if (Date.now() >= apTs) aperturaTs = apTs;
+    const _nowMs = Date.now();
+    // Detectar si configura jornada nocturna
+    const _hCierre = perfil.horarioCierre && /^\d{2}:\d{2}$/.test(perfil.horarioCierre) ? perfil.horarioCierre : null;
+    const _isNocturno = _hCierre && perfil.horarioApertura > _hCierre;
+    if (_nowMs >= apTs) {
+     // Caso normal (now ≥ apertura): apertura hoy
+     aperturaTs = apTs;
+    } else if (_isNocturno) {
+     // Caso nocturno y now < apertura: comprobar si estamos en madrugada (now < cierre)
+     const [chh, cmm] = _hCierre.split(':').map(Number);
+     const cierreTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), chh, cmm, 0, 0).getTime();
+     if (_nowMs < cierreTs) {
+      // Estamos en madrugada de la jornada anterior → apertura fue AYER
+      aperturaTs = apTs - 86400000;
+     }
+     // Si _nowMs está entre cierre y apertura → pre-jornada, mantener Date.now()
+    }
+    // Caso normal y now < apertura → pre-jornada, mantener Date.now()
    }
   } catch(_) {}
   const c = {
@@ -15487,7 +15508,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1244-dev';
+ const _APP_VERSION = 'v1.3.1245-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -15792,9 +15813,12 @@ const ui = (() => {
  cierreAutomatico: !!document.getElementById('pf-cierre-auto')?.checked,
  notifCierre: !!document.getElementById('pf-notif-cierre')?.checked,
  };
- // Validar rango (apertura < cierre). Permitir vacíos para desactivar horario.
- if (vals.horarioApertura && vals.horarioCierre && vals.horarioApertura >= vals.horarioCierre) {
-  showToast('⚠️ La apertura debe ser anterior al cierre', 'warning');
+ // v1.3.1245 FIX UX-4: soportar horario nocturno (wrap-around).
+ //   - Antes: rechazaba apertura >= cierre (bar 18:00 → 02:00 imposible)
+ //   - Ahora: solo bloquea si son idénticos (jornada de 0 minutos no tiene sentido)
+ //   - apertura > cierre → interpretación: "cierra al día siguiente"
+ if (vals.horarioApertura && vals.horarioCierre && vals.horarioApertura === vals.horarioCierre) {
+  showToast('⚠️ Apertura y cierre no pueden ser iguales', 'warning');
   return;
  }
  // Auto-cierre requiere horario de cierre definido
@@ -19194,6 +19218,9 @@ const ui = (() => {
    var today = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
    // Ya disparado hoy (cierre O notif) → nada
    // Ventana: hora_cierre..hora_cierre+5min (tolerancia si tab dormido)
+   // v1.3.1245 FIX UX-4: ventana funciona para horarios nocturnos.
+   //   Ej: cierre=02:00 → targetM=120 → ventana [120, 125] (madrugada). OK aritméticamente.
+   //   Limitación conocida (UX-5, FASE 1): ventana 5min es estrecha si app cerrada a esa hora.
    var _toMin = function(s){ var p=s.split(':'); return parseInt(p[0])*60+parseInt(p[1]); };
    var nowM = _toMin(nowHHMM);
    var targetM = _toMin(horarioCierre);
