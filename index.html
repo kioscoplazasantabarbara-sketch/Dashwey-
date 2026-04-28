@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1264-dev</title>
+<title>Dashwey v1.3.1265-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12677,93 +12677,126 @@ const State = (() => {
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
  // Este es el único setter que genera un documento nuevo — candidato a onSnapshot.
- addPedido: (p) => { // v1.3.594: deduplicación por ID — consistente con addVenta
- if (p?.id && _state.historialPedidos.some(x => x.id === p.id)) return;
- _state.historialPedidos.push(p);
- // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
- try { if (p?.id) window._DashweyMarkDirty('historialPedidos', p.id); } catch(_) {}
- // v1.3.980: FIFO — crear lotes con coste histórico al confirmar pedido
- try {
-  if (typeof FinEngine !== 'undefined' && FinEngine.crearLotesDesdeItems && Array.isArray(p?.items)) {
-   FinEngine.crearLotesDesdeItems(p.items, p.fecha || p.date || new Date().toISOString());
-  }
- } catch(_e) { console.warn('[FIFO] crearLotesDesdeItems falló:', _e?.message); }
+ //
+ // v1.3.1265 FIX P1 W-A-23/24: idempotencia POR EFECTO en lugar de "dedup global".
+ //   Antes: si el pedido ya estaba en historial, return TOTAL → si el primer
+ //   addPedido falló a mitad (pedido pushed pero gasto nunca creado), el retry
+ //   nunca completaba los efectos financieros → pedido huérfano sin gasto.
+ //   Ahora:
+ //     1) Pedido se garantiza presente en historial (push o existing)
+ //     2) FIFO se ejecuta solo si el pedido es NUEVO (lotes ya creados ≠ duplicar)
+ //     3) Gasto: dedup por pedidoId (idempotente — un pedido = un gasto)
+ //     4) Saldo: marca pedido.saldoAppliedAt para no descontar dos veces
+ //   Consecuencia: retries seguros + recuperación automática de fallos parciales.
+ addPedido: (p) => {
+ if (!p) return;
+ // Garantizar id estable — sin id, no podemos hacer dedup ni reintentos seguros
+ if (!p.id) {
+   p.id = 'ped_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+ }
+ var _existing = _state.historialPedidos.find(x => x && x.id === p.id);
+ var _isNewPedido = !_existing;
 
- // v1.3.1173 IMPACTO FINANCIERO — FLUJO OBLIGATORIO
- // Regla: si un pedido recibido NO genera impacto financiero → el sistema está roto.
- // Inserción directa en _state (SIN llamar setters que emitirían save() extra).
- // El único save() queda al final de esta función → write único, sin race conditions.
+ if (_isNewPedido) {
+   _state.historialPedidos.push(p);
+   try { window._DashweyMarkDirty('historialPedidos', p.id); } catch(_) {}
+   // FIFO: solo crear lotes para pedidos NUEVOS — re-entry no debe duplicar lotes
+   try {
+    if (typeof FinEngine !== 'undefined' && FinEngine.crearLotesDesdeItems && Array.isArray(p?.items)) {
+     FinEngine.crearLotesDesdeItems(p.items, p.fecha || p.date || new Date().toISOString());
+    }
+   } catch(_e) { console.warn('[FIFO] crearLotesDesdeItems falló:', _e?.message); }
+ }
+ // Si _existing pero diferente en items (caso raro), el pedido ya está — usar el existing
+ var _pedidoVivo = _existing || p;
+
+ // ── IMPACTO FINANCIERO — IDEMPOTENTE ─────────────────────────
+ // Cada efecto verifica si ya se aplicó. Si addPedido se llama dos veces
+ // (retry, multi-device, error parcial), los efectos se completan o se saltan
+ // sin duplicar.
  try {
-  if (Array.isArray(p?.items) && p.items.length > 0) {
-   // 1. Calcular coste total del pedido
+  if (Array.isArray(_pedidoVivo.items) && _pedidoVivo.items.length > 0) {
    var _pedCoste = 0;
    try {
     _pedCoste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste)
-     ? FinEngine.pedidoCoste(p)
-     : p.items.reduce(function(s, it){ return s + (it.ncajas||1)*(it.precio||0); }, 0);
+     ? FinEngine.pedidoCoste(_pedidoVivo)
+     : _pedidoVivo.items.reduce(function(s, it){ return s + (it.ncajas||1)*(it.precio||0); }, 0);
    } catch(_) {}
 
    if (_pedCoste > 0) {
-    // 2. Cuenta destino: primaria de negocio (fallback al 1er elemento)
+    // Cuenta destino: primaria de negocio (fallback al 1er elemento)
     var _cuentas = _state.cuentas || [];
     var _cuentaObj = _cuentas.find(function(c){ return c && !c.deleted && c.scope === 'negocio' && c.isPrimary; })
      || _cuentas.find(function(c){ return c && !c.deleted && c.scope === 'negocio'; })
      || _cuentas.find(function(c){ return c && !c.deleted; });
-    var _cuentaId = (p.cuentaId) || (_cuentaObj && _cuentaObj.id) || null;
+    var _cuentaId = (_pedidoVivo.cuentaId) || (_cuentaObj && _cuentaObj.id) || null;
 
-    // 3. Buscar nombre del proveedor
     var _prov = null;
     try {
      var _provList = _state.proveedores || [];
-     _prov = _provList.find(function(pr){ return pr && pr.id === p.provId; });
+     _prov = _provList.find(function(pr){ return pr && pr.id === _pedidoVivo.provId; });
     } catch(_) {}
-    var _provNombre = (_prov && _prov.nombre) || p.provNombre || 'Proveedor';
+    var _provNombre = (_prov && _prov.nombre) || _pedidoVivo.provNombre || 'Proveedor';
 
-    // 4. Crear gastoOp — inserción directa en _state (sin setter — evita save() doble)
-    var _gastoId = 'gped_' + (p.id || Date.now()) + '_' + Math.random().toString(36).slice(2,6);
-    var _gasto = {
-     id: _gastoId,
-     nombre: _provNombre,
-     concepto: _provNombre,
-     importe: _pedCoste,
-     fecha: p.fecha || new Date().toISOString(),
-     fechaPago: (p.fecha || new Date().toISOString()).slice(0,10),
-     origen: 'pedido',
-     pedidoId: p.id,
-     provId: p.provId || null,
-     cuentaId: _cuentaId,
-     metaTipo: 'normal',
-     scope: 'negocio',
-     estado: 'confirmado',
-     categoria: 'Compras',
-     createdAt: Date.now(),
-    };
-    if (!(_state.gastosOp || []).some(function(g){ return g.id === _gastoId; })) {
+    // EFECTO 1: GASTO — idempotente por pedidoId (no por _gastoId con random)
+    //   Un pedido SIEMPRE genera un único gasto con id determinístico = "gped_<pedidoId>".
+    //   Si ya existe un gasto con pedidoId === _pedidoVivo.id, NO se crea otro.
+    var _gastoId = 'gped_' + _pedidoVivo.id;
+    var _gastoExistente = (_state.gastosOp || []).find(function(g){
+      return g && (g.id === _gastoId || g.pedidoId === _pedidoVivo.id);
+    });
+    if (!_gastoExistente) {
+     var _gasto = {
+      id: _gastoId,
+      nombre: _provNombre,
+      concepto: _provNombre,
+      importe: _pedCoste,
+      fecha: _pedidoVivo.fecha || new Date().toISOString(),
+      fechaPago: (_pedidoVivo.fecha || new Date().toISOString()).slice(0,10),
+      origen: 'pedido',
+      pedidoId: _pedidoVivo.id,
+      provId: _pedidoVivo.provId || null,
+      cuentaId: _cuentaId,
+      metaTipo: 'normal',
+      scope: 'negocio',
+      estado: 'confirmado',
+      categoria: 'Compras',
+      createdAt: Date.now(),
+     };
      if (!_state.gastosOp) _state.gastosOp = [];
      _state.gastosOp.push(_gasto);
      try { window._DashweyMarkDirty && window._DashweyMarkDirty('gastosOp', _gastoId); } catch(_) {}
     }
 
-    // 5. Restar saldo de la cuenta — inserción directa en _state (sin setter)
-    if (_cuentaId) {
+    // EFECTO 2: SALDO — idempotente por flag pedido.saldoAppliedAt
+    //   Si ya se aplicó (timestamp presente), NO descontar de nuevo.
+    //   Sello permanente en el pedido vivo → sobrevive a retries y multi-device.
+    if (_cuentaId && !_pedidoVivo.saldoAppliedAt) {
      var _cuentaTarget = (_state.cuentas || []).find(function(c){ return c && c.id === _cuentaId; });
      if (_cuentaTarget) {
       _cuentaTarget.saldo = (_cuentaTarget.saldo || 0) - _pedCoste;
       _cuentaTarget.updatedAt = new Date().toISOString();
       try { window._DashweyMarkDirty && window._DashweyMarkDirty('cuentas', _cuentaId); } catch(_) {}
+      // Marcar el pedido como saldo-aplicado — flag inmutable post-aplicación
+      _pedidoVivo.saldoAppliedAt = Date.now();
+      _pedidoVivo.saldoCuentaId = _cuentaId;
+      _pedidoVivo.saldoImporte = _pedCoste;
+      _pedidoVivo.updatedAt = Date.now();
+      try { window._DashweyMarkDirty && window._DashweyMarkDirty('historialPedidos', _pedidoVivo.id); } catch(_) {}
      }
     }
    }
   }
  } catch(_finErr) {
   console.warn('[addPedido] impacto financiero falló (pedido guardado igual):', _finErr?.message);
-  // NO relanzar — el pedido DEBE guardarse aunque falle el impacto financiero
+  // NO relanzar — el pedido DEBE guardarse aunque falle el impacto financiero.
+  //   Próximo addPedido con mismo id reintentará los efectos faltantes.
  }
 
  save(); // WRITE ÚNICO — incluye historialPedidos + gastosOp + cuentas + lotesStock
- // v1.3.1138 FIX#8: emit centralizado desde el setter
  try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
- try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} // v1.3.1173: dashboard FC se actualiza
+ try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {}
+ try { window.DashweyBus && window.DashweyBus.emit('cuenta'); } catch(_) {} // v1.3.1265 W-A-27: emitir cuenta tras descontar saldo
  },
  removeHistorialPedido: (id) => {
   if (!_state.historialPedidos) return;
@@ -16106,7 +16139,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1264-dev';
+ const _APP_VERSION = 'v1.3.1265-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37165,8 +37198,18 @@ const marginLine = mg === null ? '' :
  pvp: pvpNuevo,
  iva: ivaNuevo,
  prov: eaProvId,
- stockMinimo: parseInt(document.getElementById('ea-nc')?.value) || prod.stockMinimo || 1,
- udscaja: parseInt(document.getElementById('ea-uc')?.value) || prod.udscaja || 12,
+ stockMinimo: (function(){ // v1.3.1265 W-A-08: permitir 0 explícito
+   var v = document.getElementById('ea-nc')?.value;
+   if (v === undefined || v === null || v === '') return prod.stockMinimo || 1;
+   var n = parseInt(v, 10);
+   return Number.isFinite(n) && n >= 0 ? n : (prod.stockMinimo || 1);
+ })(),
+ udscaja: (function(){ // v1.3.1265 W-A-09: permitir 0 explícito (raro pero válido)
+   var v = document.getElementById('ea-uc')?.value;
+   if (v === undefined || v === null || v === '') return prod.udscaja || 12;
+   var n = parseInt(v, 10);
+   return Number.isFinite(n) && n >= 0 ? n : (prod.udscaja || 12);
+ })(),
  caducidad: document.getElementById('ea-cad')?.value || null,
  // v1.3.1155: ventaNombre (opcional, para matching Loyverse exacto)
  ventaNombre: (document.getElementById('ea-venta-nombre')?.value?.trim() || null),
@@ -43320,16 +43363,19 @@ _eaRecalc();
 
  // ── Actualizar stock ────────────────────────────────────────
  // v1.3.421: detectar productos borrados — no bloquear el pedido pero avisar
+ // Nota v1.3.1265: aunque updateProd llama save() por cada item, el debounce
+ //   single-flight (500ms) colapsa todos los calls en un único write a Firebase.
+ //   No es necesario bloquear con flags peligrosos como _DashweyApplyingRemote.
  const _prodBorrados = [];
  items.forEach(o => {
- const p = State.get.prod(o.prodId);
- if (p) {
- const newStock = (p.stockActual || 0) + (o.ncajas || 1) * (o.udscaja || 1);
- State.set.updateProd(o.prodId, { stockActual: newStock });
- } else {
- _prodBorrados.push(o.nombre || o.prodId);
- console.warn('[CONFIRM] producto borrado en pedido pendiente:', o.prodId);
- }
+   const p = State.get.prod(o.prodId);
+   if (p) {
+     const newStock = (p.stockActual || 0) + (o.ncajas || 1) * (o.udscaja || 1);
+     State.set.updateProd(o.prodId, { stockActual: newStock });
+   } else {
+     _prodBorrados.push(o.nombre || o.prodId);
+     console.warn('[CONFIRM] producto borrado en pedido pendiente:', o.prodId);
+   }
  });
  if (_prodBorrados.length) {
  setTimeout(function() {
