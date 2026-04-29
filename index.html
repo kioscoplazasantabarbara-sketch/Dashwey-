@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1275-dev</title>
+<title>Dashwey v1.3.1276-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11385,6 +11385,9 @@ const State = (() => {
  diasActivos: [1,2,3,4,5,6,7], // 1=Lun..7=Dom (default: todos)
  cierreAutomatico: false, // si true y horarioCierre definido, auto-cierre en la hora
  notifCierre: false,   // notificación push al llegar cierre
+ // v1.3.1276 FASE 1 CIERRE CAJA — preliminar revisable
+ cierreCajaCuentaDestino: '',  // id cuenta destino para auto-cierre (vacío = abre sheet)
+ registrarSinVentas: false,    // si true, auto-cierre registra 0€ cuando no hubo ventas
  // v1.3.1272 FRANJA HORARIA TOGGLE — controla si la franja se aplica al period.
  //   true  → applyFranjaToPeriod inyecta dayStart/dayEnd al period
  //   false → period sin dayStart/dayEnd (día calendario completo)
@@ -12387,9 +12390,37 @@ const State = (() => {
  //   - cambios locales: debounce 500ms, un solo write por ráfaga
  //   - sin reintentos cíclicos; sin throttle de tiempo
  function save() {
- // REGLA 1 — bloqueo absoluto durante apply remoto
+ // v1.3.1276 FIX BUG-RENAME-CRITICAL: REGLA 1 corregida.
+ // Antes: durante _DashweyApplyingRemote, save() retornaba INMEDIATAMENTE sin marcar
+ // dirty ni escribir local. Si el usuario editaba justo durante un apply (onSnapshot
+ // remoto, merge inicial, drain subcol), su edición:
+ //   1) mutaba _state pero NO se marcaba dirty
+ //   2) NO se escribía a localStorage
+ //   3) al recargar, leía localStorage viejo → la edición desaparecía
+ // Bug determinista en multi-device o tras background>30s con sync activo.
+ //
+ // Fix: marcar dirty SIEMPRE (es solo un flag in-memory, no causa loop).
+ //      Escribir local SIEMPRE (es localStorage, no toca Firebase).
+ //      Solo bloquear el write a Firebase. El debounce posterior detectará dirty
+ //      y subirá cuando _DashweyApplyingRemote vuelva a false.
  if (window._DashweyApplyingRemote) {
-  console.log('[SAVE_ORIGIN] REMOTE_BLOCKED');
+  // Marcar dirty + persistir local — sin tocar Firebase
+  window._DashweyDirty = true;
+  try {
+   const _ts0 = Date.now();
+   const _did0 = window._DashweyDeviceId || 'unknown';
+   if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
+   _writeLocal(_archivePayload(_state));
+  } catch(_) {}
+  // Reprogramar para subir a Firebase cuando termine el apply remoto
+  if (!window._DashweySaveScheduled) {
+   window._DashweySaveScheduled = true;
+   clearTimeout(_saveTimer);
+   _saveTimer = setTimeout(function() {
+    window._DashweySaveScheduled = false;
+    save();
+   }, 600);
+  }
   return;
  }
  // REGLA 2 — escritura local siempre (sin Firebase), vía marca dirty + debounce
@@ -16584,7 +16615,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1275-dev';
+ const _APP_VERSION = 'v1.3.1276-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -16858,6 +16889,24 @@ const ui = (() => {
    style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">
   <span style="font-size:var(--fs-sm);color:var(--ink);flex:1">Notificarme cuando sea hora de cerrar</span>
  </label>
+ <!-- v1.3.1276 FASE 1: cuenta destino auto-cierre + registrar 0€ -->
+ <div style="margin-top:var(--sp-2)">
+  <label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);display:block;margin-bottom:var(--sp-1)">Cuenta destino auto-cierre</label>
+  <select id="pf-cierre-cuenta"
+   style="width:100%;box-sizing:border-box;height:40px;border-radius:var(--r-sm2);border:1px solid var(--border);padding:0 10px;font-size:var(--fs-sm);font-family:var(--font);color:var(--ink);background:var(--surface)">
+   <option value="">— Preguntar al cerrar —</option>
+   ${(State.get.cuentas() || []).filter(function(c){return c && !c.deleted;}).map(function(c){
+    var sel = (p.cierreCajaCuentaDestino === c.id) ? ' selected' : '';
+    return '<option value="' + esc(c.id) + '"' + sel + '>' + esc(c.nombre || 'Cuenta') + '</option>';
+   }).join('')}
+  </select>
+  <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:4px;line-height:1.4">Si seleccionas una cuenta, el cierre automático ingresará el bruto del día como movimiento preliminar revisable. Si dejas en blanco, abrirá el flujo manual.</div>
+ </div>
+ <label style="display:flex;align-items:center;gap:var(--sp-2_5);cursor:pointer;-webkit-tap-highlight-color:transparent">
+  <input id="pf-reg-sin-ventas" type="checkbox" ${p.registrarSinVentas?'checked':''}
+   style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">
+  <span style="font-size:var(--fs-sm);color:var(--ink);flex:1">Registrar movimiento de 0 € si no hubo ventas</span>
+ </label>
  <!-- Abrir jornada (botón migrado desde flujo de caja v1.3.1159) -->
  <button id="pf-abrir-jornada" onclick="App.ui._perfilAbrirJornada()"
   style="height:46px;border-radius:var(--r-md);background:var(--accent);color:#fff;border:none;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">
@@ -16896,6 +16945,9 @@ const ui = (() => {
  horarioCierre: document.getElementById('pf-h-close')?.value || '',
  cierreAutomatico: !!document.getElementById('pf-cierre-auto')?.checked,
  notifCierre: !!document.getElementById('pf-notif-cierre')?.checked,
+ // v1.3.1276 FASE 1 cierre caja
+ cierreCajaCuentaDestino: document.getElementById('pf-cierre-cuenta')?.value || '',
+ registrarSinVentas: !!document.getElementById('pf-reg-sin-ventas')?.checked,
  };
  // v1.3.1245 FIX UX-4: soportar horario nocturno (wrap-around).
  //   - Antes: rechazaba apertura >= cierre (bar 18:00 → 02:00 imposible)
@@ -16911,6 +16963,18 @@ const ui = (() => {
   return;
  }
  if (!vals.nombre) { showToast('⚠️ Nombre obligatorio', 'warning'); return; }
+ // v1.3.1276 FASE 1: pedir permiso Notification API si activó notifCierre
+ try {
+  if (vals.notifCierre && 'Notification' in window && Notification.permission === 'default') {
+   Notification.requestPermission().then(function(perm){
+    if (perm === 'granted') {
+     try { showToast('✅ Notificaciones activadas', 'success'); } catch(_) {}
+    } else {
+     try { showToast('ℹ️ Permiso denegado — usaremos avisos en pantalla', 'info'); } catch(_) {}
+    }
+   });
+  }
+ } catch(_) {}
  State.set.perfil(vals);
  closeFs();
  showToast('✅ Perfil guardado', 'success');
@@ -20428,20 +20492,129 @@ const ui = (() => {
 
  // ══════════════════════════════════════════════════════════════════════
  // v1.3.1162 AUTO-CIERRE SCHEDULER
- // Chequea cada 60s: si perfil.cierreAutomatico && perfil.horarioCierre
- // definido y la hora actual cruza el umbral de cierre con jornada abierta,
- // dispara _openCierreCajaSheet (o cierre silencioso si config).
+ // v1.3.1276 FASE 1 — modelo "preliminar revisable":
+ //   - Persistencia anti-duplicado en localStorage (sobrevive al reload)
+ //   - Si perfil.cierreCajaCuentaDestino configurada → registra ingreso preliminar
+ //     directo (pendienteRevision:true) sin abrir sheet. Notif local + toast.
+ //   - Si NO hay cuenta destino → comportamiento legacy (abre sheet)
+ //   - Setting registrarSinVentas controla caso 0€
+ //   - Notification API (con permiso) + fallback toast
+ //   - Cálculo bruto exacto rango horarioApertura → horarioCierre
+ //
  // Edge cases:
- //   - Sin horario → no hace nada (retorna silencioso)
- //   - Sin jornada activa → no cierra (no hay nada que cerrar)
- //   - Multi-device → addCierre dedupea por id + merge-by-id cubre
+ //   - Sin horario → no hace nada
+ //   - Sin jornada activa Y sin ventas en rango → solo notif (no auto-cierre)
+ //   - Multi-device → addIngreso dedupea por id + key persistida evita doble disparo
  //   - Offline → pendiente se encola en _pendingQueue
- //   - Ya disparado hoy → flag `_autoCierreLastFired` (yyyy-mm-dd)
- //   - Notif: si perfil.notifCierre=true → toast en app (FCM push es server-side)
+ //   - Ya disparado hoy → flag persistido `closebox_YYYY-MM-DD` (FASE 1 fix)
  // ══════════════════════════════════════════════════════════════════════
  var _autoCierreTimer = null;
  var _autoCierreLastFired = null; // 'YYYY-MM-DD' para evitar doble disparo
  var _autoNotifLastFired = null;
+
+ // v1.3.1276 FASE 1 — hidratar flag desde localStorage al arrancar (sobrevive reload)
+ function _autoCierreLoadPersisted() {
+  try {
+   var raw = localStorage.getItem('dashwey_autocierre_lastfired');
+   if (raw) _autoCierreLastFired = raw;
+   var rawN = localStorage.getItem('dashwey_autonotif_lastfired');
+   if (rawN) _autoNotifLastFired = rawN;
+  } catch(_) {}
+ }
+ _autoCierreLoadPersisted();
+
+ // v1.3.1276 FASE 1 — calcular bruto exacto en rango horarioApertura→horarioCierre
+ // Devuelve {bruto, nTickets, ticketMedio, rangoStr}
+ function _autoCierreCalcBruto(perfil) {
+  try {
+   var ventas = (State.get.ventas && State.get.ventas()) || [];
+   var hAp = perfil.horarioApertura;
+   var hCi = perfil.horarioCierre;
+   var now = new Date();
+   var hoy = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+   var pad = function(n){ return String(n).padStart(2,'0'); };
+   // Construir Date objetos para apertura y cierre
+   var [hhA, mmA] = (hAp||'00:00').split(':').map(Number);
+   var [hhC, mmC] = (hCi||'23:59').split(':').map(Number);
+   var aperturaDt = new Date(now); aperturaDt.setHours(hhA, mmA, 0, 0);
+   var cierreDt = new Date(now); cierreDt.setHours(hhC, mmC, 0, 0);
+   // Soporte horario nocturno (apertura > cierre): apertura es ayer
+   if (hhA*60+mmA > hhC*60+mmC) {
+    aperturaDt.setDate(aperturaDt.getDate() - 1);
+   }
+   var aperturaTs = aperturaDt.getTime();
+   var cierreTs = cierreDt.getTime();
+   var bruto = 0;
+   var nTickets = 0;
+   ventas.forEach(function(v){
+    if (!v || v.deleted) return;
+    var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
+    if (ts >= aperturaTs && ts <= cierreTs) {
+     var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
+     bruto += imp;
+     nTickets++;
+    }
+   });
+   var ticketMedio = nTickets > 0 ? (bruto / nTickets) : 0;
+   var rangoStr = (hAp || '?') + '–' + (hCi || '?');
+   return { bruto: Math.round(bruto*100)/100, nTickets: nTickets, ticketMedio: Math.round(ticketMedio*100)/100, rangoStr: rangoStr };
+  } catch(e) {
+   console.warn('[AutoCierre] calcBruto err', e);
+   return { bruto: 0, nTickets: 0, ticketMedio: 0, rangoStr: '' };
+  }
+ }
+
+ // v1.3.1276 FASE 1 — Notification API local (si app abierta o backgrounded)
+ function _autoCierreNotify(title, body) {
+  // Toast siempre (in-app)
+  try { showToast('🕐 ' + body); } catch(_) {}
+  // Notification API (si permiso)
+  try {
+   if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body: body, icon: '/icon-192.png', tag: 'dashwey-cierre' });
+   }
+  } catch(_) {}
+ }
+
+ // v1.3.1276 FASE 1 — registro preliminar revisable directo (sin sheet)
+ function _autoCierreRegistrarPreliminar(perfil) {
+  try {
+   var cuentaId = perfil.cierreCajaCuentaDestino;
+   if (!cuentaId) return false;
+   var info = _autoCierreCalcBruto(perfil);
+   // Caso 0€ — solo registrar si setting activo
+   if (info.bruto <= 0 && info.nTickets === 0 && !perfil.registrarSinVentas) {
+    console.info('[AutoCierre] sin ventas y registrarSinVentas=false → no se registra');
+    return true; // tratamos como exitoso (no es error)
+   }
+   var now = Date.now();
+   var hoy = new Date().toISOString().split('T')[0];
+   var ingreso = {
+    id: 'cierre_auto_' + now,
+    importe: info.bruto,
+    fecha: new Date(now).toISOString(),
+    cuentaId: cuentaId,
+    concepto: 'Cierre automático (preliminar) ' + hoy + ' · ' + info.rangoStr,
+    origen: 'cierre_caja_auto',
+    metaTipo: 'normal',
+    estado: 'confirmado',
+    pendienteRevision: true, // ← clave del modelo preliminar revisable
+    cierreInfo: {
+     bruto: info.bruto,
+     nTickets: info.nTickets,
+     ticketMedio: info.ticketMedio,
+     rangoStr: info.rangoStr,
+     generadoEn: now,
+    },
+   };
+   State.set.addIngreso(ingreso);
+   console.info('[AutoCierre] ✓ ingreso preliminar registrado:', info.bruto + '€ · ' + info.nTickets + ' tickets');
+   return true;
+  } catch(e) {
+   console.warn('[AutoCierre] registrarPreliminar err', e);
+   return false;
+  }
+ }
 
  function _autoCierreTick() {
   try {
@@ -20456,44 +20629,58 @@ const ui = (() => {
    var mm = String(now.getMinutes()).padStart(2,'0');
    var nowHHMM = hh + ':' + mm;
    var today = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
-   // Ya disparado hoy (cierre O notif) → nada
-   // Ventana: hora_cierre..hora_cierre+5min (tolerancia si tab dormido)
-   // v1.3.1245 FIX UX-4: ventana funciona para horarios nocturnos.
-   //   Ej: cierre=02:00 → targetM=120 → ventana [120, 125] (madrugada). OK aritméticamente.
-   //   Limitación conocida (UX-5, FASE 1): ventana 5min es estrecha si app cerrada a esa hora.
+   // Ventana: hora_cierre..hora_cierre+5min
    var _toMin = function(s){ var p=s.split(':'); return parseInt(p[0])*60+parseInt(p[1]); };
    var nowM = _toMin(nowHHMM);
    var targetM = _toMin(horarioCierre);
-   if (nowM < targetM || nowM > targetM + 5) return; // fuera de ventana
-   // Detectar jornada abierta (si CierreEngine expuesto)
+   if (nowM < targetM || nowM > targetM + 5) return;
+   // Detectar jornada abierta
    var jornadaAbierta = false;
    try {
     if (window.App && App.CierreEngine && App.CierreEngine.jornadaActiva) {
      jornadaAbierta = !!App.CierreEngine.jornadaActiva();
     } else {
-     // Fallback: buscar cierre con estado 'abierto'
      var cc = State.get.cierresCaja ? State.get.cierresCaja() : [];
      jornadaAbierta = cc.some(function(c){ return c && c.estado === 'abierto' && !c.deleted; });
     }
    } catch(_) {}
-   // NOTIFICACIÓN (si activada, 1 vez por día)
+   // NOTIFICACIÓN (1 vez por día, persistida)
    if (perfil.notifCierre && _autoNotifLastFired !== today) {
     _autoNotifLastFired = today;
-    if (jornadaAbierta) {
-     try { showToast('🕐 Hora de cerrar caja — horario de negocio ' + horarioCierre); } catch(_) {}
+    try { localStorage.setItem('dashwey_autonotif_lastfired', today); } catch(_) {}
+    if (jornadaAbierta || perfil.cierreCajaCuentaDestino) {
+     _autoCierreNotify('Dashwey · Hora de cerrar caja', 'Horario de negocio: ' + horarioCierre + '. Revisa el cierre del día.');
     }
    }
-   // AUTO-CIERRE (si activada + jornada abierta + no disparado hoy)
-   if (perfil.cierreAutomatico && jornadaAbierta && _autoCierreLastFired !== today) {
-    _autoCierreLastFired = today;
-    console.info('[AutoCierre] disparando cierre automático ' + horarioCierre);
-    try {
-     // Preferir _openCierreCajaSheet (vista interactiva) si disponible
-     if (window.App && App.dash && App.dash._openCierreCajaSheet) {
-      App.dash._openCierreCajaSheet();
-      showToast('🔒 Cierre automático — revisa y confirma', 'error');
+   // AUTO-CIERRE (persistido — sobrevive al reload)
+   if (perfil.cierreAutomatico && _autoCierreLastFired !== today) {
+    // Modo PRELIMINAR REVISABLE: cuenta destino configurada → registro directo
+    if (perfil.cierreCajaCuentaDestino) {
+     _autoCierreLastFired = today;
+     try { localStorage.setItem('dashwey_autocierre_lastfired', today); } catch(_) {}
+     console.info('[AutoCierre] modo preliminar revisable — disparando ' + horarioCierre);
+     var ok = _autoCierreRegistrarPreliminar(perfil);
+     if (ok) {
+      var info = _autoCierreCalcBruto(perfil);
+      _autoCierreNotify('Dashwey · Cierre automático', 'Registrado: ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets · ' + info.rangoStr);
+     } else {
+      // Si falla, deshacer flag para reintentar próximo tick
+      _autoCierreLastFired = null;
+      try { localStorage.removeItem('dashwey_autocierre_lastfired'); } catch(_) {}
      }
-    } catch(e) { console.warn('[AutoCierre]', e); }
+    }
+    // Modo LEGACY (sheet interactivo) — solo si hay jornada abierta
+    else if (jornadaAbierta) {
+     _autoCierreLastFired = today;
+     try { localStorage.setItem('dashwey_autocierre_lastfired', today); } catch(_) {}
+     console.info('[AutoCierre] modo sheet (sin cuenta destino) — abriendo cierre manual');
+     try {
+      if (window.App && App.dash && App.dash._openCierreCajaSheet) {
+       App.dash._openCierreCajaSheet();
+       showToast('🔒 Cierre automático — revisa y confirma', 'error');
+      }
+     } catch(e) { console.warn('[AutoCierre]', e); }
+    }
    }
   } catch(_) { /* silencioso — nunca romper la app */ }
  }
