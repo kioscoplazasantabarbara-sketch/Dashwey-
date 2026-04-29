@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1291-dev</title>
+<title>Dashwey v1.3.1292-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12189,6 +12189,16 @@ const State = (() => {
    var nm = (p.nombre || '').trim();
    var _isLegacy = !p.origen && !p.createdAt;
    var _isNoName = !nm;
+   // v1.3.1292: proteger proveedores recién creados (createdAt reciente)
+   //   incluso si por accidente cumplieran isLegacy/isNoName (defensive).
+   if (p.createdAt) {
+    var _provCreatedMs = (typeof p.createdAt === 'number')
+      ? p.createdAt
+      : (function(){ var d = new Date(p.createdAt); return isNaN(d.getTime()) ? 0 : d.getTime(); })();
+    if (_provCreatedMs > 0 && (Date.now() - _provCreatedMs) < (72 * 60 * 60 * 1000)) {
+     return; // protegido — proveedor reciente, intocable
+    }
+   }
    if (_isLegacy || _isNoName) {
     p.deleted = true;
     p.deletedAt = _migNow;
@@ -12231,17 +12241,37 @@ const State = (() => {
  //   array tras filter superior). Por tanto, productos cuyo prov apunta a un
  //   tombstone NO son considerados huérfanos. Solo lo son si prov:null o prov
  //   apunta a id desconocido.
+ // v1.3.1292 FIX P0 PROTECCIÓN ARTÍCULOS NUEVOS — productos creados en últimas
+ //   72h por el usuario (createdAt reciente Y prov no nulo) NUNCA se consideran
+ //   huérfanos, sin importar el resto del state. Garantía absoluta: si el
+ //   usuario lo creó hace poco, sobrevive a cualquier ciclo de boot. Esto
+ //   protege contra cualquier flujo destructivo no identificado en el merge
+ //   inicial o el migrate.
  var _provIdsVivos = {};
  (state.proveedores || []).forEach(function(pv){ if (pv && pv.id) _provIdsVivos[pv.id] = 1; });
  var _orphanProdIds = {};
  // Semillar con los eliminados explícitamente v1.3.995 para que el cascade los limpie
  Object.keys(_explicitDemoIds).forEach(function(id){ _orphanProdIds[id] = 1; });
+ // v1.3.1292: cutoff 72h — protege productos manuales recién creados
+ var _PROTECTION_CUTOFF_MS = 72 * 60 * 60 * 1000;
+ var _nowProtect = Date.now();
  if (Array.isArray(state.productos)) {
   state.productos.forEach(function(p){
    if (!p || !p.id) return;
    // v1.3.1013: NO considerar huérfanos los productos importados de Loyverse
    // Loyverse es fuente de verdad — proveedores pueden llegar en otro snapshot
    if (p.origen === 'loyverse') return;
+   // v1.3.1292: PROTECCIÓN ABSOLUTA — si tiene createdAt reciente Y prov,
+   //   nunca es huérfano. Solo aplica si prov apunta a un id válido (incluso
+   //   si es tombstone, lo importante es que el prov exista en el array).
+   if (p.createdAt && p.prov) {
+    var _createdMs = (typeof p.createdAt === 'number')
+      ? p.createdAt
+      : (function(){ var d = new Date(p.createdAt); return isNaN(d.getTime()) ? 0 : d.getTime(); })();
+    if (_createdMs > 0 && (_nowProtect - _createdMs) < _PROTECTION_CUTOFF_MS) {
+     return; // protegido — no marcar huérfano
+    }
+   }
    if (!p.prov || !_provIdsVivos[p.prov]) _orphanProdIds[p.id] = 1;
   });
   // v1.3.1289: HARD-delete solo demos explícitos. Huérfanos no-demo → SOFT-delete
@@ -16750,7 +16780,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1291-dev';
+ const _APP_VERSION = 'v1.3.1292-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -42434,6 +42464,10 @@ function calcIAAnalysis() {
  // Ningún otro punto del código debe llamar a State.set.addProd
  // para artículos nuevos desde el formulario — todo pasa por aquí.
  function _createArticle(data) {
+ // v1.3.1292 FIX P0 PROTECCIÓN ARTÍCULOS NUEVOS — añadir origen:'manual' y
+ //   createdAt al crear. Sin estos campos, los artículos quedaban ambiguos para
+ //   `_migrateDemoData` y la protección por createdAt. Ahora son explícitos y
+ //   trazables. Idéntico patrón al que usa saveProvEdit/addProv para proveedores.
  State.set.addProd({
  id: data.id,
  nombre: data.nombre,
@@ -42455,7 +42489,9 @@ function calcIAAnalysis() {
  re: data.re || false,
  ean: data.ean || null,
  loyverseItemId: data.loyverseItemId || null,
- ventaNombre: data.ventaNombre || null
+ ventaNombre: data.ventaNombre || null,
+ origen: 'manual',
+ createdAt: new Date().toISOString()
  });
 
  // Limpiar foto temporal
