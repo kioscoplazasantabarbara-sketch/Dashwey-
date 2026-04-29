@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1271-dev</title>
+<title>Dashwey v1.3.1272-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1331,6 +1331,61 @@ body:not([data-tab="1"]) #dash-nav-next { display: none !important; }
  font-size: var(--fs-2xs); font-weight: var(--fw-bold); letter-spacing:var(--ls-wider);
  text-transform: uppercase; color: var(--ink-soft);
  margin-bottom: var(--sp-1);
+}
+
+/* v1.3.1272 FIX-FRANJA: toggle iOS-style smartphone-first.
+   Toggle 44×24px (Apple HIG) con halo invisible 44×44 para tap target.
+   Inputs atenuados cuando toggle OFF (no escondidos — feedback claro). */
+.dps-franja-header-row {
+ display: flex; align-items: center; justify-content: space-between;
+ gap: var(--sp-3); margin-bottom: var(--sp-2);
+ min-height: 32px;
+}
+.dps-franja-header-label {
+ display: flex; align-items: center; gap: var(--sp-1_5);
+ font-size: var(--fs-xs); font-weight: var(--fw-bold);
+ color: var(--ink-soft); text-transform: uppercase;
+ letter-spacing: var(--ls-wide); flex: 1;
+}
+.dps-franja-toggle {
+ position: relative; display: inline-flex; align-items: center;
+ width: 44px; height: 44px; cursor: pointer;
+ -webkit-tap-highlight-color: transparent;
+ flex-shrink: 0; justify-content: flex-end;
+}
+.dps-franja-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.dps-franja-toggle-slider {
+ position: relative; display: block;
+ width: 44px; height: 26px;
+ background: rgba(0,0,0,0.18);
+ border-radius: 13px;
+ transition: background 200ms cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.dps-franja-toggle-slider::after {
+ content: ''; position: absolute;
+ top: 2px; left: 2px; width: 22px; height: 22px;
+ background: #fff; border-radius: 50%;
+ box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.1);
+ transition: transform 200ms cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.dps-franja-toggle input:checked + .dps-franja-toggle-slider {
+ background: var(--red);
+}
+.dps-franja-toggle input:checked + .dps-franja-toggle-slider::after {
+ transform: translateX(18px);
+}
+[data-theme="dark"] .dps-franja-toggle-slider {
+ background: rgba(255,255,255,0.18);
+}
+
+.dps-franja-inputs {
+ transition: opacity 220ms ease;
+}
+.dps-franja-inputs-row {
+ display: flex; gap: var(--sp-2); align-items: flex-end;
+}
+.dps-franja-inputs[data-disabled="1"] {
+ opacity: 0.4; pointer-events: none;
 }
 .dps-apply-btn {
  width: 100%; height: 50px; border-radius:var(--r-md);
@@ -11108,6 +11163,10 @@ const State = (() => {
  diasActivos: [1,2,3,4,5,6,7], // 1=Lun..7=Dom (default: todos)
  cierreAutomatico: false, // si true y horarioCierre definido, auto-cierre en la hora
  notifCierre: false,   // notificación push al llegar cierre
+ // v1.3.1272 FRANJA HORARIA TOGGLE — controla si la franja se aplica al period.
+ //   true  → applyFranjaToPeriod inyecta dayStart/dayEnd al period
+ //   false → period sin dayStart/dayEnd (día calendario completo)
+ franjaActiva: false,
  },
  baseCats: [], // categorías definidas por el usuario — sin seed legacy
  // ── Finanzas ────────────────────────────────────────────────
@@ -15692,18 +15751,36 @@ const Utils = (() => {
  // v1.3.1257: hidratar inputs de FRANJA HORARIA con valores actuales del periodo.
  //   Si no hay franja configurada, defaults 00:00–23:59 (= día completo).
  //   Listener en los inputs actualiza el hint en vivo y persiste al cerrar.
+ // v1.3.1272 FIX-FRANJA-01: añadido toggle activa/desactiva (lee user.franjaActiva).
  try {
   const dsInp = document.getElementById('dps-day-start');
   const deInp = document.getElementById('dps-day-end');
   const hint = document.getElementById('dps-franja-hint');
+  const tgl = document.getElementById('dps-franja-toggle');
+  const tglWrap = document.getElementById('dps-franja-inputs');
   if (dsInp && deInp) {
-   const _curDS = (config.dayStart && /^\d{1,2}:\d{2}$/.test(config.dayStart)) ? config.dayStart : '00:00';
-   const _curDE = (config.dayEnd && /^\d{1,2}:\d{2}$/.test(config.dayEnd)) ? config.dayEnd : '23:59';
+   // v1.3.1272: defaults sugeridos 15:00–04:00 (jornada nocturna típica).
+   //   Si el user ya tiene franja configurada en el period, prevalece.
+   const _curDS = (config.dayStart && /^\d{1,2}:\d{2}$/.test(config.dayStart)) ? config.dayStart : '15:00';
+   const _curDE = (config.dayEnd && /^\d{1,2}:\d{2}$/.test(config.dayEnd)) ? config.dayEnd : '04:00';
    dsInp.value = _curDS;
    deInp.value = _curDE;
+
+   // Estado actual del toggle desde user.franjaActiva
+   let _franjaActiva = false;
+   try { _franjaActiva = !!(State.get.user && State.get.user().franjaActiva); } catch(_) {}
+   if (tgl) tgl.checked = _franjaActiva;
+   if (tglWrap) tglWrap.dataset.disabled = _franjaActiva ? '' : '1';
+
    const _updateHint = () => {
     if (!hint) return;
     const v1 = dsInp.value, v2 = deInp.value;
+    const _isActive = tgl ? tgl.checked : true;
+    if (!_isActive) {
+     hint.textContent = 'Franja desactivada — día completo (00:00–23:59)';
+     hint.style.color = 'var(--ink-soft)';
+     return;
+    }
     if (v1 === '00:00' && v2 === '23:59') {
      hint.textContent = 'Día completo (00:00–23:59)';
      hint.style.color = 'var(--ink-soft)';
@@ -15724,6 +15801,22 @@ const Utils = (() => {
     dsInp.addEventListener(evt, _updateHint);
     deInp.addEventListener(evt, _updateHint);
    });
+   // v1.3.1272: handler toggle franja — persiste user.franjaActiva + UI feedback
+   if (tgl) {
+    const _onToggle = () => {
+     const isOn = tgl.checked;
+     try {
+      const cur = State.get.user();
+      State.set.user(Object.assign({}, cur, { franjaActiva: isOn }));
+     } catch(eU) { console.warn('[Dashwey/Franja] persist toggle err:', eU); }
+     if (tglWrap) tglWrap.dataset.disabled = isOn ? '' : '1';
+     try { Utils.triggerHaptic('light'); } catch(_) {}
+     _updateHint();
+    };
+    if (tgl._frjHandler) tgl.removeEventListener('change', tgl._frjHandler);
+    tgl._frjHandler = _onToggle;
+    tgl.addEventListener('change', _onToggle);
+   }
   }
  } catch(eFranja) { console.warn('[Dashwey/Period] franja hydrate err:', eFranja); }
 
@@ -15754,13 +15847,20 @@ const Utils = (() => {
 
  // v1.3.1257: leer franja horaria activa de los inputs (Loyverse style)
  //   y propagarla al callback. Default 00:00–23:59 (día completo).
+ // v1.3.1272 FIX-FRANJA-02: si user.franjaActiva === false, NO inyectar franja
+ //   (period queda sin dayStart/dayEnd → día calendario completo).
  let _ds = '00:00', _de = '23:59';
+ let _franjaOn = false;
+ try { _franjaOn = !!(State.get.user && State.get.user().franjaActiva); } catch(_) {}
  try {
   const dsEl = document.getElementById('dps-day-start');
   const deEl = document.getElementById('dps-day-end');
   if (dsEl?.value && /^\d{1,2}:\d{2}$/.test(dsEl.value)) _ds = dsEl.value;
   if (deEl?.value && /^\d{1,2}:\d{2}$/.test(deEl.value)) _de = deEl.value;
  } catch(_) {}
+
+ // Si toggle OFF → forzar día completo (período sin franja aplicada)
+ if (!_franjaOn) { _ds = '00:00'; _de = '23:59'; }
 
  if (config?.onSelect) {
  // v1.2.42: guardar callback ANTES de limpiar config — evita race condition
@@ -16185,7 +16285,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1271-dev';
+ const _APP_VERSION = 'v1.3.1272-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22689,14 +22789,58 @@ const dash = (() => {
  let buckets, xLabels;
 
  if (period.type === 'today' || period.type === 'hours') {
- // 24 hourly buckets — all ventas in the period
- buckets = Array(24).fill(0);
+ // v1.3.1272 FIX-CHART-01: gráfica respeta franja horaria (replica Loyverse Dashboard).
+ //   - Sin franja o franja "00:00–23:59" → 24 buckets naturales [0..23]
+ //   - Con franja nocturna 15:00→04:00 → 13 buckets [15,16,17,18,19,20,21,22,23,0,1,2,3]
+ //     (eje X muestra: 15:00 → 18:00 → 21:00 → 00:00 → 03:00, no se ve la barra de 0h
+ //     a la izquierda como antes — ahora va al final de la jornada como Loyverse).
+ //   - Con franja diurna 08:00→20:00 → 12 buckets [8..19]
+ const _parseChartHour = (s) => {
+   const m = String(s).match(/^(\d{1,2}):(\d{2})$/);
+   return m ? +m[1] : null;
+ };
+ let bucketStartHour = 0;  // hora inicial natural por defecto
+ let nBuckets = 24;
+ const _hasFranja = period.dayStart && period.dayEnd
+   && !(period.dayStart === '00:00' && period.dayEnd === '23:59');
+ if (_hasFranja) {
+   const ds = _parseChartHour(period.dayStart);
+   const de = _parseChartHour(period.dayEnd);
+   if (ds !== null && de !== null) {
+     bucketStartHour = ds;
+     const isNocturno = de <= ds;
+     nBuckets = isNocturno ? (24 - ds + de) : (de - ds);
+     if (nBuckets <= 0 || nBuckets > 24) nBuckets = 24;  // fallback seguro
+   }
+ }
+
+ buckets = Array(nBuckets).fill(0);
  ventas.forEach(v => {
  const h = new Date(v.fecha).getHours();
- buckets[h] += _vtAmt(v);
+ // Mapear hora natural [0..23] → índice en bucket de jornada
+ const idx = ((h - bucketStartHour) + 24) % 24;
+ if (idx >= 0 && idx < nBuckets) buckets[idx] += _vtAmt(v);
  });
- // xLabels: [texto, índice_barra] para alineación exacta
-    xLabels = [['00:00',0],['06:00',6],['12:00',12],['18:00',18],['23:00',23]];
+
+ // Etiquetas X — mostrar hora natural cada ~step buckets, máx 5 etiquetas
+ const _fmtChartH = (h) => String(h % 24).padStart(2,'0') + ':00';
+ if (!_hasFranja) {
+   // Comportamiento legacy: 5 puntos fijos del día natural
+   xLabels = [['00:00',0],['06:00',6],['12:00',12],['18:00',18],['23:00',23]];
+ } else {
+   const step = Math.max(1, Math.ceil(nBuckets / 5));
+   xLabels = [];
+   for (let i = 0; i < nBuckets; i += step) {
+     const realHour = (bucketStartHour + i) % 24;
+     xLabels.push([_fmtChartH(realHour), i]);
+   }
+   // Asegurar última hora visible (evitar etiquetas truncadas)
+   const lastIdx = nBuckets - 1;
+   if (xLabels.length === 0 || xLabels[xLabels.length - 1][1] < lastIdx) {
+     const realLast = (bucketStartHour + lastIdx) % 24;
+     xLabels.push([_fmtChartH(realLast), lastIdx]);
+   }
+ }
 
  } else if (period.type === 'week') {
  // 7-day buckets Mon=0 … Sun=6
@@ -28125,9 +28269,12 @@ function _confirmBorrarCuenta(id) {
  //   con valores de la franja para que el resto del código (legacy) siga
  //   funcionando sin cambios. Si nocturno (deMin <= dsMin) no se ajusta
  //   nada aquí — el auto-avance de día siguiente más abajo lo gestiona.
+ // v1.3.1272 FIX-FRANJA-02: si toggle OFF → forzar 00:00–23:59 (día completo).
+ let _franjaOnA = false;
+ try { _franjaOnA = !!(State.get.user && State.get.user().franjaActiva); } catch(_) {}
  try {
-  const _dsG = document.getElementById('dps-day-start')?.value;
-  const _deG = document.getElementById('dps-day-end')?.value;
+  const _dsG = _franjaOnA ? document.getElementById('dps-day-start')?.value : '00:00';
+  const _deG = _franjaOnA ? document.getElementById('dps-day-end')?.value : '23:59';
   if (_dsG && /^\d{1,2}:\d{2}$/.test(_dsG)) {
    const _dsHEl = document.getElementById('dps-desde-h');
    if (_dsHEl) _dsHEl.value = _dsG;
@@ -28169,9 +28316,12 @@ function _confirmBorrarCuenta(id) {
  const tRaw = document.getElementById('dps-hasta')?.value;
  if (!fRaw || !tRaw) { showToast('⚠️ Selecciona ambas fechas', 'warning'); return; }
  // v1.3.1259: leer hora desde franja global (ver _applyPeriodSheet).
+ // v1.3.1272 FIX-FRANJA-02: si toggle OFF → forzar 00:00–23:59 (día completo).
+ let _franjaOnB = false;
+ try { _franjaOnB = !!(State.get.user && State.get.user().franjaActiva); } catch(_) {}
  try {
-  const _dsG = document.getElementById('dps-day-start')?.value;
-  const _deG = document.getElementById('dps-day-end')?.value;
+  const _dsG = _franjaOnB ? document.getElementById('dps-day-start')?.value : '00:00';
+  const _deG = _franjaOnB ? document.getElementById('dps-day-end')?.value : '23:59';
   if (_dsG && /^\d{1,2}:\d{2}$/.test(_dsG)) {
    const _dsHEl = document.getElementById('dps-desde-h');
    if (_dsHEl) _dsHEl.value = _dsG;
@@ -48189,22 +48339,31 @@ window._almCarritoOptions = function() {
       Aplica a today/week/month/year. Soporta wrap-around nocturno
       (15:00 → 04:00 = jornada típica de bar). 00:00–23:59 = día completo. -->
  <div id="dps-franja-block" style="padding:var(--sp-3) 16px var(--sp-2);border-top:1px solid var(--border)">
-   <div style="display:flex;align-items:center;gap:var(--sp-1_5);margin-bottom:var(--sp-2);font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">
-     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-     <span>Franja horaria de la jornada</span>
-   </div>
-   <div style="display:flex;gap:var(--sp-2);align-items:flex-end">
-     <div style="flex:1">
-       <div class="dps-custom-lbl">Inicio</div>
-       <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-start" value="00:00">
+   <!-- v1.3.1272 FIX-FRANJA-01: toggle iOS-style activa/desactiva franja sin perder valores. -->
+   <div class="dps-franja-header-row">
+     <div class="dps-franja-header-label">
+       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+       <span>Franja horaria de la jornada</span>
      </div>
-     <div style="flex:1">
-       <div class="dps-custom-lbl">Fin</div>
-       <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-end" value="23:59">
+     <label class="dps-franja-toggle" aria-label="Activar/desactivar franja horaria">
+       <input type="checkbox" id="dps-franja-toggle">
+       <span class="dps-franja-toggle-slider"></span>
+     </label>
+   </div>
+   <div class="dps-franja-inputs" id="dps-franja-inputs">
+     <div class="dps-franja-inputs-row">
+       <div style="flex:1">
+         <div class="dps-custom-lbl">Inicio</div>
+         <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-start" value="00:00">
+       </div>
+       <div style="flex:1">
+         <div class="dps-custom-lbl">Fin</div>
+         <input type="time" class="dps-custom-inp dps-custom-inp-time" id="dps-day-end" value="23:59">
+       </div>
      </div>
    </div>
    <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:var(--sp-1_5);line-height:var(--lh-snug)" id="dps-franja-hint">
-     Día completo (00:00–23:59)
+     Franja desactivada — día completo (00:00–23:59)
    </div>
  </div>
  <div class="dps-custom-form" id="dps-custom-form">
