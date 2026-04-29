@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1276-dev</title>
+<title>Dashwey v1.3.1278-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9605,7 +9605,8 @@ window._DashweyFirebase = {
     // Stack ejemplo (Chrome): "Error\n    at write\n    at save\n    at addVenta\n..."
     var lines = stack.split('\n').slice(1, 12);
     // Buscar primera línea que NO sea write/wrappedWrite/setTimeout/Promise interno
-    var skipPatterns = /\b(write|wrappedWrite|_DashweyFBTelemetry|setTimeout|Promise|_writeFirebase(Dual)?|setDoc|<anonymous>)\b/;
+    // v1.3.1277 FIX: añadir _detectCaller, wrappedSubscribe, wrappedCallback al skip
+    var skipPatterns = /\b(write|wrappedWrite|wrappedSubscribe|wrappedCallback|_detectCaller|_DashweyFBTelemetry|setTimeout|Promise|_writeFirebase(Dual)?|setDoc|<anonymous>)\b/;
     for (var i = 0; i < lines.length; i++) {
      var line = lines[i].trim();
      // Extraer nombre función: "at fnName ("  o "at Object.fnName"
@@ -13026,6 +13027,30 @@ const State = (() => {
  // v1.3.1144 HÍBRIDO
  // v1.3.1146 CAPA 1: guard deleted:true items externos
  // v1.3.1150 EVENT-DRIVEN: campos inmutables protegidos
+ // v1.3.1277 FASE 1.5 — setter específico para revisión de cierres preliminares.
+ // Bypassa el guard de inmutables (importe, concepto) PERO solo si:
+ //   - origen === 'cierre_caja_auto'
+ //   - pendienteRevision === true (aún no archivado)
+ // Una vez archivado (pendienteRevision:false), las siguientes ediciones caen
+ // por updateIngreso normal y el importe vuelve a ser inmutable.
+ confirmarRevisionCierre: (id, vals) => {
+  const i = (_state.ingresosFin || []).find(x => x.id === id);
+  if (!i) return;
+  if (i.origen !== 'cierre_caja_auto' || i.pendienteRevision !== true) {
+   console.warn('[Dashwey/State] confirmarRevisionCierre: ingreso no es cierre preliminar', id);
+   return;
+  }
+  // Permitir solo los campos esperados de la revisión
+  const allowed = {};
+  if (typeof vals.importe === 'number' && isFinite(vals.importe) && vals.importe >= 0) allowed.importe = vals.importe;
+  if (typeof vals.concepto === 'string') allowed.concepto = vals.concepto;
+  allowed.pendienteRevision = false;
+  allowed.revisadoEn = Date.now();
+  Object.assign(i, allowed);
+  try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {}
+ },
  updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; if (vals && vals.deleted === true && i.origen && _EXT_ORIGINS[i.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: bloqueado deleted:true en item externo', i.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_I = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bi = []; for (const k of _IMMUTABLE_I) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== i[k]) { _bi.push(k); delete vals[k]; } } if (_bi.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: inmutables bloqueados', i.id, ':', _bi.join(',')); } Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
  setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', _guardExt(v)); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
@@ -16615,7 +16640,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1276-dev';
+ const _APP_VERSION = 'v1.3.1278-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18976,6 +19001,14 @@ const ui = (() => {
    // Proveedor fallback para items sin categoría
    var fallbackProvId = 'prov_lv_nocat';
    var fbExisting = prevProvById[fallbackProvId];
+   // v1.3.1278 FIX BUG-3: respeto tombstone fallback (simétrico al guard de línea 18936
+   //   para proveedores LV con categoría). Si el usuario borró manualmente el fallback
+   //   "Sin categoría", el tombstone YA está en mergedProvs desde loop1 (L18917).
+   //   Sin este guard, lvCats.forEach NO entra (no es categoría LV) pero el push de abajo
+   //   recreaba el fallback ignorando el tombstone → reaparecía tras re-import.
+   if (fbExisting && fbExisting.deleted) {
+    // ya está como tombstone en mergedProvs vía loop1 — no hacer nada
+   } else {
    // v1.3.1237: preservar nombre editado por usuario (mismo principio)
    // v1.3.1241 FIX BUG-3: misma tolerancia para fallback "Sin categoría"
    //   Caso 3 incluido: migración congelada con sourceName === nombre pero ambos != "Sin categoría"
@@ -19005,6 +19038,7 @@ const ui = (() => {
     banner: (fbExisting && fbExisting.banner) || '',
     origen: 'loyverse',
    });
+   } // v1.3.1278 FIX BUG-3: cierre else del guard tombstone fallback
    // v1.3.1084: proveedores Loyverse ANTIGUOS que ya no están en lvCats → soft-delete
    // (caso: categoría borrada en Loyverse desde la última sync)
    var _newLvProvIds = {};
@@ -21126,7 +21160,18 @@ const ui = (() => {
    }
 
    // 3. Mapping label → proveedorId (reusa Loyverse o crea manual)
-   var provsDashwey = State.get.proveedores() || [];
+   // v1.3.1278 FIX BUG-3: usar State.raw para INCLUIR tombstones (proveedores borrados
+   //   manualmente). Sin esto, prov_bb_* borrados no aparecían en provIdByLabel y se
+   //   recreaban silenciosamente en cada re-import → reaparición tras borrado.
+   var rawProvsBB = (State.raw && State.raw.proveedores) ? State.raw.proveedores() : (State.get.proveedores() || []);
+   var provsDashwey = rawProvsBB.filter(function(p){ return p && !p.deleted; });
+   // Set de IDs prov_bb_* tombstoned (deletados) — para no recrearlos
+   var deletedBBIds = {};
+   rawProvsBB.forEach(function(p){
+    if (p && p.id && p.deleted && p.id.indexOf('prov_bb_') === 0) {
+     deletedBBIds[p.id] = true;
+    }
+   });
    var provIdByLabel = {};
    provsDashwey.forEach(function(p){
     if (p.nombre) provIdByLabel[p.nombre.toLowerCase()] = p.id;
@@ -21178,7 +21223,13 @@ const ui = (() => {
       provId = provIdByLabel[lblKey];
      } else if (r.labels !== 'Recaudación del día' && r.payee) {
       var newProvId = 'prov_bb_' + r.labels.toLowerCase().replace(/[^a-z0-9]/g,'');
-      if (!provIdByLabel[lblKey]) {
+      // v1.3.1278 FIX BUG-3: si el usuario borró este proveedor BB manualmente,
+      //   respetar la decisión y NO recrearlo. El gasto queda sin provId (será un
+      //   gasto "huérfano" categorizable manualmente).
+      if (deletedBBIds[newProvId]) {
+       // Tombstone activo — no recrear, no asignar provId al gasto
+       // (provId queda '', el gasto se importa pero sin enlace al proveedor borrado)
+      } else if (!provIdByLabel[lblKey]) {
        newProvs.push({
         id: newProvId, nombre: r.labels,
         agente: '', tel: '', email: '', diasPedido: [],
@@ -22939,6 +22990,8 @@ const dash = (() => {
  const _finSnap = FinEngine.snapshot(period);
 
  // ── Tarjetas financieras ──────────────────────────────────────
+ // v1.3.1277 FASE 1.5: banner cierres pendientes (preliminar revisable)
+ try { _renderCierresPendientesBanner(); } catch(_) {}
  try { renderFinanciero(); } catch(e) {}
  try { renderVisitasComerciales(); } catch(e) {}
  try { renderRendimiento(period); } catch(e) {}
@@ -34087,7 +34140,175 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope};
+  // ══════════════════════════════════════════════════════════════════
+  // v1.3.1277 FASE 1.5 — BANNER CIERRES PENDIENTES + MODAL AJUSTE RÁPIDO
+  // Detecta ingresos con pendienteRevision:true (creados por auto-cierre) y
+  // muestra banner persistente arriba del Dashboard. Tap → modal con campos
+  // editables (importe, concepto). Confirmar → marca pendienteRevision:false.
+  // ══════════════════════════════════════════════════════════════════
+  function _getCierresPendientes() {
+   try {
+    var ings = State.get.ingresosFin ? State.get.ingresosFin() : [];
+    return (ings || []).filter(function(i){
+     return i && !i.deleted && i.pendienteRevision === true && i.origen === 'cierre_caja_auto';
+    }).sort(function(a, b){
+     var ta = a.fecha ? new Date(a.fecha).getTime() : 0;
+     var tb = b.fecha ? new Date(b.fecha).getTime() : 0;
+     return ta - tb;
+    });
+   } catch(_) { return []; }
+  }
+
+  function _renderCierresPendientesBanner() {
+   try {
+    var container = document.getElementById('dash-cards-container');
+    if (!container) return;
+    var existing = document.getElementById('cierres-pendientes-banner');
+    var pendientes = _getCierresPendientes();
+    if (!pendientes.length) {
+     if (existing) existing.remove();
+     return;
+    }
+    var n = pendientes.length;
+    var labelN = (n === 1) ? '1 cierre pendiente' : (n + ' cierres pendientes');
+    var primero = pendientes[0];
+    var fechaStr = '';
+    try {
+     var d = new Date(primero.fecha);
+     fechaStr = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+    } catch(_) {}
+    var html = '<div id="cierres-pendientes-banner" class="card" ' +
+     'onclick="App.dash._openAjusteCierreSheet(\'' + esc(primero.id) + '\')" ' +
+     'style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,0.12),var(--surface));' +
+     'border:1px solid #f59e0b;padding:14px 16px;margin-bottom:12px;' +
+     '-webkit-tap-highlight-color:transparent;display:flex;align-items:center;gap:12px">' +
+     '<div style="font-size:24px;flex-shrink:0">🕐</div>' +
+     '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink)">' + labelN + ' por revisar</div>' +
+      '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">' +
+       'Auto-cierre del ' + esc(fechaStr) + ' · ' + (primero.importe || 0).toFixed(2) + ' € · ' +
+       'Toca para revisar' +
+      '</div>' +
+     '</div>' +
+     '<div style="font-size:20px;color:var(--ink-soft);flex-shrink:0">›</div>' +
+    '</div>';
+    if (existing) {
+     existing.outerHTML = html;
+    } else {
+     container.insertAdjacentHTML('afterbegin', html);
+    }
+   } catch(e) {
+    console.warn('[CierresBanner] render err', e && e.message);
+   }
+  }
+
+  function _openAjusteCierreSheet(ingresoId) {
+   try {
+    var ings = State.get.ingresosFin ? State.get.ingresosFin() : [];
+    var ing = (ings || []).find(function(i){ return i && i.id === ingresoId; });
+    if (!ing) { try { showToast('No se encontró el cierre'); } catch(_){} return; }
+    var cuentas = State.get.cuentas ? State.get.cuentas() : [];
+    var cuenta = (cuentas || []).find(function(c){ return c && c.id === ing.cuentaId; });
+    var cuentaNombre = cuenta ? (cuenta.nombre || 'Cuenta') : '— sin cuenta —';
+    var info = ing.cierreInfo || {};
+    var fechaStr = '';
+    try {
+     var d = new Date(ing.fecha);
+     fechaStr = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
+    } catch(_) {}
+    var ticketMedio = (info.nTickets > 0) ? (info.bruto / info.nTickets) : 0;
+    var bodyHtml =
+     '<div style="padding:16px 18px 100px">' +
+     '<div style="background:var(--surface-soft,#f5f5f5);border-radius:12px;padding:14px 16px;margin-bottom:18px">' +
+      '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Cierre automático preliminar</div>' +
+      '<div style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink)">' + esc(fechaStr) + '</div>' +
+      '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:4px">' +
+       (info.rangoStr ? 'Rango horario: ' + esc(info.rangoStr) : 'Generado automáticamente') +
+      '</div>' +
+     '</div>' +
+     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+       '<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Bruto calculado</div>' +
+       '<div style="font-size:18px;font-weight:var(--fw-bold);color:var(--ink);margin-top:4px">' + (info.bruto || 0).toFixed(2) + ' €</div>' +
+      '</div>' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+       '<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Tickets</div>' +
+       '<div style="font-size:18px;font-weight:var(--fw-bold);color:var(--ink);margin-top:4px">' + (info.nTickets || 0) + '</div>' +
+      '</div>' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+       '<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Ticket medio</div>' +
+       '<div style="font-size:18px;font-weight:var(--fw-bold);color:var(--ink);margin-top:4px">' + ticketMedio.toFixed(2) + ' €</div>' +
+      '</div>' +
+      '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+       '<div style="font-size:var(--fs-2xs);color:var(--ink-soft)">Cuenta</div>' +
+       '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(cuentaNombre) + '</div>' +
+      '</div>' +
+     '</div>' +
+     '<label style="display:block;margin-bottom:18px">' +
+      '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px">Importe definitivo</span>' +
+      '<input id="ajc-importe" type="number" step="0.01" inputmode="decimal" value="' + (ing.importe || 0) + '" ' +
+       'style="width:100%;box-sizing:border-box;height:48px;border-radius:8px;border:1px solid var(--border);' +
+       'padding:0 14px;font-size:18px;font-weight:var(--fw-bold);font-family:var(--font);color:var(--ink);background:var(--surface)">' +
+     '</label>' +
+     '<label style="display:block;margin-bottom:24px">' +
+      '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px">Concepto</span>' +
+      '<input id="ajc-concepto" type="text" value="' + esc(ing.concepto || '') + '" ' +
+       'style="width:100%;box-sizing:border-box;height:44px;border-radius:8px;border:1px solid var(--border);' +
+       'padding:0 14px;font-size:var(--fs-sm);font-family:var(--font);color:var(--ink);background:var(--surface)">' +
+     '</label>' +
+     '<div style="display:flex;gap:10px;flex-direction:column">' +
+      '<button onclick="App.dash._confirmarRevisionCierre(\'' + esc(ing.id) + '\')" ' +
+       'style="height:48px;border-radius:8px;border:none;background:var(--accent,#10b981);color:#fff;' +
+       'font-weight:var(--fw-bold);font-size:var(--fs-sm);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
+       '✓ Confirmar y archivar' +
+      '</button>' +
+      '<button onclick="window.SideSheet&&window.SideSheet.close&&window.SideSheet.close()" ' +
+       'style="height:44px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--ink);' +
+       'font-size:var(--fs-sm);cursor:pointer;-webkit-tap-highlight-color:transparent">' +
+       'Revisar más tarde' +
+      '</button>' +
+     '</div>' +
+     '</div>';
+    if (window.SideSheet && window.SideSheet.open) {
+     window.SideSheet.open({ title: 'Revisar cierre del día', content: bodyHtml });
+    } else if (window.FullScreenSheet && window.FullScreenSheet.open) {
+     window.FullScreenSheet.open({ title: 'Revisar cierre del día', content: bodyHtml });
+    } else {
+     try { alert('Cierre pendiente: ' + (ing.importe || 0).toFixed(2) + ' € · revisar manualmente'); } catch(_){}
+    }
+   } catch(e) {
+    console.warn('[CierreSheet] open err', e && e.message);
+   }
+  }
+
+  function _confirmarRevisionCierre(ingresoId) {
+   try {
+    var impEl = document.getElementById('ajc-importe');
+    var concEl = document.getElementById('ajc-concepto');
+    var nuevoImporte = impEl ? parseFloat(impEl.value) : NaN;
+    var nuevoConcepto = concEl ? concEl.value.trim() : '';
+    if (!isFinite(nuevoImporte) || nuevoImporte < 0) {
+     try { showToast('⚠️ Importe no válido', 'warning'); } catch(_){}
+     return;
+    }
+    State.set.confirmarRevisionCierre(ingresoId, {
+     importe: Math.round(nuevoImporte * 100) / 100,
+     concepto: nuevoConcepto || 'Cierre revisado',
+    });
+    try { showToast('✅ Cierre archivado', 'success'); } catch(_){}
+    try { if (window.SideSheet && window.SideSheet.close) window.SideSheet.close(); } catch(_){}
+    try { if (window.FullScreenSheet && window.FullScreenSheet.close) window.FullScreenSheet.close(); } catch(_){}
+    setTimeout(function(){
+     try { _renderCierresPendientesBanner(); } catch(_){}
+     try { if (App.dash.refresh) App.dash.refresh(); } catch(_){}
+    }, 100);
+   } catch(e) {
+    console.warn('[CierreConfirm] err', e && e.message);
+    try { showToast('Error al guardar', 'error'); } catch(_){}
+   }
+  }
+
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _openAjusteCierreSheet, _confirmarRevisionCierre};
 })();
 
 // ══════════════════════════════════════════
