@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1273-dev</title>
+<title>Dashwey v1.3.1274-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16362,7 +16362,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1273-dev';
+ const _APP_VERSION = 'v1.3.1274-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23062,11 +23062,26 @@ const dash = (() => {
  yEl.innerHTML = yLabels.map(l => `<span>${l}</span>`).join('');
 
  // Bars — count transactions per bucket for popup
+ // v1.3.1274 FIX-CHART-03: txnBuckets respeta franja horaria.
+ //   Antes: usaba getHours() directo → con jornada nocturna (13 buckets) las
+ //   ventas a las 23h se escapaban (idx=23 > 12). Ahora mapea a bucket real.
+ const _evParseHour = (s) => {
+   const m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
+   return m ? +m[1] : null;
+ };
+ const _evHasFranjaTxn = period.dayStart && period.dayEnd
+   && !(period.dayStart === '00:00' && period.dayEnd === '23:59');
+ let _evBucketStartHour = 0;
+ if (_evHasFranjaTxn) {
+   const _ds = _evParseHour(period.dayStart);
+   if (_ds !== null) _evBucketStartHour = _ds;
+ }
  const txnBuckets = Array(buckets.length).fill(0);
  ventas.forEach(v => {
  let idx = -1;
  if (period.type === 'today' || period.type === 'hours') {
- idx = new Date(v.fecha).getHours();
+ const _h = new Date(v.fecha).getHours();
+ idx = ((_h - _evBucketStartHour) + 24) % 24;
  } else if (period.type === 'week') {
  const dow = new Date(v.fecha).getDay();
  idx = dow === 0 ? 6 : dow - 1;
@@ -23087,8 +23102,12 @@ const dash = (() => {
  const scale = val > 0 ? Math.max(0.02, val / yMax) : 0;
  const isPeak = i === peakIdx && val > 0;
  const txn = txnBuckets[i];
+ // v1.3.1274 FIX-CHART-03: tooltip muestra hora REAL (no índice).
+ //   Con franja nocturna, bucket 0 = 15h, no 00h. Antes mostraba "00:00" mintiendo.
+ const _realHour = (period.type === 'today' || period.type === 'hours')
+   ? ((_evBucketStartHour + i) % 24) : i;
  const timeLabel = period.type === 'today' || period.type === 'hours'
- ? `${String(i).padStart(2,'0')}:00`
+ ? `${String(_realHour).padStart(2,'0')}:00`
  : period.type === 'week' ? ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'][i]||''
  : period.type === 'year' ? ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][i]||''
  : `Día ${i+1}`;
@@ -30760,11 +30779,39 @@ function _confirmBorrarCuenta(id) {
  try {
   if (ptype === 'today' || ptype === 'hours') {
    xMode = 'hora';
-   vals   = new Array(24).fill(0);
-   labels = Array.from({length: 24}, function(_, i) { return i + 'h'; });
+   // v1.3.1274 FIX-CHART-02: snap chart respeta franja horaria.
+   //   Mismo patrón que _renderEvChart (v1.3.1272). Sin esto, los snap charts
+   //   de "Rendimiento" y "Compras" mostraban 24 buckets fijos [0..23] aunque
+   //   el period tuviera dayStart/dayEnd configurado → barras desordenadas con
+   //   jornada nocturna (0h aparecía a la izquierda en lugar de tras 23h).
+   var _parseSnapHour = function(s) {
+    var m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
+    return m ? +m[1] : null;
+   };
+   var _snapBucketStartHour = 0;
+   var _snapNBuckets = 24;
+   var _snapHasFranja = period && period.dayStart && period.dayEnd
+     && !(period.dayStart === '00:00' && period.dayEnd === '23:59');
+   if (_snapHasFranja) {
+    var _ds = _parseSnapHour(period.dayStart);
+    var _de = _parseSnapHour(period.dayEnd);
+    if (_ds !== null && _de !== null) {
+     _snapBucketStartHour = _ds;
+     var _isNocturno = _de <= _ds;
+     _snapNBuckets = _isNocturno ? (24 - _ds + _de) : (_de - _ds);
+     if (_snapNBuckets <= 0 || _snapNBuckets > 24) _snapNBuckets = 24;
+    }
+   }
+   vals = new Array(_snapNBuckets).fill(0);
+   // Labels: mostrar hora natural (no índice). Cada hora del bucket
+   labels = Array.from({length: _snapNBuckets}, function(_, i) {
+    return ((_snapBucketStartHour + i) % 24) + 'h';
+   });
    events.forEach(function(e) {
     var hh = new Date(e.fecha).getHours();
-    if (hh >= 0 && hh < 24) vals[hh] += e.valor;
+    // Mapear hora natural → índice en bucket de jornada
+    var idx = ((hh - _snapBucketStartHour) + 24) % 24;
+    if (idx >= 0 && idx < _snapNBuckets) vals[idx] += e.valor;
    });
   } else if (ptype === 'week') {
    xMode  = 'dia';
