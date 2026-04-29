@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1289-dev</title>
+<title>Dashwey v1.3.1290-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12485,6 +12485,25 @@ const State = (() => {
  }
  // REGLA 2 — escritura local siempre (sin Firebase), vía marca dirty + debounce
  window._DashweyDirty = true;
+ // v1.3.1290 FIX P0 SAVE-PERSISTENCIA: persistir local INMEDIATAMENTE ANTES
+ //   del debounce de Firebase. ANTES: la escritura local solo ocurría dentro del
+ //   setTimeout(_saveTimer), pero si llegaba con flags isSaving o ApplyingRemote
+ //   en true, entraba en rama de reprogramación SIN escribir local. Resultado:
+ //   borras 3 proveedores rápido → primer save schedule → llamadas 2 y 3 hacen
+ //   return sin escribir → timer dispara, posiblemente reprograma sin escribir
+ //   → localStorage queda con estado pre-borrado → al cerrar app, runtime se
+ //   pierde → al abrir, los proveedores "vuelven". Bug determinista en multi-
+ //   borrado rápido (Hung 2026-04-29 sesión).
+ //
+ //   FIX: escribir _writeLocal sincronamente en cada save(). localStorage es
+ //   barato (~5ms para 1.5MB), no introduce loops, garantiza durabilidad local
+ //   incluso si Firebase se atasca. Firebase sigue su debounce 500ms separado.
+ try {
+  const _tsNow = Date.now();
+  const _didNow = window._DashweyDeviceId || 'unknown';
+  if (_state.user) { _state.user.lastSyncAt = _tsNow; _state.user.lastDeviceId = _didNow; }
+  _writeLocal(_archivePayload(_state));
+ } catch(_) {}
  // REGLA 3 — single-flight debounce: si ya hay save agendado, no agendar otro
  if (window._DashweySaveScheduled) return;
  window._DashweySaveScheduled = true;
@@ -12493,7 +12512,20 @@ const State = (() => {
   window._DashweySaveScheduled = false;
   // v1.3.1132: si aborta por guard temporal (apply en curso o save concurrente),
   // reprogramar en 1s. Sin esto, dirty=true queda huérfano sin subir jamás.
+  // v1.3.1290 FIX P0 SAVE-PERSISTENCIA: ANTES de reprogramar, persistir local SIEMPRE.
+  //   Bug previo: si flags ApplyingRemote o isSaving estaban true cuando dispara
+  //   el timer, las ramas reprogramaban pero NO escribían _writeLocal. Si entre
+  //   reprogramación y siguiente ciclo el state runtime cambiaba (otros saves
+  //   abortados igual), localStorage quedaba con estado obsoleto. Al cerrar app
+  //   se perdía toda la mutación runtime. Reproducible borrando varios items
+  //   rápido. Fix: persistir local inmediatamente antes de reprogramar Firebase.
   if (window._DashweyApplyingRemote) {
+   try {
+    const _ts0 = Date.now();
+    const _did0 = window._DashweyDeviceId || 'unknown';
+    if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
+    _writeLocal(_archivePayload(_state));
+   } catch(_) {}
    if (window._DashweyDirty) {
     window._DashweySaveScheduled = true;
     _saveTimer = setTimeout(save, 1000);
@@ -12501,6 +12533,12 @@ const State = (() => {
    return;
   }
   if (window._DashweySavingCtrl?.isSaving) {
+   try {
+    const _ts0 = Date.now();
+    const _did0 = window._DashweyDeviceId || 'unknown';
+    if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
+    _writeLocal(_archivePayload(_state));
+   } catch(_) {}
    if (window._DashweyDirty) {
     window._DashweySaveScheduled = true;
     _saveTimer = setTimeout(save, 1000);
@@ -16699,7 +16737,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1289-dev';
+ const _APP_VERSION = 'v1.3.1290-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
