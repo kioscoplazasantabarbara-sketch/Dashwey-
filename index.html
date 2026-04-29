@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1272-dev</title>
+<title>Dashwey v1.3.1273-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15759,16 +15759,34 @@ const Utils = (() => {
   const tgl = document.getElementById('dps-franja-toggle');
   const tglWrap = document.getElementById('dps-franja-inputs');
   if (dsInp && deInp) {
-   // v1.3.1272: defaults sugeridos 15:00–04:00 (jornada nocturna típica).
-   //   Si el user ya tiene franja configurada en el period, prevalece.
-   const _curDS = (config.dayStart && /^\d{1,2}:\d{2}$/.test(config.dayStart)) ? config.dayStart : '15:00';
-   const _curDE = (config.dayEnd && /^\d{1,2}:\d{2}$/.test(config.dayEnd)) ? config.dayEnd : '04:00';
-   dsInp.value = _curDS;
-   deInp.value = _curDE;
-
    // Estado actual del toggle desde user.franjaActiva
    let _franjaActiva = false;
    try { _franjaActiva = !!(State.get.user && State.get.user().franjaActiva); } catch(_) {}
+
+   // v1.3.1273 FIX-C: hidratar inputs con valores sensatos.
+   //   - Si franjaActiva ON: leer del period (config.dayStart) — fuente real
+   //   - Si franjaActiva OFF: usar valores guardados en user.franjaPrefDS/franjaPrefDE
+   //     (recuerda última franja del usuario), o sugerencia 15:00–04:00 si nunca configuró.
+   let _curDS, _curDE;
+   if (_franjaActiva && config.dayStart && /^\d{1,2}:\d{2}$/.test(config.dayStart)
+       && !(config.dayStart === '00:00' && config.dayEnd === '23:59')) {
+     _curDS = config.dayStart;
+     _curDE = config.dayEnd;
+   } else {
+     // Recuperar última preferencia del user (si existió)
+     let _userPref = null;
+     try {
+       const _u = State.get.user && State.get.user();
+       if (_u && _u.franjaPrefDS && _u.franjaPrefDE) {
+         _userPref = { ds: _u.franjaPrefDS, de: _u.franjaPrefDE };
+       }
+     } catch(_) {}
+     _curDS = _userPref ? _userPref.ds : '15:00';
+     _curDE = _userPref ? _userPref.de : '04:00';
+   }
+   dsInp.value = _curDS;
+   deInp.value = _curDE;
+
    if (tgl) tgl.checked = _franjaActiva;
    if (tglWrap) tglWrap.dataset.disabled = _franjaActiva ? '' : '1';
 
@@ -15805,18 +15823,77 @@ const Utils = (() => {
    if (tgl) {
     const _onToggle = () => {
      const isOn = tgl.checked;
+     // 1. Persist user.franjaActiva
      try {
       const cur = State.get.user();
       State.set.user(Object.assign({}, cur, { franjaActiva: isOn }));
      } catch(eU) { console.warn('[Dashwey/Franja] persist toggle err:', eU); }
+     // 2. v1.3.1273 FIX-A: actualizar PERIOD ACTUAL inmediatamente — no esperar a re-tap "Hoy".
+     //    Si toggle ON → inyectar dayStart/dayEnd actuales al period.
+     //    Si toggle OFF → eliminar dayStart/dayEnd del period (día completo).
+     try {
+      const _curP = State.get.period();
+      if (_curP) {
+       const _newP = Object.assign({}, _curP);
+       if (isOn) {
+        _newP.dayStart = (dsInp.value && /^\d{1,2}:\d{2}$/.test(dsInp.value)) ? dsInp.value : '15:00';
+        _newP.dayEnd = (deInp.value && /^\d{1,2}:\d{2}$/.test(deInp.value)) ? deInp.value : '04:00';
+       } else {
+        delete _newP.dayStart;
+        delete _newP.dayEnd;
+       }
+       State.set.period(_newP);
+      }
+     } catch(eP) { console.warn('[Dashwey/Franja] update period err:', eP); }
+     // 3. UI feedback
      if (tglWrap) tglWrap.dataset.disabled = isOn ? '' : '1';
      try { Utils.triggerHaptic('light'); } catch(_) {}
      _updateHint();
+     // 4. v1.3.1273 FIX-A: emitir evento date:changed para que cards/charts re-rendericen.
+     //    No cerramos el sheet — el usuario ve el efecto detrás.
+     try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
+     try { if (window.App?.dash?.refresh) window.App.dash.refresh(); } catch(_) {}
     };
     if (tgl._frjHandler) tgl.removeEventListener('change', tgl._frjHandler);
     tgl._frjHandler = _onToggle;
     tgl.addEventListener('change', _onToggle);
    }
+   // v1.3.1273 FIX-A2: cambios en inputs hora también actualizan period si toggle ON.
+   //    Sin esto, ajustar 15:00→16:00 con toggle ON no afectaba la gráfica hasta re-tap.
+   //    Además persiste user.franjaPrefDS/DE para recordar entre sesiones.
+   const _onHourChange = () => {
+    // Persistir preferencia del user (siempre, aunque toggle OFF — para recordar)
+    try {
+     const _curU = State.get.user();
+     if (_curU && dsInp.value && deInp.value) {
+      State.set.user(Object.assign({}, _curU, {
+       franjaPrefDS: dsInp.value,
+       franjaPrefDE: deInp.value
+      }));
+     }
+    } catch(ePref) { console.warn('[Dashwey/Franja] persist pref err:', ePref); }
+    const _isOn = tgl ? tgl.checked : false;
+    if (!_isOn) return;  // si OFF, no toca period
+    try {
+     const _curP = State.get.period();
+     if (_curP) {
+      const _newP = Object.assign({}, _curP);
+      if (dsInp.value && /^\d{1,2}:\d{2}$/.test(dsInp.value)) _newP.dayStart = dsInp.value;
+      if (deInp.value && /^\d{1,2}:\d{2}$/.test(deInp.value)) _newP.dayEnd = deInp.value;
+      State.set.period(_newP);
+     }
+    } catch(eHr) { console.warn('[Dashwey/Franja] hour change err:', eHr); }
+    try { document.dispatchEvent(new Event('date:changed')); } catch(_) {}
+    try { if (window.App?.dash?.refresh) window.App.dash.refresh(); } catch(_) {}
+   };
+   ['change'].forEach(evt => {
+    if (dsInp._frjHrHandler) dsInp.removeEventListener(evt, dsInp._frjHrHandler);
+    if (deInp._frjHrHandler) deInp.removeEventListener(evt, deInp._frjHrHandler);
+    dsInp._frjHrHandler = _onHourChange;
+    deInp._frjHrHandler = _onHourChange;
+    dsInp.addEventListener(evt, _onHourChange);
+    deInp.addEventListener(evt, _onHourChange);
+   });
   }
  } catch(eFranja) { console.warn('[Dashwey/Period] franja hydrate err:', eFranja); }
 
@@ -16285,7 +16362,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1272-dev';
+ const _APP_VERSION = 'v1.3.1273-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22769,9 +22846,12 @@ const dash = (() => {
  if (!barsEl || !yEl || !xEl) return;
 
  // v1.3.283: DASH-04 — dirty-check: skip si datos y periodo no cambiaron
+ // v1.3.1273 FIX-B: incluir dayStart/dayEnd en hash. Sin esto, cambiar el toggle
+ //   franja o ajustar horas no invalidaba el cache → chart no re-renderizaba.
  const _newHash = ventas.map(v => v.id + '|' + (v.total||0)).join(',')
  + '|' + (period.type||'') + '|' + (period.offset||0)
- + '|' + (period.customStart||'') + '|' + (period.customEnd||'');
+ + '|' + (period.customStart||'') + '|' + (period.customEnd||'')
+ + '|' + (period.dayStart||'') + '|' + (period.dayEnd||'');
  if (_newHash === barsEl._evHash) return;
  barsEl._evHash = _newHash;
 
