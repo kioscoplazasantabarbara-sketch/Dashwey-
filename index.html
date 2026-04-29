@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1287-dev</title>
+<title>Dashwey v1.3.1288-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10439,6 +10439,9 @@ window._DashweySyncAhora = async function() {
      if (!rit?.id) return;
      const lit = byId[rit.id];
      if (!lit) { byId[rit.id] = rit; return; }
+     // v1.3.1287 FIX: tombstone siempre gana (lit deleted, rit vivo → keep lit)
+     if (lit.deleted && !rit.deleted) return;
+     if (rit.deleted && !lit.deleted) { byId[rit.id] = rit; return; }
      const rTs = _tsOf(rit);
      const lTs = _tsOf(lit);
      if (rTs > lTs) byId[rit.id] = rit;
@@ -16642,7 +16645,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1287-dev';
+ const _APP_VERSION = 'v1.3.1288-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -39843,9 +39846,16 @@ const marginLine = mg === null ? '' :
 
  function borrarProv(id) {
  // v1.3.1074: soft delete
+ // v1.3.1287: añadir updatedAt para que merge respete tombstone aunque
+ // un sync LV posterior intente "ganar" con su updatedAt
  var _arr = State.get.proveedores().slice();
  var _pv = _arr.find(function(p) { return p.id === id; });
- if (_pv) { _pv.deleted = true; _pv.deletedAt = Date.now(); }
+ if (_pv) {
+  var _now = Date.now();
+  _pv.deleted = true;
+  _pv.deletedAt = _now;
+  _pv.updatedAt = new Date(_now).toISOString();
+ }
  State.set.proveedores(_arr);
  // 2. ordenItems vacio desde v8.9.0 -- filtro eliminado v1.3.427
  // 2b. v1.3.594: cascade delete pedidos programados huérfanos del proveedor eliminado
@@ -46072,10 +46082,18 @@ _eaRecalc();
   //   Strict > → empates dejan el local intacto. Combinado con sellos
   //   obligatorios en addProd/addProv/update*/_lvCommitCatalog, los items
   //   nuevos siempre tendrán _ts > 0 y ganarán a items legacy del remoto.
+  // v1.3.1287 FIX P0 BORRADO: tombstone (deleted=true) siempre gana sobre
+  //   versión viva, sin importar timestamps. Antes, si remoto tenía
+  //   updatedAt > deletedAt local, el merge resucitaba el item borrado.
+  //   Confirmado bug: borras proveedor → reinicias → vuelve a aparecer.
   remoteArr.forEach(function(item) {
    if (!item || !item.id) return;
    var existing = map[item.id];
    if (!existing) { map[item.id] = item; return; }
+   // Tombstone siempre gana
+   if (existing.deleted && !item.deleted) return; // local tombstone gana
+   if (item.deleted && !existing.deleted) { map[item.id] = item; return; } // remote tombstone gana
+   // Ambos vivos o ambos deleted → comparar timestamps
    if (_ts(item) > _ts(existing)) map[item.id] = item;
   });
   return Object.values(map);
