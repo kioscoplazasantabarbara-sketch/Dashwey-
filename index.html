@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1285-dev</title>
+<title>Dashwey v1.3.1286-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16642,7 +16642,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1285-dev';
+ const _APP_VERSION = 'v1.3.1286-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18909,9 +18909,20 @@ const ui = (() => {
    // v1.3.1056: MERGE inteligente — proveedores
    // v1.3.1084: placeholders BB y proveedores Loyverse obsoletos se marcan DELETED,
    // no solo se omiten. Así el tombstone viaja vía sync y otros dispositivos los borran.
+   // v1.3.1286 FIX BB: NO marcar deleted los prov_bb_* que tienen gastos asignados o
+   // que el usuario haya tocado (campos editados, updatedAt reciente). Esos están
+   // en uso real y borrarlos es una regresión confirmada en producción.
    var prevProvs = _rawProvs;
    var prevProvById = {};
    prevProvs.forEach(function(p){ if (p && p.id) prevProvById[p.id] = p; });
+   // v1.3.1286: precomputar set de prov ids que tienen gastos asignados
+   var _provIdsConGastos = {};
+   try {
+    var _gops = (State.get.gastosOp ? State.get.gastosOp() : []) || [];
+    _gops.forEach(function(g){
+     if (g && g.provId) _provIdsConGastos[g.provId] = true;
+    });
+   } catch(_){}
    var mergedProvs = [];
    // Conservar proveedores manuales (origen != loyverse Y no bb_*)
    prevProvs.forEach(function(p){
@@ -18919,6 +18930,13 @@ const ui = (() => {
     if (p.deleted) { mergedProvs.push(p); return; } // ya deleted → mantener tombstone
     if (p.origen === 'loyverse') return; // lo recreamos abajo (pero si no se recrea, se marca deleted luego)
     if (p.id.indexOf('prov_bb_') === 0) {
+     // v1.3.1286 FIX: NO marcar deleted si el BB está en uso (tiene gastos o fue editado)
+     var enUso = !!_provIdsConGastos[p.id];
+     var fueEditado = !!(p.updatedAt || (p.tel && p.tel.length) || (p.email && p.email.length) || (p.cif && p.cif.length) || (p.web && p.web.length) || (p.direccion && p.direccion.length));
+     if (enUso || fueEditado) {
+      mergedProvs.push(p); // preservar tal cual
+      return;
+     }
      // v1.3.1084: soft-delete en vez de omitir → sync consistente entre dispositivos
      mergedProvs.push(Object.assign({}, p, { deleted: true, deletedAt: _now }));
      return;
@@ -20834,6 +20852,28 @@ const ui = (() => {
    var esNocturno = (hhA*60+mmA > hhC*60+mmC);
    var maxDias = Math.max(1, Math.min(30, maxDiasAtras || 7));
 
+   // v1.3.1286 FIX BACKLOG: respetar cierreAutomatico_activadoEn
+   //   La feature de auto-cierre se activó en una fecha. Días anteriores a esa fecha
+   //   NO deben procesarse retroactivamente (en producción causó cierres falsos
+   //   con fechas antiguas en v1.3.1284).
+   //   Si no hay marca de activación, asumir HOY (no procesar retroactivos).
+   var activadoEnTs = null;
+   if (perfil.cierreAutomatico_activadoEn) {
+    activadoEnTs = new Date(perfil.cierreAutomatico_activadoEn).getTime();
+    if (isNaN(activadoEnTs)) activadoEnTs = null;
+   }
+   if (!activadoEnTs) {
+    // Sin marca → solo procesar HOY (no retroactivos)
+    activadoEnTs = Date.now();
+    // Auto-marcar en perfil para próximas ejecuciones
+    try {
+     var p2 = State.get.perfil() || {};
+     p2.cierreAutomatico_activadoEn = new Date(activadoEnTs).toISOString();
+     State.set.perfil(p2);
+     console.info('[AutoCierre/Backlog] cierreAutomatico_activadoEn auto-marcado:', p2.cierreAutomatico_activadoEn);
+    } catch(_){}
+   }
+
    // Construir lista de cierres ya registrados (por dateKey) para no duplicar
    var ings = (State.get.ingresosFin && State.get.ingresosFin()) || [];
    var registradosByKey = {};
@@ -20878,6 +20918,12 @@ const ui = (() => {
      cierreDateKey = siguiente.toISOString().slice(0, 10);
     }
     var cierreTs = _autoCierreTzToUtc(cierreDateKey, hhC, mmC, zona);
+
+    // v1.3.1286 FIX: NO procesar días anteriores a la activación de la feature
+    if (cierreTs < activadoEnTs) {
+     registradosByKey[candidateKey] = true; // marcar para no chequear más
+     continue;
+    }
 
     // ¿La hora de cierre ya pasó?
     if (cierreTs > nowMs) continue; // cierre en el futuro → no procesar todavía
