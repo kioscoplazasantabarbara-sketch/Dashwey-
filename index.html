@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1286-dev</title>
+<title>Dashwey v1.3.1287-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16642,7 +16642,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1286-dev';
+ const _APP_VERSION = 'v1.3.1287-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38937,7 +38937,10 @@ const marginLine = mg === null ? '' :
   var scroll = document.getElementById('prov-picker-scroll');
   if (!scroll) return;
   var sel = State.get.selectedProv();
-  var provs = State.get.proveedores() || [];
+  // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers, NO son proveedores reales)
+  var provs = (State.get.proveedores() || []).filter(function(p){
+   return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+  });
   provs.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
 
   // v1.3.1215: fila persistente "+ Añadir proveedor" SIEMPRE al final
@@ -39211,7 +39214,12 @@ const marginLine = mg === null ? '' :
   var emptyNoArts = document.getElementById('alm-empty');
   var catInline   = document.getElementById('alm-cat-inline');
   var sugerencia  = document.getElementById('alm-sugerencia');
-  var provs = (typeof State !== 'undefined' && State.get && State.get.proveedores) ? (State.get.proveedores() || []) : [];
+  // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers, no proveedores reales)
+  var provs = (typeof State !== 'undefined' && State.get && State.get.proveedores)
+   ? (State.get.proveedores() || []).filter(function(p){
+      return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+     })
+   : [];
   var sel = State.get.selectedProv();
   var prov = sel ? State.get.prov(sel) : null;
 
@@ -39261,7 +39269,10 @@ const marginLine = mg === null ? '' :
  //   1. Si no hay proveedores → mostrar empty state CTA "Añadir proveedor"
  //   2. Si hay proveedores y hay savedId válido → seleccionar ese
  //   3. Si hay proveedores pero no hay savedId → seleccionar el primero auto
- var provs = State.get.proveedores() || [];
+ // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers)
+ var provs = (State.get.proveedores() || []).filter(function(p){
+  return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+ });
  if (!provs.length) {
   // ESTADO 1
   updateProvBar();
@@ -39302,7 +39313,10 @@ const marginLine = mg === null ? '' :
  if (!arr || !arr.length) return '';
  return arr.map(function(d){ return DNAMES[d]; }).join(', ');
  }
- var provs = State.get.proveedores() || [];
+ var provs = (State.get.proveedores() || []).filter(function(p){
+  // v1.3.1287: prov_bb_* son categorías BudgetBakers, no proveedores reales
+  return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+ });
  var rows = provs.map(function(p, _pi) {
  var dp = _fmtDaysLocal(p.diasPedido || []);
  var de = _fmtDaysLocal(p.diasEntrega || []);
@@ -39586,11 +39600,11 @@ const marginLine = mg === null ? '' :
 
  <!-- Acciones -->
  <div class="alm-form-footer" style="padding-top:4px">
- <button class="btn-sec alm-btn-danger" aria-label="Eliminar proveedor" onclick="App.alm.confirmarBorrarProv('${p.id}')">
- <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" style="vertical-align:-3px"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+ <button class="btn-sec alm-btn-danger" aria-label="Eliminar proveedor" data-action="prov-borrar" data-pid="${esc(p.id)}">
+ <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" style="vertical-align:-3px" pointer-events="none"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
  Borrar
  </button>
- <button class="btn-ok alm-btn-primary" onclick="App.alm.saveProvEdit('${p.id}')">Guardar</button>
+ <button class="btn-ok alm-btn-primary" data-action="prov-guardar" data-pid="${esc(p.id)}">Guardar</button>
  </div>
 
  </div>
@@ -43256,6 +43270,33 @@ _eaRecalc();
    });
   }, 30);
  }
+
+ // v1.3.1287 FIX: listener delegado para botones del editor proveedor
+ // El onclick inline fallaba en algunos casos (WebView Android). Delegación robusta:
+ try {
+  if (!window._dashweyProvEditDelegated) {
+   document.addEventListener('click', function(ev){
+    var btn = ev.target && ev.target.closest && ev.target.closest('[data-action="prov-borrar"], [data-action="prov-guardar"]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var pid = btn.getAttribute('data-pid');
+    if (!pid) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    try {
+     if (action === 'prov-borrar') {
+      confirmarBorrarProv(pid);
+     } else if (action === 'prov-guardar') {
+      saveProvEdit(pid);
+     }
+    } catch(e) {
+     console.warn('[prov-edit-action]', action, pid, e && e.message);
+    }
+   }, true);
+   window._dashweyProvEditDelegated = true;
+   console.info('[Dashwey/v1.3.1287] listener delegado prov-edit instalado');
+  }
+ } catch(e) { console.warn('[prov-edit-delegation]', e && e.message); }
 
  return {
  // Proveedor
