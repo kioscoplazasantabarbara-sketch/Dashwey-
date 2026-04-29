@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1274-dev</title>
+<title>Dashwey v1.3.1275-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9543,6 +9543,228 @@ window._DashweyFirebase = {
 };
 
 // ──────────────────────────────────────────────────────────────────
+// v1.3.1275 — TELEMETRÍA COSTE FIREBASE (LOTE A — observabilidad)
+// Wrappers no invasivos sobre window._DashweyFirebase.write y .subscribe.
+// Persistencia: localStorage con rotación diaria (clave dashwey_fb_stats_YYYY-MM-DD).
+// API consola: window.dxStats(), window.dxStatsReset(), window.dxStatsClearAll().
+// Detector bursts (>5 writes/10s al mismo doc) y loops (write→snap→write <2s).
+// Cero efecto sobre lógica: solo lee, suma, persiste. Failsafe en try/catch.
+// ──────────────────────────────────────────────────────────────────
+(function _DashweyFBTelemetry() {
+ try {
+  if (window._DashweyFBTelemetryInstalled) return;
+  if (!window._DashweyFirebase) return;
+  var fb = window._DashweyFirebase;
+
+  // ── Storage helpers (rotación diaria) ────────────────────────────
+  function _todayKey() {
+   var d = new Date();
+   var y = d.getFullYear();
+   var m = String(d.getMonth() + 1).padStart(2, '0');
+   var day = String(d.getDate()).padStart(2, '0');
+   return 'dashwey_fb_stats_' + y + '-' + m + '-' + day;
+  }
+  function _emptyStats() {
+   return {
+    sessionStart: Date.now(),
+    writes: { total: 0, byCollection: {}, byCaller: {} },
+    snapshots: { total: 0, byCollection: {} },
+    bursts: [],     // {ts, collection, count, windowMs}
+    loops: [],      // {ts, collection, gapMs, caller}
+    burstDetected: false,
+    loopDetected: false
+   };
+  }
+  function _load() {
+   try {
+    var raw = localStorage.getItem(_todayKey());
+    if (!raw) return _emptyStats();
+    var parsed = JSON.parse(raw);
+    // Si el sessionStart es de otra sesión (>4h gap), conservar acumulado pero
+    // marcar nuevo arranque (no resetear — queremos el día completo).
+    return parsed || _emptyStats();
+   } catch(_) { return _emptyStats(); }
+  }
+  function _persist() {
+   try { localStorage.setItem(_todayKey(), JSON.stringify(_stats)); } catch(_) {}
+  }
+  // Throttle persist (no escribir en cada write — costoso)
+  var _persistTimer = null;
+  function _persistDebounced() {
+   if (_persistTimer) return;
+   _persistTimer = setTimeout(function() {
+    _persistTimer = null;
+    _persist();
+   }, 1500);
+  }
+
+  // ── Caller detection ─────────────────────────────────────────────
+  function _detectCaller() {
+   try {
+    var stack = (new Error()).stack || '';
+    // Stack ejemplo (Chrome): "Error\n    at write\n    at save\n    at addVenta\n..."
+    var lines = stack.split('\n').slice(1, 12);
+    // Buscar primera línea que NO sea write/wrappedWrite/setTimeout/Promise interno
+    var skipPatterns = /\b(write|wrappedWrite|_DashweyFBTelemetry|setTimeout|Promise|_writeFirebase(Dual)?|setDoc|<anonymous>)\b/;
+    for (var i = 0; i < lines.length; i++) {
+     var line = lines[i].trim();
+     // Extraer nombre función: "at fnName ("  o "at Object.fnName"
+     var m = line.match(/at\s+(?:Object\.|new\s+)?([A-Za-z_$][\w$.]*)/);
+     if (m && m[1] && !skipPatterns.test(m[1])) {
+      return m[1].slice(0, 60);
+     }
+    }
+    // Fallback: primera línea no vacía
+    return (lines[0] || 'unknown').trim().slice(0, 60) || 'unknown';
+   } catch(_) { return 'unknown'; }
+  }
+
+  // ── Burst & loop detection ───────────────────────────────────────
+  var _recentWrites = []; // {ts, collection}
+  var _lastWriteTs = {};  // collection -> ts
+  var _lastSnapshotTs = {}; // collection -> ts
+
+  function _checkBurst(collection) {
+   var now = Date.now();
+   var WINDOW = 10000;
+   _recentWrites = _recentWrites.filter(function(w) { return (now - w.ts) < WINDOW; });
+   _recentWrites.push({ ts: now, collection: collection });
+   var sameDoc = _recentWrites.filter(function(w) { return w.collection === collection; });
+   if (sameDoc.length > 5) {
+    _stats.burstDetected = true;
+    _stats.bursts.push({ ts: now, collection: collection, count: sameDoc.length, windowMs: WINDOW });
+    if (_stats.bursts.length > 50) _stats.bursts = _stats.bursts.slice(-50);
+    console.warn('[DX-TELEMETRY] BURST detected:', collection, sameDoc.length, 'writes in', WINDOW, 'ms');
+   }
+  }
+
+  function _checkLoop(collection, caller) {
+   // Loop = snapshot remoto recibido <2s antes de un write a la misma colección
+   var now = Date.now();
+   var lastSnap = _lastSnapshotTs[collection] || 0;
+   var gap = now - lastSnap;
+   if (lastSnap > 0 && gap < 2000) {
+    _stats.loopDetected = true;
+    _stats.loops.push({ ts: now, collection: collection, gapMs: gap, caller: caller });
+    if (_stats.loops.length > 50) _stats.loops = _stats.loops.slice(-50);
+    console.warn('[DX-TELEMETRY] LOOP candidate: write', gap, 'ms after remote snapshot on', collection, 'caller:', caller);
+   }
+   _lastWriteTs[collection] = now;
+  }
+
+  // ── Estado ───────────────────────────────────────────────────────
+  var _stats = _load();
+  fb._stats = _stats;
+
+  // ── Wrap fb.write ────────────────────────────────────────────────
+  var _origWrite = fb.write.bind(fb);
+  fb.write = async function wrappedWrite(coleccion, data, _attempt) {
+   try {
+    // Solo contar el primer intento (no los reintentos internos)
+    if (!_attempt || _attempt === 0) {
+     _stats.writes.total++;
+     _stats.writes.byCollection[coleccion] = (_stats.writes.byCollection[coleccion] || 0) + 1;
+     var caller = _detectCaller();
+     _stats.writes.byCaller[caller] = (_stats.writes.byCaller[caller] || 0) + 1;
+     _checkBurst(coleccion);
+     _checkLoop(coleccion, caller);
+     _persistDebounced();
+    }
+   } catch(_) {}
+   return _origWrite(coleccion, data, _attempt);
+  };
+
+  // ── Wrap fb.subscribe ────────────────────────────────────────────
+  var _origSubscribe = fb.subscribe.bind(fb);
+  fb.subscribe = function wrappedSubscribe(coleccion, callback) {
+   var wrappedCallback = function(snap) {
+    try {
+     _stats.snapshots.total++;
+     _stats.snapshots.byCollection[coleccion] = (_stats.snapshots.byCollection[coleccion] || 0) + 1;
+     _lastSnapshotTs[coleccion] = Date.now();
+     _persistDebounced();
+    } catch(_) {}
+    return callback(snap);
+   };
+   return _origSubscribe(coleccion, wrappedCallback);
+  };
+
+  // ── API consola ──────────────────────────────────────────────────
+  window.dxStats = function() {
+   var ageMin = ((Date.now() - _stats.sessionStart) / 60000).toFixed(1);
+   console.group('[DX-TELEMETRY] Firebase coste — ' + _todayKey().replace('dashwey_fb_stats_', ''));
+   console.log('Sesión activa hace:', ageMin, 'min');
+   console.log('TOTAL writes:', _stats.writes.total);
+   console.log('TOTAL snapshots:', _stats.snapshots.total);
+   console.log('Writes por colección:', _stats.writes.byCollection);
+   console.log('Snapshots por colección:', _stats.snapshots.byCollection);
+   console.log('Top callers (writes):', Object.entries(_stats.writes.byCaller)
+    .sort(function(a,b){return b[1]-a[1];}).slice(0, 10));
+   if (_stats.burstDetected) console.warn('⚠️ BURST detected:', _stats.bursts.slice(-5));
+   if (_stats.loopDetected)  console.warn('⚠️ LOOP candidates:', _stats.loops.slice(-5));
+   if (!_stats.burstDetected && !_stats.loopDetected) console.log('✅ Sin bursts ni loops detectados.');
+   console.groupEnd();
+   return _stats;
+  };
+  window.dxStatsReset = function() {
+   _stats = _emptyStats();
+   fb._stats = _stats;
+   _recentWrites = [];
+   _lastWriteTs = {};
+   _lastSnapshotTs = {};
+   _persist();
+   console.log('[DX-TELEMETRY] Stats del día reseteadas.');
+  };
+  window.dxStatsClearAll = function() {
+   try {
+    var rm = [];
+    for (var i = 0; i < localStorage.length; i++) {
+     var k = localStorage.key(i);
+     if (k && k.indexOf('dashwey_fb_stats_') === 0) rm.push(k);
+    }
+    rm.forEach(function(k){ localStorage.removeItem(k); });
+    console.log('[DX-TELEMETRY] Borradas', rm.length, 'claves de stats históricas.');
+   } catch(e) { console.warn('[DX-TELEMETRY] clearAll error:', e); }
+  };
+  window.dxStatsHistory = function(days) {
+   var n = (typeof days === 'number') ? days : 7;
+   var out = [];
+   try {
+    for (var i = 0; i < localStorage.length; i++) {
+     var k = localStorage.key(i);
+     if (k && k.indexOf('dashwey_fb_stats_') === 0) {
+      try {
+       var v = JSON.parse(localStorage.getItem(k));
+       out.push({
+        date: k.replace('dashwey_fb_stats_', ''),
+        writes: v.writes ? v.writes.total : 0,
+        snapshots: v.snapshots ? v.snapshots.total : 0,
+        burst: !!v.burstDetected,
+        loop: !!v.loopDetected
+       });
+      } catch(_) {}
+     }
+    }
+    out.sort(function(a,b){ return b.date.localeCompare(a.date); });
+    console.table(out.slice(0, n));
+   } catch(e) { console.warn('[DX-TELEMETRY] history error:', e); }
+   return out;
+  };
+
+  // Persistir al cerrar pestaña / pasar a background
+  try {
+   window.addEventListener('pagehide', _persist);
+   window.addEventListener('beforeunload', _persist);
+  } catch(_) {}
+
+  window._DashweyFBTelemetryInstalled = true;
+  console.log('[DX-TELEMETRY] v1.3.1275 instalado. Comandos: dxStats() · dxStatsHistory() · dxStatsReset() · dxStatsClearAll()');
+ } catch(e) {
+  console.warn('[DX-TELEMETRY] install error (no crítico):', e);
+ }
+})();
+
+// ──────────────────────────────────────────────────────────────────
 // v1.3.1237 BUG-CRIT-1 FIX — _waitForAuth
 // Promesa que resuelve cuando hay user real (no anónimo) o tras timeout.
 // Usado por escritores y rutas críticas para evitar fallos por carrera
@@ -16362,7 +16584,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1274-dev';
+ const _APP_VERSION = 'v1.3.1275-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
