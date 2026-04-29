@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1283-dev</title>
+<title>Dashwey v1.3.1284-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16642,7 +16642,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1283-dev';
+ const _APP_VERSION = 'v1.3.1284-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20798,13 +20798,186 @@ const ui = (() => {
  function _autoCierreStart() {
   if (_autoCierreTimer) return;
   _autoCierreTimer = setInterval(_autoCierreTick, 60000); // cada 60s
+  // v1.3.1284: chequeo retroactivo al arrancar — recupera cierres perdidos
+  //   de días anteriores en los que la app no estuvo abierta a la hora de cierre.
+  //   Comportamiento: independientemente de cuándo abras Dashwey, si hay días
+  //   pasados sin cierre registrado y su hora de cierre ya pasó → se crea
+  //   el ingreso preliminar retroactivo. Banner aparece al abrir Dashboard.
+  setTimeout(function(){ try { _autoCierreCheckBacklog(); } catch(_) {} }, 1500);
   console.info('[AutoCierre] scheduler activo');
  }
  function _autoCierreStop() {
   if (_autoCierreTimer) { clearInterval(_autoCierreTimer); _autoCierreTimer = null; }
  }
+
+ // v1.3.1284 — chequeo retroactivo de cierres perdidos.
+ //   Recorre los últimos N días (default 7) en zona kiosco. Para cada día:
+ //   1. ¿Ya hay un ingreso 'cierre_caja_auto' registrado para ese día? → skip
+ //   2. ¿La hora de cierre de ese día ya pasó? → calcular bruto retroactivo
+ //   3. Crear ingreso preliminar con fecha = momento del cierre del día
+ function _autoCierreCheckBacklog(maxDiasAtras) {
+  try {
+   if (!window._DashweyInitialSyncDone) return;
+   var perfil = null;
+   try { perfil = State.get.perfil ? State.get.perfil() : null; } catch(_) {}
+   if (!perfil) return;
+   if (!perfil.cierreAutomatico) return;
+   if (!perfil.cierreCajaCuentaDestino) return;
+   var horarioCierre = perfil.horarioCierre || '';
+   var horarioApertura = perfil.horarioApertura || '';
+   if (!horarioCierre || !/^\d{2}:\d{2}$/.test(horarioCierre)) return;
+   if (!horarioApertura || !/^\d{2}:\d{2}$/.test(horarioApertura)) return;
+
+   var zona = perfil.zona || 'Europe/Madrid';
+   var [hhA, mmA] = horarioApertura.split(':').map(Number);
+   var [hhC, mmC] = horarioCierre.split(':').map(Number);
+   var esNocturno = (hhA*60+mmA > hhC*60+mmC);
+   var maxDias = Math.max(1, Math.min(30, maxDiasAtras || 7));
+
+   // Construir lista de cierres ya registrados (por dateKey) para no duplicar
+   var ings = (State.get.ingresosFin && State.get.ingresosFin()) || [];
+   var registradosByKey = {};
+   ings.forEach(function(i){
+    if (!i || i.deleted) return;
+    if (i.origen !== 'cierre_caja_auto') return;
+    var key = (i.cierreInfo && i.cierreInfo.dateKey) ? i.cierreInfo.dateKey : null;
+    if (!key && i.fecha) {
+     // Backward compat: cierres antiguos sin cierreInfo.dateKey
+     try { key = new Date(i.fecha).toISOString().slice(0,10); } catch(_) {}
+    }
+    if (key) registradosByKey[key] = true;
+   });
+
+   var nowMs = Date.now();
+   var tzNow = _autoCierreTzNow(zona);
+   var hoyKey = tzNow.dateKey;
+   var creados = 0;
+
+   // Recorrer días desde HOY hacia atrás
+   for (var i = 0; i <= maxDias; i++) {
+    // Calcular dateKey del día candidato (i días antes de hoy en zona kiosco)
+    var pa = hoyKey.split('-');
+    var dCand = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    dCand.setUTCDate(dCand.getUTCDate() - i);
+    var candidateKey = dCand.toISOString().slice(0, 10);
+
+    // ¿Ya está registrado?
+    if (registradosByKey[candidateKey]) continue;
+
+    // Anti-duplicado HOY (si hoy ya disparó vía tick, no procesar otra vez)
+    if (candidateKey === hoyKey && _autoCierreLastFired === hoyKey) continue;
+
+    // Calcular el timestamp UTC del cierre del día candidato:
+    //   - horario normal (apertura < cierre): cierre es en el mismo día candidate
+    //   - horario nocturno (apertura > cierre): cierre es a la mañana del día SIGUIENTE
+    var cierreDateKey = candidateKey;
+    if (esNocturno) {
+     var pa2 = candidateKey.split('-');
+     var siguiente = new Date(Date.UTC(parseInt(pa2[0],10), parseInt(pa2[1],10)-1, parseInt(pa2[2],10)));
+     siguiente.setUTCDate(siguiente.getUTCDate() + 1);
+     cierreDateKey = siguiente.toISOString().slice(0, 10);
+    }
+    var cierreTs = _autoCierreTzToUtc(cierreDateKey, hhC, mmC, zona);
+
+    // ¿La hora de cierre ya pasó?
+    if (cierreTs > nowMs) continue; // cierre en el futuro → no procesar todavía
+
+    // Calcular bruto retroactivo del día candidato
+    var info = _calcBrutoForDay(perfil, candidateKey);
+    if (info.bruto <= 0 && info.nTickets === 0 && !perfil.registrarSinVentas) {
+     console.info('[AutoCierre/Backlog] ' + candidateKey + ': sin ventas y registrarSinVentas=false → skip');
+     // Marcar como procesado para no volver a chequear cada arranque
+     registradosByKey[candidateKey] = true;
+     continue;
+    }
+
+    // Registrar preliminar retroactivo
+    var ingreso = {
+     id: 'cierre_auto_' + cierreTs + '_' + Math.random().toString(36).slice(2,7),
+     importe: info.bruto,
+     fecha: new Date(cierreTs).toISOString(),
+     cuentaId: perfil.cierreCajaCuentaDestino,
+     concepto: 'Cierre automático (preliminar) ' + candidateKey + ' · ' + info.rangoStr,
+     origen: 'cierre_caja_auto',
+     metaTipo: 'normal',
+     estado: 'confirmado',
+     pendienteRevision: true,
+     cierreInfo: {
+      bruto: info.bruto,
+      nTickets: info.nTickets,
+      ticketMedio: info.ticketMedio,
+      rangoStr: info.rangoStr,
+      zona: zona,
+      dateKey: candidateKey,
+      retroactivo: true,
+      generadoEn: nowMs,
+     },
+    };
+    try {
+     State.set.addIngreso(ingreso);
+     registradosByKey[candidateKey] = true;
+     creados++;
+     console.info('[AutoCierre/Backlog] ✓ cierre retroactivo ' + candidateKey + ': ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets');
+    } catch(e) {
+     console.warn('[AutoCierre/Backlog] err en ' + candidateKey, e);
+    }
+   }
+   if (creados > 0) {
+    console.info('[AutoCierre/Backlog] ✓ ' + creados + ' cierre(s) retroactivo(s) creado(s). Banner aparecerá en Dashboard.');
+    // Refrescar banner inmediatamente si Dashboard activo
+    setTimeout(function(){
+     try { if (window.App && App.dash && App.dash._renderCierresPendientesBanner) App.dash._renderCierresPendientesBanner(); } catch(_) {}
+    }, 500);
+   }
+  } catch(e) {
+   console.warn('[AutoCierre/Backlog] err', e);
+  }
+ }
+
+ // v1.3.1284 helper: calcular bruto para un dateKey específico (no necesariamente hoy).
+ //   Usado por _autoCierreCheckBacklog para reconstruir cierres pasados.
+ function _calcBrutoForDay(perfil, dayKey) {
+  try {
+   var ventas = (State.get.ventas && State.get.ventas()) || [];
+   var hAp = perfil.horarioApertura;
+   var hCi = perfil.horarioCierre;
+   var zona = perfil.zona || 'Europe/Madrid';
+   var [hhA, mmA] = (hAp||'00:00').split(':').map(Number);
+   var [hhC, mmC] = (hCi||'23:59').split(':').map(Number);
+   var aperturaKey = dayKey;
+   var cierreKey = dayKey;
+   if (hhA*60+mmA > hhC*60+mmC) {
+    // Horario nocturno: cierre es al día SIGUIENTE
+    var pa = dayKey.split('-');
+    var siguiente = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    siguiente.setUTCDate(siguiente.getUTCDate() + 1);
+    cierreKey = siguiente.toISOString().slice(0, 10);
+   }
+   var aperturaTs = _autoCierreTzToUtc(aperturaKey, hhA, mmA, zona);
+   var cierreTs = _autoCierreTzToUtc(cierreKey, hhC, mmC, zona);
+   var bruto = 0;
+   var nTickets = 0;
+   ventas.forEach(function(v){
+    if (!v || v.deleted) return;
+    var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
+    if (ts >= aperturaTs && ts <= cierreTs) {
+     var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
+     bruto += imp;
+     nTickets++;
+    }
+   });
+   var ticketMedio = nTickets > 0 ? (bruto / nTickets) : 0;
+   var rangoStr = (hAp || '?') + '–' + (hCi || '?');
+   return { bruto: Math.round(bruto*100)/100, nTickets: nTickets, ticketMedio: Math.round(ticketMedio*100)/100, rangoStr: rangoStr };
+  } catch(e) {
+   console.warn('[AutoCierre] _calcBrutoForDay err', e);
+   return { bruto: 0, nTickets: 0, ticketMedio: 0, rangoStr: '' };
+  }
+ }
+
  window._DashweyAutoCierreStart = _autoCierreStart;
  window._DashweyAutoCierreStop = _autoCierreStop;
+ window._DashweyAutoCierreCheckBacklog = _autoCierreCheckBacklog;
  // Arrancar tras initial sync (3s gap como Loyverse realtime)
  setTimeout(function(){
   try { _autoCierreStart(); } catch(_) {}
