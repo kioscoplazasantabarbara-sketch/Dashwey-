@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1294-dev</title>
+<title>Dashwey v1.3.1295-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2621,6 +2621,44 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
  color: rgba(0,0,0,0.35);
  text-decoration: line-through;
  text-decoration-thickness: 1px;
+}
+
+/* v1.3.1295 — TAB "ACTIVIDAD" (vista unificada de eventos) */
+/* Cajón con scroll interno: altura calculada para llenar el espacio entre
+   los KPIs de la card y el separador del Insight. Se usa max-height con
+   clamp para adaptarse a distintos tamaños de pantalla manteniendo el
+   smartphone como prioridad. */
+.snap-actividad-wrap {
+ max-height: clamp(360px, 60vh, 520px);
+ overflow-y: auto;
+ -webkit-overflow-scrolling: touch;
+ overscroll-behavior: contain;
+ padding-right: 4px; /* leve respiro para la barra de scroll */
+}
+/* Dentro del cajón, el timeline NO debe tener su propio overflow — el cajón se encarga */
+.snap-actividad-wrap .snap-tl-v-actividad {
+ max-height: none;
+ overflow: visible;
+ padding: var(--sp-1) 0 8px;
+}
+/* Items de Actividad: contenedor ajusta layout para acomodar timeline horizontal embebido */
+.snap-tl-v-item.snap-tl-v-item-act {
+ align-items: flex-start;
+ padding: 8px 0;
+ border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+.snap-tl-v-item.snap-tl-v-item-act:last-child { border-bottom: none; }
+.snap-tl-v-item.snap-tl-v-item-act .snap-tl-v-item-content {
+ display: flex;
+ flex-direction: column;
+ gap: 2px;
+}
+/* Tachado en past solo aplica a recordatorios sin contenido rico — quitar por defecto */
+.snap-tl-v-item.snap-tl-v-item-act.past .snap-tl-v-item-content > div {
+ text-decoration: none;
+}
+.snap-tl-v-item.snap-tl-v-item-act.past .snap-tl-v-item-hora {
+ text-decoration: none;
 }
 
 /* Point pop-in animation */
@@ -8778,9 +8816,13 @@ function _authTabSafe(tab) {
  <div class="snap-kpi-label" id="snap-lbl-agenda">Alertas activas</div>
  <div class="snap-kpi-value" id="snap-val-agenda" style="font-size:clamp(28px,8vw,40px)">—</div>
 
- <!-- TABS: Alertas / Entregas / Eventos -->
+ <!-- TABS: v1.3.1295 — Actividad (unificado) / Pedidos / Entregas / Alertas -->
  <div class="snap-agenda-tabs" id="snap-agenda-tabs">
- <button class="snap-agenda-tab active" data-tab="visitas">
+ <button class="snap-agenda-tab active" data-tab="recordatorios">
+ <div class="snap-agenda-tab-lbl">Actividad</div>
+ <div class="snap-agenda-tab-val" id="snap-rec-agenda">—</div>
+ </button>
+ <button class="snap-agenda-tab" data-tab="visitas">
  <div class="snap-agenda-tab-lbl">Pedidos</div>
  <div class="snap-agenda-tab-val" id="snap-vis-agenda">—</div>
  </button>
@@ -8791,10 +8833,6 @@ function _authTabSafe(tab) {
  <button class="snap-agenda-tab" data-tab="alertas">
  <div class="snap-agenda-tab-lbl">Alertas</div>
  <div class="snap-agenda-tab-val" id="snap-alrt-agenda">—</div>
- </button>
- <button class="snap-agenda-tab" data-tab="recordatorios">
- <div class="snap-agenda-tab-lbl">Recordatorios</div>
- <div class="snap-agenda-tab-val" id="snap-rec-agenda">—</div>
  </button>
  </div>
 
@@ -16796,7 +16834,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1294-dev';
+ const _APP_VERSION = 'v1.3.1295-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30584,7 +30622,8 @@ function _confirmBorrarCuenta(id) {
 
  // ── Agenda: tabs + timeline horizontal — v1.3.22 ───────────────────────
  // v1.3.990: default = 'visitas' (ahora renombrado UI "Próximo Pedido"), orden spec
- var _snapAgendaActiveTab = 'visitas';
+ // v1.3.1295: tab inicial = recordatorios (renombrado a "Actividad" — vista unificada)
+ var _snapAgendaActiveTab = 'recordatorios';
 
  // v1.3.991 — LOTE B: helpers puros de recurrencia Próximo Pedido
  //
@@ -30735,7 +30774,10 @@ function _confirmBorrarCuenta(id) {
   } else if (_snapAgendaActiveTab === 'visitas') {
    if (_lblEl) _lblEl.textContent = 'Pedidos en periodo';
   } else if (_snapAgendaActiveTab === 'recordatorios') {
-   if (_lblEl) _lblEl.textContent = 'Recordatorios';
+   // v1.3.1295: tab "Actividad" — label "Eventos", valor = total eventos.
+   //   Total se calcula abajo (recEl) y se reaplica aquí también.
+   if (_lblEl) _lblEl.textContent = 'Eventos';
+   // _valEl se actualiza más abajo cuando se calcula _nActividad
   }
  }
  var pedEl = document.getElementById('snap-ped-agenda');
@@ -30743,14 +30785,40 @@ function _confirmBorrarCuenta(id) {
  var visEl = document.getElementById('snap-vis-agenda');
  if (visEl) { visEl.textContent = allVisitas.length || '0'; }
 
- // v1.3.992 LOTE C — contador Recordatorios (futuros o de hoy)
+ // v1.3.1295: contador "Actividad" = suma total de eventos del periodo.
+ //   Pedidos (count visitas) + Entregas (count pedidos) + Alertas (count totales,
+ //   no filtradas por periodo) + Recordatorios (futuros o de hoy).
  var recEl = document.getElementById('snap-rec-agenda');
  if (recEl) {
   var _recs = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
   var _ahora = new Date();
   var _hoy00 = new Date(_ahora); _hoy00.setHours(0,0,0,0);
-  var _nRec = _recs.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= _hoy00; }).length;
-  recEl.textContent = _nRec || '0';
+  // Recordatorios dentro del periodo (si hay rango) o futuros sin rango
+  var _nRec = 0;
+  if (rangeStart && rangeEnd) {
+   var _rS = new Date(rangeStart); _rS.setHours(0,0,0,0);
+   var _rE = new Date(rangeEnd); _rE.setHours(23,59,59,999);
+   _nRec = _recs.filter(function(r){
+    if (!r || !r.fecha) return false;
+    var d = new Date(r.fecha);
+    return !isNaN(d.getTime()) && d >= _rS && d <= _rE;
+   }).length;
+  } else {
+   _nRec = _recs.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= _hoy00; }).length;
+  }
+  // Suma total de eventos para "Actividad"
+  var _nActividad = (allPedidos.length || 0) + (allVisitas.length || 0) + (_nAlrt || 0) + _nRec;
+  recEl.textContent = _nActividad || '0';
+  // v1.3.1295: si tab Actividad activo, mostrar total en _valEl (cabecera grande)
+  if (_snapAgendaActiveTab === 'recordatorios') {
+   var _valEl2 = document.getElementById('snap-val-agenda');
+   if (_valEl2) _snapCounterUp(_valEl2, _nActividad, 'int', 400);
+   var _deltaEl2 = document.getElementById('snap-delta-agenda');
+   if (_deltaEl2) {
+    if (_nActividad === 0) _deltaEl2.textContent = 'Sin eventos en el periodo';
+    else _deltaEl2.textContent = (allVisitas.length || 0) + ' pedidos · ' + (allPedidos.length || 0) + ' entregas';
+   }
+  }
  }
 
  // ── Wire tab clicks ────────────────────────────────────────
@@ -31137,7 +31205,356 @@ function _confirmBorrarCuenta(id) {
  // ── v1.3.992 LOTE C — Panel RECORDATORIOS: timeline vertical (estilo TickTick) ──
  // Agrupa por día: "Hoy", "Mañana", "Miércoles 14"…
  // Cada item: hora + título. Punto+línea vertical continua.
+ // v1.3.1295 — TAB "ACTIVIDAD" (antes "Recordatorios").
+ // Vista unificada: combina pedidos, entregas, alertas y recordatorios del periodo
+ // activo del header. Línea vertical de tiempo con grupos por día. Cada evento
+ // muestra hora de creación. Pedidos y Entregas incluyen línea horizontal embebida
+ // (mismo fmt que sus tabs respectivos).
+ //
+ // Scroll interno: contenedor con overflow-y:auto. Altura calculada dinámicamente
+ // entre los KPIs y el separador del Insight para llenar exactamente el espacio.
  function _snapRenderRecordatoriosPanel(wrap, hoy, fmtD) {
+ // ── Recolectar todos los eventos del periodo activo ─────────────
+ var period = State.get.period ? State.get.period() : { type:'month', offset:0 };
+ var rng = null;
+ try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+ var rangeStart = rng ? rng.start : null;
+ var rangeEnd = rng ? rng.end : null;
+
+ var hoy0 = new Date(hoy); hoy0.setHours(0,0,0,0);
+ var ahora = new Date();
+
+ // Helper: calcular fecha de entrega con diasEntrega del proveedor
+ var calcEntA = function(fechaISO, provId) {
+  var prov = State.get.prov ? State.get.prov(provId) : null;
+  var de = (prov && prov.diasEntrega) || [];
+  if (!de.length) { var d=new Date(fechaISO); d.setDate(d.getDate()+2); return d; }
+  var base = new Date(fechaISO);
+  for (var i=1; i<=14; i++) {
+   var d2=new Date(base); d2.setDate(base.getDate()+i);
+   var dow=d2.getDay()===0?6:d2.getDay()-1;
+   if (de.indexOf(dow)>=0) return d2;
+  }
+  var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
+ };
+
+ var inRange = function(d) {
+  if (!rangeStart || !rangeEnd) return true;
+  var dd = new Date(d); dd.setHours(0,0,0,0);
+  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
+  return dd >= rS && dd <= rE;
+ };
+
+ var eventos = [];
+
+ // 1) Pedidos realizados (fecha de pedido en periodo)
+ var _histPed = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+ _histPed.forEach(function(p) {
+  if (!p || !p.fecha) return;
+  var fp = new Date(p.fecha);
+  if (isNaN(fp.getTime())) return;
+  if (inRange(fp)) {
+   eventos.push({
+    tipo: 'pedido',
+    fecha: fp,
+    sortKey: fp.getTime(),
+    pedido: p
+   });
+  }
+ });
+
+ // 2) Entregas (fecha entrega calculada en periodo) — solo si NO coincide con la
+ //    fecha del pedido (si misma fecha, ya viene como "pedido" arriba).
+ _histPed.forEach(function(p) {
+  if (!p || !p.fecha) return;
+  var fp = new Date(p.fecha);
+  if (isNaN(fp.getTime())) return;
+  var fe = calcEntA(p.fecha, p.provId);
+  if (isNaN(fe.getTime())) return;
+  // Si entrega es el mismo día que el pedido, no duplicar
+  if (fe.toDateString() === fp.toDateString()) return;
+  if (inRange(fe)) {
+   eventos.push({
+    tipo: 'entrega',
+    fecha: fe,
+    sortKey: fe.getTime(),
+    pedido: p,
+    fechaPedido: fp
+   });
+  }
+ });
+
+ // 3) Alertas — productos con problemas. NO tienen fecha real; las pongo en HOY
+ //    para que aparezcan en grupo "Hoy". Si el periodo no incluye hoy, NO se
+ //    muestran (coherente con "eventos del periodo").
+ if (inRange(hoy0)) {
+  var _prodsAct = State.get.productos ? (State.get.productos() || []) : [];
+  var _listSinStock = _prodsAct.filter(function(p){ return (p.stockActual||0) <= 0; });
+  var _listBajoMin = _prodsAct.filter(function(p){
+   return p.stockMinimo > 0 && (p.stockActual||0) > 0 && (p.stockActual||0) <= p.stockMinimo;
+  });
+  var _listCad = [];
+  try { _listCad = KPI.getCaducidadesAlerta ? KPI.getCaducidadesAlerta() : []; } catch(_) {}
+  var _listMargenBajo = _prodsAct.filter(function(p){
+   var r = typeof _calcMargenProd === 'function' ? _calcMargenProd(p) : { valid: false };
+   return r.valid && r.mg < 15;
+  });
+  // Agregamos como un solo evento "alertas" si hay alguno (resumen).
+  var _totalAlertas = _listSinStock.length + _listBajoMin.length + _listCad.length + _listMargenBajo.length;
+  if (_totalAlertas > 0) {
+   var _hoyMid = new Date(hoy0); _hoyMid.setHours(12,0,0,0);
+   eventos.push({
+    tipo: 'alerta',
+    fecha: _hoyMid,
+    sortKey: _hoyMid.getTime() + 1, // ligero offset para orden estable
+    alertas: {
+     sinStock: _listSinStock.length,
+     bajoMin: _listBajoMin.length,
+     cad: _listCad.length,
+     margenBajo: _listMargenBajo.length,
+     total: _totalAlertas
+    }
+   });
+  }
+ }
+
+ // 4) Recordatorios en periodo
+ var _recs = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
+ _recs.forEach(function(r) {
+  if (!r || !r.fecha) return;
+  var fr = new Date(r.fecha);
+  if (isNaN(fr.getTime())) return;
+  if (inRange(fr)) {
+   eventos.push({
+    tipo: 'recordatorio',
+    fecha: fr,
+    sortKey: fr.getTime(),
+    recordatorio: r
+   });
+  }
+ });
+
+ // ── Empty state ──────────────────────────────────────────────
+ if (!eventos.length) {
+  var empty = document.createElement('div');
+  empty.style.cssText = 'text-align:center;padding:var(--sp-5) 0 8px;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
+  empty.textContent = 'Sin eventos en este periodo';
+  wrap.appendChild(empty);
+  var _addRecEmp = document.createElement('button');
+  _addRecEmp.style.cssText = 'width:100%;height:34px;border:1px dashed var(--border);border-radius:var(--r-sm2);background:none;color:var(--ink-soft);font-size:var(--fs-sm);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;margin-top:var(--sp-2);-webkit-tap-highlight-color:transparent';
+  _addRecEmp.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:var(--sp-1)"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nuevo recordatorio';
+  _addRecEmp.addEventListener('click', function(){ try { App.dash._openRecordatorioSheet(null); } catch(_) {} });
+  wrap.appendChild(_addRecEmp);
+  return;
+ }
+
+ // Ordenar cronológico ascendente (sortKey ya incluye hora)
+ eventos.sort(function(a, b) { return a.sortKey - b.sortKey; });
+
+ // ── Agrupar por día ──────────────────────────────────────────
+ var DNAMES_FULL = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+ var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+ var groups = {};
+ var groupOrder = [];
+ eventos.forEach(function(ev) {
+  var d = ev.fecha;
+  var key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  if (!groups[key]) {
+   groups[key] = { date: new Date(d.getFullYear(), d.getMonth(), d.getDate()), items: [] };
+   groupOrder.push(key);
+  }
+  groups[key].items.push(ev);
+ });
+
+ var manana0 = new Date(hoy0); manana0.setDate(hoy0.getDate()+1);
+ var semanaLimit = new Date(hoy0); semanaLimit.setDate(hoy0.getDate()+7);
+
+ // ── Wrapper con scroll interno ───────────────────────────────
+ // Altura calculada dinámicamente para llenar el espacio entre los KPIs
+ // y la línea separadora del Insight (mediante CSS class snap-actividad-wrap).
+ var scrollWrap = document.createElement('div');
+ scrollWrap.className = 'snap-actividad-wrap';
+
+ var tl = document.createElement('div');
+ tl.className = 'snap-tl-v snap-tl-v-actividad';
+
+ groupOrder.forEach(function(key) {
+  var g = groups[key];
+  var isPast = g.date < hoy0;
+  var lbl;
+  if (g.date.getTime() === hoy0.getTime()) lbl = 'Hoy';
+  else if (g.date.getTime() === manana0.getTime()) lbl = 'Mañana';
+  else if (g.date < semanaLimit && g.date >= hoy0) lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate();
+  else lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate() + ' ' + MON[g.date.getMonth()];
+
+  var group = document.createElement('div');
+  group.className = 'snap-tl-v-group';
+
+  var dayEl = document.createElement('div');
+  dayEl.className = 'snap-tl-v-day' + (isPast ? ' past' : '');
+  dayEl.textContent = lbl;
+  group.appendChild(dayEl);
+
+  g.items.forEach(function(ev) {
+   var item = document.createElement('div');
+   var itemPast = ev.fecha < ahora;
+   item.className = 'snap-tl-v-item snap-tl-v-item-act' + (itemPast ? ' past' : '');
+
+   // Hora (creación si la tiene, sino la fecha del evento)
+   var horaEl = document.createElement('div');
+   horaEl.className = 'snap-tl-v-item-hora';
+   var h = ev.fecha.getHours(), m = ev.fecha.getMinutes();
+   horaEl.textContent = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+   item.appendChild(horaEl);
+
+   // Contenido
+   var contentEl = document.createElement('div');
+   contentEl.className = 'snap-tl-v-item-content';
+   contentEl.style.cssText = 'flex:1;min-width:0';
+
+   if (ev.tipo === 'pedido') {
+    var p = ev.pedido;
+    var prov = State.get.prov ? State.get.prov(p.provId) : null;
+    var provName = prov ? (prov.nombre || '—') : (p.provId || '—');
+    var nArts = (p.items && p.items.length) || 0;
+    var titulo = document.createElement('div');
+    titulo.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);display:flex;align-items:center;gap:6px;margin-bottom:3px';
+    titulo.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/></svg>'
+     + '<span>Pedido · ' + provName + '</span>'
+     + '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArts + ' art' + (nArts !== 1 ? 's.' : '.') + '</span>';
+    contentEl.appendChild(titulo);
+
+    // Línea horizontal embebida — pedido (icono persona)
+    var fechaPed = new Date(p.fecha);
+    var fechaEnt = calcEntA(p.fecha, p.provId);
+    var totalMs = fechaEnt - fechaPed;
+    var pasadoMs = ahora - fechaPed;
+    var pct = totalMs > 0 ? Math.min(1, Math.max(0, pasadoMs / totalMs)) : 0.5;
+    if (fechaPed > ahora) pct = 0;
+    var tlH = _snapHTimeline(
+     fmtD(fechaPed),
+     'Preparar',
+     fmtD(fechaEnt),
+     pct,
+     '🧑‍💼',
+     fechaPed <= ahora,
+     true
+    );
+    contentEl.appendChild(tlH);
+    item.style.cursor = 'pointer';
+    (function(orderId) {
+     item.addEventListener('click', function() {
+      try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+     });
+    })(p.id);
+   } else if (ev.tipo === 'entrega') {
+    var pE = ev.pedido;
+    var provE = State.get.prov ? State.get.prov(pE.provId) : null;
+    var provNameE = provE ? (provE.nombre || '—') : (pE.provId || '—');
+    var nArtsE = (pE.items && pE.items.length) || 0;
+    var tituloE = document.createElement('div');
+    tituloE.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);display:flex;align-items:center;gap:6px;margin-bottom:3px';
+    tituloE.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>'
+     + '<span>Entrega · ' + provNameE + '</span>'
+     + '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArtsE + ' art' + (nArtsE !== 1 ? 's.' : '.') + '</span>';
+    contentEl.appendChild(tituloE);
+
+    // Línea horizontal embebida — entrega (icono camión)
+    var fpE = ev.fechaPedido;
+    var feE = ev.fecha;
+    var totalMsE = feE - fpE;
+    var pasadoMsE = ahora - fpE;
+    var pctE = totalMsE > 0 ? Math.min(1, Math.max(0, pasadoMsE / totalMsE)) : 0.5;
+    if (fpE > ahora) pctE = 0;
+    var tlHE = _snapHTimeline(
+     fmtD(fpE),
+     'En tránsito',
+     fmtD(feE),
+     pctE,
+     '🚚',
+     fpE <= ahora,
+     false
+    );
+    contentEl.appendChild(tlHE);
+    item.style.cursor = 'pointer';
+    (function(orderId) {
+     item.addEventListener('click', function() {
+      try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+     });
+    })(pE.id);
+   } else if (ev.tipo === 'alerta') {
+    var a = ev.alertas;
+    var alertaTit = document.createElement('div');
+    alertaTit.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);display:flex;align-items:center;gap:6px;margin-bottom:3px';
+    alertaTit.innerHTML = '<svg width="12" height="12" fill="none" stroke="var(--red)" stroke-width="2" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+     + '<span>Alertas · ' + a.total + ' producto' + (a.total !== 1 ? 's' : '') + '</span>';
+    contentEl.appendChild(alertaTit);
+    var detalles = [];
+    if (a.sinStock) detalles.push(a.sinStock + ' sin stock');
+    if (a.bajoMin) detalles.push(a.bajoMin + ' bajo mínimo');
+    if (a.cad) detalles.push(a.cad + ' caducidad');
+    if (a.margenBajo) detalles.push(a.margenBajo + ' margen <15%');
+    if (detalles.length) {
+     var subEl = document.createElement('div');
+     subEl.style.cssText = 'font-size:var(--fs-xs);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
+     subEl.textContent = detalles.join(' · ');
+     contentEl.appendChild(subEl);
+    }
+    item.style.cursor = 'pointer';
+    item.addEventListener('click', function() {
+     _snapAgendaActiveTab = 'alertas';
+     try {
+      var tabsEl = document.getElementById('snap-agenda-tabs');
+      if (tabsEl) tabsEl.querySelectorAll('.snap-agenda-tab').forEach(function(b){
+       b.classList.toggle('active', b.dataset.tab === 'alertas');
+      });
+      _snapRenderTimeline();
+     } catch(_) {}
+    });
+   } else if (ev.tipo === 'recordatorio') {
+    var r = ev.recordatorio;
+    var recTit = document.createElement('div');
+    recTit.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);display:flex;align-items:center;gap:6px';
+    recTit.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+     + '<span style="font-weight:var(--fw-semi)">' + (r.titulo || '(sin título)') + '</span>';
+    contentEl.appendChild(recTit);
+    if (r.notas) {
+     var notaEl = document.createElement('div');
+     notaEl.style.cssText = 'font-size:var(--fs-xs);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif;margin-top:2px';
+     notaEl.textContent = r.notas;
+     contentEl.appendChild(notaEl);
+    }
+    item.style.cursor = 'pointer';
+    (function(recId) {
+     item.addEventListener('click', function() {
+      try { App.dash._openRecordatorioSheet(recId); } catch(_) {}
+     });
+    })(r.id);
+   }
+
+   item.appendChild(contentEl);
+   group.appendChild(item);
+  });
+
+  tl.appendChild(group);
+ });
+
+ scrollWrap.appendChild(tl);
+ wrap.appendChild(scrollWrap);
+
+ // Botón "+ Nuevo recordatorio" siempre disponible al final
+ var _addRec = document.createElement('button');
+ _addRec.style.cssText = 'width:100%;height:34px;border:1px dashed var(--border);border-radius:var(--r-sm2);background:none;color:var(--ink-soft);font-size:var(--fs-sm);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;margin-top:var(--sp-2);-webkit-tap-highlight-color:transparent';
+ _addRec.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:var(--sp-1)"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nuevo recordatorio';
+ _addRec.addEventListener('click', function(){ try { App.dash._openRecordatorioSheet(null); } catch(_) {} });
+ wrap.appendChild(_addRec);
+ }
+
+ // v1.3.1295 — versión legacy preservada por si hace falta restaurar.
+ //   No se invoca desde ningún sitio (dispatcher usa _snapRenderRecordatoriosPanel).
+ //   Restaurar: renombrar esta a _snapRenderRecordatoriosPanel y la nueva a Legacy.
+ function _snapRenderRecordatoriosPanelLegacy(wrap, hoy, fmtD) {
  var recs = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
  // Filtrar: solo futuros o del día de hoy
  var ahora = new Date();
@@ -32482,6 +32899,33 @@ function _confirmBorrarCuenta(id) {
  // KPI tab "Pedidos" — count pedidos realizados en periodo
  var visEl = document.getElementById('snap-vis-agenda');
  if (visEl) _snapCounterUp(visEl, pedidosRealizados.length, 'int', 400);
+
+ // v1.3.1295: KPI tab "Alertas" + KPI tab "Actividad" (suma total)
+ var _prodsA = State.get.productos ? (State.get.productos() || []) : [];
+ var _nAlrtFP = _prodsA.filter(function(p){ return (p.stockActual||0)<=0; }).length
+   + _prodsA.filter(function(p){ return p.stockMinimo>0&&(p.stockActual||0)>0&&(p.stockActual||0)<=p.stockMinimo; }).length
+   + (function(){ try{ return KPI.getCaducidadesAlerta ? KPI.getCaducidadesAlerta().length : 0; }catch(_){ return 0; } })()
+   + _prodsA.filter(function(p){ var r=typeof _calcMargenProd==='function'?_calcMargenProd(p):{valid:false}; return r.valid&&r.mg<15; }).length;
+ var alrtElFP = document.getElementById('snap-alrt-agenda');
+ if (alrtElFP) alrtElFP.textContent = _nAlrtFP || '0';
+
+ var _recsFP = (State.get.recordatorios ? State.get.recordatorios() : []) || [];
+ var _nRecFP = 0;
+ if (rangeStart && rangeEnd) {
+  var _rSFP = new Date(rangeStart); _rSFP.setHours(0,0,0,0);
+  var _rEFP = new Date(rangeEnd); _rEFP.setHours(23,59,59,999);
+  _nRecFP = _recsFP.filter(function(r){
+   if (!r || !r.fecha) return false;
+   var d = new Date(r.fecha); return !isNaN(d.getTime()) && d >= _rSFP && d <= _rEFP;
+  }).length;
+ } else {
+  _nRecFP = _recsFP.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= hoy; }).length;
+ }
+ var recElFP = document.getElementById('snap-rec-agenda');
+ if (recElFP) {
+  var _nActFP = (pedidosRealizados.length || 0) + (pedidos.length || 0) + (_nAlrtFP || 0) + _nRecFP;
+  recElFP.textContent = _nActFP || '0';
+ }
  }
  // ── Compras y Suministros ─────────────────────────────────────────
  if (cardId === 'compras') {
