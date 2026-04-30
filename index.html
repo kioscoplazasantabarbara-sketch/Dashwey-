@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1293-dev</title>
+<title>Dashwey v1.3.1294-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16796,7 +16796,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1293-dev';
+ const _APP_VERSION = 'v1.3.1294-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30661,22 +30661,58 @@ function _confirmBorrarCuenta(id) {
  var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
  };
 
- var allPedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
- .filter(function(o){ return o.status === 'pending'; })
- .filter(function(o) {
- if (!rangeStart || !rangeEnd) return true;
- var ent = calcEnt(o.date, o.provId); ent.setHours(0,0,0,0);
- var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
- var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
- return ent >= rS && ent <= rE;
+ // ─────────────────────────────────────────────────────────────────
+ // v1.3.1294 — FIX D8 KPI AGENDA: ambos tabs leen historialPedidos.
+ //   "Pedidos" (tab data-tab='visitas', id snap-vis-agenda):
+ //     pedidos cuya FECHA DE PEDIDO cae en el periodo activo.
+ //   "Entregas" (tab data-tab='pedidos', id snap-ped-agenda):
+ //     pedidos cuya FECHA DE ENTREGA calculada cae en el periodo activo.
+ //   Misma fuente de datos, distinta fecha de filtro.
+ //   Antes: pendingOrders + _computeProximosPedidos → 0/0 en cuentas
+ //   reales (proveedores LV sin diasPedido + pedidos ya recibidos).
+ // ─────────────────────────────────────────────────────────────────
+ var _histPed = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+
+ // allPedidos = pintar tab "Entregas" (data-tab='pedidos') — shape compatible
+ //   con _snapRenderPedidosPanel ({ id, provId, date, items }).
+ //   Filtro: fecha de ENTREGA dentro del periodo.
+ var allPedidos = _histPed
+ .filter(function(p) {
+  if (!p || !p.fecha) return false;
+  if (!rangeStart || !rangeEnd) return true;
+  var ent = calcEnt(p.fecha, p.provId); ent.setHours(0,0,0,0);
+  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
+  return ent >= rS && ent <= rE;
+ })
+ .map(function(p) {
+  // Adaptador shape historialPedidos → pendingOrders (date en lugar de fecha)
+  return { id: p.id, provId: p.provId, date: p.fecha, items: p.items || [] };
  })
  .sort(function(a,b){ return calcEnt(a.date,a.provId) - calcEnt(b.date,b.provId); });
 
- // v1.3.991: LOTE B — allVisitas ahora se auto-genera desde proveedores con diasPedido.
- // Cada item: { provId, agente, fecha, auto:true } — recurrente calculada.
- // Antes leíamos State.get.visitasComerciales() (notas manuales libres, legacy).
- // Esos items legacy migrarán a "Recordatorios" en LOTE C.
- var allVisitas = _computeProximosPedidos(rangeStart, rangeEnd, hoy);
+ // allVisitas = pintar tab "Pedidos" (data-tab='visitas') — shape compatible
+ //   con _snapRenderVisitasPanel ({ provId, fecha, agente, notas }).
+ //   Filtro: fecha de PEDIDO dentro del periodo.
+ var allVisitas = _histPed
+ .filter(function(p) {
+  if (!p || !p.fecha) return false;
+  if (!rangeStart || !rangeEnd) return true;
+  var pd = new Date(p.fecha); pd.setHours(0,0,0,0);
+  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
+  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
+  return pd >= rS && pd <= rE;
+ })
+ .map(function(p) {
+  var prov = State.get.prov ? State.get.prov(p.provId) : null;
+  return {
+   provId: p.provId,
+   fecha: p.fecha,
+   agente: (prov && prov.agente) || '',
+   notas: (p.items && p.items.length) ? (p.items.length + ' artículos') : ''
+  };
+ })
+ .sort(function(a,b){ return new Date(a.fecha) - new Date(b.fecha); });
 
  // ── Actualizar contadores en tabs ──────────────────────────
  // Contador alertas
@@ -30695,9 +30731,9 @@ function _confirmBorrarCuenta(id) {
    if (_lblEl) _lblEl.textContent = 'Alertas activas';
    if (_valEl) _snapCounterUp(_valEl, _nAlrt, 'int', 400);
   } else if (_snapAgendaActiveTab === 'pedidos') {
-   if (_lblEl) _lblEl.textContent = 'Eventos';
+   if (_lblEl) _lblEl.textContent = 'Entregas en periodo';
   } else if (_snapAgendaActiveTab === 'visitas') {
-   if (_lblEl) _lblEl.textContent = 'Eventos';
+   if (_lblEl) _lblEl.textContent = 'Pedidos en periodo';
   } else if (_snapAgendaActiveTab === 'recordatorios') {
    if (_lblEl) _lblEl.textContent = 'Recordatorios';
   }
@@ -32371,11 +32407,14 @@ function _confirmBorrarCuenta(id) {
  var rangeStart = rng ? rng.start : null;
  var rangeEnd = rng ? rng.end : null;
 
- // Filtrar pedidos por fecha de entrega dentro del rango del periodo
- var allPedidos = (State.get.pendingOrders ? State.get.pendingOrders() : [])
- .filter(function(o) { return o.status === 'pending'; });
-
- // calcEntrega inline
+ // ─────────────────────────────────────────────────────────────────
+ // v1.3.1294 — FIX D8 KPI AGENDA (cardId='agenda' fast path).
+ //   Coherente con _snapRenderTimeline:
+ //     - allPedidos = historialPedidos cuya entrega cae en periodo (tab Entregas)
+ //     - allVisitas = historialPedidos cuya fecha cae en periodo (tab Pedidos)
+ //   Antes leía pendingOrders + visitasComerciales → KPIs en 0 con datos reales.
+ // ─────────────────────────────────────────────────────────────────
+ // calcEntrega inline (movido arriba para uso en allPedidos/allVisitas)
  var calcEnt = function(fechaISO, provId) {
  var prov = State.get.prov ? State.get.prov(provId) : null;
  var de = (prov && prov.diasEntrega) || [];
@@ -32389,32 +32428,34 @@ function _confirmBorrarCuenta(id) {
  var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
  };
 
- // Filtrar por entrega dentro del rango
- var pedidos = allPedidos.filter(function(o) {
- if (!rangeStart || !rangeEnd) return true; // sin rango → mostrar todos
- var entrega = calcEnt(o.date, o.provId);
- entrega.setHours(0,0,0,0);
+ var _histPed = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+
+ // Tab "Entregas" — fecha de entrega calculada en periodo
+ var pedidos = _histPed.filter(function(p) {
+ if (!p || !p.fecha) return false;
+ if (!rangeStart || !rangeEnd) return true;
+ var entrega = calcEnt(p.fecha, p.provId); entrega.setHours(0,0,0,0);
  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
  return entrega >= rS && entrega <= rE;
  });
 
- // Filtrar visitas por fecha dentro del rango
- var allVisitas = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
- var visitas = allVisitas.filter(function(v) {
- if (!v.fecha) return false;
+ // Tab "Pedidos" — fecha de pedido en periodo
+ var pedidosRealizados = _histPed.filter(function(p) {
+ if (!p || !p.fecha) return false;
  if (!rangeStart || !rangeEnd) return true;
- var vd = new Date(v.fecha); vd.setHours(0,0,0,0);
+ var pd = new Date(p.fecha); pd.setHours(0,0,0,0);
  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
- return vd >= rS && vd <= rE;
+ return pd >= rS && pd <= rE;
  });
 
  var hoy = new Date(); hoy.setHours(0,0,0,0);
 
- // Próxima entrega — la más próxima dentro del rango
- var pedidosConEnt = pedidos.map(function(o) {
- return { order: o, entrega: calcEnt(o.date, o.provId) };
+ // Próxima entrega — la más próxima dentro del rango (label cabecera)
+ var pedidosConEnt = pedidos.map(function(p) {
+ return { order: { id: p.id, provId: p.provId, date: p.fecha, items: p.items || [] },
+          entrega: calcEnt(p.fecha, p.provId) };
  }).sort(function(a,b){ return a.entrega - b.entrega; });
 
  var proxPedObj = pedidosConEnt.length > 0 ? pedidosConEnt[0] : null;
@@ -32434,24 +32475,13 @@ function _confirmBorrarCuenta(id) {
  if (deltaEl) deltaEl.textContent = prov ? prov.nombre :
  (pedidos.length > 0 ? pedidos.length + ' pedidos' : 'Todo al día');
 
+ // KPI tab "Entregas" — count pedidos con entrega en periodo
  var pedEl = document.getElementById('snap-ped-agenda');
  if (pedEl) _snapCounterUp(pedEl, pedidos.length, 'int', 400);
 
- // Próxima visita: siempre la más próxima desde hoy (no filtrada por periodo)
- var allVisitasParaProx = State.get.visitasComerciales ? (State.get.visitasComerciales() || []) : [];
- var proxVisita = allVisitasParaProx
- .filter(function(v){ return v.fecha && new Date(v.fecha) >= hoy; })
- .sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); })[0];
+ // KPI tab "Pedidos" — count pedidos realizados en periodo
  var visEl = document.getElementById('snap-vis-agenda');
- if (visEl) {
- if (proxVisita) {
- var vd = new Date(proxVisita.fecha);
- visEl.textContent = DNAMES[vd.getDay()===0?6:vd.getDay()-1] + ' ' +
- String(vd.getDate()).padStart(2,'0') + ' ' + MON[vd.getMonth()];
- } else {
- visEl.textContent = '—';
- }
- }
+ if (visEl) _snapCounterUp(visEl, pedidosRealizados.length, 'int', 400);
  }
  // ── Compras y Suministros ─────────────────────────────────────────
  if (cardId === 'compras') {
