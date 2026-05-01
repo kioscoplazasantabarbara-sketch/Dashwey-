@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1345-dev</title>
+<title>Dashwey v1.3.1346-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8175,14 +8175,12 @@ html:not([data-app-mode]) .alm-hdr-icon-btn[aria-label="Menú"] {
    Color ink-soft, 0.6 opacity, padding izq 4px para separar del texto.
    Antes (v1.3.1158): se ocultaba por ruido visual; ahora con título grande
    alineado a la izquierda, el chevron es la única señal visual de "tappable". */
+/* v1.3.1346: chevron legacy ocultado — el header doble v1.3.1339 ya incluye un
+   chevron SVG dentro del botón secundario (.hdr-title-secondary). Mantener este
+   ▾ inline causaba un caracter solitario al lado de la hamburguesa. El elemento
+   sigue en el DOM por compat con JS legacy que lo referencie. */
 #dash-title-period-chevron {
- display: inline-flex !important;
- font-size: 14px;
- opacity: 0.45;
- margin-left: 4px;
- color: var(--ink-soft);
- align-self: center;
- line-height: 1;
+ display: none !important;
 }
 /* v1.3.1326 — chevron Almacén SVG (mismo lenguaje visual que Dashboard ▾) */
 #alm-prov-sub-btn > svg {
@@ -17338,7 +17336,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1345-dev';
+ const _APP_VERSION = 'v1.3.1346-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -34236,11 +34234,17 @@ function _confirmBorrarCuenta(id) {
     var cid = row.dataset.cid;
     try { Utils.triggerHaptic('selection'); } catch(_){}
     close();
-    setTimeout(function(){
-     try {
-      if (App.dash && App.dash._openDetalleCuenta) App.dash._openDetalleCuenta(cid);
-     } catch(_){}
-    }, 280);
+    // v1.3.1346: doble RAF (en vez de setTimeout 280ms ciegos) para que el
+    // detalle empiece a abrirse en el siguiente frame mientras el sheet baja.
+    // El sheet se cierra hacia abajo y el detalle entra por la derecha →
+    // sin solapamiento visual confuso. Gana ~270ms de feedback percibido.
+    requestAnimationFrame(function(){
+     requestAnimationFrame(function(){
+      try {
+       if (App.dash && App.dash._openDetalleCuenta) App.dash._openDetalleCuenta(cid);
+      } catch(_){}
+     });
+    });
    });
   });
   // v1.3.1342: row "Vista global" → vista derivada de todas las cuentas
@@ -34249,11 +34253,14 @@ function _confirmBorrarCuenta(id) {
    globRowEl.addEventListener('click', function(){
     try { Utils.triggerHaptic('selection'); } catch(_){}
     close();
-    setTimeout(function(){
-     try {
-      if (App.dash && App.dash._openDetalleCuentaGlobal) App.dash._openDetalleCuentaGlobal();
-     } catch(_){}
-    }, 280);
+    // v1.3.1346: idem doble RAF
+    requestAnimationFrame(function(){
+     requestAnimationFrame(function(){
+      try {
+       if (App.dash && App.dash._openDetalleCuentaGlobal) App.dash._openDetalleCuentaGlobal();
+      } catch(_){}
+     });
+    });
    });
   }
  };
@@ -35681,6 +35688,54 @@ function _confirmBorrarCuenta(id) {
     movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
      importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:i.metaTipo });
    });
+   // v1.3.1346 FIX P0 BUG-4B: incluir ventas Loyverse agregadas (venta-dia)
+   // asignadas a esta cuenta. Antes solo se leían gastosOp+ingresosFin → las
+   // ventas (origen='loyverse'/'import_loyverse') que sí aparecen en Vista
+   // Global con cuentaId=Kiosco no se mostraban en el detalle de Kiosco.
+   // Reusamos la misma agrupación que FinEngine.unifiedTransactions() para
+   // garantizar coherencia: vista global y detalle cuenta enseñan lo mismo.
+   //
+   // ANTI-DUPLICADO: si ya existe un ingreso cierre_caja_auto para ese día
+   // y cuenta, NO añadir el venta-dia (el cierre ya contabiliza las ventas
+   // como bruto). Cierre auto está desactivado en producción al cierre 29-abr,
+   // pero esta guarda evita duplicado si se reactiva en el futuro.
+   try {
+    if (typeof FinEngine !== 'undefined' && FinEngine.unifiedTransactions) {
+     // Set de claves "YYYY-MM-DD" donde ya hay cierre_caja_auto en esta cuenta
+     var _diasConCierreAuto = new Set();
+     ingresos.forEach(function(i){
+      if (i && i.origen === 'cierre_caja_auto' && i.fecha) {
+       try {
+        var d = new Date(i.fecha);
+        var k = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0')
+                + '-' + String(d.getDate()).padStart(2,'0');
+        _diasConCierreAuto.add(k);
+       } catch(_){}
+      }
+     });
+     var _allTxs = FinEngine.unifiedTransactions() || [];
+     _allTxs.forEach(function(t){
+      if (t && t.kind === 'venta-dia' && t.cuentaId === cuentaId) {
+       // Evitar duplicado vs cierre_caja_auto
+       try {
+        var dt = new Date(t.fecha);
+        var dk = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0')
+                 + '-' + String(dt.getDate()).padStart(2,'0');
+        if (_diasConCierreAuto.has(dk)) return;
+       } catch(_){}
+       movs.push({
+        id: t.id,
+        src: t.src || 'venta',
+        concepto: t.concepto || 'Ventas del día',
+        importe: +(t.importe || 0),
+        fecha: t.fecha || '',
+        tipo: 'venta',
+        metaTipo: t.metaTipo || 'venta-agregada',
+       });
+      }
+     });
+    }
+   } catch(_){}
    movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
 
    // Calcular saldo tras cada movimiento (hacia atrás desde saldo actual)
