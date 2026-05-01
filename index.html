@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1347-dev</title>
+<title>Dashwey v1.3.1348-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17336,7 +17336,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1347-dev';
+ const _APP_VERSION = 'v1.3.1348-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35444,7 +35444,45 @@ function _confirmBorrarCuenta(id) {
 
   var _renderGlobal = function(initial) {
    var metrics = FinEngine.unifiedMetrics();
-   var movs = FinEngine.unifiedTransactions();
+   var movsRaw = FinEngine.unifiedTransactions();
+
+   // v1.3.1348 ARQUITECTURA: en cuentas/Vista global NO mostrar venta-dia
+   // (resúmenes agregados de tickets Loyverse). Solo cierres cerrados como
+   // movimiento contable. KPIs (metrics.ingresosTotal/gastosTotal) NO se tocan
+   // — se siguen calculando sobre todos los txs incluyendo venta-dia, así las
+   // cifras agregadas son consistentes con la realidad de las ventas. Solo
+   // cambia la lista de filas que se enseñan al usuario.
+   var movs = movsRaw.filter(function(t){ return t && t.kind !== 'venta-dia'; });
+   try {
+    var _cierresG = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
+    _cierresG.forEach(function(c){
+     if (!c || c.deleted) return;
+     if (c.estado !== 'cerrado' || !c.cierreTs) return;
+     var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
+     if (neto === 0) return;
+     var cInfo = (State.get.cuentas() || []).find(function(x){ return x.id === c.cuentaId; });
+     var nT = Number(c.nVentas) || 0;
+     var label = '💰 Cierre ' + (c.jornadaLabel || '—')
+              + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
+     movs.push({
+      kind: 'cierre',
+      id: c.id,
+      src: 'cierre',
+      concepto: label,
+      importe: Math.abs(neto),
+      delta: neto,
+      fecha: new Date(c.cierreTs).toISOString(),
+      cuentaId: c.cuentaId,
+      cuentaNombre: cInfo ? cInfo.nombre : '?',
+      cuentaColor: cInfo ? cInfo.color : '#999',
+      metaTipo: 'cierre-caja',
+      transferId: null,
+      isTransfer: false,
+     });
+    });
+   } catch(_){}
+   // Re-ordenar tras inyectar cierres (newest→oldest)
+   movs.sort(function(a, b){ return new Date(b.fecha) - new Date(a.fecha); });
 
    // Saldo acumulado descendente: parte del saldo actual y resta el delta
    //   de cada movimiento al ir más antiguo. Pares de transferencia tienen
@@ -35709,53 +35747,38 @@ function _confirmBorrarCuenta(id) {
     movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
      importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:i.metaTipo });
    });
-   // v1.3.1346 FIX P0 BUG-4B: incluir ventas Loyverse agregadas (venta-dia)
-   // asignadas a esta cuenta. Antes solo se leían gastosOp+ingresosFin → las
-   // ventas (origen='loyverse'/'import_loyverse') que sí aparecen en Vista
-   // Global con cuentaId=Kiosco no se mostraban en el detalle de Kiosco.
-   // Reusamos la misma agrupación que FinEngine.unifiedTransactions() para
-   // garantizar coherencia: vista global y detalle cuenta enseñan lo mismo.
+   // v1.3.1348 ARQUITECTURA: en Flujo de Caja y detalles de cuenta NO se muestran
+   // ventas individuales ni "Ventas del día (Loyverse)" agregadas. Solo los CIERRES
+   // CERRADOS (manuales o automáticos) — el modelo es: "los tickets son operación
+   // comercial, los cierres son asientos contables". Los tickets se exploran en
+   // Resumen de Ventas, no en cuentas. Esto evita duplicación visual y mantiene
+   // un estado de cuentas limpio tipo banca.
    //
-   // ANTI-DUPLICADO: si ya existe un ingreso cierre_caja_auto para ese día
-   // y cuenta, NO añadir el venta-dia (el cierre ya contabiliza las ventas
-   // como bruto). Cierre auto está desactivado en producción al cierre 29-abr,
-   // pero esta guarda evita duplicado si se reactiva en el futuro.
+   // Se REVIERTE el añadido v1.3.1346 (que mostraba venta-dia desde unifiedTransactions).
+   // En su lugar, inyectamos los cierres cerrados de State.cierresCaja, que son los
+   // únicos eventos válidos como ingreso de caja en el modelo financiero.
    try {
-    if (typeof FinEngine !== 'undefined' && FinEngine.unifiedTransactions) {
-     // Set de claves "YYYY-MM-DD" donde ya hay cierre_caja_auto en esta cuenta
-     var _diasConCierreAuto = new Set();
-     ingresos.forEach(function(i){
-      if (i && i.origen === 'cierre_caja_auto' && i.fecha) {
-       try {
-        var d = new Date(i.fecha);
-        var k = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0')
-                + '-' + String(d.getDate()).padStart(2,'0');
-        _diasConCierreAuto.add(k);
-       } catch(_){}
-      }
+    var _cierres = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
+    _cierres.forEach(function(c){
+     if (!c || c.deleted) return;
+     if (c.estado !== 'cerrado' || !c.cierreTs) return;
+     if (c.cuentaId !== cuentaId) return;
+     // Importe neto del cierre = ventas + ingresos - gastos
+     var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
+     if (neto === 0) return;
+     var nT = Number(c.nVentas) || 0;
+     var label = '💰 Cierre ' + (c.jornadaLabel || '—')
+              + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
+     movs.push({
+      id: c.id,
+      src: 'cierre',
+      concepto: label,
+      importe: neto, // ya con signo (puede ser negativo si gastos>ventas)
+      fecha: new Date(c.cierreTs).toISOString(),
+      tipo: neto >= 0 ? 'ingreso' : 'gasto',
+      metaTipo: 'cierre-caja',
      });
-     var _allTxs = FinEngine.unifiedTransactions() || [];
-     _allTxs.forEach(function(t){
-      if (t && t.kind === 'venta-dia' && t.cuentaId === cuentaId) {
-       // Evitar duplicado vs cierre_caja_auto
-       try {
-        var dt = new Date(t.fecha);
-        var dk = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0')
-                 + '-' + String(dt.getDate()).padStart(2,'0');
-        if (_diasConCierreAuto.has(dk)) return;
-       } catch(_){}
-       movs.push({
-        id: t.id,
-        src: t.src || 'venta',
-        concepto: t.concepto || 'Ventas del día',
-        importe: +(t.importe || 0),
-        fecha: t.fecha || '',
-        tipo: 'venta',
-        metaTipo: t.metaTipo || 'venta-agregada',
-       });
-      }
-     });
-    }
+    });
    } catch(_){}
    movs.sort(function(a,b){ return new Date(b.fecha)-new Date(a.fecha); });
 
