@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1344-dev</title>
+<title>Dashwey v1.3.1345-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14074,6 +14074,23 @@ window._hdrDashTitles = function(period) {
  }
  // 'end' suele ser exclusivo. Para mostrar resta 1ms para que muestre el último día real.
  const _endDisplay = new Date(end.getTime() - 1);
+ // v1.3.1345 BUG-FIX: cuando hay franja nocturna (ej. 15:00–04:00), KPI.getRange()
+ // empuja `end` al día calendario SIGUIENTE (ej. mes Mayo + 15:00–04:00 → end=1jun 04:00),
+ // por lo que `_endDisplay` cae al día 1 del mes siguiente y se mostraba "1 - 1 mayo".
+ // Para el SUBTÍTULO (etiqueta humana del periodo) usamos siempre el rango calendario,
+ // no el rango ajustado por franja.
+ const _calStart = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+ // v1.3.1345: append franja al subtítulo si está configurada y NO es 24h completa.
+ // Loyverse-style: "1 - 31 mayo 2026 · 15:00 a 04:00".
+ const _ds = (period.dayStart && /^\d{1,2}:\d{2}$/.test(period.dayStart)) ? period.dayStart : null;
+ const _de = (period.dayEnd && /^\d{1,2}:\d{2}$/.test(period.dayEnd)) ? period.dayEnd : null;
+ // Solo concatenar si:
+ //   - tipo no es custom/hours (esos ya llevan horas explícitas)
+ //   - franja NO es 00:00–23:59 (default = día completo)
+ const _showFranja = _ds && _de
+  && !(_ds === '00:00' && _de === '23:59')
+  && type !== 'custom' && type !== 'hours';
+ const _appendFranja = (sub) => _showFranja ? (sub + ' · ' + _ds + ' a ' + _de) : sub;
 
  // ── HOY/AYER ──
  if (type === 'today') {
@@ -14081,7 +14098,7 @@ window._hdrDashTitles = function(period) {
   if (off === 0)       title = 'Hoy';
   else if (off === -1) title = 'Ayer';
   else                 title = _capitalize(_weekday(start));
-  return { title, subtitle: _fullDate(start) };
+  return { title, subtitle: _appendFranja(_fullDate(start)) };
  }
  // ── HORAS (24h móvil) ──
  if (type === 'hours') {
@@ -14095,29 +14112,33 @@ window._hdrDashTitles = function(period) {
   else if (off === -1)  title = 'Semana Anterior';
   else if (off > 0)     title = `Semana +${off}`;
   else                  title = `Hace ${Math.abs(off)} sem.`;
-  const sameMonth = start.getMonth() === _endDisplay.getMonth();
-  const sameYear  = start.getFullYear() === _endDisplay.getFullYear();
+  // v1.3.1345: el último día calendario de la semana es start + 6 (lun..dom).
+  // No usar _endDisplay porque con franja nocturna salta al lunes siguiente.
+  const _weekEnd = new Date(_calStart.getFullYear(), _calStart.getMonth(), _calStart.getDate() + 6);
+  const sameMonth = _calStart.getMonth() === _weekEnd.getMonth();
+  const sameYear  = _calStart.getFullYear() === _weekEnd.getFullYear();
   let subtitle;
   if (sameMonth && sameYear) {
-   subtitle = start.getDate() + ' - ' + _endDisplay.getDate() + ' ' + _monthLong(start) + ' ' + start.getFullYear();
+   subtitle = _calStart.getDate() + ' - ' + _weekEnd.getDate() + ' ' + _monthLong(_calStart) + ' ' + _calStart.getFullYear();
   } else if (sameYear) {
-   subtitle = _shortDate(start) + ' - ' + _shortDate(_endDisplay) + ' ' + start.getFullYear();
+   subtitle = _shortDate(_calStart) + ' - ' + _shortDate(_weekEnd) + ' ' + _calStart.getFullYear();
   } else {
-   subtitle = _fullDate(start) + ' - ' + _fullDate(_endDisplay);
+   subtitle = _fullDate(_calStart) + ' - ' + _fullDate(_weekEnd);
   }
-  return { title, subtitle };
+  return { title, subtitle: _appendFranja(subtitle) };
  }
  // ── MES ──
  if (type === 'month') {
-  const title = _capitalize(_monthLong(start));
-  const last = _endDisplay.getDate();
-  const subtitle = '1 - ' + last + ' ' + _monthLong(start) + ' ' + start.getFullYear();
-  return { title, subtitle };
+  const title = _capitalize(_monthLong(_calStart));
+  // v1.3.1345: último día = día 0 del mes siguiente (truco JS estándar)
+  const lastDay = new Date(_calStart.getFullYear(), _calStart.getMonth() + 1, 0).getDate();
+  const subtitle = '1 - ' + lastDay + ' ' + _monthLong(_calStart) + ' ' + _calStart.getFullYear();
+  return { title, subtitle: _appendFranja(subtitle) };
  }
  // ── AÑO ──
  if (type === 'year') {
   const y = start.getFullYear();
-  return { title: String(y), subtitle: '1 ene - 31 dic ' + y };
+  return { title: String(y), subtitle: _appendFranja('1 ene - 31 dic ' + y) };
  }
  // ── CUSTOM ──
  if (type === 'custom') {
@@ -17317,7 +17338,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1344-dev';
+ const _APP_VERSION = 'v1.3.1345-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29939,20 +29960,14 @@ function _confirmBorrarCuenta(id) {
  const titleLbl = document.getElementById('dash-title-period-lbl');
  if (titleLbl) titleLbl.textContent = label;
  // v1.3.1257: actualizar línea de franja horaria si está configurada
+ // v1.3.1345: integrada AL LADO del subtítulo en _hdrDashTitles → este pill queda
+ // siempre oculto. Se mantiene el elemento por compatibilidad con JS legacy que
+ // pueda referenciarlo, pero ya no se muestra.
  try {
   const franjaLbl = document.getElementById('dash-title-franja-lbl');
   if (franjaLbl) {
-   const p = State.get.period();
-   const ds = (p && p.dayStart && /^\d{1,2}:\d{2}$/.test(p.dayStart)) ? p.dayStart : null;
-   const de = (p && p.dayEnd && /^\d{1,2}:\d{2}$/.test(p.dayEnd)) ? p.dayEnd : null;
-   // Solo mostrar si NO es 00:00–23:59 (que es el default = día completo)
-   if (ds && de && !(ds === '00:00' && de === '23:59') && p.type !== 'custom') {
-    franjaLbl.textContent = ds + ' – ' + de;
-    franjaLbl.style.display = '';
-   } else {
-    franjaLbl.style.display = 'none';
-    franjaLbl.textContent = '';
-   }
+   franjaLbl.style.display = 'none';
+   franjaLbl.textContent = '';
   }
  } catch(_) {}
  // Fila de periodo en hero card (compatibilidad)
