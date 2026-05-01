@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1340-dev</title>
+<title>Dashwey v1.3.1341-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17337,7 +17337,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1340-dev';
+ const _APP_VERSION = 'v1.3.1341-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19639,8 +19639,60 @@ const ui = (() => {
     mergedProvs.push(p);
    });
    var catIdToProvId = {}; // mapping lvCategoryId → dashweyProvId
+   // v1.3.1341 AUTO-MATCH MANUAL → LV
+   //   Antes de procesar lvCats, construir índice de proveedores manuales
+   //   con sourceName escrito. Si su sourceName matchea (case-insensitive trim)
+   //   con c.name de una categoría LV, MIGRAREMOS ese manual a LV preservando
+   //   id, nombre, datos editables. Anti-duplicación: cada manual solo puede
+   //   matchear UNA vez. Si hay 2 manuales con mismo sourceName, gana el más
+   //   antiguo (createdAt menor).
+   var _norm = function(s) { return String(s || '').trim().toLowerCase(); };
+   var _manualBySourceNorm = {}; // norm sourceName → manualProv (más antiguo)
+   mergedProvs.forEach(function(mp) {
+    if (!mp || mp.deleted) return;
+    if (mp.origen !== 'manual') return;
+    if (!mp.sourceName) return;
+    if (mp.loyverseCategoryId) return; // ya migrado, ignorar
+    var key = _norm(mp.sourceName);
+    if (!key) return;
+    var prev = _manualBySourceNorm[key];
+    if (!prev) { _manualBySourceNorm[key] = mp; return; }
+    // tiebreak: gana el de createdAt menor (más antiguo)
+    var prevCa = Date.parse(prev.createdAt || '') || 0;
+    var thisCa = Date.parse(mp.createdAt || '') || 0;
+    if (thisCa && (!prevCa || thisCa < prevCa)) _manualBySourceNorm[key] = mp;
+   });
+   var _matchedManualIds = {}; // anti-doble-match
    (lvCats || []).forEach(function(c) {
     if (!c || !c.id) return;
+    // ─── v1.3.1341: AUTO-MATCH manual → LV antes de crear prov_lv_*
+    var _matchManual = _manualBySourceNorm[_norm(c.name)];
+    if (_matchManual && !_matchedManualIds[_matchManual.id]) {
+     // ¿Existe ya un prov_lv_<c.id>? Si sí, conflicto → preferir el LV existente,
+     // dejar el manual sin tocar (no podemos fusionar de forma segura aquí).
+     var _existingLv = prevProvById['prov_lv_' + c.id];
+     if (!_existingLv || _existingLv.deleted) {
+      // MIGRAR: manual adopta loyverseCategoryId conservando todo lo demás
+      _matchedManualIds[_matchManual.id] = true;
+      catIdToProvId[c.id] = _matchManual.id; // referencia para items
+      // Localizar el manual en mergedProvs y mutarlo en sitio
+      for (var _mi = 0; _mi < mergedProvs.length; _mi++) {
+       if (mergedProvs[_mi] && mergedProvs[_mi].id === _matchManual.id) {
+        var _mig = Object.assign({}, mergedProvs[_mi], {
+         origen: 'loyverse',
+         loyverseCategoryId: c.id,
+         sourceName: c.name || _matchManual.sourceName,
+         updatedAt: new Date(_now).toISOString()
+        });
+        mergedProvs[_mi] = _mig;
+        try { console.log('[LV/auto-match] manual "' + _matchManual.nombre + '" → categoría LV "' + c.name + '" (provId preservado: ' + _matchManual.id + ')'); } catch(_){}
+        break;
+       }
+      }
+      return; // saltar la creación de prov_lv_<c.id> nuevo
+     }
+     // Si _existingLv vivo: no migramos (quedaría duplicado), seguimos flujo normal
+    }
     var provId = 'prov_lv_' + c.id;
     var existing = prevProvById[provId];
     // v1.3.1266 FIX W-A-43: respeto tombstone proveedor LV (simétrico a W-A-17/18 en productos).
@@ -41199,13 +41251,15 @@ function _parseIva(iva) {
  <div class="pe-section-title">Proveedor</div>
  <div class="prov-edit-card">
  <div><div class="fl">Nombre</div><input class="fi" id="pe-n" value="${esc(p.nombre||'')}" placeholder="Nombre del proveedor"></div>
- ${p.origen === 'loyverse' ? `
+ <!-- v1.3.1341: campo "Nombre TPV (Loyverse)" SIEMPRE editable.
+      Para proveedores manuales: si lo dejas escrito, al re-importar Loyverse,
+      Dashwey vinculará automáticamente este proveedor con la categoría LV
+      cuyo nombre coincida (case-insensitive). -->
  <div>
-  <div class="fl">Nombre origen Loyverse <span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-2xs)">(usado para vincular ventas Loyverse)</span></div>
-  <input class="fi" id="pe-source" value="${esc(p.sourceName||p.nombre||'')}" placeholder="Nombre de categoría Loyverse">
-  <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:4px;line-height:1.4">Categoría Loyverse usada al importar el catálogo. Se usa para asociar ventas e items. Editar el nombre arriba no rompe el matching mientras este campo coincida con la categoría real en Loyverse.</div>
+  <div class="fl">Nombre TPV ${p.origen === 'loyverse' ? '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-2xs)">(categoría Loyverse — para matching de ventas)</span>' : '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-2xs)">(opcional — categoría Loyverse)</span>'}</div>
+  <input class="fi" id="pe-source" value="${esc(p.sourceName||'')}" placeholder="Ej: Coca Cola">
+  <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:4px;line-height:1.4">${p.origen === 'loyverse' ? 'Nombre exacto de la categoría en Loyverse. Editar el nombre arriba no rompe el matching mientras este campo coincida.' : 'Si tienes este proveedor en Loyverse como categoría, escribe aquí el nombre exacto. Cuando importes Loyverse se vinculará automáticamente.'}</div>
  </div>
- ` : ''}
  <div><div class="fl">CIF / NIF</div><input class="fi" id="pe-cif" value="${esc(p.cif||'')}" placeholder="B12345678" autocomplete="off"></div>
  <div><div class="fl">Teléfono</div><input class="fi" type="tel" id="pe-t" value="${esc(p.telefono||'')}" placeholder="000 000 000"></div>
  <div><div class="fl">Dirección <span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-2xs)">(opcional)</span></div><input class="fi" id="pe-dir" value="${esc(p.direccion||'')}" placeholder="Calle, ciudad…" autocomplete="off"></div>
@@ -41405,6 +41459,7 @@ function _parseIva(iva) {
 
   // v1.3.427: si es proveedor nuevo pendiente, crear en State ahora
   if (_provNuevoPendiente && _provNuevoPendiente.id === id) {
+  // v1.3.1341: aceptar sourceName en proveedor nuevo (manual)
   const newProv = Object.assign({}, _provNuevoPendiente, {
   nombre: n, cif: cif||'', telefono: tel || '', direccion: dir || '',
   email: email||'', web: web||'',
@@ -41413,21 +41468,25 @@ function _parseIva(iva) {
   origen: 'manual',
   createdAt: new Date().toISOString(),
   });
+  if (sourceNameRaw) newProv.sourceName = sourceNameRaw;
   State.set.addProv(newProv);
   _provNuevoPendiente = null;
   // Seleccionar y persistir en localStorage el proveedor recién creado
   State.set.selectedProv(newProv.id);
   _almSaveLastProv(newProv.id);
   } else {
-  // v1.3.1237: payload base + sourceName solo si el input existía (proveedor LV)
+  // v1.3.1341: sourceName editable en CUALQUIER proveedor (manual o LV)
+  // Para manuales con sourceName: queda listo para auto-match al re-importar LV
   const _payload = {
    nombre: n, cif: cif||'', telefono: tel, direccion: dir,
    email: email||'', web: web||'',
    agente: ag, repartidor: rep, telReparto: trel,
    periodicidad: periodoBase,
   };
-  if (sourceNameRaw !== undefined && p && p.origen === 'loyverse') {
-   _payload.sourceName = sourceNameRaw || (p.sourceName || '');
+  if (sourceNameRaw !== undefined) {
+   // Solo escribir el campo si cambia algo (evita writes innecesarios)
+   const _curSource = (p && p.sourceName) || '';
+   if (sourceNameRaw !== _curSource) _payload.sourceName = sourceNameRaw;
   }
   State.set.updateProv(id, _payload);
   }
