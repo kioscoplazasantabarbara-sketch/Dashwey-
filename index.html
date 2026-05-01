@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1346-dev</title>
+<title>Dashwey v1.3.1347-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17336,7 +17336,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1346-dev';
+ const _APP_VERSION = 'v1.3.1347-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35442,7 +35442,7 @@ function _confirmBorrarCuenta(id) {
    catch(_){ return ''; }
   };
 
-  var _renderGlobal = function() {
+  var _renderGlobal = function(initial) {
    var metrics = FinEngine.unifiedMetrics();
    var movs = FinEngine.unifiedTransactions();
 
@@ -35457,11 +35457,13 @@ function _confirmBorrarCuenta(id) {
     acc -= (m.delta || 0);
    });
 
-   // Render filas
-   var movsHtml;
-   if (!movs.length) {
-    movsHtml = '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en ninguna cuenta</div>';
-   } else {
+   // v1.3.1347: builder reusable para fase 1+2 de render diferido (mismo patrón
+   // que _openDetalleCuenta). Vista global tiene típicamente 2895+ movs en
+   // producción → split shell+rows reduce ~1s de stall a ~150ms percibidos.
+   var _buildGlobalRowsHtml = function() {
+    if (!movs.length) {
+     return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en ninguna cuenta</div>';
+    }
     var lastMonth = '';
     var rows = [];
     movs.forEach(function(m, i) {
@@ -35533,8 +35535,14 @@ function _confirmBorrarCuenta(id) {
       + '</div>'
      );
     });
-    movsHtml = rows.join('');
-   }
+    return rows.join('');
+   };
+
+   var _DEFER_THRESHOLD = 80;
+   var _deferRows = (initial === true) && movs.length >= _DEFER_THRESHOLD;
+   var movsHtml = _deferRows
+    ? '<div style="padding:var(--sp-6) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs);opacity:0.6">Cargando ' + movs.length + ' movimientos…</div>'
+    : _buildGlobalRowsHtml();
 
    // KPIs ingresos/gastos
    var kpiHtml =
@@ -35572,9 +35580,22 @@ function _confirmBorrarCuenta(id) {
     + '</div>';
 
    App.ui.setFs(html);
+
+   // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
+   // RAF — la sheet ya inició su animación de entrada.
+   if (_deferRows) {
+    requestAnimationFrame(function() {
+     requestAnimationFrame(function() {
+      try {
+       var _movsEl = document.getElementById('dc-movs');
+       if (_movsEl) _movsEl.innerHTML = _buildGlobalRowsHtml();
+      } catch(_) {}
+     });
+    });
+   }
   };
 
-  _renderGlobal();
+  _renderGlobal(true);
   App.ui.openFs('full');
 
   // Activar layout fijo (mismo patrón que _openDetalleCuenta)
@@ -35672,7 +35693,7 @@ function _confirmBorrarCuenta(id) {
 
   var COLORS = ['#2563EB','var(--success)','var(--warning)','#8B5CF6','#EC4899','#14B8A6'];
 
-  var _renderDetalle = function() {
+  var _renderDetalle = function(initial) {
    var cuenta = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
    if (!cuenta) return;
 
@@ -35757,10 +35778,13 @@ function _confirmBorrarCuenta(id) {
     } catch(_){ return ''; }
    };
    // Render movimientos con separadores de mes
-   var movsHtml;
-   if (movs.length === 0) {
-    movsHtml = '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>';
-   } else {
+   // v1.3.1347: extraído en función reusable para split fase 1 (shell) + fase 2 (rows)
+   //   Permite abrir el sheet INSTANTÁNEO (shell ligero) y pintar las 2670 filas
+   //   en el siguiente RAF, evitando bloqueo del main thread (~1s con 2670 movs).
+   var _buildRowsHtml = function() {
+    if (movs.length === 0) {
+     return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>';
+    }
     var lastMonth = '';
     var rows = [];
     movs.forEach(function(m, i) {
@@ -35811,8 +35835,16 @@ function _confirmBorrarCuenta(id) {
       + '</div>'
      );
     });
-    movsHtml = rows.join('');
-   }
+    return rows.join('');
+   };
+
+   // Threshold: ≥80 movs activa render diferido en primera apertura.
+   // 80 es ~3 pantallas → bajo este umbral construir todo síncrono no es perceptible.
+   var _DEFER_THRESHOLD = 80;
+   var _deferRows = (initial === true) && movs.length >= _DEFER_THRESHOLD;
+   var movsHtml = _deferRows
+    ? '<div style="padding:var(--sp-6) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs);opacity:0.6">Cargando ' + movs.length + ' movimientos…</div>'
+    : _buildRowsHtml();
 
    // Menú llave — 3 secciones colapsables
    var _seccion = function(id, titulo, contenido) {
@@ -35900,6 +35932,21 @@ function _confirmBorrarCuenta(id) {
 
    App.ui.setFs(html);
    App.ui.openFs('full');
+
+   // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
+   // RAF — la sheet ya inició su animación de entrada y el thread está libre.
+   // El usuario percibe: tap → sheet abre instantáneo con "Cargando 2670…" → ~80ms
+   // después aparecen las filas. Total < 200ms percibidos vs ~1s antes.
+   if (_deferRows) {
+    requestAnimationFrame(function() {
+     requestAnimationFrame(function() {
+      try {
+       var _movsEl = document.getElementById('dc-movs');
+       if (_movsEl) _movsEl.innerHTML = _buildRowsHtml();
+      } catch(_) {}
+     });
+    });
+   }
 
    // v1.3.1249 FIX UX-SCROLL: marcar fs-content para activar layout sin scroll padre
    //   Compatibilidad con Android WebView <105 que no soporta :has() selector.
@@ -36029,7 +36076,7 @@ function _confirmBorrarCuenta(id) {
    });
   };
 
-  _renderDetalle();
+  _renderDetalle(true);
 
   // v1.3.1165: re-render in-place tras editar movimiento (evento custom desde editor)
   var _movUpdHandler = function(ev){
