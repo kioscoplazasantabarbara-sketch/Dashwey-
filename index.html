@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1348-dev</title>
+<title>Dashwey v1.3.1349-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17336,7 +17336,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1348-dev';
+ const _APP_VERSION = 'v1.3.1349-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28182,6 +28182,250 @@ function _openEditMovimientoSheet(id, src) {
   });
  }
 
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1349: TICKETS DEL PERIODO — vista de ventas individuales
+ //   Accesible desde dial card "Resumen de Ventas" → Tickets.
+ //   Lista cada ticket (Loyverse / TPV / manual) con hora, items, total y método.
+ //   Ordenados newest→oldest. Respeta franja nocturna del periodo activo.
+ //   Render diferido (skeleton + RAF#2) si > 80 tickets, igual patrón v1.3.1347.
+ //   No duplica con cierres ni venta-dia: aquí se muestra la operación granular,
+ //   no el asiento contable.
+ // ══════════════════════════════════════════════════════════════════════
+ function _openTicketsPeriodoSheet() {
+  var period = State.get.period();
+  var periodLabel = (period && period.label) || 'Periodo actual';
+
+  // Reusar KPI.ventasEnPeriodo: ya respeta franja nocturna, custom, hours, etc.
+  var ventas = [];
+  try {
+   ventas = (KPI && KPI.ventasEnPeriodo) ? (KPI.ventasEnPeriodo(period) || []) : [];
+  } catch(_) { ventas = []; }
+
+  // Ordenar newest → oldest (criterio extracto)
+  ventas = ventas.slice().sort(function(a,b){
+   return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+  });
+
+  var nTickets = ventas.length;
+  var totalPeriodo = ventas.reduce(function(s,v){
+   var t = (typeof v.total === 'number' && !isNaN(v.total))
+    ? v.total
+    : ((v.items || []).reduce(function(ss,it){ return ss + (it.qty||0)*(it.pvp||0); }, 0));
+   return s + (t || 0);
+  }, 0);
+
+  // Helpers locales (no contaminan scope)
+  var _esc = function(s) {
+   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  };
+  var _feur2 = function(v) { return (+(v||0)).toFixed(2).replace('.',',') + ' €'; };
+  var _fmtHora = function(iso) {
+   try { var d=new Date(iso); var p=function(n){return String(n).padStart(2,'0');};
+    return p(d.getHours())+':'+p(d.getMinutes());
+   } catch(_) { return '--:--'; }
+  };
+  var _fmtFechaCorta = function(iso) {
+   var MON = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+   try { var d=new Date(iso);
+    return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+   } catch(_) { return '—'; }
+  };
+  var _fmtDateGroup = function(iso) {
+   var WD = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+   var MON_LONG = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+   try { var d=new Date(iso);
+    return WD[d.getDay()] + ' ' + d.getDate() + ' ' + MON_LONG[d.getMonth()];
+   } catch(_) { return ''; }
+  };
+  var _origenLabel = function(v) {
+   var o = (v && v.origen) || '';
+   if (o === 'loyverse' || o === 'import_loyverse') return 'Loyverse';
+   if (o === 'tpv') return 'TPV';
+   if (o === 'manual') return 'Manual';
+   return '—';
+  };
+
+  // Resumen items: "Producto1, Producto2 +N"
+  var _itemsResumen = function(v) {
+   var items = (v.items || []);
+   if (!items.length) return '';
+   var nombres = items.slice(0, 2).map(function(it){
+    var nm = '';
+    if (it.nombre) nm = it.nombre;
+    else if (it.prodId && State.get.prod) {
+     var p = State.get.prod(it.prodId);
+     nm = p ? (p.nombre || it.prodId) : it.prodId;
+    } else {
+     nm = it.prodId || '?';
+    }
+    var qty = it.qty || 1;
+    return (qty > 1 ? (qty + '× ') : '') + _esc(nm);
+   }).join(', ');
+   return nombres + (items.length > 2 ? ' +' + (items.length - 2) : '');
+  };
+  var _ticketTotal = function(v) {
+   if (typeof v.total === 'number' && !isNaN(v.total)) return v.total;
+   return (v.items || []).reduce(function(s,it){ return s + (it.qty||0)*(it.pvp||0); }, 0);
+  };
+
+  // Builder reusable para fase 1+2 del render diferido
+  var _buildTicketsHtml = function() {
+   if (!ventas.length) {
+    return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;font-family:var(--font)">'
+     + '<div style="font-size:40px;margin-bottom:var(--sp-3);opacity:0.5">🧾</div>'
+     + '<div style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:var(--sp-1)">Sin tickets</div>'
+     + '<div style="font-size:var(--fs-sm);color:var(--ink-soft)">No hay ventas en ' + _esc(periodLabel) + '.</div>'
+     + '</div>';
+   }
+   // Agrupar por día calendario (separadores sticky tipo extracto banca)
+   var rows = [];
+   var lastDay = '';
+   ventas.forEach(function(v) {
+    try {
+     var d = new Date(v.fecha);
+     var dayKey = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+     if (dayKey !== lastDay) {
+      rows.push(
+       '<div class="tk-day-sep" style="position:sticky;top:0;z-index:2;'
+       + 'padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);'
+       + 'color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);'
+       + 'background:var(--bg);border-bottom:1px solid var(--border)">'
+       + _esc(_fmtDateGroup(v.fecha))
+       + '</div>'
+      );
+      lastDay = dayKey;
+     }
+    } catch(_) {}
+
+    var hora = _fmtHora(v.fecha);
+    var totalT = _ticketTotal(v);
+    var resumen = _itemsResumen(v);
+    var nItems = (v.items || []).length;
+    var orig = _origenLabel(v);
+    var subtitleLine = resumen || (nItems
+     ? (nItems + ' artículo' + (nItems !== 1 ? 's' : ''))
+     : '—');
+    rows.push(
+     '<div class="tk-row" style="display:flex;align-items:flex-start;gap:var(--sp-3);'
+     + 'padding:var(--sp-3) 16px;border-bottom:1px solid var(--border)">'
+     // Hora — bloque izquierdo prominente
+     + '<div style="flex-shrink:0;width:48px;text-align:center;padding-top:2px">'
+     +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink);line-height:1">' + _esc(hora) + '</div>'
+     +  '<div style="font-size:9px;color:var(--ink-soft);margin-top:3px;letter-spacing:0.3px">' + _esc(orig) + '</div>'
+     + '</div>'
+     // Centro — items + nº artículos
+     + '<div style="flex:1;min-width:0">'
+     +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);'
+     +     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + subtitleLine + '</div>'
+     +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:3px">'
+     +     nItems + (nItems === 1 ? ' artículo' : ' artículos')
+     +  '</div>'
+     + '</div>'
+     // Derecha — total
+     + '<div style="flex-shrink:0;text-align:right">'
+     +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--success);'
+     +     'font-variant-numeric:tabular-nums">+ ' + _feur2(totalT) + '</div>'
+     + '</div>'
+     + '</div>'
+    );
+   });
+   return rows.join('');
+  };
+
+  // Threshold: ≥80 → render diferido (mismo umbral que v1.3.1347)
+  var _DEFER_THRESHOLD = 80;
+  var _defer = nTickets >= _DEFER_THRESHOLD;
+  var listHtml = _defer
+   ? '<div style="padding:var(--sp-6) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs);opacity:0.6">Cargando ' + nTickets + ' tickets…</div>'
+   : _buildTicketsHtml();
+
+  // Header + lista (estructura dc-layout reusada para que la lista sea único scrollable)
+  var html =
+   '<div class="dc-layout">'
+   + '<div class="dc-header" style="position:relative;background:var(--surface);'
+   +    'border-bottom:1px solid var(--border);padding:var(--sp-4) 16px 14px;flex-shrink:0">'
+   + '<div style="display:flex;align-items:center;gap:var(--sp-2_5);margin-bottom:var(--sp-3)">'
+   +  '<div style="width:24px;height:24px;border-radius:50%;background:var(--success);display:flex;'
+   +     'align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:bold;flex-shrink:0">🧾</div>'
+   +  '<div style="flex:1;min-width:0">'
+   +   '<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink);'
+   +      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Tickets</div>'
+   +   '<div style="font-size:var(--fs-xs);color:var(--ink-soft);'
+   +      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(periodLabel) + '</div>'
+   +  '</div>'
+   +  '<button class="mhd-close" onclick="App.ui.closeFs()" style="flex-shrink:0">×</button>'
+   + '</div>'
+   // Saldo hero — total del periodo
+   + '<div style="display:flex;align-items:baseline;gap:var(--sp-2)">'
+   +  '<div style="font-size:38px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _feur2(totalPeriodo) + '</div>'
+   +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">total</div>'
+   + '</div>'
+   // KPI count
+   + '<div style="display:flex;border-top:1px solid var(--border);'
+   +    'border-bottom:1px solid var(--border);margin-top:var(--sp-3)">'
+   +  '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center">'
+   +   '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);'
+   +      'text-transform:uppercase;letter-spacing:var(--ls-wide)">Tickets</div>'
+   +   '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">' + nTickets + '</div>'
+   +  '</div>'
+   +  '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center;border-left:1px solid var(--border)">'
+   +   '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);'
+   +      'text-transform:uppercase;letter-spacing:var(--ls-wide)">Ticket medio</div>'
+   +   '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">'
+   +     (nTickets ? _feur2(totalPeriodo / nTickets) : '—')
+   +   '</div>'
+   +  '</div>'
+   + '</div>'
+   + '</div>'
+   // Etiqueta lista
+   + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);'
+   +    'color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);'
+   +    'padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);'
+   +    'flex-shrink:0;background:var(--surface)">Tickets (' + nTickets + ')</div>'
+   // Lista scrollable
+   + '<div id="tk-list" class="dc-scroll" style="flex:1;overflow-y:auto;'
+   +    '-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + listHtml + '</div>'
+   + '</div>';
+
+  App.ui.setFs(html);
+  App.ui.openFs('full');
+
+  // Activar layout sin scroll padre (mismo patrón que detalle cuenta)
+  try {
+   var _fsCnt = document.getElementById('fs-content');
+   if (_fsCnt) _fsCnt.classList.add('has-dc-layout');
+  } catch(_) {}
+
+  // Fase 2: render diferido si aplica
+  if (_defer) {
+   requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+     try {
+      var listEl = document.getElementById('tk-list');
+      if (listEl) listEl.innerHTML = _buildTicketsHtml();
+     } catch(_) {}
+    });
+   });
+  }
+
+  // Cleanup al cerrar el fs
+  try {
+   var _fsOvl = document.getElementById('fs-overlay');
+   if (_fsOvl) {
+    var _onCloseTk = function(){
+     if (!_fsOvl.classList.contains('open')) {
+      try {
+       var _fs2 = document.getElementById('fs-content');
+       if (_fs2) _fs2.classList.remove('has-dc-layout');
+      } catch(_) {}
+      _fsOvl.removeEventListener('transitionend', _onCloseTk);
+     }
+    };
+    _fsOvl.addEventListener('transitionend', _onCloseTk);
+   }
+  } catch(_) {}
+ }
+
  function openFinModal(type) {
  if (type === 'flujo-caja') _openFlujoCajaModal();
  if (type === 'cuentas') _openCuentasModal();
@@ -33758,6 +34002,7 @@ function _confirmBorrarCuenta(id) {
  search:  '<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
  truck:   '<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',
  warn:    '<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+ receipt: '<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 2v20l2-1.5L8 22l2-1.5L12 22l2-1.5L16 22l2-1.5L20 22V2l-2 1.5L16 2l-2 1.5L12 2l-2 1.5L8 2 6 3.5 4 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>',
  };
 
  var _NAV_DIAL_CONFIG = {
@@ -33770,6 +34015,7 @@ function _confirmBorrarCuenta(id) {
  //   compras:     "Histor." ahora abre vista global de pedidos de TODOS los proveedores
  'rendimiento': [
   { icon: 'chart',   label: 'Top',     fn: function(){ try{ App.dash && App.dash.openTopVentasModal && App.dash.openTopVentasModal(); }catch(_){} } },
+  { icon: 'receipt', label: 'Tickets', fn: function(){ try{ App.dash && App.dash._openTicketsPeriodoSheet && App.dash._openTicketsPeriodoSheet(); }catch(_){} } },
   { icon: 'lock',    label: 'Cierre',  fn: function(){ try{ App.dash && App.dash._openCierreCajaSheet && App.dash._openCierreCajaSheet(); }catch(_){} } },
  ],
  'compras': [
@@ -36378,7 +36624,7 @@ function _confirmBorrarCuenta(id) {
    }
   }
 
- return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
+ return { render, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
 })();
 
 // ══════════════════════════════════════════
