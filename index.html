@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1349-dev</title>
+<title>Dashwey v1.3.1350-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17336,7 +17336,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1349-dev';
+ const _APP_VERSION = 'v1.3.1350-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35670,6 +35670,35 @@ function _confirmBorrarCuenta(id) {
  //   Reusa el layout dc-layout (header fijo, lista scrollable única).
  //   Trata transferencias internas como movimiento neutral (delta 0).
  //   Listener DashweyBus para repintar al haber cambios en cuentas/gastos/ingresos.
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1350: Helper — detección de "cierres históricos" importados de BB
+ //   En BudgetBakers el usuario registraba la recaudación diaria como un ingreso
+ //   con categoría "Ingresos por ventas" o concepto "Recaudación del día".
+ //   Esos ingresos son CIERRES MANUALES HISTÓRICOS — no son cierres reales de la
+ //   app (cierresCaja) pero conceptualmente equivalen a un cierre de jornada.
+ //   La misma heurística la usa el código de limpieza Loyverse (line 23245) para
+ //   evitar duplicación cuando se importan tickets reales sobre periodos pasados.
+ //
+ //   Se reusa AQUÍ solo para PRESENTACIÓN: cambia el label del ingreso a "💰 Cierre
+ //   histórico (BB) DD/MM" en detalles de cuenta. El objeto sigue siendo ingresoFin
+ //   con origen='budgetbakers' — no muta ni se duplica.
+ // ══════════════════════════════════════════════════════════════════════
+ function _isBBCierreManual(ingreso) {
+  if (!ingreso || ingreso.origen !== 'budgetbakers') return false;
+  var cat = (ingreso.categoria || '').toLowerCase();
+  var con = (ingreso.concepto  || '').toLowerCase();
+  return cat.indexOf('ingresos por ventas') >= 0
+      || cat === 'ventas'
+      || con.indexOf('recaudación del día') >= 0
+      || con.indexOf('recaudacion del dia') >= 0;
+ }
+ function _dayKeyFromIso(iso) {
+  try { var d = new Date(iso);
+   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0')
+        + '-' + String(d.getDate()).padStart(2,'0');
+  } catch(_) { return ''; }
+ }
+
  function _openDetalleCuentaGlobal() {
   // v1.3.1255 FIX: FinEngine es const en scope de módulo, NO window.FinEngine.
   //   Usar typeof FinEngine — patrón consistente con el resto del código.
@@ -35699,6 +35728,51 @@ function _confirmBorrarCuenta(id) {
    // cifras agregadas son consistentes con la realidad de las ventas. Solo
    // cambia la lista de filas que se enseñan al usuario.
    var movs = movsRaw.filter(function(t){ return t && t.kind !== 'venta-dia'; });
+
+   // v1.3.1350: pre-calcular set "(cuentaId|dayKey)" con cierre REAL de cierresCaja.
+   // Si un día+cuenta tiene cierre real, los ingresos BB de ese día NO se relabelean
+   // (anti-confusión: el cierre real ya cubre ese dinero).
+   var _diasCierreRealG = new Set();
+   try {
+    var _csG = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
+    _csG.forEach(function(c){
+     if (!c || c.deleted) return;
+     if (c.estado !== 'cerrado' || !c.cierreTs) return;
+     _diasCierreRealG.add((c.cuentaId || '?') + '|' + _dayKeyFromIso(c.cierreTs));
+    });
+   } catch(_){}
+
+   // v1.3.1350: relabel ingresos BB que son cierres históricos manuales.
+   // El objeto sigue siendo ingreso (kind:'ingreso'), no se duplica ni muta.
+   // Solo cambia el concepto visual a "💰 Cierre histórico DD/MM".
+   try {
+    var _ingsBB = (State.get.ingresosFin ? (State.get.ingresosFin() || []) : []);
+    var _bbCierreById = {};
+    _ingsBB.forEach(function(i){
+     if (_isBBCierreManual(i)) {
+      var key = (i.cuentaId || '?') + '|' + _dayKeyFromIso(i.fecha);
+      if (!_diasCierreRealG.has(key)) {
+       _bbCierreById[i.id] = true;
+      }
+     }
+    });
+    movs = movs.map(function(m){
+     if (m && m.kind === 'ingreso' && _bbCierreById[m.id]) {
+      var dStr = '';
+      try {
+       var d = new Date(m.fecha);
+       dStr = String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+      } catch(_){}
+      // Mutación de copia (no toca el objeto State original)
+      return Object.assign({}, m, {
+       concepto: '💰 Cierre histórico' + (dStr ? ' ' + dStr : ''),
+       metaTipo: 'cierre-bb-historico',
+      });
+     }
+     return m;
+    });
+   } catch(_){}
+
    try {
     var _cierresG = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierresG.forEach(function(c){
@@ -35989,9 +36063,41 @@ function _confirmBorrarCuenta(id) {
     movs.push({ id:g.id, src:'gasto', concepto:g.nombre||'Gasto',
      importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'', tipo:g.tipo||'gasto', metaTipo:g.metaTipo });
    });
+   // v1.3.1350: pre-calcular set de días con cierre REAL para esta cuenta.
+   // Si un día tiene cierre real, los ingresos BB de ese día NO se relabelean
+   // (el cierre real ya cubre el dinero, evitar confusión visual).
+   var _diasCierreRealKiosco = (function(){
+    var s = new Set();
+    try {
+     var cs = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
+     cs.forEach(function(c){
+      if (!c || c.deleted) return;
+      if (c.estado !== 'cerrado' || !c.cierreTs) return;
+      if (c.cuentaId !== cuentaId) return;
+      s.add(_dayKeyFromIso(c.cierreTs));
+     });
+    } catch(_){}
+    return s;
+   })();
    ingresos.forEach(function(i){
-    movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
-     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:i.metaTipo });
+    // v1.3.1350: si es ingreso BB que representa cierre histórico, relabel.
+    var concepto = i.concepto || 'Ingreso';
+    var metaTipo = i.metaTipo;
+    if (_isBBCierreManual(i)) {
+     var dk = _dayKeyFromIso(i.fecha);
+     if (!_diasCierreRealKiosco.has(dk)) {
+      // Solo relabel si no hay cierre real ese día (anti-confusión)
+      var dStr = '';
+      try {
+       var d = new Date(i.fecha);
+       dStr = String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+      } catch(_){}
+      concepto = '💰 Cierre histórico' + (dStr ? ' ' + dStr : '');
+      metaTipo = 'cierre-bb-historico';
+     }
+    }
+    movs.push({ id:i.id, src:'ingreso', concepto:concepto,
+     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:metaTipo });
    });
    // v1.3.1348 ARQUITECTURA: en Flujo de Caja y detalles de cuenta NO se muestran
    // ventas individuales ni "Ventas del día (Loyverse)" agregadas. Solo los CIERRES
