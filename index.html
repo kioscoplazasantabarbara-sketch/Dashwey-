@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1352-dev</title>
+<title>Dashwey v1.3.1353-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17355,7 +17355,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1352-dev';
+ const _APP_VERSION = 'v1.3.1353-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26515,11 +26515,14 @@ function _toggleCardFromManager(id, btn) {
 
   // Set "(cuentaId|dayKey)" con cierre REAL — ventas de esos días NO se agregan
   // como cierre derivado (anti-duplicado vs cierre real Dashwey)
+  //   v1.3.1353: usar jornadaLabel (día contable) para que coincida con dayKey
+  //   Madrid del venta-dia. cierreTs en madrugada del día siguiente desfasa.
   var _fcDiasCierreReal = new Set();
   _cierres.forEach(function(c){
    if (!c || c.deleted) return;
    if (c.estado !== 'cerrado' || !c.cierreTs) return;
-   _fcDiasCierreReal.add((c.cuentaId || '?') + '|' + _fcDayKey(c.cierreTs));
+   var jKey = c.jornadaLabel || _fcDayKey(c.cierreTs);
+   _fcDiasCierreReal.add((c.cuentaId || '?') + '|' + jKey);
   });
 
   // Agrupar ventas (sin closureId) por cuenta + día Madrid
@@ -35800,13 +35803,39 @@ function _confirmBorrarCuenta(id) {
    return;
   }
   var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  // v1.3.1353 ZONA: formateadores en zona Europe/Madrid — coherente con el
+  // agrupado de _isoDay (FinEngine v1.3.1351). Si el dispositivo está en otra
+  // zona, los separadores de día siguen mostrando el día contable español.
+  var _MAD_PARTS = (function(){
+   try {
+    return new Intl.DateTimeFormat('en-CA', {
+     timeZone: 'Europe/Madrid',
+     year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+   } catch(_) { return null; }
+  })();
+  var _madDateParts = function(iso) {
+   try {
+    if (_MAD_PARTS) {
+     var s = _MAD_PARTS.format(new Date(iso)); // YYYY-MM-DD
+     var p = s.split('-');
+     return { y: parseInt(p[0],10), m: parseInt(p[1],10)-1, d: parseInt(p[2],10) };
+    }
+    var dd = new Date(iso);
+    return { y: dd.getFullYear(), m: dd.getMonth(), d: dd.getDate() };
+   } catch(_) { return { y: 1970, m: 0, d: 1 }; }
+  };
   var _fmtFechaCorta = function(iso) {
-   try { var d = new Date(iso); return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()]; }
-   catch(_){ return ''; }
+   try {
+    var p = _madDateParts(iso);
+    return String(p.d).padStart(2,'0') + ' ' + MON[p.m];
+   } catch(_){ return ''; }
   };
   var _monthLabel = function(iso) {
-   try { var d = new Date(iso); return MON[d.getMonth()] + ' ' + d.getFullYear(); }
-   catch(_){ return ''; }
+   try {
+    var p = _madDateParts(iso);
+    return MON[p.m] + ' ' + p.y;
+   } catch(_){ return ''; }
   };
 
   var _renderGlobal = function(initial) {
@@ -35824,14 +35853,20 @@ function _confirmBorrarCuenta(id) {
    //   Resumen de Ventas y Tickets del periodo NO se tocan — siguen granulares.
    // ──────────────────────────────────────────────────────────────────
 
-   // 1. Set de días con cierre REAL (cierresCaja cerrado) → prioridad absoluta
+   // 1. Set de días con cierre REAL → prioridad absoluta
+   //    v1.3.1353: usar jornadaLabel (día contable explícito) en lugar de cierreTs
+   //    para que coincida con el dayKey Madrid del venta-dia. Antes: cierreTs en
+   //    madrugada del día siguiente daba dayKey desfasado +1 → anti-duplicado fallaba
+   //    y el cierre real + venta-dia se mostraban ambos como duplicado visual.
    var _diasCierreRealG = new Set();
    try {
     var _csG = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
     _csG.forEach(function(c){
      if (!c || c.deleted) return;
      if (c.estado !== 'cerrado' || !c.cierreTs) return;
-     _diasCierreRealG.add((c.cuentaId || '?') + '|' + _dayKeyFromIso(c.cierreTs));
+     // jornadaLabel es ya YYYY-MM-DD del día contable de la jornada
+     var jKey = c.jornadaLabel || _dayKeyFromIso(c.cierreTs);
+     _diasCierreRealG.add((c.cuentaId || '?') + '|' + jKey);
     });
    } catch(_){}
 
@@ -35862,6 +35897,9 @@ function _confirmBorrarCuenta(id) {
    });
 
    // 3. Inyectar cierres REALES Dashwey (formato consistente)
+   //    v1.3.1353: usar jornadaLabel para construir la fecha visual del cierre
+   //    (mediodía UTC = mediodía Madrid en cualquier zona). Antes: usaba cierreTs
+   //    que podía caer en madrugada del día siguiente → separador desfasado +1.
    try {
     var _cierresG = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierresG.forEach(function(c){
@@ -35873,6 +35911,15 @@ function _confirmBorrarCuenta(id) {
      var nT = Number(c.nVentas) || 0;
      var label = '💰 Cierre ' + (c.jornadaLabel || '—')
               + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
+     // Construir fecha visual = mediodía Madrid del jornadaLabel
+     // Mediodía 12:00 Madrid = 10:00 UTC (verano UTC+2) o 11:00 UTC (invierno UTC+1)
+     // Usar 11:00 UTC fijo es seguro: nunca cruza día en zona Madrid.
+     var visualFecha;
+     if (c.jornadaLabel && /^\d{4}-\d{2}-\d{2}$/.test(c.jornadaLabel)) {
+      visualFecha = c.jornadaLabel + 'T11:00:00.000Z';
+     } else {
+      visualFecha = new Date(c.cierreTs).toISOString();
+     }
      movs.push({
       kind: 'cierre',
       id: c.id,
@@ -35880,7 +35927,7 @@ function _confirmBorrarCuenta(id) {
       concepto: label,
       importe: Math.abs(neto),
       delta: neto,
-      fecha: new Date(c.cierreTs).toISOString(),
+      fecha: visualFecha,
       cuentaId: c.cuentaId,
       cuentaNombre: cInfo ? cInfo.nombre : '?',
       cuentaColor: cInfo ? cInfo.color : '#999',
@@ -36131,8 +36178,21 @@ function _confirmBorrarCuenta(id) {
    } catch(_){ return '\u2014'; }
   };
 
+  // v1.3.1353 ZONA: formateador en zona Madrid (coherente con FinEngine v1.3.1351)
+  var _MAD_PARTS_KC = (function(){
+   try {
+    return new Intl.DateTimeFormat('en-CA', {
+     timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+   } catch(_) { return null; }
+  })();
   var _fmtFechaCorta = function(iso) {
    try {
+    if (_MAD_PARTS_KC) {
+     var s = _MAD_PARTS_KC.format(new Date(iso));
+     var p = s.split('-');
+     return p[2] + ' ' + MON[parseInt(p[1],10)-1];
+    }
     var d = new Date(iso);
     return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
    } catch(_){ return ''; }
@@ -36166,6 +36226,8 @@ function _confirmBorrarCuenta(id) {
    // ──────────────────────────────────────────────────────────────────
 
    // Set de días con cierre REAL para ESTA cuenta
+   //   v1.3.1353: usar jornadaLabel (día contable) en lugar de cierreTs (puede caer
+   //   en madrugada del día siguiente y desfasar el dayKey).
    var _diasCierreRealCta = (function(){
     var s = new Set();
     try {
@@ -36174,7 +36236,8 @@ function _confirmBorrarCuenta(id) {
       if (!c || c.deleted) return;
       if (c.estado !== 'cerrado' || !c.cierreTs) return;
       if (c.cuentaId !== cuentaId) return;
-      s.add(_dayKeyFromIso(c.cierreTs));
+      var jKey = c.jornadaLabel || _dayKeyFromIso(c.cierreTs);
+      s.add(jKey);
      });
     } catch(_){}
     return s;
@@ -36209,6 +36272,8 @@ function _confirmBorrarCuenta(id) {
    } catch(_){}
 
    // Inyectar cierres REALES Dashwey
+   //   v1.3.1353: fecha visual = mediodía Madrid del jornadaLabel (no cierreTs)
+   //   para que el separador de día sea coherente con el día contable.
    try {
     var _cierres = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierres.forEach(function(c){
@@ -36220,12 +36285,19 @@ function _confirmBorrarCuenta(id) {
      var nT = Number(c.nVentas) || 0;
      var label = '💰 Cierre ' + (c.jornadaLabel || '—')
               + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
+     // 11:00 UTC = 12:00 Madrid invierno / 13:00 verano — siempre mismo día Madrid
+     var visualFecha;
+     if (c.jornadaLabel && /^\d{4}-\d{2}-\d{2}$/.test(c.jornadaLabel)) {
+      visualFecha = c.jornadaLabel + 'T11:00:00.000Z';
+     } else {
+      visualFecha = new Date(c.cierreTs).toISOString();
+     }
      movs.push({
       id: c.id,
       src: 'cierre',
       concepto: label,
       importe: neto, // ya con signo (puede ser negativo si gastos>ventas)
-      fecha: new Date(c.cierreTs).toISOString(),
+      fecha: visualFecha,
       tipo: neto >= 0 ? 'ingreso' : 'gasto',
       metaTipo: 'cierre-caja',
      });
@@ -36245,8 +36317,14 @@ function _confirmBorrarCuenta(id) {
    //   - Cantidad con signo +/- y color verde/rojo (✓ ya estaba sign + col)
    //   - Concepto custom debajo del nombre, gris pequeño
    //   - Separador mes en línea propia entre grupos
+   // v1.3.1353 ZONA: separador mes en zona Madrid
    var _monthLabel = function(iso) {
     try {
+     if (_MAD_PARTS_KC) {
+      var s = _MAD_PARTS_KC.format(new Date(iso));
+      var p = s.split('-');
+      return MON[parseInt(p[1],10)-1] + ' ' + p[0];
+     }
      var d = new Date(iso);
      return MON[d.getMonth()] + ' ' + d.getFullYear();
     } catch(_){ return ''; }
