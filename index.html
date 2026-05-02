@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1361-dev</title>
+<title>Dashwey v1.3.1362-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15752,11 +15752,29 @@ const CierreEngine = (() => {
  // Etiqueta legible para la jornada (fecha del día de apertura)
  // Ej: '2026-04-28' (día lógico, independiente de si cerró el 29)
  function _jornadaLabel(aperturaTs) {
-  const d = new Date(aperturaTs);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return y + '-' + m + '-' + dd;
+  // v1.3.1362 FIX TZ MADRID: jornadaLabel debe ser la fecha YYYY-MM-DD en la
+  //   zona del kiosco (perfil.zona), no la zona del dispositivo. Sin esto,
+  //   un cierre disparado a 00:00 Madrid (= 06:00 Hanoi) tendría jornadaLabel
+  //   distinto si Hung está en Vietnam — rompiendo el lock mutuo de v1.3.1361.
+  //   Estrategia: usar Intl.DateTimeFormat con timeZone para extraer fecha
+  //   en zona kiosco. Fallback a zona dispositivo si Intl falla.
+  try {
+   var perfil = (window.State && window.State.get && window.State.get.perfil) ? window.State.get.perfil() : null;
+   var zona = (perfil && perfil.zona) || 'Europe/Madrid';
+   var fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: zona, year: 'numeric', month: '2-digit', day: '2-digit'
+   });
+   var parts = fmt.formatToParts(new Date(aperturaTs));
+   var get = function(t){ var p = parts.find(function(x){return x.type===t;}); return p ? p.value : ''; };
+   var y = get('year'), m = get('month'), d = get('day');
+   if (y && m && d) return y + '-' + m + '-' + d;
+  } catch(_) {}
+  // Fallback legacy: zona dispositivo
+  const _dt = new Date(aperturaTs);
+  const _y = _dt.getFullYear();
+  const _m = String(_dt.getMonth() + 1).padStart(2, '0');
+  const _dd = String(_dt.getDate()).padStart(2, '0');
+  return _y + '-' + _m + '-' + _dd;
  }
 
  // Obtener el cierre activo (jornada en curso). null si no hay.
@@ -15872,24 +15890,51 @@ const CierreEngine = (() => {
   //     - now >= apertura  → aperturaTs = hoy a la hora apertura (ej: 20:00 → hoy 18:00)
   //     - now < cierre     → aperturaTs = AYER a la hora apertura (ej: 01:00 → ayer 18:00)
   //     - cierre ≤ now < apertura → pre-jornada (mantener Date.now())
+  // v1.3.1362 FIX TZ MADRID: aperturaTs se calcula en zona del kiosco (perfil.zona),
+  //   no en zona del dispositivo. Sin esto, si Hung en Hanoi abre la app cuando llega
+  //   primera venta a las 10:00 Madrid (= 16:00 Hanoi), apTs sería 09:30 Hanoi
+  //   (= 02:30 Madrid) en lugar de 09:30 Madrid. Las ventas previas no entrarían
+  //   en la jornada. Usa _DashweyAutoCierreTzNow + _DashweyAutoCierreTzToUtc.
   let aperturaTs = opts.aperturaTs || Date.now();
   try {
    const perfil = State.get.perfil ? State.get.perfil() : null;
    if (!opts.aperturaTs && perfil && perfil.horarioApertura && /^\d{2}:\d{2}$/.test(perfil.horarioApertura)) {
     const [hh, mm] = perfil.horarioApertura.split(':').map(Number);
-    const today = new Date();
-    const apTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0, 0).getTime();
-    const _nowMs = Date.now();
-    // Detectar si configura jornada nocturna
     const _hCierre = perfil.horarioCierre && /^\d{2}:\d{2}$/.test(perfil.horarioCierre) ? perfil.horarioCierre : null;
     const _isNocturno = _hCierre && perfil.horarioApertura > _hCierre;
+    const _nowMs = Date.now();
+
+    // v1.3.1362: usar helpers TZ Madrid si están disponibles
+    const _tzNow = (typeof window._DashweyAutoCierreTzNow === 'function')
+     ? window._DashweyAutoCierreTzNow(perfil.zona || 'Europe/Madrid')
+     : null;
+    const _toUtc = (typeof window._DashweyAutoCierreTzToUtc === 'function')
+     ? window._DashweyAutoCierreTzToUtc
+     : null;
+
+    let apTs;
+    if (_tzNow && _toUtc) {
+     // Camino TZ-aware: aperturaTs en zona kiosco
+     apTs = _toUtc(_tzNow.dateKey, hh, mm, perfil.zona || 'Europe/Madrid');
+    } else {
+     // Fallback legacy: zona dispositivo
+     const today = new Date();
+     apTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0, 0).getTime();
+    }
+
     if (_nowMs >= apTs) {
      // Caso normal (now ≥ apertura): apertura hoy
      aperturaTs = apTs;
     } else if (_isNocturno) {
      // Caso nocturno y now < apertura: comprobar si estamos en madrugada (now < cierre)
      const [chh, cmm] = _hCierre.split(':').map(Number);
-     const cierreTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), chh, cmm, 0, 0).getTime();
+     let cierreTs;
+     if (_tzNow && _toUtc) {
+      cierreTs = _toUtc(_tzNow.dateKey, chh, cmm, perfil.zona || 'Europe/Madrid');
+     } else {
+      const today = new Date();
+      cierreTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), chh, cmm, 0, 0).getTime();
+     }
      if (_nowMs < cierreTs) {
       // Estamos en madrugada de la jornada anterior → apertura fue AYER
       aperturaTs = apTs - 86400000;
@@ -17449,7 +17494,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1361-dev';
+ const _APP_VERSION = 'v1.3.1362-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21848,6 +21893,9 @@ const ui = (() => {
  window._DashweyAutoCierreCheckBacklog = _autoCierreCheckBacklog;
  // v1.3.1361: exponer _autoCierreTzNow para uso desde otros IIFEs (lock mutuo cierre).
  window._DashweyAutoCierreTzNow = _autoCierreTzNow;
+ // v1.3.1362 FIX TZ MADRID: exponer _autoCierreTzToUtc para que CierreEngine pueda
+ //   construir aperturaTs en zona del kiosco (no zona del dispositivo).
+ window._DashweyAutoCierreTzToUtc = _autoCierreTzToUtc;
  // v1.3.1361 LOCK MUTUO: helper canónico — ¿hay ya un cierre CERRADO para la jornada de HOY (zona Madrid)?
  //   Usado por:
  //     - closeJornada() para bloquear cierre manual si ya existe uno cerrado hoy
