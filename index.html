@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1371-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1372-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1371-dev</title>
+<title>Dashwey v1.3.1372-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17480,7 +17480,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1371-dev';
+ const _APP_VERSION = 'v1.3.1372-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31758,67 +31758,116 @@ function _confirmBorrarCuenta(id) {
  return null;
  }
 
- // v1.3.1370 — Helper de ciclo de visitas del proveedor.
- //   Devuelve { prevDate, nextDate, pct } o null si no se puede calcular.
- //   La barra horizontal del feed Agenda muestra el CICLO DE VISITAS del
- //   proveedor (visita anterior → próxima visita), no el viaje pedido→entrega.
- //   Coherente para todos los casos (mismo día / días distintos / predichos).
+ // v1.3.1372 — Helper de ciclo del proveedor (barra horizontal del feed Agenda).
+ //   La barra simula al comercial/repartidor caminando desde la última entrega
+ //   hacia la próxima. Una sola lógica para todos los casos.
  //
- //   Lógica por tipo de periodicidad:
- //     diario     → prev = anchor - 1 día, next = anchor + 1 día
- //     semanal    → prev = anchor - 7 días, next = anchor + 7 días
- //     quincenal  → prev = anchor - 15 días, next = anchor + 15 días
- //     mensual    → prev = mes anterior mismo día, next = mes siguiente mismo día
- //     custom     → prev = fechaInicio, next = fechaFin (sin ciclo cíclico)
+ //   - prevDate = fecha de la ENTREGA ANTERIOR (la última que ya ocurrió)
+ //   - nextDate = fecha de la PRÓXIMA ENTREGA (la siguiente programada)
+ //   - pct = (hoy - prev) / (next - prev) con clamp 2-98
  //
- //   anchor = fecha del evento (fecha pedido o entrega que se está renderizando)
- //   pct = posición del icono móvil entre prev y next según hoy
- //         clamp 2-98 (igual que _progressPct ya usado en otros sitios)
+ //   Cómo se calculan prev/next:
+ //   1. Si el proveedor tiene diasEntrega, usar esos días como anclas:
+ //      - prev = último día de entrega anterior a HOY (incluido HOY si es día entrega)
+ //      - next = primer día de entrega posterior a prev (siguiente ciclo)
+ //      - El "salto" entre prev y next viene determinado por la periodicidad
+ //        (semanal=7, quincenal=15, mensual=30) y diasEntrega configurados
+ //   2. Si no hay diasEntrega → fallback con periodicidad pura sobre anchor
  //
- //   Si prov no tiene periodicidad o anchor inválido → null (sin barra).
+ //   Si custom mal definido → null (sin barra).
  function _calcCicloProv(prov, anchorDate, hoyDate) {
-  if (!prov || !anchorDate || isNaN(anchorDate.getTime())) return null;
+  if (!prov) return null;
   var period = prov.periodicidad || { tipo: 'semanal' };
-  var anchor = new Date(anchorDate); anchor.setHours(0,0,0,0);
   var hoy = hoyDate ? new Date(hoyDate) : new Date();
   hoy.setHours(0,0,0,0);
+
+  // CASO 1: custom (rango de fechas exactas) — sin ciclo recurrente
+  if (period.tipo === 'custom') {
+   if (!period.fechaInicio || !period.fechaFin) return null;
+   var pStart = new Date(period.fechaInicio); pStart.setHours(0,0,0,0);
+   var pEnd = new Date(period.fechaFin); pEnd.setHours(0,0,0,0);
+   if (isNaN(pStart.getTime()) || isNaN(pEnd.getTime())) return null;
+   if (pEnd <= pStart) return null;
+   var totalC = pEnd - pStart;
+   var elapsedC = hoy - pStart;
+   var pctC = Math.min(98, Math.max(2, Math.round((elapsedC / totalC) * 100)));
+   return { prevDate: pStart, nextDate: pEnd, pct: pctC };
+  }
+
+  // CASO 2: diario — entrega ayer y mañana (sin diasEntrega aplicable)
+  if (period.tipo === 'diario') {
+   var ayer = new Date(hoy); ayer.setDate(hoy.getDate() - 1);
+   var manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
+   var totalD = manana - ayer;
+   var elapsedD = hoy - ayer;
+   var pctD = Math.min(98, Math.max(2, Math.round((elapsedD / totalD) * 100)));
+   return { prevDate: ayer, nextDate: manana, pct: pctD };
+  }
+
+  // CASO 3: semanal/quincenal/mensual con diasEntrega configurados
+  var diasEntrega = (prov.diasEntrega && prov.diasEntrega.length) ? prov.diasEntrega : null;
+  // Salto del ciclo en días según periodicidad
+  var saltoDias = 7;
+  if (period.tipo === 'quincenal') saltoDias = 14;
+  else if (period.tipo === 'mensual') saltoDias = 30;
 
   var prevDate = null;
   var nextDate = null;
 
-  switch (period.tipo) {
-   case 'diario':
-    prevDate = new Date(anchor); prevDate.setDate(anchor.getDate() - 1);
-    nextDate = new Date(anchor); nextDate.setDate(anchor.getDate() + 1);
-    break;
-   case 'semanal':
-    prevDate = new Date(anchor); prevDate.setDate(anchor.getDate() - 7);
-    nextDate = new Date(anchor); nextDate.setDate(anchor.getDate() + 7);
-    break;
-   case 'quincenal':
-    prevDate = new Date(anchor); prevDate.setDate(anchor.getDate() - 15);
-    nextDate = new Date(anchor); nextDate.setDate(anchor.getDate() + 15);
-    break;
-   case 'mensual':
+  if (diasEntrega) {
+   // Buscar última entrega: días hacia atrás desde HOY (incluyendo HOY) buscando
+   // un día que esté en diasEntrega. Margen 30 días para mensual.
+   for (var i = 0; i <= 31; i++) {
+    var dPrev = new Date(hoy); dPrev.setDate(hoy.getDate() - i);
+    var dowPrev = dPrev.getDay() === 0 ? 6 : dPrev.getDay() - 1;
+    if (diasEntrega.indexOf(dowPrev) >= 0) {
+     prevDate = dPrev;
+     break;
+    }
+   }
+   // Próxima entrega = prevDate + saltoDias, ajustado al primer día de entrega
+   //   válido (búsqueda hacia adelante 7 días para encontrar el día configurado).
+   if (prevDate) {
+    var baseNext = new Date(prevDate); baseNext.setDate(prevDate.getDate() + saltoDias);
+    for (var j = 0; j < 14; j++) {
+     var dNext = new Date(baseNext); dNext.setDate(baseNext.getDate() + j);
+     var dowNext = dNext.getDay() === 0 ? 6 : dNext.getDay() - 1;
+     if (diasEntrega.indexOf(dowNext) >= 0) {
+      nextDate = dNext;
+      break;
+     }
+    }
+    // Si quincenal/mensual y la búsqueda hacia adelante encontró el siguiente
+    // día de entrega muy cerca de prev (ej. quincenal con 2 días marcados),
+    // re-saltar para asegurar el ciclo completo.
+    if (nextDate && (nextDate - prevDate) < (saltoDias * 86400000 / 2)) {
+     baseNext = new Date(prevDate); baseNext.setDate(prevDate.getDate() + saltoDias);
+     for (var k = 0; k < 14; k++) {
+      var dNext2 = new Date(baseNext); dNext2.setDate(baseNext.getDate() + k);
+      var dowNext2 = dNext2.getDay() === 0 ? 6 : dNext2.getDay() - 1;
+      if (diasEntrega.indexOf(dowNext2) >= 0) {
+       nextDate = dNext2;
+       break;
+      }
+     }
+    }
+   }
+  }
+
+  // Fallback: si no hay diasEntrega o no se encontró → usar anchor y salto puro
+  if (!prevDate || !nextDate) {
+   var anchor = anchorDate ? new Date(anchorDate) : new Date(hoy);
+   anchor.setHours(0,0,0,0);
+   prevDate = new Date(anchor); prevDate.setDate(anchor.getDate() - saltoDias);
+   nextDate = new Date(anchor);
+   if (period.tipo === 'mensual') {
     prevDate = new Date(anchor); prevDate.setMonth(anchor.getMonth() - 1);
-    nextDate = new Date(anchor); nextDate.setMonth(anchor.getMonth() + 1);
-    break;
-   case 'custom':
-    if (!period.fechaInicio || !period.fechaFin) return null;
-    prevDate = new Date(period.fechaInicio);
-    nextDate = new Date(period.fechaFin);
-    if (isNaN(prevDate.getTime()) || isNaN(nextDate.getTime())) return null;
-    if (nextDate <= prevDate) return null;
-    break;
-   default:
-    // Sin tipo conocido → semanal por defecto
-    prevDate = new Date(anchor); prevDate.setDate(anchor.getDate() - 7);
-    nextDate = new Date(anchor); nextDate.setDate(anchor.getDate() + 7);
+   }
   }
 
   if (!prevDate || !nextDate) return null;
-
-  // Calcular pct: posición de hoy entre prev y next (clamp 2-98)
+  prevDate.setHours(0,0,0,0);
+  nextDate.setHours(0,0,0,0);
   var total = nextDate - prevDate;
   if (total <= 0) return null;
   var elapsed = hoy - prevDate;
@@ -32860,7 +32909,7 @@ function _confirmBorrarCuenta(id) {
     if (ciclo) {
      var tlH = _snapHTimeline(
       fmtD(ciclo.prevDate),
-      'Ciclo',
+      'De camino',
       fmtD(ciclo.nextDate),
       ciclo.pct / 100,
       '🧑‍💼',
@@ -32899,23 +32948,23 @@ function _confirmBorrarCuenta(id) {
     } else if (ev._pending && !ev._atrasado) {
      _badgePE = '<span style="background:rgba(180,140,40,0.12);color:#a07520;font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:2px 6px;border-radius:4px;letter-spacing:0.2px;text-transform:uppercase">Pendiente</span>';
     }
-    // Icono carrito (representa transacción cerrada en una visita)
-    tituloPE.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>'
+    // Icono furgoneta (comercial = repartidor en una visita)
+    tituloPE.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="6" width="13" height="11" rx="1"/><path d="M14 9h5l3 4v4h-8V9z"/><circle cx="5" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>'
      + '<span>Pedido &amp; Entrega · ' + provNamePE + '</span>'
      + (_badgePE ? _badgePE : '')
      + (ev._predicho ? '' : '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArtsPE + ' art' + (nArtsPE !== 1 ? 's.' : '.') + '</span>');
     contentEl.appendChild(tituloPE);
 
-    // Barra ciclo del proveedor (anterior visita ↔ próxima visita)
+    // Barra ciclo del proveedor (entrega anterior → próxima entrega)
     var fechaPE = new Date(pPE.fecha);
     var cicloPE = _calcCicloProv(provPE, fechaPE, ahora);
     if (cicloPE) {
      var tlHPE = _snapHTimeline(
       fmtD(cicloPE.prevDate),
-      'Ciclo',
+      'En tránsito',
       fmtD(cicloPE.nextDate),
       cicloPE.pct / 100,
-      '🛒',
+      '🚐',
       cicloPE.pct >= 50,
       false
      );
@@ -32954,14 +33003,14 @@ function _confirmBorrarCuenta(id) {
      + (ev._predicho ? '' : '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArtsE + ' art' + (nArtsE !== 1 ? 's.' : '.') + '</span>');
     contentEl.appendChild(tituloE);
 
-    // v1.3.1370: barra horizontal = CICLO DE VISITAS del proveedor.
+    // v1.3.1372: barra ciclo (entrega anterior → próxima entrega)
     //   Si no se puede calcular ciclo → sin barra.
     var feE = ev.fecha;
     var cicloE = _calcCicloProv(provE, feE, ahora);
     if (cicloE) {
      var tlHE = _snapHTimeline(
       fmtD(cicloE.prevDate),
-      'Ciclo',
+      'En tránsito',
       fmtD(cicloE.nextDate),
       cicloE.pct / 100,
       '🚚',
