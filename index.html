@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1350-dev</title>
+<title>Dashwey v1.3.1351-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15214,9 +15214,28 @@ const FinEngine = (() => {
    // Agrupar por (cuentaId resolved + díaISO YYYY-MM-DD)
    //   cuentaId de venta puede estar vacío → fallback a cuenta primaria.
    const ventasGroups = {}; // key → { cuentaId, dia, total, count, fechaRepresentativa, sources }
+   // v1.3.1351 ZONA: agrupar por día calendario en zona del KIOSCO (Europe/Madrid),
+   // no en zona del dispositivo. Si el usuario está físicamente en otra zona (ej.
+   // viajando), las ventas siguen alineadas con el día contable real del negocio.
+   // Antes: getFullYear/Month/Date → zona dispositivo (rompía el agrupado al estar
+   // fuera de España). Ahora: Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Madrid'})
+   // garantiza dayKey YYYY-MM-DD coherente con horario España.
+   const _isoDayFmt = (function(){
+    try {
+     return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Madrid',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+     });
+    } catch(_) { return null; }
+   })();
    const _isoDay = (iso) => {
     try {
      const d = new Date(iso);
+     if (_isoDayFmt) {
+      // 'en-CA' ya devuelve YYYY-MM-DD nativo
+      return _isoDayFmt.format(d);
+     }
+     // Fallback (navegador sin Intl.DateTimeFormat con timeZone): zona dispositivo
      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     } catch(_) { return null; }
    };
@@ -17336,7 +17355,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1350-dev';
+ const _APP_VERSION = 'v1.3.1351-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35671,29 +35690,29 @@ function _confirmBorrarCuenta(id) {
  //   Trata transferencias internas como movimiento neutral (delta 0).
  //   Listener DashweyBus para repintar al haber cambios en cuentas/gastos/ingresos.
  // ══════════════════════════════════════════════════════════════════════
- // v1.3.1350: Helper — detección de "cierres históricos" importados de BB
- //   En BudgetBakers el usuario registraba la recaudación diaria como un ingreso
- //   con categoría "Ingresos por ventas" o concepto "Recaudación del día".
- //   Esos ingresos son CIERRES MANUALES HISTÓRICOS — no son cierres reales de la
- //   app (cierresCaja) pero conceptualmente equivalen a un cierre de jornada.
- //   La misma heurística la usa el código de limpieza Loyverse (line 23245) para
- //   evitar duplicación cuando se importan tickets reales sobre periodos pasados.
+ // v1.3.1351: Helper — clave de día calendario en zona Europe/Madrid
+ //   Coherente con FinEngine.unifiedTransactions (también usa Madrid desde
+ //   v1.3.1351). Se usa en cuentas/Vista global para indexar "días con cierre
+ //   real" y comparar contra el dayKey del venta-dia (anti-duplicado).
+ //   Si dispositivo está fuera de España (Vietnam, etc.), las claves siguen
+ //   siendo del calendario español → un día = un día contable, sin desfases.
  //
- //   Se reusa AQUÍ solo para PRESENTACIÓN: cambia el label del ingreso a "💰 Cierre
- //   histórico (BB) DD/MM" en detalles de cuenta. El objeto sigue siendo ingresoFin
- //   con origen='budgetbakers' — no muta ni se duplica.
+ //   v1.3.1350 _isBBCierreManual ELIMINADO: la auto-purga v1.3.1060 ya borra
+ //   los ingresos BB "Recaudación del día" cuando se ingestan tickets Loyverse,
+ //   así que en producción no quedan BB-cierres supervivientes que relabelar.
  // ══════════════════════════════════════════════════════════════════════
- function _isBBCierreManual(ingreso) {
-  if (!ingreso || ingreso.origen !== 'budgetbakers') return false;
-  var cat = (ingreso.categoria || '').toLowerCase();
-  var con = (ingreso.concepto  || '').toLowerCase();
-  return cat.indexOf('ingresos por ventas') >= 0
-      || cat === 'ventas'
-      || con.indexOf('recaudación del día') >= 0
-      || con.indexOf('recaudacion del dia') >= 0;
- }
+ var _dayKeyMadridFmt = (function(){
+  try {
+   return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Madrid',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+   });
+  } catch(_) { return null; }
+ })();
  function _dayKeyFromIso(iso) {
   try { var d = new Date(iso);
+   if (_dayKeyMadridFmt) return _dayKeyMadridFmt.format(d); // 'YYYY-MM-DD' nativo
+   // Fallback: zona dispositivo
    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0')
         + '-' + String(d.getDate()).padStart(2,'0');
   } catch(_) { return ''; }
@@ -35721,17 +35740,18 @@ function _confirmBorrarCuenta(id) {
    var metrics = FinEngine.unifiedMetrics();
    var movsRaw = FinEngine.unifiedTransactions();
 
-   // v1.3.1348 ARQUITECTURA: en cuentas/Vista global NO mostrar venta-dia
-   // (resúmenes agregados de tickets Loyverse). Solo cierres cerrados como
-   // movimiento contable. KPIs (metrics.ingresosTotal/gastosTotal) NO se tocan
-   // — se siguen calculando sobre todos los txs incluyendo venta-dia, así las
-   // cifras agregadas son consistentes con la realidad de las ventas. Solo
-   // cambia la lista de filas que se enseñan al usuario.
-   var movs = movsRaw.filter(function(t){ return t && t.kind !== 'venta-dia'; });
+   // ──────────────────────────────────────────────────────────────────
+   // v1.3.1351 MODELO ARQUITECTÓNICO FINAL (Vista global)
+   //   En cuentas/Vista global mostramos UN movimiento por día como cierre:
+   //   1. Cierre REAL Dashwey (cierresCaja.estado='cerrado') → tiene prioridad.
+   //   2. Si no, agregación venta-dia (tickets Loyverse del día) → 💰 Cierre del día.
+   //   3. Gastos / ingresos manuales no-venta → como están.
+   //   Cero duplicación: día+cuenta produce UNA fila de cierre, nunca dos.
+   //   Cero impacto en KPIs (unifiedMetrics) ni saldo (_bbRecalcSaldos).
+   //   Resumen de Ventas y Tickets del periodo NO se tocan — siguen granulares.
+   // ──────────────────────────────────────────────────────────────────
 
-   // v1.3.1350: pre-calcular set "(cuentaId|dayKey)" con cierre REAL de cierresCaja.
-   // Si un día+cuenta tiene cierre real, los ingresos BB de ese día NO se relabelean
-   // (anti-confusión: el cierre real ya cubre ese dinero).
+   // 1. Set de días con cierre REAL (cierresCaja cerrado) → prioridad absoluta
    var _diasCierreRealG = new Set();
    try {
     var _csG = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
@@ -35742,37 +35762,33 @@ function _confirmBorrarCuenta(id) {
     });
    } catch(_){}
 
-   // v1.3.1350: relabel ingresos BB que son cierres históricos manuales.
-   // El objeto sigue siendo ingreso (kind:'ingreso'), no se duplica ni muta.
-   // Solo cambia el concepto visual a "💰 Cierre histórico DD/MM".
-   try {
-    var _ingsBB = (State.get.ingresosFin ? (State.get.ingresosFin() || []) : []);
-    var _bbCierreById = {};
-    _ingsBB.forEach(function(i){
-     if (_isBBCierreManual(i)) {
-      var key = (i.cuentaId || '?') + '|' + _dayKeyFromIso(i.fecha);
-      if (!_diasCierreRealG.has(key)) {
-       _bbCierreById[i.id] = true;
-      }
-     }
-    });
-    movs = movs.map(function(m){
-     if (m && m.kind === 'ingreso' && _bbCierreById[m.id]) {
-      var dStr = '';
-      try {
-       var d = new Date(m.fecha);
-       dStr = String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
-      } catch(_){}
-      // Mutación de copia (no toca el objeto State original)
-      return Object.assign({}, m, {
-       concepto: '💰 Cierre histórico' + (dStr ? ' ' + dStr : ''),
-       metaTipo: 'cierre-bb-historico',
-      });
-     }
-     return m;
-    });
-   } catch(_){}
+   // 2. Movs base: incluye venta-dia (que el agregador de FinEngine ya genera).
+   //    Filtrar las venta-dia cuyo día+cuenta YA tienen cierre real (anti-duplicado).
+   //    Y relabelar el resto como "💰 Cierre del día · N tickets · Loyverse".
+   var movs = movsRaw.filter(function(t){
+    if (!t) return false;
+    if (t.kind === 'venta-dia') {
+     var key = (t.cuentaId || '?') + '|' + _dayKeyFromIso(t.fecha);
+     // Si hay cierre real ese día+cuenta, suprimimos el venta-dia (gana el real)
+     if (_diasCierreRealG.has(key)) return false;
+    }
+    return true;
+   }).map(function(t){
+    if (t && t.kind === 'venta-dia') {
+     // Relabel: nuestro cierre derivado coherente con el modelo
+     var nT = t.ventasCount || 0;
+     return Object.assign({}, t, {
+      concepto: '💰 Cierre del día'
+              + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '')
+              + ' · Loyverse',
+      // metaTipo nuevo para distinguir del venta-dia genérico (auditoría futura)
+      metaTipo: 'cierre-derivado-loyverse',
+     });
+    }
+    return t;
+   });
 
+   // 3. Inyectar cierres REALES Dashwey (formato consistente)
    try {
     var _cierresG = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierresG.forEach(function(c){
@@ -36063,10 +36079,21 @@ function _confirmBorrarCuenta(id) {
     movs.push({ id:g.id, src:'gasto', concepto:g.nombre||'Gasto',
      importe:-(g.importe||0), fecha:g.fecha||g.fechaPago||'', tipo:g.tipo||'gasto', metaTipo:g.metaTipo });
    });
-   // v1.3.1350: pre-calcular set de días con cierre REAL para esta cuenta.
-   // Si un día tiene cierre real, los ingresos BB de ese día NO se relabelean
-   // (el cierre real ya cubre el dinero, evitar confusión visual).
-   var _diasCierreRealKiosco = (function(){
+   ingresos.forEach(function(i){
+    movs.push({ id:i.id, src:'ingreso', concepto:i.concepto||'Ingreso',
+     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:i.metaTipo });
+   });
+
+   // ──────────────────────────────────────────────────────────────────
+   // v1.3.1351 MODELO ARQUITECTÓNICO FINAL (detalle cuenta individual)
+   //   1. Cierre REAL Dashwey (cierresCaja.estado='cerrado') tiene prioridad.
+   //   2. Si no, agregación venta-dia (Loyverse) → "💰 Cierre del día · N tickets · Loyverse".
+   //   Cero duplicación: día+cuenta produce UNA fila de cierre, nunca dos.
+   //   Día calendario en zona Europe/Madrid (gestionado por FinEngine v1.3.1351).
+   // ──────────────────────────────────────────────────────────────────
+
+   // Set de días con cierre REAL para ESTA cuenta
+   var _diasCierreRealCta = (function(){
     var s = new Set();
     try {
      var cs = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
@@ -36079,43 +36106,42 @@ function _confirmBorrarCuenta(id) {
     } catch(_){}
     return s;
    })();
-   ingresos.forEach(function(i){
-    // v1.3.1350: si es ingreso BB que representa cierre histórico, relabel.
-    var concepto = i.concepto || 'Ingreso';
-    var metaTipo = i.metaTipo;
-    if (_isBBCierreManual(i)) {
-     var dk = _dayKeyFromIso(i.fecha);
-     if (!_diasCierreRealKiosco.has(dk)) {
-      // Solo relabel si no hay cierre real ese día (anti-confusión)
-      var dStr = '';
-      try {
-       var d = new Date(i.fecha);
-       dStr = String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
-      } catch(_){}
-      concepto = '💰 Cierre histórico' + (dStr ? ' ' + dStr : '');
-      metaTipo = 'cierre-bb-historico';
-     }
+
+   // Inyectar cierres derivados Loyverse (venta-dia de FinEngine) para esta cuenta
+   try {
+    if (typeof FinEngine !== 'undefined' && FinEngine.unifiedTransactions) {
+     var _allTxs = FinEngine.unifiedTransactions() || [];
+     _allTxs.forEach(function(t){
+      if (!t || t.kind !== 'venta-dia') return;
+      if (t.cuentaId !== cuentaId) return;
+      // Anti-duplicado: si hay cierre REAL ese día, omitir
+      var dk = _dayKeyFromIso(t.fecha);
+      if (_diasCierreRealCta.has(dk)) return;
+      // Insertar como cierre derivado
+      var nT = t.ventasCount || 0;
+      var label = '💰 Cierre del día'
+               + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '')
+               + ' · Loyverse';
+      movs.push({
+       id: t.id,
+       src: 'venta',
+       concepto: label,
+       importe: +(t.importe || 0),
+       fecha: t.fecha || '',
+       tipo: 'ingreso',
+       metaTipo: 'cierre-derivado-loyverse',
+      });
+     });
     }
-    movs.push({ id:i.id, src:'ingreso', concepto:concepto,
-     importe:+(i.importe||0), fecha:i.fecha||'', tipo:i.tipo||'ingreso', metaTipo:metaTipo });
-   });
-   // v1.3.1348 ARQUITECTURA: en Flujo de Caja y detalles de cuenta NO se muestran
-   // ventas individuales ni "Ventas del día (Loyverse)" agregadas. Solo los CIERRES
-   // CERRADOS (manuales o automáticos) — el modelo es: "los tickets son operación
-   // comercial, los cierres son asientos contables". Los tickets se exploran en
-   // Resumen de Ventas, no en cuentas. Esto evita duplicación visual y mantiene
-   // un estado de cuentas limpio tipo banca.
-   //
-   // Se REVIERTE el añadido v1.3.1346 (que mostraba venta-dia desde unifiedTransactions).
-   // En su lugar, inyectamos los cierres cerrados de State.cierresCaja, que son los
-   // únicos eventos válidos como ingreso de caja en el modelo financiero.
+   } catch(_){}
+
+   // Inyectar cierres REALES Dashwey
    try {
     var _cierres = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierres.forEach(function(c){
      if (!c || c.deleted) return;
      if (c.estado !== 'cerrado' || !c.cierreTs) return;
      if (c.cuentaId !== cuentaId) return;
-     // Importe neto del cierre = ventas + ingresos - gastos
      var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
      if (neto === 0) return;
      var nT = Number(c.nVentas) || 0;
