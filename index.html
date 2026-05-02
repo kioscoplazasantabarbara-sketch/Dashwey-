@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1360-dev</title>
+<title>Dashwey v1.3.1361-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15943,6 +15943,21 @@ const CierreEngine = (() => {
  // Retorna el cierre actualizado, o null si no hay jornada activa
  function closeJornada(opts) {
   opts = opts || {};
+  // v1.3.1361 LOCK MUTUO: si ya hay cierre cerrado HOY (Madrid), bloquear.
+  //   Esto previene duplicación cuando manual y automático coinciden:
+  //     - Manual pulsa antes del scheduler → bloquea scheduler (vía _autoCierreTick)
+  //     - Scheduler dispara antes que manual → bloquea manual aquí
+  //   La verificación es en zona Madrid (perfil.zona) usando jornadaLabel YYYY-MM-DD.
+  //   No afecta cierres ABIERTOS — solo previene crear un segundo CERRADO el mismo día.
+  try {
+   if (typeof window._DashweyYaHayCierreHoy === 'function' && window._DashweyYaHayCierreHoy()) {
+    console.warn('[CierreEngine] closeJornada bloqueado — ya hay cierre cerrado hoy (lock mutuo v1.3.1361)');
+    if (typeof window.showToast === 'function') {
+     window.showToast('⚠️ Ya hay un cierre registrado hoy', 'warning');
+    }
+    return null;
+   }
+  } catch(_) {}
   const c = getJornadaActiva();
   if (!c) {
    console.warn('[CierreEngine] no hay jornada activa para cerrar');
@@ -17434,7 +17449,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1360-dev';
+ const _APP_VERSION = 'v1.3.1361-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21574,6 +21589,19 @@ const ui = (() => {
      _autoCierreNotify('Dashwey · Hora de cerrar caja', 'Horario de negocio: ' + horarioCierre + '. Revisa el cierre del día.');
     }
    }
+   // v1.3.1361 LOCK MUTUO: si ya hay un cierre CERRADO hoy (manual o auto previo),
+   //   marcamos lastFired y skip. Esto evita que el scheduler cree otro cierre
+   //   cuando el usuario ya cerró manualmente antes de llegar la hora.
+   try {
+    if (typeof window._DashweyYaHayCierreHoy === 'function' && window._DashweyYaHayCierreHoy()) {
+     if (_autoCierreLastFired !== today) {
+      _autoCierreLastFired = today;
+      try { localStorage.setItem('dashwey_autocierre_lastfired', today); } catch(_) {}
+      console.info('[AutoCierre] skip — ya hay cierre cerrado hoy (lock mutuo v1.3.1361)');
+     }
+     return; // No disparar
+    }
+   } catch(_) {}
    // AUTO-CIERRE (persistido — sobrevive al reload)
    if (perfil.cierreAutomatico && _autoCierreLastFired !== today) {
     // Modo PRELIMINAR REVISABLE: cuenta destino configurada → registro directo
@@ -21818,6 +21846,29 @@ const ui = (() => {
  window._DashweyAutoCierreStart = _autoCierreStart;
  window._DashweyAutoCierreStop = _autoCierreStop;
  window._DashweyAutoCierreCheckBacklog = _autoCierreCheckBacklog;
+ // v1.3.1361: exponer _autoCierreTzNow para uso desde otros IIFEs (lock mutuo cierre).
+ window._DashweyAutoCierreTzNow = _autoCierreTzNow;
+ // v1.3.1361 LOCK MUTUO: helper canónico — ¿hay ya un cierre CERRADO para la jornada de HOY (zona Madrid)?
+ //   Usado por:
+ //     - closeJornada() para bloquear cierre manual si ya existe uno cerrado hoy
+ //     - _autoCierreTick() para skip si manual ya cerró antes de la hora
+ //     - UI Dashboard para ocultar/disable botón "Cerrar caja ahora"
+ //   Idempotente: misma jornadaLabel = mismo día Madrid YYYY-MM-DD.
+ //   NO bloquea cierres ABIERTOS (estado='abierto') — esos se pueden cerrar normalmente.
+ window._DashweyYaHayCierreHoy = function() {
+  try {
+   var perfil = (window.State && window.State.get && window.State.get.perfil) ? window.State.get.perfil() : null;
+   var zona = (perfil && perfil.zona) || 'Europe/Madrid';
+   var hoy = _autoCierreTzNow(zona).dateKey; // "YYYY-MM-DD"
+   var cierres = (window.State && window.State.get && window.State.get.cierresCaja) ? (window.State.get.cierresCaja() || []) : [];
+   return cierres.some(function(c) {
+    return c && !c.deleted && c.estado === 'cerrado' && c.jornadaLabel === hoy;
+   });
+  } catch(e) {
+   console.warn('[YaHayCierreHoy] error:', e && e.message);
+   return false; // En caso de error, NO bloquear (degradación segura)
+  }
+ };
  // Arrancar tras initial sync (3s gap como Loyverse realtime)
  setTimeout(function(){
   try { _autoCierreStart(); } catch(_) {}
