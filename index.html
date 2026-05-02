@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1364-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1365-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1364-dev</title>
+<title>Dashwey v1.3.1365-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17494,7 +17494,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1364-dev';
+ const _APP_VERSION = 'v1.3.1365-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31839,6 +31839,26 @@ function _confirmBorrarCuenta(id) {
  // ─────────────────────────────────────────────────────────────────
  var _histPed = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
 
+ // v1.3.1365 FIX BUG-AGENDA: filtro temporal contra HOY
+ //   El selector global ("Esta Semana", "Este Mes", "Este Año") incluye días
+ //   pasados del rango. Sin filtro adicional, eventos cuya fecha de entrega
+ //   o pedido fue hace días siguen apareciendo en el feed.
+ //
+ //   Ejemplo: hoy=3-may, selector="Esta Semana" (27 abr - 3 may).
+ //   Pedido del 25 abr con entrega 27 abr → caía en rango → se mostraba
+ //   aunque la entrega fue hace 6 días.
+ //
+ //   FIX: si el rango incluye HOY (vista actual: hoy/semana/mes/año en curso),
+ //   ocultar eventos completamente vencidos (< hoy 00:00). Si el rango NO
+ //   incluye hoy (ej. "Mes Anterior", "Año Pasado"), preservar comportamiento
+ //   histórico — el usuario está consultando archivo intencionalmente.
+ var _now = new Date();
+ var _hoyMidnight = new Date(_now); _hoyMidnight.setHours(0,0,0,0);
+ var _rangoIncluyeHoy = false;
+ if (rangeStart && rangeEnd) {
+  _rangoIncluyeHoy = (rangeStart <= _now && _now <= rangeEnd);
+ }
+
  // allPedidos = pintar tab "Entregas" (data-tab='pedidos') — shape compatible
  //   con _snapRenderPedidosPanel ({ id, provId, date, items }).
  //   Filtro: fecha de ENTREGA dentro del periodo.
@@ -31849,7 +31869,10 @@ function _confirmBorrarCuenta(id) {
   var ent = calcEnt(p.fecha, p.provId); ent.setHours(0,0,0,0);
   var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
   var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
-  return ent >= rS && ent <= rE;
+  if (ent < rS || ent > rE) return false;
+  // v1.3.1365: si rango incluye HOY, ocultar entregas con fecha < hoy
+  if (_rangoIncluyeHoy && ent < _hoyMidnight) return false;
+  return true;
  })
  .map(function(p) {
   // Adaptador shape historialPedidos → pendingOrders (date en lugar de fecha)
@@ -31867,7 +31890,10 @@ function _confirmBorrarCuenta(id) {
   var pd = new Date(p.fecha); pd.setHours(0,0,0,0);
   var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
   var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
-  return pd >= rS && pd <= rE;
+  if (pd < rS || pd > rE) return false;
+  // v1.3.1365: si rango incluye HOY, ocultar pedidos con fecha < hoy
+  if (_rangoIncluyeHoy && pd < _hoyMidnight) return false;
+  return true;
  })
  .map(function(p) {
   var prov = State.get.prov ? State.get.prov(p.provId) : null;
@@ -31921,6 +31947,7 @@ function _confirmBorrarCuenta(id) {
   var _ahora = new Date();
   var _hoy00 = new Date(_ahora); _hoy00.setHours(0,0,0,0);
   // Recordatorios dentro del periodo (si hay rango) o futuros sin rango
+  // v1.3.1365: si rango incluye HOY, también ocultar recordatorios vencidos
   var _nRec = 0;
   if (rangeStart && rangeEnd) {
    var _rS = new Date(rangeStart); _rS.setHours(0,0,0,0);
@@ -31928,7 +31955,11 @@ function _confirmBorrarCuenta(id) {
    _nRec = _recs.filter(function(r){
     if (!r || !r.fecha) return false;
     var d = new Date(r.fecha);
-    return !isNaN(d.getTime()) && d >= _rS && d <= _rE;
+    if (isNaN(d.getTime())) return false;
+    if (d < _rS || d > _rE) return false;
+    // v1.3.1365: filtrar pasados si rango incluye hoy
+    if (_rangoIncluyeHoy && d < _hoyMidnight) return false;
+    return true;
    }).length;
   } else {
    _nRec = _recs.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= _hoy00; }).length;
