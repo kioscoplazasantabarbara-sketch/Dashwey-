@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1367-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1368-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1367-dev</title>
+<title>Dashwey v1.3.1368-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2728,6 +2728,13 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
 /* Asegurar que el icono del camión/persona NO sobresalga del cajón derecho */
 .snap-tl-v-item.snap-tl-v-item-act .snap-tl-h-icon {
  z-index: 3;
+}
+/* v1.3.1368 BUG-FIX: el track tiene margin-left:-72px para fusionar con la
+   vertical roja, pero los LABELS heredan ese margin y salen del card por la izda.
+   Compensar añadiendo padding-left:72px a los labels (queda dentro del card).
+   También padding-right:0 para que el label derecho mantenga su alineación. */
+.snap-tl-v-item.snap-tl-v-item-act .snap-tl-h-labels {
+ padding-left: 72px;
 }
 
 /* Point pop-in animation */
@@ -17494,7 +17501,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1367-dev';
+ const _APP_VERSION = 'v1.3.1368-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31763,7 +31770,8 @@ function _confirmBorrarCuenta(id) {
  function _nextOrderDate(diasPedido, fromDate) {
  if (!diasPedido || !diasPedido.length) return null;
  var base = new Date(fromDate); base.setHours(9, 0, 0, 0); // visita/pedido típico 9am
- for (var i = 0; i < 14; i++) { // hasta 14 días — cubre cualquier periodicidad semanal
+ // v1.3.1368: 20 días — cubre semanal + quincenal con margen
+ for (var i = 0; i < 20; i++) {
   var d = new Date(base); d.setDate(base.getDate() + i);
   var dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Lu … 6=Do
   if (diasPedido.indexOf(dow) >= 0) return d;
@@ -31933,10 +31941,59 @@ function _confirmBorrarCuenta(id) {
    // _valEl se actualiza más abajo cuando se calcula _nActividad
   }
  }
+ // v1.3.1368: contar también pendingOrders + ciclos predichos para KPIs.
+ //   PEDIDOS (visitas) cuenta:
+ //     - histPed con fecha pedido en rango (allVisitas)
+ //     - pendingOrders con fecha pedido en rango
+ //     - próximos pedidos predichos (auto) en rango
+ //   ENTREGAS (pedidos) cuenta:
+ //     - histPed con fecha entrega en rango (allPedidos)
+ //     - pendingOrders con fecha entrega en rango
+ //     - próximas entregas predichas en rango
+ var _nPendPed = 0;     // pendingOrders contados en "PEDIDOS"
+ var _nPendEnt = 0;     // pendingOrders contados en "ENTREGAS"
+ var _nPredPed = 0;     // ciclos predichos contados en "PEDIDOS"
+ var _nPredEnt = 0;     // ciclos predichos contados en "ENTREGAS"
+ try {
+  var _po = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
+  _po.forEach(function(p) {
+   if (!p || !p.date) return;
+   var fp = new Date(p.date);
+   if (isNaN(fp.getTime())) return;
+   var fe = calcEnt(p.date, p.provId);
+   if (rangeStart && rangeEnd) {
+    var rS2 = new Date(rangeStart); rS2.setHours(0,0,0,0);
+    var rE2 = new Date(rangeEnd); rE2.setHours(23,59,59,999);
+    var fpD = new Date(fp); fpD.setHours(0,0,0,0);
+    var feD = new Date(fe); feD.setHours(0,0,0,0);
+    if (fpD >= rS2 && fpD <= rE2) _nPendPed++;
+    if (feD >= rS2 && feD <= rE2) _nPendEnt++;
+   } else {
+    _nPendPed++;
+    _nPendEnt++;
+   }
+  });
+  // v1.3.1368: ciclos predichos del proveedor (próximo solo, scope rango)
+  var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  _provs.forEach(function(prov) {
+   if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
+   var fpPred = (typeof _nextOrderDate === 'function') ? _nextOrderDate(prov.diasPedido, _hoyMidnight) : null;
+   if (!fpPred) return;
+   if (rangeStart && rangeEnd) {
+    var rS3 = new Date(rangeStart); rS3.setHours(0,0,0,0);
+    var rE3 = new Date(rangeEnd); rE3.setHours(23,59,59,999);
+    if (fpPred >= rS3 && fpPred <= rE3) _nPredPed++;
+    // entrega predicha (basada en diasEntrega)
+    var fePred = calcEnt(fpPred.toISOString(), prov.id);
+    if (fePred && fePred >= rS3 && fePred <= rE3) _nPredEnt++;
+   }
+  });
+ } catch(_) {}
+
  var pedEl = document.getElementById('snap-ped-agenda');
- if (pedEl) pedEl.textContent = allPedidos.length || '0';
+ if (pedEl) pedEl.textContent = (allPedidos.length + _nPendEnt + _nPredEnt) || '0';
  var visEl = document.getElementById('snap-vis-agenda');
- if (visEl) { visEl.textContent = allVisitas.length || '0'; }
+ if (visEl) { visEl.textContent = (allVisitas.length + _nPendPed + _nPredPed) || '0'; }
 
  // v1.3.1295: contador "Actividad" = suma total de eventos del periodo.
  //   Pedidos (count visitas) + Entregas (count pedidos) + Alertas (count totales,
@@ -31965,7 +32022,10 @@ function _confirmBorrarCuenta(id) {
    _nRec = _recs.filter(function(r){ return r && r.fecha && new Date(r.fecha) >= _hoy00; }).length;
   }
   // Suma total de eventos para "Actividad"
-  var _nActividad = (allPedidos.length || 0) + (allVisitas.length || 0) + (_nAlrt || 0) + _nRec;
+  // v1.3.1368: incluir pendingOrders + ciclos predichos
+  var _totalPed = (allPedidos.length || 0) + _nPendEnt + _nPredEnt;
+  var _totalVis = (allVisitas.length || 0) + _nPendPed + _nPredPed;
+  var _nActividad = _totalPed + _totalVis + (_nAlrt || 0) + _nRec;
   recEl.textContent = _nActividad || '0';
   // v1.3.1295: si tab Actividad activo, mostrar total en _valEl (cabecera grande)
   if (_snapAgendaActiveTab === 'recordatorios') {
@@ -31974,7 +32034,7 @@ function _confirmBorrarCuenta(id) {
    var _deltaEl2 = document.getElementById('snap-delta-agenda');
    if (_deltaEl2) {
     if (_nActividad === 0) _deltaEl2.textContent = 'Sin eventos en el periodo';
-    else _deltaEl2.textContent = (allVisitas.length || 0) + ' pedidos · ' + (allPedidos.length || 0) + ' entregas';
+    else _deltaEl2.textContent = _totalVis + ' pedidos · ' + _totalPed + ' entregas';
    }
   }
  }
@@ -32499,6 +32559,55 @@ function _confirmBorrarCuenta(id) {
   });
  });
 
+ // v1.3.1368 (Cambio 3) — 2.6) Ciclos predichos del proveedor
+ //   Para cada proveedor con diasPedido configurado, calcular el PRÓXIMO ciclo
+ //   (pedido + entrega) basado en sus días configurados.
+ //   - Solo el próximo (no llenar feed con N ciclos del rango)
+ //   - Si cae en rango → mostrar como "Pedido programado" + "Entrega prevista"
+ //   - Marca visual "PROGRAMADO" sutil para distinguir de eventos reales
+ //   - Si ya hay un pendingOrder reciente del mismo proveedor en el rango,
+ //     omitir el ciclo predicho para evitar duplicación visual
+ //   - Si pasa el día predicho sin acción, simplemente desaparece (filtro 1366)
+ var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+ var _pending2 = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
+ // Set de provIds que ya tienen un pendingOrder activo (no duplicar predicción)
+ var _provsConPendiente = {};
+ _pending2.forEach(function(p){ if (p && p.provId) _provsConPendiente[p.provId] = true; });
+
+ _provs.forEach(function(prov) {
+  if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
+  // Si ya hay pedido pendiente real, no duplicar con predicción
+  if (_provsConPendiente[prov.id]) return;
+  // Calcular próxima fecha de pedido desde HOY
+  var fpPred = _nextOrderDate(prov.diasPedido, hoy0);
+  if (!fpPred) return;
+  // Si cae en rango → añadir como evento "pedido predicho"
+  if (inRange(fpPred)) {
+   eventos.push({
+    tipo: 'pedido',
+    fecha: fpPred,
+    sortKey: fpPred.getTime(),
+    pedido: { id: '_predicho_' + prov.id, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+    _predicho: true
+   });
+  }
+  // Calcular entrega predicha (basada en pedido predicho + diasEntrega)
+  var fePred = calcEntA(fpPred.toISOString(), prov.id);
+  if (!fePred || isNaN(fePred.getTime())) return;
+  // Si entrega coincide con pedido (mismo día), no duplicar
+  if (fePred.toDateString() === fpPred.toDateString()) return;
+  if (inRange(fePred)) {
+   eventos.push({
+    tipo: 'entrega',
+    fecha: fePred,
+    sortKey: fePred.getTime(),
+    pedido: { id: '_predicho_' + prov.id, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+    fechaPedido: fpPred,
+    _predicho: true
+   });
+  }
+ });
+
  // 3) Alertas — productos con problemas. NO tienen fecha real; las pongo en HOY
  //    para que aparezcan en grupo "Hoy". Si el periodo no incluye hoy, NO se
  //    muestran (coherente con "eventos del periodo").
@@ -32630,9 +32739,15 @@ function _confirmBorrarCuenta(id) {
     var nArts = (p.items && p.items.length) || 0;
     var titulo = document.createElement('div');
     titulo.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);display:flex;align-items:center;gap:6px;margin-bottom:3px';
+    // v1.3.1368: badge "PROGRAMADO" para predichos
+    var _progBadge = '';
+    if (ev._predicho) {
+     _progBadge = '<span style="background:rgba(56,89,180,0.10);color:#3859b4;font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:2px 6px;border-radius:4px;letter-spacing:0.2px;text-transform:uppercase">Programado</span>';
+    }
     titulo.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/></svg>'
      + '<span>Pedido · ' + provName + '</span>'
-     + '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArts + ' art' + (nArts !== 1 ? 's.' : '.') + '</span>';
+     + (_progBadge ? _progBadge : '')
+     + (ev._predicho ? '' : '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArts + ' art' + (nArts !== 1 ? 's.' : '.') + '</span>');
     contentEl.appendChild(titulo);
 
     // Línea horizontal embebida — pedido (icono persona)
@@ -32653,11 +32768,17 @@ function _confirmBorrarCuenta(id) {
     );
     contentEl.appendChild(tlH);
     item.style.cursor = 'pointer';
-    (function(orderId) {
+    // v1.3.1368: si es predicho, click navega al proveedor para crear pedido real;
+    // si es real, abre detalle del pedido como antes.
+    (function(orderId, isPred, provId) {
      item.addEventListener('click', function() {
-      try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+      if (isPred) {
+       try { App.alm && App.alm.selProv && App.alm.selProv(provId); } catch(_) {}
+      } else {
+       try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+      }
      });
-    })(p.id);
+    })(p.id, !!ev._predicho, p.provId);
    } else if (ev.tipo === 'entrega') {
     var pE = ev.pedido;
     var provE = State.get.prov ? State.get.prov(pE.provId) : null;
@@ -32666,8 +32787,11 @@ function _confirmBorrarCuenta(id) {
     var tituloE = document.createElement('div');
     tituloE.style.cssText = 'font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);display:flex;align-items:center;gap:6px;margin-bottom:3px';
     // v1.3.1367 (Cambio C): badge "Atrasado · N días" si pendiente y vencido
+    // v1.3.1368: badge "Programado" para entregas predichas
     var _atrasadoBadge = '';
-    if (ev._atrasado && ev._diasAtraso > 0) {
+    if (ev._predicho) {
+     _atrasadoBadge = '<span style="background:rgba(56,89,180,0.10);color:#3859b4;font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:2px 6px;border-radius:4px;letter-spacing:0.2px;text-transform:uppercase">Programado</span>';
+    } else if (ev._atrasado && ev._diasAtraso > 0) {
      _atrasadoBadge = '<span style="background:rgba(220,38,38,0.12);color:var(--red);font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:2px 6px;border-radius:4px;letter-spacing:0.2px;text-transform:uppercase">Atrasado · ' + ev._diasAtraso + ' día' + (ev._diasAtraso !== 1 ? 's' : '') + '</span>';
     } else if (ev._pending && !ev._atrasado) {
      _atrasadoBadge = '<span style="background:rgba(180,140,40,0.12);color:#a07520;font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:2px 6px;border-radius:4px;letter-spacing:0.2px;text-transform:uppercase">Pendiente</span>';
@@ -32675,7 +32799,7 @@ function _confirmBorrarCuenta(id) {
     tituloE.innerHTML = '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>'
      + '<span>Entrega · ' + provNameE + '</span>'
      + (_atrasadoBadge ? _atrasadoBadge : '')
-     + '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArtsE + ' art' + (nArtsE !== 1 ? 's.' : '.') + '</span>';
+     + (ev._predicho ? '' : '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs);margin-left:auto">' + nArtsE + ' art' + (nArtsE !== 1 ? 's.' : '.') + '</span>');
     contentEl.appendChild(tituloE);
 
     // Línea horizontal embebida — entrega (icono camión)
@@ -32696,11 +32820,16 @@ function _confirmBorrarCuenta(id) {
     );
     contentEl.appendChild(tlHE);
     item.style.cursor = 'pointer';
-    (function(orderId) {
+    // v1.3.1368: si es predicho, click navega al proveedor; si es real, abre detalle
+    (function(orderId, isPred, provIdC) {
      item.addEventListener('click', function() {
-      try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+      if (isPred) {
+       try { App.alm && App.alm.selProv && App.alm.selProv(provIdC); } catch(_) {}
+      } else {
+       try { App.alm._ldcAbrirDetallePedido(orderId); } catch(_) {}
+      }
      });
-    })(pE.id);
+    })(pE.id, !!ev._predicho, pE.provId);
    } else if (ev.tipo === 'alerta') {
     var a = ev.alertas;
     var alertaTit = document.createElement('div');
