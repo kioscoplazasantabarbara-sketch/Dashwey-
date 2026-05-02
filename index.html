@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1354-dev</title>
+<title>Dashwey v1.3.1356-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10363,10 +10363,50 @@ window._DashweyValidatePayload = function(obj, path) {
 
 // Helper: batch writer para subcolecciones — NO se invoca todavía
 // En Fase 3 será llamado desde save() cuando el flag esté ON
+// v1.3.1355 CIRCUIT BREAKER — helpers para inspección/reset manual desde consola
+window._DashweyResourceExhaustedUntil = window._DashweyResourceExhaustedUntil || 0;
+window._dashweyCircuitStatus = function() {
+ var _u = window._DashweyResourceExhaustedUntil || 0;
+ var _now = Date.now();
+ if (!_u || _now >= _u) {
+  console.log('[Dashwey/CircuitBreaker] INACTIVO — writes habilitados');
+  return { active: false };
+ }
+ var _remain = Math.ceil((_u - _now) / 1000);
+ console.log('[Dashwey/CircuitBreaker] ACTIVO — ' + _remain + 's restantes');
+ return { active: true, remainSec: _remain };
+};
+window._dashweyCircuitReset = function() {
+ window._DashweyResourceExhaustedUntil = 0;
+ console.log('[Dashwey/CircuitBreaker] reset manual — writes reanudados');
+ return { ok: true };
+};
+
 window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
  const fb = window._DashweyFirebase;
  if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
  if (!Array.isArray(items) || !items.length) return true;
+ // ──────────────────────────────────────────────────────────────────
+ // v1.3.1355 CIRCUIT BREAKER — Prevenir cascada Firebase resource-exhausted
+ //   Si Firebase rechazó un batch por sobrecarga en los últimos 60s, NO
+ //   intentamos otro write hasta que pase la ventana. Esto rompe el loop
+ //   donde el writer dispara write→error→re-marca dirty→write→error.
+ //   La ventana de 60s da tiempo a Firebase para drenar la cola interna.
+ //   Cuando expira, el próximo save() intentará normalmente. Si vuelve
+ //   a fallar, re-arma la pausa (auto-renovación).
+ // ──────────────────────────────────────────────────────────────────
+ if (window._DashweyResourceExhaustedUntil) {
+  var _now = Date.now();
+  if (_now < window._DashweyResourceExhaustedUntil) {
+   var _remainSec = Math.ceil((window._DashweyResourceExhaustedUntil - _now) / 1000);
+   console.warn('[Dashwey/SubB] CIRCUIT BREAKER activo — espera ' + _remainSec + 's antes de reintentar (stateKey=' + stateKey + ')');
+   return false;
+  } else {
+   // Ventana expirada — limpiar y permitir intento
+   window._DashweyResourceExhaustedUntil = 0;
+   console.info('[Dashwey/SubB] circuit breaker expirado — reintentando writes');
+  }
+ }
  // ──────────────────────────────────────────────────────────────────
  // v1.3.1237 BUG-CRIT-6 FIX — Guard InitialSync en batch writer subcol
  // SIN ESTE GUARD: cualquier device puede escribir subcol con state local
@@ -10409,6 +10449,22 @@ window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
   }
   return true;
  } catch(e) {
+  // v1.3.1355 CIRCUIT BREAKER — armar pausa si Firebase reporta sobrecarga
+  // Códigos típicos: 'resource-exhausted', 'unavailable', 'deadline-exceeded'
+  // Mensaje típico: "Write stream exhausted maximum allowed queued writes"
+  var _errCode = e?.code || '';
+  var _errMsg = (e?.message || '').toLowerCase();
+  var _isOverload = _errCode === 'resource-exhausted'
+    || _errCode === 'unavailable'
+    || _errCode === 'deadline-exceeded'
+    || _errMsg.indexOf('exhausted') !== -1
+    || _errMsg.indexOf('maximum allowed queued') !== -1
+    || _errMsg.indexOf('overloading') !== -1;
+  if (_isOverload) {
+   // Pausa de 60s — da tiempo a Firebase para drenar la cola
+   window._DashweyResourceExhaustedUntil = Date.now() + 60000;
+   console.warn('[Dashwey/SubB] CIRCUIT BREAKER armado por 60s — Firebase sobrecargado:', _errCode || _errMsg.slice(0, 80));
+  }
   // v1.3.1134: si es invalid-argument, loguear el primer item problemático
   if (e?.code === 'invalid-argument' || e?.message?.includes('invalid-argument')) {
    try {
@@ -11949,6 +12005,14 @@ const State = (() => {
  if (!fb.isRegistered()) {
  // No mutar syncStatus aqui: evita save() loop
  return false;
+ }
+ // v1.3.1355 CIRCUIT BREAKER — respetar pausa armada por subB writer
+ //   Si subB armó pausa (60s) por overload, NO escribimos root tampoco.
+ //   Sin esto el root seguiría escribiendo y empeoraría la cola Firebase.
+ if (window._DashweyResourceExhaustedUntil && Date.now() < window._DashweyResourceExhaustedUntil) {
+  var _remain = Math.ceil((window._DashweyResourceExhaustedUntil - Date.now()) / 1000);
+  console.warn('[Dashwey/FB] root write pausado por circuit breaker — espera ' + _remain + 's');
+  return false;
  }
  // Asegurar que el data lleva deviceId actualizado (guard onSnapshot)
  if (data?.user && window._DashweyDeviceId) {
@@ -16726,13 +16790,13 @@ const Utils = (() => {
  // Reset form personalizado
  if (current === 'custom') form?.classList.add('show');
  else form?.classList.remove('show');
- // v1.3.1259: el bloque franja horaria SIEMPRE visible (incluido custom).
- //   Antes (v1.3.1258) lo ocultábamos en custom porque tenía sus propias horas,
- //   pero los selectores de hora del custom han sido eliminados — ahora la
- //   franja global es la única fuente de verdad para horas.
+ // v1.3.1356: bloque franja horaria oculto en modo Personalizado (custom)
+ //   por redundancia visual con DESDE/HASTA. En el resto de modos
+ //   (today/week/month/year) sigue visible — sigue siendo single source of truth
+ //   para las horas operativas (ej. 15:00→04:00 jornada nocturna).
  try {
   const _franjaB = document.getElementById('dps-franja-block');
-  if (_franjaB) _franjaB.style.display = '';
+  if (_franjaB) _franjaB.style.display = (current === 'custom') ? 'none' : '';
  } catch(_) {}
  const pDesde = document.getElementById('dps-desde');
  const pHasta = document.getElementById('dps-hasta');
@@ -16916,10 +16980,13 @@ const Utils = (() => {
  el.classList.toggle('sel', el.dataset.t === t)
  );
 
- // v1.3.1259: el bloque franja horaria se mantiene VISIBLE en TODOS los modos
- //   (incluido Personalizado) — es la única fuente de verdad para horas.
- //   El form Personalizado solo tiene fechas (DESDE/HASTA), las horas vienen
- //   de la franja global automáticamente.
+ // v1.3.1356: ocultar bloque franja al entrar en Personalizado (redundante con DESDE/HASTA),
+ //   restaurarlo al volver a Hoy/Semana/Mes/Año. En non-custom la franja sigue siendo la
+ //   única fuente de verdad para horas operativas.
+ try {
+  const _franjaB = document.getElementById('dps-franja-block');
+  if (_franjaB) _franjaB.style.display = (t === 'custom') ? 'none' : '';
+ } catch(_) {}
 
  if (t === 'custom') {
  form?.classList.add('show');
@@ -17367,7 +17434,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1354-dev';
+ const _APP_VERSION = 'v1.3.1356-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
