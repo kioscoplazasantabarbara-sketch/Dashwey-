@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1353-dev</title>
+<title>Dashwey v1.3.1354-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15835,11 +15835,23 @@ const CierreEngine = (() => {
     // Caso normal y now < apertura → pre-jornada, mantener Date.now()
    }
   } catch(_) {}
+  // v1.3.1354: resolver cuentaId desde opts o cuenta primaria. Sin esto el cierre
+  //   nacía con cuentaId=undefined y luego el anti-duplicado fallaba (no podía
+  //   matchear con el dayKey del venta-dia). Bug pre-existente, ahora cubierto.
+  var _ctaIdRes = opts.cuentaId;
+  if (!_ctaIdRes) {
+   try {
+    var _cuentasJ = (State.get.cuentas && State.get.cuentas()) || [];
+    var _primJ = _cuentasJ.find(function(x){ return x && !x.deleted && x.isPrimary; });
+    _ctaIdRes = _primJ ? _primJ.id : (_cuentasJ[0] ? _cuentasJ[0].id : null);
+   } catch(_){}
+  }
   const c = {
    id: _genId(),
    aperturaTs,
    cierreTs: null,
    jornadaLabel: _jornadaLabel(aperturaTs),
+   cuentaId: _ctaIdRes,
    saldoInicial: Number(opts.saldoInicial) || 0,
    saldoEsperado: null,
    saldoReal: null,
@@ -17355,7 +17367,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1353-dev';
+ const _APP_VERSION = 'v1.3.1354-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26517,12 +26529,18 @@ function _toggleCardFromManager(id, btn) {
   // como cierre derivado (anti-duplicado vs cierre real Dashwey)
   //   v1.3.1353: usar jornadaLabel (día contable) para que coincida con dayKey
   //   Madrid del venta-dia. cierreTs en madrugada del día siguiente desfasa.
+  //   v1.3.1354: si cierre.cuentaId vacío, fallback a cuenta primaria — sin
+  //   esto el cierre manual sin cuenta asignada se duplicaba con venta-dia.
+  var _fcCuentas = State.get.cuentas() || [];
+  var _fcPrimCta = _fcCuentas.find(function(c){ return c && !c.deleted && c.isPrimary; });
+  var _fcPrimCtaId = _fcPrimCta ? _fcPrimCta.id : (_fcCuentas[0] ? _fcCuentas[0].id : '?');
   var _fcDiasCierreReal = new Set();
   _cierres.forEach(function(c){
    if (!c || c.deleted) return;
    if (c.estado !== 'cerrado' || !c.cierreTs) return;
    var jKey = c.jornadaLabel || _fcDayKey(c.cierreTs);
-   _fcDiasCierreReal.add((c.cuentaId || '?') + '|' + jKey);
+   var ctaIdEff = c.cuentaId || _fcPrimCtaId;
+   _fcDiasCierreReal.add(ctaIdEff + '|' + jKey);
   });
 
   // Agrupar ventas (sin closureId) por cuenta + día Madrid
@@ -35858,15 +35876,23 @@ function _confirmBorrarCuenta(id) {
    //    para que coincida con el dayKey Madrid del venta-dia. Antes: cierreTs en
    //    madrugada del día siguiente daba dayKey desfasado +1 → anti-duplicado fallaba
    //    y el cierre real + venta-dia se mostraban ambos como duplicado visual.
+   //    v1.3.1354: si el cierre real no tiene cuentaId (bug pre-existente:
+   //    openJornada no lo asigna), asumir cuenta primaria. Sin esto, las claves
+   //    "?|2026-04-30" vs "kiosco|2026-04-30" no coincidían → duplicado.
    var _diasCierreRealG = new Set();
    try {
+    var _cuentasG = State.get.cuentas() || [];
+    var _primCtaG = _cuentasG.find(function(c){ return c && !c.deleted && c.isPrimary; });
+    var _primCtaIdG = _primCtaG ? _primCtaG.id : (_cuentasG[0] ? _cuentasG[0].id : '?');
     var _csG = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
     _csG.forEach(function(c){
      if (!c || c.deleted) return;
      if (c.estado !== 'cerrado' || !c.cierreTs) return;
      // jornadaLabel es ya YYYY-MM-DD del día contable de la jornada
      var jKey = c.jornadaLabel || _dayKeyFromIso(c.cierreTs);
-     _diasCierreRealG.add((c.cuentaId || '?') + '|' + jKey);
+     // Resolver cuentaId si falta (cierres pre-v1.3.1354 sin cuenta asignada)
+     var ctaId = c.cuentaId || _primCtaIdG;
+     _diasCierreRealG.add(ctaId + '|' + jKey);
     });
    } catch(_){}
 
@@ -35900,20 +35926,22 @@ function _confirmBorrarCuenta(id) {
    //    v1.3.1353: usar jornadaLabel para construir la fecha visual del cierre
    //    (mediodía UTC = mediodía Madrid en cualquier zona). Antes: usaba cierreTs
    //    que podía caer en madrugada del día siguiente → separador desfasado +1.
+   //    v1.3.1354: si cierre.cuentaId falta, asumir cuenta primaria — visual
+   //    consistente con el dayKey indexado arriba.
    try {
-    var _cierresG = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
-    _cierresG.forEach(function(c){
+    var _cierresG2 = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
+    _cierresG2.forEach(function(c){
      if (!c || c.deleted) return;
      if (c.estado !== 'cerrado' || !c.cierreTs) return;
      var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
      if (neto === 0) return;
-     var cInfo = (State.get.cuentas() || []).find(function(x){ return x.id === c.cuentaId; });
+     // Resolver cuenta efectiva (preferir la del cierre, fallback a primaria)
+     var ctaIdEff = c.cuentaId || _primCtaIdG;
+     var cInfo = (State.get.cuentas() || []).find(function(x){ return x.id === ctaIdEff; });
      var nT = Number(c.nVentas) || 0;
      var label = '💰 Cierre ' + (c.jornadaLabel || '—')
               + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
-     // Construir fecha visual = mediodía Madrid del jornadaLabel
-     // Mediodía 12:00 Madrid = 10:00 UTC (verano UTC+2) o 11:00 UTC (invierno UTC+1)
-     // Usar 11:00 UTC fijo es seguro: nunca cruza día en zona Madrid.
+     // 11:00 UTC = 12:00 Madrid invierno / 13:00 verano — siempre mismo día Madrid
      var visualFecha;
      if (c.jornadaLabel && /^\d{4}-\d{2}-\d{2}$/.test(c.jornadaLabel)) {
       visualFecha = c.jornadaLabel + 'T11:00:00.000Z';
@@ -35928,7 +35956,7 @@ function _confirmBorrarCuenta(id) {
       importe: Math.abs(neto),
       delta: neto,
       fecha: visualFecha,
-      cuentaId: c.cuentaId,
+      cuentaId: ctaIdEff,
       cuentaNombre: cInfo ? cInfo.nombre : '?',
       cuentaColor: cInfo ? cInfo.color : '#999',
       metaTipo: 'cierre-caja',
@@ -36228,14 +36256,21 @@ function _confirmBorrarCuenta(id) {
    // Set de días con cierre REAL para ESTA cuenta
    //   v1.3.1353: usar jornadaLabel (día contable) en lugar de cierreTs (puede caer
    //   en madrugada del día siguiente y desfasar el dayKey).
+   //   v1.3.1354: si cierre.cuentaId vacío, resolver a cuenta primaria. Sin esto,
+   //   un cierre con cuentaId=undefined se filtraba y no aplicaba al detalle de
+   //   Kiosco aunque le perteneciera. Resultado: duplicado venta-dia + cierre.
    var _diasCierreRealCta = (function(){
     var s = new Set();
     try {
+     var _cuentasD = State.get.cuentas() || [];
+     var _primCtaD = _cuentasD.find(function(c){ return c && !c.deleted && c.isPrimary; });
+     var _primCtaIdD = _primCtaD ? _primCtaD.id : null;
      var cs = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
      cs.forEach(function(c){
       if (!c || c.deleted) return;
       if (c.estado !== 'cerrado' || !c.cierreTs) return;
-      if (c.cuentaId !== cuentaId) return;
+      var ctaIdEff = c.cuentaId || _primCtaIdD;
+      if (ctaIdEff !== cuentaId) return;
       var jKey = c.jornadaLabel || _dayKeyFromIso(c.cierreTs);
       s.add(jKey);
      });
@@ -36274,12 +36309,17 @@ function _confirmBorrarCuenta(id) {
    // Inyectar cierres REALES Dashwey
    //   v1.3.1353: fecha visual = mediodía Madrid del jornadaLabel (no cierreTs)
    //   para que el separador de día sea coherente con el día contable.
+   //   v1.3.1354: si cierre.cuentaId vacío, asumir cuenta primaria.
    try {
+    var _cuentasI = State.get.cuentas() || [];
+    var _primCtaI = _cuentasI.find(function(c){ return c && !c.deleted && c.isPrimary; });
+    var _primCtaIdI = _primCtaI ? _primCtaI.id : null;
     var _cierres = (State.get.cierresCaja ? (State.get.cierresCaja() || []) : []);
     _cierres.forEach(function(c){
      if (!c || c.deleted) return;
      if (c.estado !== 'cerrado' || !c.cierreTs) return;
-     if (c.cuentaId !== cuentaId) return;
+     var ctaIdEff = c.cuentaId || _primCtaIdI;
+     if (ctaIdEff !== cuentaId) return;
      var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
      if (neto === 0) return;
      var nT = Number(c.nVentas) || 0;
