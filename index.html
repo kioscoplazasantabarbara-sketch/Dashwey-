@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1359-dev</title>
+<title>Dashwey v1.3.1360-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17434,7 +17434,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1359-dev';
+ const _APP_VERSION = 'v1.3.1360-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -53309,19 +53309,37 @@ window._almCarritoOptions = function() {
  var sel = St.get.selectedProv();
  var qLow = q.toLowerCase();
  var allProds = St.get.productos() || [];
+ var allProvs = St.get.proveedores() || [];
 
- // Buscar en proveedor activo, fallback a todos
- var pool = sel ? allProds.filter(function(p){ return p.prov === sel; }) : allProds;
- var hits = pool.filter(function(p) {
- return (p.nombre||'').toLowerCase().includes(qLow) ||
- (p.cat||'').toLowerCase().includes(qLow);
- });
- if (hits.length === 0 && sel) {
- hits = allProds.filter(function(p) {
- return (p.nombre||'').toLowerCase().includes(qLow) ||
- (p.cat||'').toLowerCase().includes(qLow);
- });
+ // v1.3.1360: spotlight respeta proveedor activo.
+ //   Caso A: hay proveedor activo → busca primero en ese proveedor.
+ //   Caso B: NO hay match en proveedor activo → busca globalmente y etiqueta
+ //           cada hit con su proveedor real (ya que todo producto tiene UN
+ //           proveedor por diseño). Tap → cambia proveedor activo.
+ //   Caso C: vista global (sin sel) → comportamiento antiguo (busca todos).
+ var matchFn = function(p) {
+  return (p.nombre||'').toLowerCase().includes(qLow) ||
+         (p.cat||'').toLowerCase().includes(qLow);
+ };
+ var hits;
+ var hitsFromOtherProv = false;
+ if (sel) {
+  var pool = allProds.filter(function(p){ return p.prov === sel; });
+  hits = pool.filter(matchFn);
+  if (hits.length === 0) {
+   // Sin matches en proveedor activo → buscar global y marcar como "otros"
+   hits = allProds.filter(matchFn);
+   hitsFromOtherProv = true;
+  }
+ } else {
+  hits = allProds.filter(matchFn);
  }
+
+ // Mapa rápido proveedor.id → nombre legible
+ var provNameMap = {};
+ allProvs.forEach(function(pv) {
+  provNameMap[pv.id] = pv.nombre || pv.sourceName || '?';
+ });
 
  // Highlight
  var hiRe = new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi');
@@ -53329,18 +53347,33 @@ window._almCarritoOptions = function() {
 
  var frag = document.createDocumentFragment();
 
+ // v1.3.1360: aviso cuando los hits son de OTROS proveedores
+ if (hitsFromOtherProv && hits.length > 0) {
+  var noticeLi = document.createElement('li');
+  noticeLi.style.cssText = 'padding:10px 16px;background:var(--surface-2,rgba(0,0,0,0.04));font-size:var(--fs-xs);color:var(--ink-soft);font-style:italic;border-bottom:1px solid var(--border);';
+  noticeLi.textContent = 'No hay coincidencias en este proveedor. Resultados en otros proveedores:';
+  frag.appendChild(noticeLi);
+ }
+
  // Items encontrados
  hits.slice(0,10).forEach(function(p) {
+ var isOther = hitsFromOtherProv && p.prov !== sel;
  var li = document.createElement('li');
  li.style.cssText = 'display:flex;align-items:center;gap:var(--sp-3);padding:11px 16px;border-bottom:1px solid var(--border);cursor:pointer;';
  var foto = p.foto
  ? '<img loading="lazy" src="'+p.foto+'" style="width:36px;height:36px;object-fit:cover;border-radius:var(--r-sm);flex-shrink:0;">'
  : '<span style="font-size:var(--fs-2xl);width:36px;text-align:center;flex-shrink:0;">'+(p.e||'📦')+'</span>';
  var pvpStr = p.pvp ? ' · '+Number(p.pvp).toFixed(2).replace('.',',')+' €' : '';
+ // v1.3.1360: si es de otro proveedor, mostrar el nombre del proveedor en rojo
+ var provLabel = '';
+ if (isOther) {
+  var pn = provNameMap[p.prov] || '(?)';
+  provLabel = ' · <span style="color:var(--red);font-weight:var(--fw-semi);">'+pn+'</span>';
+ }
  li.innerHTML = foto +
  '<div style="flex:1;min-width:0;">'+
  '<div style="font-size:var(--fs-base);font-weight:var(--fw-semi);color:var(--ink);">'+hi(p.nombre)+'</div>'+
- '<div style="font-size:var(--fs-xs);color:var(--ink-soft);">'+(p.cat||'')+pvpStr+'</div>'+
+ '<div style="font-size:var(--fs-xs);color:var(--ink-soft);">'+(p.cat||'')+pvpStr+provLabel+'</div>'+
  '</div>'+
  '<button data-pid="'+p.id+'" style="width:32px;height:32px;border-radius:50%;border:none;'+
  'background:var(--bg);color:var(--ink-mid);font-size:var(--fs-xl);cursor:pointer;'+
@@ -53348,10 +53381,13 @@ window._almCarritoOptions = function() {
  // Tap en botón +
  li.querySelector('button').addEventListener('click', function(e) {
  e.stopPropagation();
+ // v1.3.1360: si es otro proveedor, primero cambia proveedor activo
+ if (isOther) { try { window._spotlightSwitchToProv(p.prov); } catch(_) {} }
  window._spotlightAddCart(this.dataset.pid);
  });
- // Tap en fila → añadir y cerrar
+ // Tap en fila → añadir y cerrar (cambiando prov si toca)
  li.addEventListener('click', function() {
+ if (isOther) { try { window._spotlightSwitchToProv(p.prov); } catch(_) {} }
  window._spotlightPick(p.id);
  });
  frag.appendChild(li);
@@ -53370,6 +53406,21 @@ window._almCarritoOptions = function() {
  var items = res.querySelectorAll('li');
  items.forEach(function(li, i) { li.style.setProperty('--item-index', i); });
  }
+
+ // v1.3.1360: helper público — cambia proveedor activo y refresca UI Almacén
+ window._spotlightSwitchToProv = function(provId) {
+  if (!provId) return;
+  var St2 = (window.App && window.App.State) || window.State;
+  if (!St2 || !St2.set || !St2.set.selectedProv) return;
+  try {
+   St2.set.selectedProv(provId);
+   if (typeof _almSaveLastProv === 'function') _almSaveLastProv(provId);
+  } catch(_) {}
+  // Refrescar header + listas Almacén tras el cambio
+  try { if (typeof updateProvBar === 'function') updateProvBar(); } catch(_) {}
+  try { if (typeof _updateAlmEmptyState === 'function') _updateAlmEmptyState(); } catch(_) {}
+  try { if (typeof renderCatInline === 'function') renderCatInline(); } catch(_) {}
+ };
 
  // ── ACCIONES ───────────────────────────────────────────────────
  window._spotlightAddCart = function(prodId) {
