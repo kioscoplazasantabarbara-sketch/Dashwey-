@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1173-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1363-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1362-dev</title>
+<title>Dashwey v1.3.1363-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17494,7 +17494,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1362-dev';
+ const _APP_VERSION = 'v1.3.1363-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31085,15 +31085,27 @@ function _confirmBorrarCuenta(id) {
  var durMs = (function(){ try { var r=KPI.getRange(period); return r.end-r.start; } catch(_){return 30*86400000;} })();
  var pAnt = { type:'custom', start:new Date(Date.now()-durMs*2), end:new Date(Date.now()-durMs) };
  var bnAnt = (function(){ try { return KPI.getBeneficioNeto(pAnt); } catch(_){return {vta:0};} })();
- var delta = bnAnt.vta > 0 ? Math.round(((vta-bnAnt.vta)/bnAnt.vta)*100) : null;
+ // v1.3.1363 FIX BUG-INSIGHT-A: clamp delta a ±999% para evitar valores absurdos
+ //   tipo +24145% cuando bnAnt.vta es muy bajo (ej. primer día con datos).
+ //   Si bnAnt.vta < 5€ se considera "no comparable" y delta queda null.
+ var delta = (bnAnt.vta > 5)
+  ? Math.max(-999, Math.min(999, Math.round(((vta-bnAnt.vta)/bnAnt.vta)*100)))
+  : null;
 
  var topV = (function(){ try { return KPI.getTopVentas(period); } catch(_){return [];} })();
  var topVnom = topV[0]&&topV[0].prod ? topV[0].prod.nombre : null;
  var topVuds = topV[0] ? (topV[0].uds||0) : 0;
+ // v1.3.1363: top2 para insight de concentración
+ var top2Uds = topV[1] ? (topV[1].uds||0) : 0;
+ var totalUdsTop = topV.reduce(function(s,x){return s+(x.uds||0);},0);
+ var concentracionTop = totalUdsTop > 0 ? Math.round((topVuds/totalUdsTop)*100) : 0;
 
  var chartV = (function(){ try { return KPI.getVentasChartData(period,'ingresos'); } catch(_){return {labels:[],vals:[]};} })();
  var picoIdx = chartV.vals.length ? chartV.vals.indexOf(Math.max.apply(null,chartV.vals)) : -1;
  var picoH = picoIdx>=0 ? (chartV.labels[picoIdx]||null) : null;
+ // v1.3.1363: detectar tramo flojo (valor en chart < 30% del pico) — útil para optimizar horario
+ var picoVal = picoIdx>=0 ? chartV.vals[picoIdx] : 0;
+ var nTramosFlojos = picoVal > 0 ? chartV.vals.filter(function(v){return v > 0 && v < picoVal*0.3;}).length : 0;
 
  var topC = (function(){ try { return KPI.getTopCompras(period); } catch(_){return [];} })();
  var topCnom = topC[0]&&topC[0].prod ? topC[0].prod.nombre : null;
@@ -31118,6 +31130,17 @@ function _confirmBorrarCuenta(id) {
  var ingTotal= ingresos.reduce(function(s,i){return s+(i.importe||0);},0);
  var flujNet = ingTotal - gasTotal;
 
+ // v1.3.1363: Runway estimado (meses de caja al ritmo actual)
+ var saldoActual = 0;
+ try {
+  var cuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+  saldoActual = cuentas.reduce(function(s,c){return s + (c.saldo||0);}, 0);
+ } catch(_) {}
+ var gastoMensual = (typeof FinEngine !== 'undefined' && FinEngine.gastoMensualTotal)
+  ? FinEngine.gastoMensualTotal() : 0;
+ var runwayMeses = (gastoMensual > 0 && saldoActual > 0)
+  ? Math.round((saldoActual / gastoMensual) * 10) / 10 : null;
+
  var pedidos = State.get.historialPedidos&&State.get.historialPedidos()||[];
  var pedRecientes = pedidos.filter(function(p){return new Date(p.fecha)>=new Date(Date.now()-30*86400000);});
  var pedProx = pedRecientes.sort(function(a,b){return new Date(a.fecha)-new Date(b.fecha);})[0]||null;
@@ -31133,100 +31156,157 @@ function _confirmBorrarCuenta(id) {
  }, 0);
  var topRoi = (function(){ try { return KPI.getTopRoi(period); } catch(_){return [];} })();
 
+ // v1.3.1363 — REFACTOR INSIGHTS: filosofía
+ //   1. NO repetir KPI visible (ticket medio, hora pico, ventas totales, top producto, etc.)
+ //   2. NO mostrar texto inútil ("sin datos", "sin transacciones") — devolver null y filtrar abajo
+ //   3. SOLO insights accionables: anomalía, comparación, tendencia, recomendación
+ //   4. Si no hay insight bueno, mostrar uno solo en vez de inventar 5 mediocres
+ //
+ //   Si una frase devuelve null, se filtra antes de renderizar.
+
+ // Helper: solo añadir frase si es no-null
+ var _build = function(arr) { return arr.filter(function(p){ return p; }); };
+
  var phrases = {
- rendimiento: [
- vta > 0
- ? (delta !== null
- ? 'Llevas ' + feur(vta) + ' en ventas, ' + (delta >= 0 ? 'un +' + delta + '% sobre el periodo anterior.' : 'un ' + delta + '% respecto al periodo anterior.')
- : 'Llevas ' + feur(vta) + ' en ventas este periodo.')
- : 'Sin ventas registradas aún. Asegúrate de que el TPV está activo.',
- nTick > 0
- ? 'Ticket medio de ' + feur(ticket) + ' en ' + nTick + ' transacciones.'
- : 'Sin transacciones en este periodo.',
- picoH
- ? 'Tu hora pico es ' + picoH + '. Asegúrate de tener stock suficiente en ese tramo.'
- : 'Necesitas más datos de ventas para calcular la hora pico.',
- topVnom
- ? '' + topVnom + ' es tu producto estrella — ' + topVuds + ' unidades vendidas.'
- : 'Sin ventas registradas para determinar el producto estrella.',
- margen > 0
- ? 'Margen bruto del ' + margen + '%' + (margen < 20 ? ' — por debajo del 20% recomendado. Revisa precios.' : ' — buen nivel de rentabilidad.')
- : 'Margen negativo. Estás perdiendo dinero en cada venta — revisa costes.',
- ],
- compras: [
- inv > 0
- ? 'Has invertido ' + feur(inv) + ' en ' + pedRecientes.length + ' pedidos este periodo.'
- : 'Sin pedidos registrados en este periodo.',
- prov1
- ? '' + prov1.nombre + ' concentra el ' + prov1.pct + '% del gasto con un margen estimado del ' + prov1.margen + '%.'
- : 'Sin datos de proveedor para este periodo.',
- topCnom
- ? '' + topCnom + ' es el artículo más comprado — ' + topCcaj + ' bultos en el periodo.'
- : 'Sin datos de compras para determinar el artículo más pedido.',
- cosMedia > 0
- ? 'Coste medio por pedido de ' + feur(cosMedia) + '.'
- : 'Sin pedidos suficientes para calcular el coste medio.',
- roi !== 0
- ? 'ROI estimado del ' + roi + '% sobre la inversión en compras.'
- : 'Sin datos suficientes para calcular el ROI.',
- ],
- 'flujo-caja': [
- ben >= 0
- // v1.3.1270 FIX W-D-08: "bruto" coherente con el cálculo real
- ? 'Beneficio bruto de ' + feur(ben) + ' — margen del ' + margen + '%.'
- : 'Beneficio negativo de ' + feur(ben) + '. Revisa márgenes y costes.',
- flujNet >= 0
- ? 'Flujo de caja positivo: +' + feur(flujNet) + ' entre ingresos y gastos operativos.'
- : 'Gastas ' + feur(Math.abs(flujNet)) + ' más de lo que ingresas. Identifica gastos variables a reducir.',
- gasMax
- ? 'Tu mayor gasto es ' + (gasMax.concepto||'sin nombre') + ' con ' + feur(gasMax.importe||0) + '.'
- : 'Sin gastos operativos registrados.',
- valInv > 0
- ? 'Tienes ' + feur(valInv) + ' inmovilizados en stock.'
- : 'Sin valor de stock registrado.',
- roi !== 0
- ? 'ROI del periodo: ' + roi + '% sobre la inversión total en compras.'
- : 'Sin datos suficientes para calcular el ROI.',
- ],
- agenda: [
- pedRecientes.length > 0
- ? 'Tienes ' + pedRecientes.length + ' pedido' + (pedRecientes.length !== 1 ? 's' : '') + ' en los últimos 30 días.'
- : 'Sin pedidos recientes. ¿Toca hacer el pedido?',
- invCam > 0
- ? '' + feur(invCam) + ' en inversión pendiente de recibir.'
- : 'Sin órdenes de compra pendientes.',
- visPend.length > 0
- ? (visProx
- ? 'Próxima visita el ' + new Date(visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + '. ' + visPend.length + ' visita' + (visPend.length !== 1 ? 's' : '') + ' pendiente' + (visPend.length !== 1 ? 's' : '') + '.'
- : '' + visPend.length + ' visita' + (visPend.length !== 1 ? 's' : '') + ' comercial' + (visPend.length !== 1 ? 'es' : '') + ' pendiente' + (visPend.length !== 1 ? 's' : '') + '.')
- : 'Sin eventos pendientes.',
- visitas.filter(function(v){return v.estado==='cumplida';}).length > 0
- ? '' + visitas.filter(function(v){return v.estado==='cumplida';}).length + ' visita' + (visitas.filter(function(v){return v.estado==='cumplida';}).length !== 1 ? 's' : '') + ' comercial' + (visitas.filter(function(v){return v.estado==='cumplida';}).length !== 1 ? 'es' : '') + ' realizadas.'
- : 'Sin eventos realizados aún.',
- pedProx
- ? 'Próxima entrega prevista el ' + new Date(pedProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + '.'
- : 'Sin entregas programadas próximamente.',
- ],
- caducidades: [
- cad7.length > 0
- ? '' + cad7.length + ' producto' + (cad7.length !== 1 ? 's' : '') + ' caduca' + (cad7.length !== 1 ? 'n' : '') + ' en menos de 7 días — ' + feur(cadVal) + ' en riesgo.'
- : 'Ningún producto caduca esta semana.',
- cad1
- ? '' + (cad1.prod&&cad1.prod.nombre||'—') + ' es el más urgente — caduca en ' + cad1.diasRestantes + ' día' + (cad1.diasRestantes !== 1 ? 's' : '') + '.'
- : 'Sin caducidades próximas registradas.',
- cad.length > 0
- ? '' + cad.length + ' producto' + (cad.length !== 1 ? 's' : '') + ' caduca' + (cad.length !== 1 ? 'n' : '') + ' en los próximos 30 días.'
- : 'Sin caducidades en los próximos 30 días.',
- cadVal > 0
- ? 'Valor de stock en riesgo esta semana: ' + feur(cadVal) + '.'
- : 'Sin valor de stock en riesgo esta semana.',
- topRoi[0]&&topRoi[0].prod
- ? '' + topRoi[0].prod.nombre + ' es tu producto más rentable con un ROI del ' + topRoi[0].roi + '%.'
- : 'Sin datos de ROI para este periodo.',
- ],
+ rendimiento: _build([
+  // Comparación temporal con clamp anti-valor-absurdo
+  (vta > 0 && delta !== null && Math.abs(delta) >= 10)
+   ? (delta > 0
+     ? '📈 Vas ' + delta + '% por encima del periodo anterior. Sigue el ritmo.'
+     : '📉 Vas ' + Math.abs(delta) + '% por debajo del periodo anterior. Revisa qué cambió.')
+   : null,
+  // Concentración en top producto (solo si dependes mucho de uno)
+  (topVnom && concentracionTop >= 40 && totalUdsTop > 20)
+   ? '⚠️ ' + concentracionTop + '% de tus ventas dependen de ' + topVnom + '. Asegura su stock.'
+   : null,
+  // Margen bajo — accionable
+  (vta > 100 && margen > 0 && margen < 20)
+   ? '⚠️ Margen del ' + margen + '% — por debajo del 20% recomendado. Revisa precios o costes.'
+   : null,
+  // Margen negativo — crítico
+  (vta > 100 && margen < 0)
+   ? '🚨 Margen negativo: pierdes dinero en cada venta. Revisa costes urgente.'
+   : null,
+  // Tramos flojos detectados (oportunidad de promo)
+  (nTramosFlojos >= 3 && picoH)
+   ? '💡 ' + nTramosFlojos + ' tramos con ventas flojas. Oportunidad de lanzar promo.'
+   : null,
+ ]),
+
+ compras: _build([
+  // Capital pendiente (no visible en card de compras)
+  (invCam > 50)
+   ? '📦 ' + feur(invCam) + ' en pedidos pendientes de recibir.'
+   : null,
+  // Concentración en proveedor (riesgo de dependencia)
+  (prov1 && prov1.pct >= 50)
+   ? '⚠️ ' + prov1.pct + '% del gasto concentrado en ' + prov1.nombre + '. Riesgo de dependencia.'
+   : null,
+  // Margen del proveedor top (si es dato útil)
+  (prov1 && prov1.margen !== undefined && prov1.margen < 15 && prov1.pct >= 30)
+   ? '⚠️ Margen del ' + prov1.margen + '% con ' + prov1.nombre + '. Negocia o diversifica.'
+   : null,
+  // ROI bajo (alerta) o alto (felicitación)
+  (inv > 100 && roi !== 0)
+   ? (roi >= 30
+     ? '✅ ROI del ' + roi + '% sobre la inversión. Buen ritmo.'
+     : (roi < 0
+       ? '🚨 ROI negativo (' + roi + '%). Las compras no están rentando.'
+       : '📊 ROI del ' + roi + '%. Margen de mejora.'))
+   : null,
+  // Coste medio pedido (si hay >=3 pedidos)
+  (pedRecientes.length >= 3 && cosMedia > 0)
+   ? '📊 Coste medio por pedido: ' + feur(cosMedia) + ' (últimos 30 días).'
+   : null,
+ ]),
+
+ 'flujo-caja': _build([
+  // v1.3.1363 FIX BUG-INSIGHT-B: signo correcto en flujo
+  // Runway al ritmo actual (insight estrella)
+  (runwayMeses !== null && runwayMeses < 6)
+   ? '⚠️ Tu caja aguantará ' + runwayMeses + ' meses al ritmo actual de gasto.'
+   : (runwayMeses !== null && runwayMeses >= 6 && runwayMeses < 24
+     ? '✅ Tu caja aguantará ' + runwayMeses + ' meses al ritmo actual.'
+     : null),
+  // Beneficio del periodo (no visible directamente — es derivado de margen)
+  (vta > 100 && ben !== 0)
+   ? (ben >= 0
+     ? '💰 Beneficio bruto del periodo: ' + feur(ben) + ' (margen ' + margen + '%).'
+     : '🚨 Pérdida de ' + feur(Math.abs(ben)) + ' este periodo. Revisa precios o gastos.')
+   : null,
+  // Mayor gasto del periodo (no visible — útil saber concepto)
+  (gasMax && gasMax.importe > 100)
+   ? '💸 Mayor gasto: ' + (gasMax.concepto||'sin concepto') + ' (' + feur(gasMax.importe||0) + ').'
+   : null,
+  // Capital inmovilizado en stock (no visible aquí)
+  (valInv > 500)
+   ? '📦 Tienes ' + feur(valInv) + ' inmovilizados en stock.'
+   : null,
+  // Saldo bajo crítico
+  (saldoActual > 0 && saldoActual < 500)
+   ? '🚨 Saldo bajo (' + feur(saldoActual) + '). Considera frenar gastos no esenciales.'
+   : null,
+ ]),
+
+ agenda: _build([
+  // v1.3.1363 FIX BUG-INSIGHT-C: insights útiles, no mensajes vacíos
+  // Pedidos pendientes (capital comprometido)
+  (pendOrd.length > 0 && invCam > 0)
+   ? '📦 ' + pendOrd.length + ' pedido' + (pendOrd.length !== 1 ? 's' : '') + ' pendiente' + (pendOrd.length !== 1 ? 's' : '') + ' (' + feur(invCam) + ').'
+   : null,
+  // Próxima visita comercial (accionable)
+  visProx
+   ? '🤝 Próxima visita: ' + new Date(visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + '.'
+   : null,
+  // Visitas pendientes acumuladas (alerta si muchas)
+  (visPend.length >= 3)
+   ? '⚠️ ' + visPend.length + ' visitas comerciales pendientes acumuladas.'
+   : null,
+  // Caducidades urgentes (cruzar info)
+  (cad7.length > 0 && cadVal > 50)
+   ? '🚨 ' + cad7.length + ' producto' + (cad7.length !== 1 ? 's' : '') + ' caduca' + (cad7.length !== 1 ? 'n' : '') + ' en 7 días (' + feur(cadVal) + ' en riesgo).'
+   : null,
+  // Pedidos recientes (ritmo de reposición)
+  (pedRecientes.length === 0 && pendOrd.length === 0)
+   ? '💡 Sin pedidos en 30 días. ¿Toca reponer mercancía?'
+   : null,
+ ]),
+
+ caducidades: _build([
+  // Caducidades 7 días — más útil con valor en riesgo
+  (cad7.length > 0)
+   ? '🚨 ' + cad7.length + ' producto' + (cad7.length !== 1 ? 's' : '') + ' caduca' + (cad7.length !== 1 ? 'n' : '') + ' en menos de 7 días (' + feur(cadVal) + ' en riesgo).'
+   : null,
+  // Producto más urgente (concreto)
+  cad1
+   ? '⏰ ' + (cad1.prod&&cad1.prod.nombre||'—') + ' caduca en ' + cad1.diasRestantes + ' día' + (cad1.diasRestantes !== 1 ? 's' : '') + '.'
+   : null,
+  // Total 30 días (visión periodo)
+  (cad.length > cad7.length)
+   ? '📅 ' + cad.length + ' productos caducan en los próximos 30 días.'
+   : null,
+  // Producto más rentable (cruzar con caducidades = oportunidad de venta urgente)
+  (topRoi[0]&&topRoi[0].prod)
+   ? '✅ ' + topRoi[0].prod.nombre + ' es tu producto más rentable (ROI ' + topRoi[0].roi + '%).'
+   : null,
+ ]),
  };
 
- return phrases[cardId] || null;
+ // v1.3.1363: si una card no tiene NINGÚN insight bueno, mostrar 1 mensaje neutral y único
+ var result = phrases[cardId];
+ if (!result || result.length === 0) {
+  // Fallback minimalista por card — solo se muestra si la card no tiene datos suficientes
+  var fallbacks = {
+   rendimiento: vta > 0 ? null : ['Sin ventas suficientes en este periodo para detectar patrones.'],
+   compras: inv > 0 ? null : ['Sin compras registradas en este periodo.'],
+   'flujo-caja': null, // sin fallback — si no hay nada útil, no mostrar
+   agenda: ['Agenda al día. Sin alertas pendientes.'],
+   caducidades: ['Sin caducidades próximas registradas.'],
+  };
+  result = fallbacks[cardId] || null;
+ }
+
+ return result;
  } catch(e) {
  return null;
  }
