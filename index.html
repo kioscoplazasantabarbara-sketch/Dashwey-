@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1395-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1397-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1395-dev</title>
+<title>Dashwey v1.3.1397-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12103,6 +12103,11 @@ const State = (() => {
  horarioCierre: '',    // 'HH:MM' o ''
  diasActivos: [1,2,3,4,5,6,7], // 1=Lun..7=Dom (default: todos)
  cierreAutomatico: false, // si true y horarioCierre definido, auto-cierre en la hora
+ // v1.3.1397 — Modo de archivo del cierre automático.
+ //   'revisar' (default): crea preliminar pendiente de revisión + banner.
+ //   'directo': crea cierre real directamente, estampa closureId en ventas, sin banner.
+ //   Recomendado 'directo' cuando Loyverse es 100% fiable y no necesitas ajuste manual.
+ cierreAutomatico_modoArchivo: 'revisar',
  notifCierre: false,   // notificación push al llegar cierre
  // v1.3.1276 FASE 1 CIERRE CAJA — preliminar revisable
  cierreCajaCuentaDestino: '',  // id cuenta destino para auto-cierre (vacío = abre sheet)
@@ -13955,15 +13960,52 @@ const State = (() => {
    if (dateKey && i.cuentaId) {
     // Construir cierre real con shape compatible con CierreEngine
     const importe = (typeof allowed.importe === 'number') ? allowed.importe : (i.importe || 0);
-    const aperturaTs = (function(){
-     // 00:00 Madrid del dateKey. Usamos _autoCierreTzToUtc si existe, fallback ISO.
+
+    // ────────────────────────────────────────────────────────────────────
+    // v1.3.1396 — RANGO TEMPORAL CORRECTO PARA EL DÍA CONTABLE ORIGINAL
+    //   Bug v1.3.1395: cierreTs se ponía = momento del archivado. Si Hung
+    //   archivaba el preliminar varios días tarde, el rango [aperturaTs..cierreTs]
+    //   incluía ventas de días posteriores → closureId mal asignado.
+    //   Fix: separar dos timestamps:
+    //     - cierreTsDiaContable: cierre HORARIO del día original (para rango ventas)
+    //     - cierreTs: momento del archivado (para ordenar feed cronológicamente)
+    // ────────────────────────────────────────────────────────────────────
+    const _perfilP = (function(){ try { return State.get.perfil ? (State.get.perfil() || {}) : {}; } catch(_) { return {}; } })();
+    const _hAp = (_perfilP.horarioApertura || '00:00').match(/^(\d{2}):(\d{2})$/);
+    const _hCi = (_perfilP.horarioCierre || '23:59').match(/^(\d{2}):(\d{2})$/);
+    const _hhA = _hAp ? parseInt(_hAp[1], 10) : 0;
+    const _mmA = _hAp ? parseInt(_hAp[2], 10) : 0;
+    const _hhC = _hCi ? parseInt(_hCi[1], 10) : 23;
+    const _mmC = _hCi ? parseInt(_hCi[2], 10) : 59;
+    const _esNocturno = (_hhA * 60 + _mmA) > (_hhC * 60 + _mmC);
+
+    // Helper local: tz→utc seguro con fallback
+    const _tzToUtc = function(dKey, hh, mm, z){
      try {
       if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
-       return window._DashweyAutoCierreTzToUtc(dateKey, 0, 0, zona);
+       return window._DashweyAutoCierreTzToUtc(dKey, hh, mm, z);
       }
      } catch(_) {}
-     return new Date(dateKey + 'T00:00:00').getTime();
-    })();
+     // Fallback simple (asume zona del dispositivo, no ideal pero no rompe)
+     const pad = function(n){ return String(n).padStart(2,'0'); };
+     return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
+    };
+
+    // Apertura: HH:MM_apertura del dateKey (en horario nocturno, apertura es del día anterior)
+    let _aperturaDateKey = dateKey;
+    if (_esNocturno) {
+     // Restar 1 día en zona kiosco para apertura
+     const _pa = dateKey.split('-');
+     const _ayer = new Date(Date.UTC(parseInt(_pa[0],10), parseInt(_pa[1],10)-1, parseInt(_pa[2],10)));
+     _ayer.setUTCDate(_ayer.getUTCDate() - 1);
+     _aperturaDateKey = _ayer.toISOString().slice(0, 10);
+    }
+    const aperturaTs = _tzToUtc(_aperturaDateKey, _hhA, _mmA, zona);
+
+    // Cierre del día contable: HH:MM_cierre del dateKey (siempre en el dateKey original,
+    //   porque dateKey YA representa el día contable, no la fecha de apertura)
+    const cierreTsDiaContable = _tzToUtc(dateKey, _hhC, _mmC, zona);
+
     const cierreTs = i.revisadoEn || Date.now();
     _cierreRealId = 'cierre_promo_' + cierreTs;
     const cierreReal = {
@@ -14022,7 +14064,10 @@ const State = (() => {
        if (!v || v.deleted || v.closureId) return;
        const t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
        if (!isFinite(t)) return;
-       if (t >= aperturaTs && t < cierreTs) {
+       // v1.3.1396: usar cierreTsDiaContable (cierre horario del día original)
+       //   en lugar de cierreTs (momento del archivado). Sin esto, archivar
+       //   varios días tarde estampaba closureId en ventas de días posteriores.
+       if (t >= aperturaTs && t < cierreTsDiaContable) {
         const cidV = v.cuentaId || i.cuentaId;
         if (cidV !== i.cuentaId) return; // solo ventas de la misma cuenta
         v.closureId = _cierreRealId;
@@ -17917,7 +17962,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1395-dev';
+ const _APP_VERSION = 'v1.3.1397-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18209,6 +18254,15 @@ const ui = (() => {
    style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">
   <span style="font-size:var(--fs-sm);color:var(--ink);flex:1">Registrar movimiento de 0 € si no hubo ventas</span>
  </label>
+ <!-- v1.3.1397 — Toggle modo directo (sin banner ni revisión) -->
+ <label style="display:flex;align-items:flex-start;gap:var(--sp-2_5);cursor:pointer;-webkit-tap-highlight-color:transparent;padding:var(--sp-2);background:var(--bg);border-radius:var(--r-sm2)">
+  <input id="pf-cierre-modo-directo" type="checkbox" ${p.cierreAutomatico_modoArchivo==='directo'?'checked':''}
+   style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0;margin-top:2px">
+  <div style="flex:1;min-width:0">
+   <div style="font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi)">Archivar cierres automáticamente</div>
+   <div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px;line-height:1.4">Al cerrar la jornada, el cierre se registra directamente en la cuenta destino sin pedir revisión. Sin banner ni paso intermedio.</div>
+  </div>
+ </label>
  <!-- Abrir jornada (botón migrado desde flujo de caja v1.3.1159) -->
  <button id="pf-abrir-jornada" onclick="App.ui._perfilAbrirJornada()"
   style="height:46px;border-radius:var(--r-md);background:var(--accent);color:#fff;border:none;font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">
@@ -18250,6 +18304,7 @@ const ui = (() => {
  // v1.3.1276 FASE 1 cierre caja
  cierreCajaCuentaDestino: document.getElementById('pf-cierre-cuenta')?.value || '',
  registrarSinVentas: !!document.getElementById('pf-reg-sin-ventas')?.checked,
+ cierreAutomatico_modoArchivo: document.getElementById('pf-cierre-modo-directo')?.checked ? 'directo' : 'revisar',
  };
  // v1.3.1245 FIX UX-4: soportar horario nocturno (wrap-around).
  //   - Antes: rechazaba apertura >= cierre (bar 18:00 → 02:00 imposible)
@@ -21976,6 +22031,9 @@ const ui = (() => {
 
  // v1.3.1276 FASE 1 — registro preliminar revisable directo (sin sheet)
  // v1.3.1283 FIX TZ — usa dateKey en zona del kiosco para concepto y cierreInfo
+ // v1.3.1397 — Bifurcación según perfil.cierreAutomatico_modoArchivo:
+ //   'revisar' (default): comportamiento original — crea ingreso preliminar pendiente
+ //   'directo': crea cierre real directamente con closureId estampado en ventas
  function _autoCierreRegistrarPreliminar(perfil) {
   try {
    var cuentaId = perfil.cierreCajaCuentaDestino;
@@ -21990,6 +22048,17 @@ const ui = (() => {
    // v1.3.1283 FIX TZ: dateKey en zona del kiosco (no del dispositivo)
    var zona = perfil.zona || 'Europe/Madrid';
    var hoy = _autoCierreTzNow(zona).dateKey;
+
+   // ═══════════════════════════════════════════════════════════════════════
+   // v1.3.1397 — MODO DIRECTO: crear cierre real sin paso preliminar
+   // ═══════════════════════════════════════════════════════════════════════
+   if (perfil.cierreAutomatico_modoArchivo === 'directo') {
+    return _autoCierreCrearCierreReal(perfil, info, hoy, cuentaId, zona, now);
+   }
+
+   // ═══════════════════════════════════════════════════════════════════════
+   // MODO REVISAR (default): ingreso preliminar pendiente de revisión
+   // ═══════════════════════════════════════════════════════════════════════
    var ingreso = {
     id: 'cierre_auto_' + now,
     importe: info.bruto,
@@ -22015,6 +22084,134 @@ const ui = (() => {
    return true;
   } catch(e) {
    console.warn('[AutoCierre] registrarPreliminar err', e);
+   return false;
+  }
+ }
+
+ // ═══════════════════════════════════════════════════════════════════════════
+ // v1.3.1397 — _autoCierreCrearCierreReal
+ //   Crea un cierre REAL (no preliminar) directamente al cerrar la jornada.
+ //   Misma lógica que la promoción de v1.3.1396 (confirmarRevisionCierre) pero
+ //   ejecutada inline desde el scheduler. No crea ingreso preliminar, no muestra
+ //   banner, no requiere acción del usuario.
+ //
+ //   Pasos:
+ //     1. Calcula rango temporal del día contable (apertura..cierre Madrid)
+ //     2. Verifica idempotencia: si ya hay cierre cerrado para este dateKey+cuenta, skip
+ //     3. Crea cierre real en cierresCaja[]
+ //     4. Estampa closureId en ventas del rango (misma cuenta)
+ //     5. Recalcula saldos
+ // ═══════════════════════════════════════════════════════════════════════════
+ function _autoCierreCrearCierreReal(perfil, info, dateKey, cuentaId, zona, now) {
+  try {
+   var importe = info.bruto;
+   var nTickets = info.nTickets;
+
+   // Calcular rango temporal del día contable original
+   var hAp = (perfil.horarioApertura || '00:00').match(/^(\d{2}):(\d{2})$/);
+   var hCi = (perfil.horarioCierre || '23:59').match(/^(\d{2}):(\d{2})$/);
+   var hhA = hAp ? parseInt(hAp[1], 10) : 0;
+   var mmA = hAp ? parseInt(hAp[2], 10) : 0;
+   var hhC = hCi ? parseInt(hCi[1], 10) : 23;
+   var mmC = hCi ? parseInt(hCi[2], 10) : 59;
+   var esNocturno = (hhA * 60 + mmA) > (hhC * 60 + mmC);
+
+   var tzToUtc = function(dKey, hh, mm){
+    try {
+     if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
+      return window._DashweyAutoCierreTzToUtc(dKey, hh, mm, zona);
+     }
+    } catch(_) {}
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
+   };
+
+   var aperturaDateKey = dateKey;
+   if (esNocturno) {
+    var pa = dateKey.split('-');
+    var ayer = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    ayer.setUTCDate(ayer.getUTCDate() - 1);
+    aperturaDateKey = ayer.toISOString().slice(0, 10);
+   }
+   var aperturaTs = tzToUtc(aperturaDateKey, hhA, mmA);
+   var cierreTsDiaContable = tzToUtc(dateKey, hhC, mmC);
+
+   // Idempotencia: ¿ya hay cierre cerrado para este dateKey + cuenta?
+   var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
+   var yaExiste = cierres.some(function(c){
+    return c && !c.deleted && c.estado === 'cerrado'
+        && c.jornadaLabel === dateKey
+        && c.cuentaId === cuentaId;
+   });
+   if (yaExiste) {
+    console.info('[AutoCierre/Directo] ya existe cierre cerrado para', dateKey, 'cuenta', cuentaId, '— skip');
+    return true;
+   }
+
+   // Construir cierre real
+   var cierreId = 'cierre_auto_directo_' + now;
+   var cierreReal = {
+    id: cierreId,
+    jornadaLabel: dateKey,
+    aperturaTs: aperturaTs,
+    cierreTs: now, // momento real del cierre (= ahora, scheduler dispara en hora cierre)
+    cuentaId: cuentaId,
+    saldoInicial: 0,
+    saldoEsperado: importe,
+    saldoReal: importe,
+    diferencia: 0,
+    ventas: importe,
+    gastos: 0,
+    ingresos: 0,
+    nVentas: nTickets,
+    nGastos: 0,
+    nIngresos: 0,
+    movimientos: [],
+    notas: 'Cierre automático directo · ' + info.rangoStr,
+    estado: 'cerrado',
+    origen: 'auto_directo',
+    createdAt: now,
+   };
+
+   // Estampar closureId en ventas del rango Madrid (misma cuenta)
+   var ventasAll = (State.get.ventas && State.get.ventas()) || [];
+   var eventIdsVentas = [];
+   ventasAll.forEach(function(v){
+    if (!v || v.deleted || v.closureId) return;
+    var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+    if (!isFinite(t)) return;
+    if (t >= aperturaTs && t < cierreTsDiaContable) {
+     var cidV = v.cuentaId || cuentaId;
+     if (cidV !== cuentaId) return;
+     v.closureId = cierreId;
+     eventIdsVentas.push(v.id);
+     try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
+    }
+   });
+   cierreReal.eventIds = { ventas: eventIdsVentas, gastos: [], ingresos: [] };
+   cierreReal.isCached = true;
+   cierreReal.cachedAt = now;
+
+   // Persistir cierre real
+   if (State.set.addCierre) {
+    State.set.addCierre(cierreReal);
+   } else {
+    // Fallback: push directo si no existe setter dedicado
+    var st = State._raw ? State._raw() : null;
+    if (st && Array.isArray(st.cierresCaja)) {
+     st.cierresCaja.push(cierreReal);
+    }
+    try { window._DashweyMarkDirty('cierresCaja', cierreId); } catch(_) {}
+   }
+
+   // Recalcular saldos
+   try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
+   try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
+
+   console.info('[AutoCierre/Directo] ✓ cierre real creado:', importe + '€ · ' + nTickets + ' tickets · ' + eventIdsVentas.length + ' ventas estampadas · zona=' + zona);
+   return true;
+  } catch(e) {
+   console.warn('[AutoCierre/Directo] crearCierreReal err', e);
    return false;
   }
  }
@@ -22076,11 +22273,14 @@ const ui = (() => {
     if (perfil.cierreCajaCuentaDestino) {
      _autoCierreLastFired = today;
      try { localStorage.setItem('dashwey_autocierre_lastfired', today); } catch(_) {}
-     console.info('[AutoCierre] modo preliminar revisable — disparando ' + horarioCierre);
+     // v1.3.1397 — log distinto según modo
+     var _modoArchivo = perfil.cierreAutomatico_modoArchivo === 'directo' ? 'directo' : 'preliminar revisable';
+     console.info('[AutoCierre] modo ' + _modoArchivo + ' — disparando ' + horarioCierre);
      var ok = _autoCierreRegistrarPreliminar(perfil);
      if (ok) {
       var info = _autoCierreCalcBruto(perfil);
-      _autoCierreNotify('Dashwey · Cierre automático', 'Registrado: ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets · ' + info.rangoStr);
+      var _notifTitle = _modoArchivo === 'directo' ? 'Dashwey · Cierre archivado' : 'Dashwey · Cierre automático';
+      _autoCierreNotify(_notifTitle, 'Registrado: ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets · ' + info.rangoStr);
      } else {
       // Si falla, deshacer flag para reintentar próximo tick
       _autoCierreLastFired = null;
@@ -22227,35 +22427,51 @@ const ui = (() => {
      continue;
     }
 
-    // Registrar preliminar retroactivo
-    var ingreso = {
-     id: 'cierre_auto_' + cierreTs + '_' + Math.random().toString(36).slice(2,7),
-     importe: info.bruto,
-     fecha: new Date(cierreTs).toISOString(),
-     cuentaId: perfil.cierreCajaCuentaDestino,
-     concepto: 'Cierre automático (preliminar) ' + candidateKey + ' · ' + info.rangoStr,
-     origen: 'cierre_caja_auto',
-     metaTipo: 'normal',
-     estado: 'confirmado',
-     pendienteRevision: true,
-     cierreInfo: {
-      bruto: info.bruto,
-      nTickets: info.nTickets,
-      ticketMedio: info.ticketMedio,
-      rangoStr: info.rangoStr,
-      zona: zona,
-      dateKey: candidateKey,
-      retroactivo: true,
-      generadoEn: nowMs,
-     },
-    };
-    try {
-     State.set.addIngreso(ingreso);
-     registradosByKey[candidateKey] = true;
-     creados++;
-     console.info('[AutoCierre/Backlog] ✓ cierre retroactivo ' + candidateKey + ': ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets');
-    } catch(e) {
-     console.warn('[AutoCierre/Backlog] err en ' + candidateKey, e);
+    // v1.3.1397 — Bifurcar según modo: directo crea cierre real, revisar crea preliminar
+    if (perfil.cierreAutomatico_modoArchivo === 'directo') {
+     try {
+      var okDirecto = _autoCierreCrearCierreReal(
+       perfil, info, candidateKey, perfil.cierreCajaCuentaDestino, zona, cierreTs
+      );
+      if (okDirecto) {
+       registradosByKey[candidateKey] = true;
+       creados++;
+       console.info('[AutoCierre/Backlog/Directo] ✓ cierre real retroactivo ' + candidateKey + ': ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets');
+      }
+     } catch(eD) {
+      console.warn('[AutoCierre/Backlog/Directo] err en ' + candidateKey, eD);
+     }
+    } else {
+     // Modo revisar: registrar preliminar retroactivo (comportamiento original)
+     var ingreso = {
+      id: 'cierre_auto_' + cierreTs + '_' + Math.random().toString(36).slice(2,7),
+      importe: info.bruto,
+      fecha: new Date(cierreTs).toISOString(),
+      cuentaId: perfil.cierreCajaCuentaDestino,
+      concepto: 'Cierre automático (preliminar) ' + candidateKey + ' · ' + info.rangoStr,
+      origen: 'cierre_caja_auto',
+      metaTipo: 'normal',
+      estado: 'confirmado',
+      pendienteRevision: true,
+      cierreInfo: {
+       bruto: info.bruto,
+       nTickets: info.nTickets,
+       ticketMedio: info.ticketMedio,
+       rangoStr: info.rangoStr,
+       zona: zona,
+       dateKey: candidateKey,
+       retroactivo: true,
+       generadoEn: nowMs,
+      },
+     };
+     try {
+      State.set.addIngreso(ingreso);
+      registradosByKey[candidateKey] = true;
+      creados++;
+      console.info('[AutoCierre/Backlog] ✓ cierre retroactivo ' + candidateKey + ': ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets');
+     } catch(e) {
+      console.warn('[AutoCierre/Backlog] err en ' + candidateKey, e);
+     }
     }
    }
    if (creados > 0) {
