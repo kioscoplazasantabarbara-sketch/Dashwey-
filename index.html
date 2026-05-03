@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1400-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1402-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1400-dev</title>
+<title>Dashwey v1.3.1402-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17962,7 +17962,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1400-dev';
+ const _APP_VERSION = 'v1.3.1402-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28278,6 +28278,7 @@ function _toggleCardFromManager(id, btn) {
   });
 
   // Convertir grupos a movimientos "💰 Cierre del día · N tickets · Loyverse"
+  // v1.3.1402: añadir dayKey + cuentaId al move para que tap abra _openTicketsDelDia
   Object.keys(_fcGrupoVentas).forEach(function(k){
    var grp = _fcGrupoVentas[k];
    var nT = grp.count;
@@ -28289,7 +28290,9 @@ function _toggleCardFromManager(id, btn) {
     nombre: label,
     importe: Math.round(grp.total * 100) / 100,
     fecha: grp.fechaRep,
-    // Sin id+src → no editable individualmente (es derivado, no objeto persistido)
+    // v1.3.1402 — tap abre lista de tickets del día (filtrado por cuenta)
+    derivedDayKey: grp.day,
+    derivedCuentaId: grp.cuentaId,
    });
   });
  } catch(_e){ console.warn('[FC] cierre derivado error:', _e); }
@@ -28336,18 +28339,23 @@ function _toggleCardFromManager(id, btn) {
  movesEl.innerHTML = _filtered.length ? _filtered.map(m => {
   const sign = m.type === 'income' ? '+' : m.type === 'expense' ? '−' : '';
   const editable = !!(m.id && m.src);
-  const editAttrs = editable ? ` data-mov-id="${m.id}" data-mov-src="${m.src}"` : '';
+  // v1.3.1402 — derivado tappable: abre _openTicketsDelDia con dayKey + cuentaId
+  const tappableDerivado = !!(m.derivedDayKey);
+  const tappable = editable || tappableDerivado;
+  let attrs = '';
+  if (editable) attrs = ` data-mov-id="${m.id}" data-mov-src="${m.src}"`;
+  else if (tappableDerivado) attrs = ` data-derived-day="${m.derivedDayKey}" data-derived-cuenta="${m.derivedCuentaId||''}"`;
   // v1.3.1000 Fase 3: badge visual para movements pendientes
   const _pendBadge = m.pendiente ? '<span style="display:inline-block;margin-left:var(--sp-1_5);padding:1px 6px;border-radius:var(--r-sm);background:rgba(245,158,11,0.15);color:#B45309;font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:.3px;vertical-align:1px">⏳ PENDIENTE</span>' : '';
   const _rowOpacity = m.pendiente ? 'opacity:0.72;' : '';
-  return `<div class="fc-move-row${editable?' fc-move-editable':''}"${editAttrs} style="${_rowOpacity}">
+  return `<div class="fc-move-row${tappable?' fc-move-editable':''}"${attrs} style="${_rowOpacity}">
   <div class="fc-move-icon ${m.type}">${ICONS[m.type] || '·'}</div>
   <div class="fc-move-info">
   <div class="fc-move-name">${esc(m.nombre)}${_pendBadge}</div>
   <div class="fc-move-date">${fmtD(m.fecha)}</div>
   </div>
   <div class="fc-move-amount ${m.type}">${sign}${_feur(m.importe)}</div>
-  ${editable ? '<div class="fc-move-edit-hint">›</div>' : ''}
+  ${tappable ? '<div class="fc-move-edit-hint">›</div>' : ''}
   </div>`;
  }).join('')
  : '<div style="font-size:var(--fs-sm);color:var(--ink-soft);padding:var(--sp-2) 0">Sin movimientos registrados</div>';
@@ -28360,9 +28368,19 @@ function _toggleCardFromManager(id, btn) {
    row.addEventListener('click', function() {
     var src = row.dataset.movSrc;
     var id = row.dataset.movId;
+    // v1.3.1402 — soportar derivados (tickets del día) además de editables
+    var derivedDay = row.getAttribute('data-derived-day');
+    var derivedCuenta = row.getAttribute('data-derived-cuenta');
     try {
-     // v1.3.1144 HÍBRIDO: click en cierre → abre histórico en lugar de edit sheet
+     // Derivado "💰 Cierre del día · Loyverse" → abrir lista de tickets de ese día
+     if (derivedDay) {
+      _openTicketsDelDia(derivedDay, derivedCuenta || null);
+      return;
+     }
+     // v1.3.1144 HÍBRIDO: click en cierre real → abre histórico
      if (src === 'cierre') {
+      // v1.3.1402: si tiene id, abre tickets del cierre específico (TODO sesión 2)
+      //   por ahora abre el histórico general
       if (window.App && App.dash && App.dash._openCierreHistorialSheet) App.dash._openCierreHistorialSheet();
       return;
      }
@@ -28997,16 +29015,15 @@ function _openEditMovimientoSheet(id, src) {
    '</div>';
 
   document.body.appendChild(sheet);
-  requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
-
-  // Abrir teclado
+  // v1.3.1401 — fix flickering al abrir modal:
+  //   1. Single RAF (doble era innecesario, causaba retraso de paint)
+  //   2. Sin scrollIntoView smooth durante la animación del panel (animaciones competían)
+  //   3. focus() exactamente al final de la animación CSS (320ms), no dispersos
+  requestAnimationFrame(function() { sheet.classList.add('open'); });
   setTimeout(function() {
    var inp = document.getElementById('edit-mov-input');
-   if (inp) {
-    inp.focus();
-    setTimeout(function() { inp.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
-   }
-  }, 350);
+   if (inp) inp.focus();
+  }, 320);
 
   // Cerrar overlay
   sheet.addEventListener('click', function(e) {
@@ -30014,6 +30031,231 @@ function _openEditMovimientoSheet(id, src) {
  //   No duplica con cierres ni venta-dia: aquí se muestra la operación granular,
  //   no el asiento contable.
  // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1402 — _openTicketsDelDia: variante que filtra por día Madrid específico
+ //   en lugar de usar el período global del Dashboard. Usado por tap en cierres
+ //   derivados ("💰 Cierre del día · N tickets · Loyverse") y tap en cierres
+ //   reales (lista de tickets del cierre).
+ //   Reusa toda la lógica de _openTicketsPeriodoSheet (render, formato, etc.)
+ //   inyectando un período sintético { from, to, label } construido a partir
+ //   del dateKey + perfil.zona + horarioApertura/Cierre.
+ function _openTicketsDelDia(dateKey, cuentaId) {
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+   try { showToast('⚠️ Fecha no válida', 'warning'); } catch(_) {}
+   return;
+  }
+  try {
+   var perfil = (State.get.perfil && State.get.perfil()) || {};
+   var zona = perfil.zona || 'Europe/Madrid';
+   var hAp = (perfil.horarioApertura || '00:00').match(/^(\d{2}):(\d{2})$/);
+   var hCi = (perfil.horarioCierre || '23:59').match(/^(\d{2}):(\d{2})$/);
+   var hhA = hAp ? parseInt(hAp[1], 10) : 0;
+   var mmA = hAp ? parseInt(hAp[2], 10) : 0;
+   var hhC = hCi ? parseInt(hCi[1], 10) : 23;
+   var mmC = hCi ? parseInt(hCi[2], 10) : 59;
+   var esNocturno = (hhA * 60 + mmA) > (hhC * 60 + mmC);
+
+   var tzToUtc = function(dKey, hh, mm) {
+    try {
+     if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
+      return window._DashweyAutoCierreTzToUtc(dKey, hh, mm, zona);
+     }
+    } catch(_) {}
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
+   };
+
+   var aperturaDateKey = dateKey;
+   if (esNocturno) {
+    var pa = dateKey.split('-');
+    var ayer = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    ayer.setUTCDate(ayer.getUTCDate() - 1);
+    aperturaDateKey = ayer.toISOString().slice(0, 10);
+   }
+   var aperturaTs = tzToUtc(aperturaDateKey, hhA, mmA);
+   var cierreTs = tzToUtc(dateKey, hhC, mmC);
+
+   // Filtrar ventas del día
+   var todasVentas = (State.get.ventas && State.get.ventas()) || [];
+   var ventasDia = todasVentas.filter(function(v) {
+    if (!v || v.deleted) return false;
+    var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+    if (!isFinite(t)) return false;
+    if (t < aperturaTs || t > cierreTs) return false;
+    if (cuentaId) {
+     var cidV = v.cuentaId || cuentaId; // sin cuentaId → asumir primaria
+     if (cidV !== cuentaId) return false;
+    }
+    return true;
+   }).sort(function(a,b){
+    return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+   });
+
+   // Label legible del día
+   var WD = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+   var MON = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+   var dParts = dateKey.split('-');
+   var fakeDate = new Date(Date.UTC(parseInt(dParts[0],10), parseInt(dParts[1],10)-1, parseInt(dParts[2],10), 12, 0));
+   var labelDia = WD[fakeDate.getUTCDay()] + ' ' + fakeDate.getUTCDate() + ' ' + MON[fakeDate.getUTCMonth()];
+   var periodLabel = 'Tickets del ' + labelDia;
+
+   // Renderizar usando la misma estructura visual que _openTicketsPeriodoSheet
+   _renderTicketsSheet(ventasDia, periodLabel);
+  } catch(e) {
+   console.warn('[TicketsDelDia] err', e);
+   try { showToast('⚠️ Error al cargar tickets', 'warning'); } catch(_) {}
+  }
+ }
+
+ // v1.3.1402 — Render compartido entre _openTicketsPeriodoSheet y _openTicketsDelDia.
+ //   Recibe ventas ya filtradas + label del periodo, construye y monta el sheet.
+ function _renderTicketsSheet(ventas, periodLabel) {
+  var nTickets = ventas.length;
+  var totalPeriodo = ventas.reduce(function(s,v){
+   var t = (typeof v.total === 'number' && !isNaN(v.total))
+    ? v.total
+    : ((v.items || []).reduce(function(ss,it){ return ss + (it.qty||0)*(it.pvp||0); }, 0));
+   return s + (t || 0);
+  }, 0);
+
+  var _esc = function(s) {
+   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  };
+  var _feur2 = function(v) { return (+(v||0)).toFixed(2).replace('.',',') + ' €'; };
+  var _fmtHora = function(iso) {
+   try { var d=new Date(iso); var p=function(n){return String(n).padStart(2,'0');};
+    return p(d.getHours())+':'+p(d.getMinutes());
+   } catch(_) { return '--:--'; }
+  };
+  var _fmtDateGroup = function(iso) {
+   var WD = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+   var MON_LONG = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+   try { var d=new Date(iso);
+    return WD[d.getDay()] + ' ' + d.getDate() + ' ' + MON_LONG[d.getMonth()];
+   } catch(_) { return ''; }
+  };
+  var _origenLabel = function(v) {
+   var o = (v && v.origen) || '';
+   if (o === 'loyverse' || o === 'import_loyverse') return 'Loyverse';
+   if (o === 'tpv') return 'TPV';
+   if (o === 'manual') return 'Manual';
+   return '—';
+  };
+  var _itemsResumen = function(v) {
+   var items = (v.items || []);
+   if (!items.length) return '';
+   var nombres = items.slice(0, 2).map(function(it){
+    var nm = '';
+    if (it.nombre) nm = it.nombre;
+    else if (it.prodId && State.get.prod) {
+     var p = State.get.prod(it.prodId);
+     nm = p ? (p.nombre || it.prodId) : it.prodId;
+    } else {
+     nm = it.prodId || '?';
+    }
+    var qty = it.qty || 1;
+    return (qty > 1 ? (qty + '× ') : '') + _esc(nm);
+   }).join(', ');
+   return nombres + (items.length > 2 ? ' +' + (items.length - 2) : '');
+  };
+  var _ticketTotal = function(v) {
+   if (typeof v.total === 'number' && !isNaN(v.total)) return v.total;
+   return (v.items || []).reduce(function(s,it){ return s + (it.qty||0)*(it.pvp||0); }, 0);
+  };
+
+  var _buildHtml = function() {
+   if (!ventas.length) {
+    return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;font-family:var(--font)">'
+     + '<div style="font-size:40px;margin-bottom:var(--sp-3);opacity:0.5">🧾</div>'
+     + '<div style="font-size:var(--fs-md);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:var(--sp-1)">Sin tickets</div>'
+     + '<div style="font-size:var(--fs-sm);color:var(--ink-soft)">No hay ventas en este día.</div>'
+     + '</div>';
+   }
+   var rows = [];
+   var lastDay = '';
+   ventas.forEach(function(v) {
+    try {
+     var d = new Date(v.fecha);
+     var dayKey = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+     if (dayKey !== lastDay) {
+      rows.push('<div class="tk-day-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">' + _esc(_fmtDateGroup(v.fecha)) + '</div>');
+      lastDay = dayKey;
+     }
+    } catch(_) {}
+    var hora = _fmtHora(v.fecha);
+    var totalT = _ticketTotal(v);
+    var resumen = _itemsResumen(v);
+    var nItems = (v.items || []).length;
+    var orig = _origenLabel(v);
+    var subtitleLine = resumen || (nItems ? (nItems + ' artículo' + (nItems !== 1 ? 's' : '')) : '—');
+    rows.push('<div class="tk-row" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border)"><div style="flex-shrink:0;width:48px;text-align:center;padding-top:2px"><div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink);line-height:1">' + _esc(hora) + '</div><div style="font-size:9px;color:var(--ink-soft);margin-top:3px;letter-spacing:0.3px">' + _esc(orig) + '</div></div><div style="flex:1;min-width:0"><div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + subtitleLine + '</div><div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:3px">' + nItems + (nItems === 1 ? ' artículo' : ' artículos') + '</div></div><div style="flex-shrink:0;text-align:right"><div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--success);font-variant-numeric:tabular-nums">+ ' + _feur2(totalT) + '</div></div></div>');
+   });
+   return rows.join('');
+  };
+
+  var _DEFER_THRESHOLD = 80;
+  var _defer = nTickets >= _DEFER_THRESHOLD;
+  var listHtml = _defer
+   ? '<div style="padding:var(--sp-6) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs);opacity:0.6">Cargando ' + nTickets + ' tickets…</div>'
+   : _buildHtml();
+
+  var html = '<div class="dc-layout">'
+   + '<div class="dc-header" style="position:relative;background:var(--surface);border-bottom:1px solid var(--border);padding:var(--sp-4) 16px 14px;flex-shrink:0">'
+   + '<div style="display:flex;align-items:center;gap:var(--sp-2_5);margin-bottom:var(--sp-3)">'
+   +  '<div style="width:24px;height:24px;border-radius:50%;background:var(--success);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:bold;flex-shrink:0">🧾</div>'
+   +  '<div style="flex:1;min-width:0">'
+   +   '<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Tickets</div>'
+   +   '<div style="font-size:var(--fs-xs);color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(periodLabel) + '</div>'
+   +  '</div>'
+   +  '<button class="mhd-close" onclick="App.ui.closeFs()" style="flex-shrink:0">×</button>'
+   + '</div>'
+   + '<div style="display:flex;align-items:baseline;gap:var(--sp-2)">'
+   +  '<div style="font-size:38px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _feur2(totalPeriodo) + '</div>'
+   +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">total</div>'
+   + '</div>'
+   + '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:var(--sp-3)">'
+   +  '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center"><div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Tickets</div><div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">' + nTickets + '</div></div>'
+   +  '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center;border-left:1px solid var(--border)"><div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Ticket medio</div><div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">' + (nTickets ? _feur2(totalPeriodo / nTickets) : '—') + '</div></div>'
+   + '</div>'
+   + '</div>'
+   + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Tickets (' + nTickets + ')</div>'
+   + '<div id="tk-list" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + listHtml + '</div>'
+   + '</div>';
+
+  App.ui.setFs(html);
+  App.ui.openFs('full');
+  try {
+   var _fsCnt = document.getElementById('fs-content');
+   if (_fsCnt) _fsCnt.classList.add('has-dc-layout');
+  } catch(_) {}
+
+  if (_defer) {
+   requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+     try {
+      var listEl = document.getElementById('tk-list');
+      if (listEl) listEl.innerHTML = _buildHtml();
+     } catch(_) {}
+    });
+   });
+  }
+
+  try {
+   var _fsOvl = document.getElementById('fs-overlay');
+   if (_fsOvl) {
+    var _onClose = function(){
+     if (!_fsOvl.classList.contains('open')) {
+      try {
+       var _fs2 = document.getElementById('fs-content');
+       if (_fs2) _fs2.classList.remove('has-dc-layout');
+      } catch(_) {}
+      _fsOvl.removeEventListener('transitionend', _onClose);
+     }
+    };
+    _fsOvl.addEventListener('transitionend', _onClose);
+   }
+  } catch(_) {}
+ }
+
  function _openTicketsPeriodoSheet() {
   var period = State.get.period();
   var periodLabel = (period && period.label) || 'Periodo actual';
@@ -38501,6 +38743,9 @@ function _confirmBorrarCuenta(id) {
        fecha: t.fecha || '',
        tipo: 'ingreso',
        metaTipo: 'cierre-derivado-loyverse',
+       // v1.3.1402 — campos para tap → _openTicketsDelDia
+       derivedDayKey: dk,
+       derivedCuentaId: t.cuentaId || cuentaId,
       });
      });
     }
@@ -38605,15 +38850,22 @@ function _confirmBorrarCuenta(id) {
       var iObj = (State.get.ingresosFin() || []).find(function(x){ return x.id === m.id; });
       if (iObj && iObj.notas) subtitle = iObj.notas;
      }
-     // v1.3.1400 — derivados (sin id+src) NO deben ser tappable.
-     //   Antes: el row se renderizaba con data-mov-id="undefined" → al tocar
-     //   intentaba abrir editor → "Movimiento no encontrado".
-     //   Ahora: si no hay id+src, sin atributos data-* y sin cursor:pointer.
-     var _editable = !!(m.id && m.src);
-     var _editAttrs = _editable ? (' data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"') : '';
-     var _cursorStyle = _editable ? 'cursor:pointer;' : 'cursor:default;';
+     // v1.3.1402 — distinguir 3 tipos: editable (gasto/ingreso) | derivado (venta-dia) | no tappable
+     //   Editable: id+src+NO derivado → abre _openEditMovimientoSheet
+     //   Derivado: metaTipo='cierre-derivado-loyverse' + derivedDayKey → abre _openTicketsDelDia
+     //   No tappable: el resto (cierres reales sin lista de tickets, etc.)
+     var _isDerivado = m.metaTipo === 'cierre-derivado-loyverse' && !!m.derivedDayKey;
+     var _editable = !_isDerivado && !!(m.id && m.src);
+     var _tappable = _editable || _isDerivado;
+     var _editAttrs = '';
+     if (_editable) {
+      _editAttrs = ' data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"';
+     } else if (_isDerivado) {
+      _editAttrs = ' data-derived-day="' + m.derivedDayKey + '" data-derived-cuenta="' + (m.derivedCuentaId || '') + '"';
+     }
+     var _cursorStyle = _tappable ? 'cursor:pointer;' : 'cursor:default;';
      rows.push(
-      '<div class="fc-move-row' + (_editable ? ' fc-move-editable' : '') + '"' + _editAttrs
+      '<div class="fc-move-row' + (_tappable ? ' fc-move-editable' : '') + '"' + _editAttrs
       + ' style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _cursorStyle + 'touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
       // Fecha (sin icono)
       + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
@@ -38859,7 +39111,8 @@ function _confirmBorrarCuenta(id) {
      App.dash._confirmBorrarCuenta(cuentaId);
     }, { once: true });
 
-    // ── Tap movimiento → editar ──
+    // ── Tap movimiento → editar / abrir tickets del día ──
+    // v1.3.1402: detectar derivados además de editables
     var movsEl = document.getElementById('dc-movs');
     if (movsEl) {
      movsEl.addEventListener('click', function(e) {
@@ -38867,6 +39120,13 @@ function _confirmBorrarCuenta(id) {
       for (var _i=0; _i<6 && el && el !== movsEl; _i++) {
        var _id  = el.getAttribute && el.getAttribute('data-mov-id');
        var _src = el.getAttribute && el.getAttribute('data-mov-src');
+       var _derivedDay = el.getAttribute && el.getAttribute('data-derived-day');
+       var _derivedCuenta = el.getAttribute && el.getAttribute('data-derived-cuenta');
+       // v1.3.1402: derivado tiene prioridad (es más específico)
+       if (_derivedDay) {
+        try { App.dash._openTicketsDelDia(_derivedDay, _derivedCuenta || null); } catch(_e) { console.warn('[tap derivado]', _e); }
+        return;
+       }
        if (_id && _src) { try { App.dash._openEditMovimientoSheet(_id, _src); } catch(_e) {} return; }
        el = el.parentElement;
       }
@@ -39180,7 +39440,7 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
+ return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
 })();
 
 // ══════════════════════════════════════════
