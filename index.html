@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1394-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1395-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1394-dev</title>
+<title>Dashwey v1.3.1395-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13923,10 +13923,142 @@ const State = (() => {
   if (typeof vals.concepto === 'string') allowed.concepto = vals.concepto;
   allowed.pendienteRevision = false;
   allowed.revisadoEn = Date.now();
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // v1.3.1395 — PROMOCIÓN A CIERRE REAL (anti-duplicado permanente)
+  //   Hasta v1.3.1394, "Confirmar y archivar" solo marcaba pendienteRevision:false.
+  //   El ingreso seguía suelto, sin closureId en las ventas, lo que provocaba que
+  //   las ventas Loyverse del día se siguieran agregando como "💰 Cierre del día"
+  //   derivado en paralelo → saldo inflado y duplicación visual.
+  //
+  //   Ahora, al archivar:
+  //     1. Se crea un cierre REAL en cierresCaja[] con estado='cerrado' y
+  //        jornadaLabel = dateKey original (Madrid). Esto activa el lock mutuo
+  //        retroactivamente y el anti-duplicado en _renderCuentaMovs (línea
+  //        ~27840) deja de generar el derivado "💰 Cierre del día" para ese día.
+  //     2. Se estampa closureId en TODAS las ventas del rango Madrid del cierre,
+  //        idéntico patrón que CierreEngine.closeJornada (línea 16332+).
+  //     3. El propio ingreso preliminar recibe closureId apuntando al cierre real
+  //        → queda "agregado" al cierre y desaparece del feed individual.
+  //   El resultado: tras archivar, hay UN solo cierre del día en sistema.
+  //
+  //   Si esta promoción falla (excepción), el archivado continúa sin cierre real
+  //   pero los Fix #1 y #3 (exclusiones en _bbRecalcSaldos y filtros UI) garantizan
+  //   que el saldo siga correcto y no haya duplicación visual mientras el preliminar
+  //   esté pendienteRevision=false. Es decir: degradación segura.
+  // ════════════════════════════════════════════════════════════════════════════
+  let _cierreRealId = null;
+  try {
+   const ci = i.cierreInfo || {};
+   const dateKey = ci.dateKey || null;
+   const zona = ci.zona || 'Europe/Madrid';
+   if (dateKey && i.cuentaId) {
+    // Construir cierre real con shape compatible con CierreEngine
+    const importe = (typeof allowed.importe === 'number') ? allowed.importe : (i.importe || 0);
+    const aperturaTs = (function(){
+     // 00:00 Madrid del dateKey. Usamos _autoCierreTzToUtc si existe, fallback ISO.
+     try {
+      if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
+       return window._DashweyAutoCierreTzToUtc(dateKey, 0, 0, zona);
+      }
+     } catch(_) {}
+     return new Date(dateKey + 'T00:00:00').getTime();
+    })();
+    const cierreTs = i.revisadoEn || Date.now();
+    _cierreRealId = 'cierre_promo_' + cierreTs;
+    const cierreReal = {
+     id: _cierreRealId,
+     jornadaLabel: dateKey,
+     aperturaTs: aperturaTs,
+     cierreTs: cierreTs,
+     cuentaId: i.cuentaId,
+     saldoInicial: 0,
+     saldoEsperado: importe,
+     saldoReal: importe,
+     diferencia: 0,
+     ventas: importe,
+     gastos: 0,
+     ingresos: 0,
+     nVentas: ci.nTickets || 0,
+     nGastos: 0,
+     nIngresos: 0,
+     movimientos: [],
+     notas: 'Promovido desde cierre automático preliminar (' + id + ')',
+     estado: 'cerrado',
+     origen: 'auto_promovido',
+     promovidoDe: id,
+     createdAt: cierreTs,
+    };
+    // Push al estado vía addCierre (setter dedup por id)
+    try {
+     if (typeof _state.cierresCaja === 'undefined' || !Array.isArray(_state.cierresCaja)) {
+      _state.cierresCaja = [];
+     }
+     // Idempotencia: si ya existe un cierre cerrado con mismo jornadaLabel+cuentaId,
+     // NO crear otro. El lock mutuo ya debería haberlo evitado, pero defensa extra.
+     const yaExiste = _state.cierresCaja.some(function(c){
+      return c && !c.deleted && c.estado === 'cerrado'
+          && c.jornadaLabel === dateKey
+          && (c.cuentaId === i.cuentaId);
+     });
+     if (yaExiste) {
+      console.info('[confirmarRevisionCierre] Cierre real ya existe para', dateKey, 'cuenta', i.cuentaId, '— skip promoción');
+      _cierreRealId = null; // marcar para no estampar
+     } else {
+      _state.cierresCaja.push(cierreReal);
+      try { window._DashweyMarkDirty('cierresCaja', _cierreRealId); } catch(_) {}
+      console.info('[confirmarRevisionCierre] ✓ Cierre real promovido:', _cierreRealId, '| jornada:', dateKey);
+     }
+    } catch(eC) {
+     console.warn('[confirmarRevisionCierre] addCierre error:', eC);
+     _cierreRealId = null;
+    }
+    // Estampar closureId en ventas del rango Madrid + el propio preliminar
+    if (_cierreRealId) {
+     try {
+      const ventasAll = _state.ventas || [];
+      const eventIdsVentas = [];
+      ventasAll.forEach(function(v){
+       if (!v || v.deleted || v.closureId) return;
+       const t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+       if (!isFinite(t)) return;
+       if (t >= aperturaTs && t < cierreTs) {
+        const cidV = v.cuentaId || i.cuentaId;
+        if (cidV !== i.cuentaId) return; // solo ventas de la misma cuenta
+        v.closureId = _cierreRealId;
+        eventIdsVentas.push(v.id);
+        try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
+       }
+      });
+      // Estampar también el propio ingreso preliminar
+      allowed.closureId = _cierreRealId;
+      // Guardar índice inverso en el cierre
+      cierreReal.eventIds = { ventas: eventIdsVentas, gastos: [], ingresos: [id] };
+      cierreReal.isCached = true;
+      cierreReal.cachedAt = cierreTs;
+      console.info('[confirmarRevisionCierre] closureId estampado en', eventIdsVentas.length, 'ventas + 1 ingreso preliminar');
+     } catch(eS) {
+      console.warn('[confirmarRevisionCierre] stamp closureId error:', eS);
+     }
+    }
+   } else {
+    console.info('[confirmarRevisionCierre] Sin dateKey o cuentaId — no se puede promover (degradación segura, Fix #1 cubre saldo)');
+   }
+  } catch(ePromo) {
+   console.warn('[confirmarRevisionCierre] promoción a cierre real falló:', ePromo);
+   // Continuar con archivado normal — Fix #1 (exclusión saldo) seguirá vigente
+   //   mientras pendienteRevision sea false pero closureId esté ausente, no:
+   //   el ingreso volverá a sumar al saldo. Por eso es CRÍTICO que la promoción
+   //   funcione, o como fallback el ingreso quede con closureId aunque sea synth.
+  }
+
   Object.assign(i, allowed);
   try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {}
+  // Recalcular saldos cuentas — ahora con closureId estampado
+  try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
   save();
   try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {}
+  try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
  },
  updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; if (vals && vals.deleted === true && i.origen && _EXT_ORIGINS[i.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: bloqueado deleted:true en item externo', i.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_I = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bi = []; for (const k of _IMMUTABLE_I) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== i[k]) { _bi.push(k); delete vals[k]; } } if (_bi.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: inmutables bloqueados', i.id, ':', _bi.join(',')); } Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
  setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', _guardExt(v)); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
@@ -17785,7 +17917,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1394-dev';
+ const _APP_VERSION = 'v1.3.1395-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23699,9 +23831,26 @@ const ui = (() => {
     // v1.3.1080: fecha del saldoInicial. Sin ella → epoch 0 (todos los movs cuentan).
     var iniMs = _toMs(c.saldoInicialFecha);
     // Ingresos manuales (excluir contrapartida de ventas)
+    // v1.3.1395 FIX SALDO INFLADO: los cierres automáticos preliminares
+    //   (origen='cierre_caja_auto' + pendienteRevision=true) NO suman al saldo.
+    //   Razón: las ventas Loyverse del día YA están sumadas vía ventas.forEach
+    //   con su closureId implícito (o ausente si jornada abierta). Si añadiéramos
+    //   también el preliminar, el saldo se inflaría con el mismo importe duplicado.
+    //   Cuando "Confirmar y archivar" → confirmarRevisionCierre promueve a cierre
+    //   REAL: estampa closureId en ventas y marca el ingreso con closureId →
+    //   a partir de ese momento, este filtro se mantiene seguro y la suma cuadra.
     ingresos.forEach(function(i){
      if (i.cuentaId !== c.id) return;
      if (i.origen === 'loyverse' || i.origen === 'tpv') return;
+     // v1.3.1395: cierres automáticos NUNCA suman directamente al saldo.
+     //   Razón: el importe del cierre auto es siempre = ventas Loyverse del día,
+     //   que YA están sumadas vía ventas.forEach abajo. Sumar el cierre auto
+     //   también duplicaría el importe.
+     //   - pendienteRevision=true → ingreso preliminar suelto: skip
+     //   - pendienteRevision=false con closureId: skip (ya agregado al cierre real)
+     //   - pendienteRevision=false sin closureId: skip por seguridad (caso edge
+     //     donde la promoción falló; mantenemos invariante "preliminar nunca suma")
+     if (i.origen === 'cierre_caja_auto') return;
      if (_toMs(i.fecha) < iniMs) return; // v1.3.1080: anterior al saldoInicial → no afecta
      saldoCalc += (parseFloat(i.importe)||0);
     });
@@ -27752,7 +27901,13 @@ function _toggleCardFromManager(id, btn) {
 
  // Ingresos manuales → income (editables) — v1.3.982 excluir transfers
  // v1.3.1000 Fase 3: incluir pendientes (excluir solo transfers) con flag para badge
- ingresos.filter(i => !window._isTransfer?.(i) && !i.closureId).forEach(i => moves.push({
+ // v1.3.1395 FIX UI: ocultar cierres automáticos preliminares del feed mientras
+ //   pendienteRevision=true. El movimiento derivado "💰 Cierre del día · Loyverse"
+ //   ya muestra el importe agregado de las ventas — incluir además el preliminar
+ //   confunde al usuario aunque no afecte saldo (Fix #1 lo excluyó del cálculo).
+ //   Al "Confirmar y archivar" → el preliminar recibe closureId y este filtro lo
+ //   mantiene fuera (queda agregado en su cierre real, sin duplicar).
+ ingresos.filter(i => !window._isTransfer?.(i) && !i.closureId && i.origen !== 'cierre_caja_auto').forEach(i => moves.push({
   type: 'income', nombre: i.concepto || 'Ingreso manual',
   importe: +(i.importe || 0), fecha: i.fecha || '',
   id: i.id || '', src: 'ingreso',
@@ -29851,7 +30006,9 @@ function _openEditMovimientoSheet(id, src) {
 
  // Todos los movimientos mezclados, fecha desc — v1.3.1000 Fase 3: incluir pendientes con flag
  const moves = [];
- ingresos.filter(i => !window._isTransfer?.(i)).forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'', pendiente: !!window._isPendiente?.(i) }));
+ // v1.3.1395 FIX UI: ocultar cierre automático preliminar (pendienteRevision)
+ //   también de la vista global financiera. Mismo razonamiento que feed cuenta.
+ ingresos.filter(i => !window._isTransfer?.(i) && i.origen !== 'cierre_caja_auto').forEach(i => moves.push({ type:'income', nombre: i.concepto||'Ingreso', importe: +(i.importe||0), fecha: i.fecha||'', pendiente: !!window._isPendiente?.(i) }));
  gastos.filter(g => !window._isTransfer?.(g)).forEach(g => moves.push({ type:'expense', nombre: g.nombre||'Gasto', importe: +(g.importe||0), fecha: g.fecha||'', pendiente: !!window._isPendiente?.(g) }));
  moves.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
@@ -35248,9 +35405,11 @@ function _confirmBorrarCuenta(id) {
   movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)', sign: '−', pendiente: !!window._isPendiente?.(g) });
  });
  // Ingresos manuales (origen≠loyverse/tpv, no asociados a cierre)
+ // v1.3.1395 FIX UI: ocultar también preliminares del cierre auto en este feed.
  ingresos.filter(function(i){
   if (i.closureId) return false;
   if (i.origen === 'loyverse' || i.origen === 'tpv') return false;
+  if (i.origen === 'cierre_caja_auto') return false; // v1.3.1395: nunca como movimiento individual
   return true;
  }).forEach(function(i) {
   movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: 'var(--ink)', sign: '+', pendiente: !!window._isPendiente?.(i) });
