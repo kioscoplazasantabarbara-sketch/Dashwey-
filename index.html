@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1383-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1384-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1383-dev</title>
+<title>Dashwey v1.3.1384-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2653,8 +2653,12 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
  overflow-y: auto;
  overflow-x: visible; /* permite que el camión sobresalga sin recortarse */
  -webkit-overflow-scrolling: touch;
- overscroll-behavior-y: auto; /* scroll-chaining al padre cuando llega al límite */
- touch-action: pan-y; /* solo absorbe pan vertical, dejando el resto al padre */
+ /* v1.3.1384 — overscroll-behavior:contain bloquea el scroll-chaining al padre.
+    Sin esto, el scroll del feed al llegar al límite propagaba al .dash-cards-container,
+    disparaba _snapFbPoll → re-render Agenda → flickering visible.
+    Si el usuario quiere cambiar de card desde Agenda, usa swipe horizontal o tabs. */
+ overscroll-behavior-y: contain;
+ touch-action: pan-y; /* solo absorbe pan vertical */
 }
 .snap-actividad-wrap::-webkit-scrollbar { display: none; }
 
@@ -17794,7 +17798,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1383-dev';
+ const _APP_VERSION = 'v1.3.1384-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -34157,6 +34161,11 @@ function _confirmBorrarCuenta(id) {
  // y la línea separadora del Insight (mediante CSS class snap-actividad-wrap).
  var scrollWrap = document.createElement('div');
  scrollWrap.className = 'snap-actividad-wrap';
+ // v1.3.1384 — Marcar _scrollingUntil para que _snapFbPoll defiera re-render
+ //   mientras el feed esté scrolleando activamente. Window de 400ms.
+ scrollWrap.addEventListener('scroll', function() {
+  scrollWrap._scrollingUntil = Date.now() + 400;
+ }, { passive: true });
 
  var tl = document.createElement('div');
  tl.className = 'snap-tl-v snap-tl-v-actividad';
@@ -36895,6 +36904,18 @@ function _confirmBorrarCuenta(id) {
  // v1.3.1139 FIX#1: respetar flag stale para forzar render tras _snapDoRenderAll
  var _fbIsStale = best.dataset.stale === '1';
  if (_fbCardId === _snapLastRenderedCardId && !_fbIsStale) return;
+ // v1.3.1384 — Si Agenda está siendo scrolleado activamente en su feed
+ //   interno, defer el re-render. Sin esto, eventos asíncronos (sync FB,
+ //   pendingOrders) marcan stale → poll detecta cambio → re-render durante
+ //   scroll → flickering visible.
+ //   El stale persiste; cuando el scroll del feed termine, el siguiente
+ //   poll lo procesará.
+ if (_fbCardId === 'agenda' && _fbIsStale) {
+  var _actWrap = document.querySelector('.snap-actividad-wrap');
+  if (_actWrap && _actWrap._scrollingUntil && Date.now() < _actWrap._scrollingUntil) {
+   return; // posponer re-render hasta que termine scroll del feed
+  }
+ }
  _snapLastRenderedCardId = _fbCardId;
  delete best.dataset.stale;
  _snapUpdateTitle(_fbCardId);
