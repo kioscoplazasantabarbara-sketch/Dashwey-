@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1377-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1378-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1377-dev</title>
+<title>Dashwey v1.3.1378-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17770,7 +17770,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1377-dev';
+ const _APP_VERSION = 'v1.3.1378-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22275,6 +22275,46 @@ const ui = (() => {
    if (rep.tipo === 'anual')    return n === 1 ? 'Cada año'    : 'Cada ' + n + ' años';
    return 'Personalizado';
   }
+
+  // v1.3.1378 — Contexto dinámico de presets Repetir, estilo TickTick
+  //   "Semanalmente (dom)" / "Mensualmente (El día 3)" / "Anualmente (el may 3)"
+  function _ctxSemanal(d) {
+   var dow = _dowMonStart(d); // L=0..D=6
+   var lbls = ['lun','mar','mié','jue','vie','sáb','dom'];
+   return ' (' + lbls[dow] + ')';
+  }
+  function _ctxMensual(d) {
+   return ' (El día ' + d.getDate() + ')';
+  }
+  function _ctxAnual(d) {
+   var meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+   return ' (el ' + meses[d.getMonth()] + ' ' + d.getDate() + ')';
+  }
+  // v1.3.1378 — Lista de zonas horarias (curada para Dashwey: kiosco + dispositivo)
+  var _ZONAS = [
+   { id: 'Europe/Madrid',     label: 'Madrid (España)' },
+   { id: 'Asia/Ho_Chi_Minh',  label: 'Ho Chi Minh (Vietnam)' },
+   { id: 'Europe/London',     label: 'Londres (UK)' },
+   { id: 'America/New_York',  label: 'Nueva York (EEUU)' },
+   { id: 'America/Los_Angeles', label: 'Los Ángeles (EEUU)' },
+   { id: 'Europe/Paris',      label: 'París (Francia)' },
+   { id: 'Europe/Berlin',     label: 'Berlín (Alemania)' },
+   { id: 'America/Mexico_City', label: 'Ciudad de México' },
+   { id: 'America/Argentina/Buenos_Aires', label: 'Buenos Aires' },
+   { id: 'America/Bogota',    label: 'Bogotá (Colombia)' },
+   { id: 'UTC',               label: 'UTC' }
+  ];
+  function _tzLabel(zonaId) {
+   if (!zonaId) {
+    // Default: zona del kiosco según perfil
+    try {
+     var perfil = (window.State && window.State.get && window.State.get.perfil) ? window.State.get.perfil() : null;
+     zonaId = (perfil && perfil.zona) || 'Europe/Madrid';
+    } catch(_) { zonaId = 'Europe/Madrid'; }
+   }
+   var found = _ZONAS.find(function(z){ return z.id === zonaId; });
+   return found ? found.label : zonaId;
+  }
   // Resumen humano del recordatorio
   function _summaryRecord(rec) {
    if (!rec || rec.minutosAntes == null) return 'Ninguno';
@@ -22363,17 +22403,23 @@ const ui = (() => {
   function _renderRepetir(root) {
    var panel = root.querySelector('#dtp-rep-panel');
    if (!panel) return;
+   // v1.3.1378 — Presets con contexto dinámico estilo TickTick
+   var f = S.fecha;
    var presets = [
-    { tipo: null,        label: 'Nunca' },
-    { tipo: 'diario',    label: 'Cada día' },
-    { tipo: 'semanal',   label: 'Cada semana' },
-    { tipo: 'mensual',   label: 'Cada mes' },
-    { tipo: 'anual',     label: 'Cada año' }
+    { tipo: null,        label: 'Nunca'                                  },
+    { tipo: 'diario',    label: 'Cada día'                               },
+    { tipo: 'semanal',   label: 'Cada semana'  + _ctxSemanal(f)          },
+    { tipo: 'mensual',   label: 'Cada mes'     + _ctxMensual(f)          },
+    { tipo: 'anual',     label: 'Cada año'     + _ctxAnual(f)            }
    ];
    var html = '';
+   // v1.3.1378 — Detección "está en modo personalizado" usa flag explícito _custom
+   //   en lugar de heurística. Esto evita el bug de marcar "Cada semana" Y
+   //   "Personalizado" simultáneamente al pulsar Personalizado.
+   var inCustom = !!(S.repite && S.repite._custom);
    for (var i = 0; i < presets.length; i++) {
     var p = presets[i];
-    var isActive = (
+    var isActive = !inCustom && (
      (p.tipo === null && !S.repite) ||
      (S.repite && S.repite.tipo === p.tipo && (S.repite.intervalo === 1 || !S.repite.intervalo) && (!S.repite.diasSemana || S.repite.diasSemana.length === 0))
     );
@@ -22382,15 +22428,14 @@ const ui = (() => {
      + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
      + '</button>';
    }
-   // Personalizado
-   var isCustom = !!(S.repite && (S.repite.intervalo > 1 || (S.repite.diasSemana && S.repite.diasSemana.length > 0 && S.repite.tipo === 'semanal')));
-   html += '<button type="button" class="dtp-subpanel-opt' + (isCustom ? ' dtp-opt-active' : '') + '" data-rep="__custom__">'
+   // Personalizado — solo activo si el usuario pulsó explícitamente Personalizado
+   html += '<button type="button" class="dtp-subpanel-opt' + (inCustom ? ' dtp-opt-active' : '') + '" data-rep="__custom__">'
     + '<span>Personalizado…</span>'
     + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
     + '</button>';
-   // Custom builder
-   var bRep = S.repite && (S.repite.intervalo > 1 || (S.repite.tipo === 'semanal' && S.repite.diasSemana && S.repite.diasSemana.length))
-    ? S.repite : { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+   // Custom builder — solo se renderiza/abre si inCustom
+   var bRep = (inCustom && S.repite) ? S.repite : { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+   var isCustom = inCustom;
    html += '<div id="dtp-rep-custom" class="dtp-custom-builder' + (isCustom ? ' dtp-custom-open' : '') + '">'
     + '<div class="dtp-custom-row">'
     +  '<span class="dtp-custom-label">Cada</span>'
@@ -22421,12 +22466,18 @@ const ui = (() => {
     el.addEventListener('click', function() {
      var v = el.getAttribute('data-rep');
      if (v === '__custom__') {
-      // Activar custom — preservar lo que haya o usar default semanal
-      S.repite = (S.repite && (S.repite.intervalo > 1 || (S.repite.tipo === 'semanal' && S.repite.diasSemana && S.repite.diasSemana.length)))
-       ? S.repite : { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+      // v1.3.1378 — Marcar flag _custom EXPLÍCITO para distinguir "modo
+      //   personalizado" del preset semanal.intervalo=1.
+      //   Si ya estábamos en custom, preservar valores. Si no, default semanal.
+      if (S.repite && S.repite._custom) {
+       /* mantener tal cual, ya está abierto */
+      } else {
+       S.repite = { tipo: 'semanal', intervalo: 1, diasSemana: [], _custom: true };
+      }
      } else if (v === '') {
       S.repite = null;
      } else {
+      // Preset normal: SIN flag _custom
       S.repite = { tipo: v, intervalo: 1, diasSemana: [] };
      }
      _renderRepetir(root);
@@ -22443,7 +22494,8 @@ const ui = (() => {
      if (n > 999) n = 999;
      var u = unit.value;
      var dws = S.repite && S.repite.diasSemana ? S.repite.diasSemana : [];
-     S.repite = { tipo: u, intervalo: n, diasSemana: u === 'semanal' ? dws : [] };
+     // v1.3.1378 — Preservar flag _custom para que UI no marque preset
+     S.repite = { tipo: u, intervalo: n, diasSemana: u === 'semanal' ? dws : [], _custom: true };
      // Re-render solo summary y row dows (sin recargar todo el panel para no perder focus)
      var dowsRow = panel.querySelector('#dtp-rep-dows-row');
      if (dowsRow) dowsRow.style.display = (u === 'semanal') ? 'flex' : 'none';
@@ -22455,7 +22507,9 @@ const ui = (() => {
    panel.querySelectorAll('[data-dow]').forEach(function(el) {
     el.addEventListener('click', function() {
      var d = parseInt(el.getAttribute('data-dow'), 10);
-     if (!S.repite) S.repite = { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+     // v1.3.1378 — Si activamos día de semana, estamos en custom por definición
+     if (!S.repite) S.repite = { tipo: 'semanal', intervalo: 1, diasSemana: [], _custom: true };
+     S.repite._custom = true;
      if (!S.repite.diasSemana) S.repite.diasSemana = [];
      var idx = S.repite.diasSemana.indexOf(d);
      if (idx >= 0) S.repite.diasSemana.splice(idx, 1);
@@ -22514,6 +22568,43 @@ const ui = (() => {
     +  '</select>'
     + '</div>'
     + '</div>';
+   // v1.3.1378 — Sección Recientes (presets que el usuario eligió antes)
+   //   Almacenado en localStorage como array de minutos antes (max 5).
+   var recientes = [];
+   try {
+    var raw = localStorage.getItem('dashwey_dtp_rec_recientes');
+    if (raw) recientes = JSON.parse(raw) || [];
+    if (!Array.isArray(recientes)) recientes = [];
+   } catch(_) { recientes = []; }
+   // Filtrar recientes que ya no estén en presets
+   var presetVals = presets.map(function(pp){ return pp.val; });
+   var recFiltered = recientes.filter(function(m){ return presetVals.indexOf(m) < 0; });
+   if (recFiltered.length) {
+    html += '<div style="font-size:9px;font-weight:var(--fw-bold);letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);padding:10px 12px 4px">Recientes</div>';
+    for (var ri = 0; ri < Math.min(5, recFiltered.length); ri++) {
+     var rm = recFiltered[ri];
+     var rLbl = _summaryRecord({ minutosAntes: rm });
+     var rActive = !!(S.recordatorio && S.recordatorio.minutosAntes === rm);
+     html += '<button type="button" class="dtp-subpanel-opt' + (rActive ? ' dtp-opt-active' : '') + '" data-rec-recent="' + rm + '">'
+      + '<span>' + rLbl + '</span>'
+      + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+      + '</button>';
+    }
+   }
+   // v1.3.1378 — Toggle "Recordatorio constante" (notificación persistente)
+   //   Si está activo, el campo S.recordatorioConstante se guarda en el evento.
+   //   Solo tiene sentido si hay recordatorio configurado (deshabilitado si !recordatorio)
+   var constActive = !!(S.recordatorio && S.recordatorioConstante);
+   var constDisabled = !S.recordatorio;
+   html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px;border-top:1px solid var(--border);margin-top:6px;opacity:' + (constDisabled ? '0.45' : '1') + '">'
+    + '<span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Recordatorio constante</span>'
+    + '<button type="button" id="dtp-rec-const" data-active="' + (constActive ? '1' : '0') + '"'
+    + ' style="width:46px;height:26px;border-radius:13px;border:none;cursor:pointer;'
+    +  'background:' + (constActive ? 'var(--red)' : 'rgba(0,0,0,0.18)') + ';position:relative;flex-shrink:0;-webkit-tap-highlight-color:transparent"'
+    + (constDisabled ? ' disabled' : '') + '>'
+    + '<span style="position:absolute;top:3px;left:' + (constActive ? '23px' : '3px') + ';width:20px;height:20px;border-radius:50%;background:#fff;transition:left 180ms"></span>'
+    + '</button>'
+    + '</div>';
    panel.innerHTML = html;
 
    panel.querySelectorAll('[data-rec]').forEach(function(el) {
@@ -22545,6 +22636,25 @@ const ui = (() => {
     };
     num2.addEventListener('input', commit2);
     unit2.addEventListener('change', commit2);
+   }
+   // v1.3.1378 — Listener Recientes
+   panel.querySelectorAll('[data-rec-recent]').forEach(function(el) {
+    el.addEventListener('click', function() {
+     var m = parseInt(el.getAttribute('data-rec-recent'), 10);
+     if (!isNaN(m)) {
+      S.recordatorio = { minutosAntes: m };
+      _renderRecord(root);
+      _refreshSummaries(root);
+     }
+    });
+   });
+   // v1.3.1378 — Listener toggle Recordatorio constante
+   var constBtn = panel.querySelector('#dtp-rec-const');
+   if (constBtn && !constBtn.disabled) {
+    constBtn.addEventListener('click', function() {
+     S.recordatorioConstante = !S.recordatorioConstante;
+     _renderRecord(root); // re-render para refrescar el toggle visual
+    });
    }
   }
 
@@ -22589,11 +22699,19 @@ const ui = (() => {
     initial.setMinutes(Math.round(initial.getMinutes() / 5) * 5, 0, 0);
    }
 
+   // v1.3.1378 — Zona horaria por defecto = perfil del kiosco
+   var defaultZona = 'Europe/Madrid';
+   try {
+    var perfil = (window.State && window.State.get && window.State.get.perfil) ? window.State.get.perfil() : null;
+    if (perfil && perfil.zona) defaultZona = perfil.zona;
+   } catch(_) {}
    S = {
     mode: mode,
     fecha: initial,
     repite: opts.initialRepite || null,
     recordatorio: opts.initialRecordatorio || null,
+    recordatorioConstante: !!opts.initialRecordatorioConstante,
+    zona: opts.initialZona || defaultZona,
     viewYear: initial.getFullYear(),
     viewMonth: initial.getMonth(),
     titulo: opts.initialTitulo || '',
@@ -22638,6 +22756,16 @@ const ui = (() => {
     +   '<span class="dtp-section-label">Hora</span>'
     +   '<input type="time" id="dtp-time-inp" class="dtp-time-input" value="' + _fmtHm(S.fecha) + '" style="width:auto">'
     +  '</div>'
+    + '</div>'
+    /* v1.3.1378 — Zona horaria visible y cambiable */
+    + '<div class="dtp-time-section">'
+    +  '<div class="dtp-section-row" id="dtp-tz-row">'
+    +   '<span class="dtp-section-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>'
+    +   '<span class="dtp-section-label">Zona horaria</span>'
+    +   '<span class="dtp-section-value" id="dtp-tz-summary">' + _esc(_tzLabel(S.zona)) + '</span>'
+    +   '<svg class="dtp-section-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>'
+    +  '</div>'
+    +  '<div class="dtp-subpanel" id="dtp-tz-panel"></div>'
     + '</div>'
     + '<div class="dtp-time-section">'
     +  '<div class="dtp-section-row" id="dtp-rep-row">'
@@ -22709,6 +22837,43 @@ const ui = (() => {
      // Si tap fuera del input, abrir el input
      if (e.target.tagName !== 'INPUT' && timeInp) {
       try { timeInp.focus(); timeInp.click(); } catch(_) {}
+     }
+    });
+   }
+
+   // v1.3.1378 — Zona horaria — toggle panel + render
+   function _renderTz(root) {
+    var tzPanel = root.querySelector('#dtp-tz-panel');
+    if (!tzPanel) return;
+    var html = '';
+    for (var ti = 0; ti < _ZONAS.length; ti++) {
+     var z = _ZONAS[ti];
+     var act = (S.zona === z.id);
+     html += '<button type="button" class="dtp-subpanel-opt' + (act ? ' dtp-opt-active' : '') + '" data-tz="' + _esc(z.id) + '">'
+      + '<span>' + _esc(z.label) + '</span>'
+      + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+      + '</button>';
+    }
+    tzPanel.innerHTML = html;
+    tzPanel.querySelectorAll('[data-tz]').forEach(function(el) {
+     el.addEventListener('click', function() {
+      S.zona = el.getAttribute('data-tz');
+      _renderTz(root);
+      var sTz = root.querySelector('#dtp-tz-summary');
+      if (sTz) sTz.textContent = _tzLabel(S.zona);
+     });
+    });
+   }
+   var tzRow = overlay.querySelector('#dtp-tz-row');
+   var tzPanel = overlay.querySelector('#dtp-tz-panel');
+   var tzChev = tzRow ? tzRow.querySelector('.dtp-section-chev') : null;
+   var tzRendered = false;
+   if (tzRow && tzPanel) {
+    tzRow.addEventListener('click', function() {
+     if (!tzRendered) { _renderTz(overlay); tzRendered = true; }
+     tzPanel.classList.toggle('dtp-subpanel-open');
+     if (tzChev) {
+      tzChev.style.transform = tzPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
      }
     });
    }
@@ -22786,12 +22951,43 @@ const ui = (() => {
       return;
      }
     }
+    // v1.3.1378 — Limpiar flag interna _custom antes de persistir + añadir
+    //   recordatorioConstante. La flag _custom es solo para UI, no se guarda.
+    var repiteOut = null;
+    if (S.repite) {
+     repiteOut = {
+      tipo: S.repite.tipo,
+      intervalo: S.repite.intervalo || 1,
+      diasSemana: S.repite.diasSemana || [],
+      fin: S.repite.fin || null
+     };
+    }
     var result = {
      fecha: S.fecha.toISOString(),
-     repite: S.repite,
-     recordatorio: S.recordatorio
+     repite: repiteOut,
+     recordatorio: S.recordatorio,
+     recordatorioConstante: !!(S.recordatorio && S.recordatorioConstante),
+     zona: S.zona || null
     };
     if (S.showTitle) result.titulo = titulo;
+    // v1.3.1378 — Actualizar lista de Recientes en localStorage si el
+    //   recordatorio elegido NO es un preset. Mantiene últimos 5.
+    if (S.recordatorio && S.recordatorio.minutosAntes != null) {
+     try {
+      var presetVals = [0, 5, 15, 30, 60, 1440];
+      if (presetVals.indexOf(S.recordatorio.minutosAntes) < 0) {
+       var raw = localStorage.getItem('dashwey_dtp_rec_recientes');
+       var rec = [];
+       try { rec = raw ? (JSON.parse(raw) || []) : []; } catch(_) { rec = []; }
+       if (!Array.isArray(rec)) rec = [];
+       // Quitar duplicados, push al frente
+       rec = rec.filter(function(m){ return m !== S.recordatorio.minutosAntes; });
+       rec.unshift(S.recordatorio.minutosAntes);
+       if (rec.length > 5) rec = rec.slice(0, 5);
+       localStorage.setItem('dashwey_dtp_rec_recientes', JSON.stringify(rec));
+      }
+     } catch(_) {}
+    }
     var keep = false;
     try { keep = S.onConfirm(result) === true; } catch(e) { console.warn('[DTP] onConfirm error:', e); }
     if (!keep) _close(overlay);
@@ -30851,13 +31047,18 @@ function _confirmBorrarCuenta(id) {
    initialValue: existing ? existing.fecha : new Date(),
    initialRepite: existing && existing.repite ? existing.repite : null,
    initialRecordatorio: existing && existing.recordatorio ? existing.recordatorio : null,
+   initialRecordatorioConstante: !!(existing && existing.recordatorioConstante),
+   initialZona: existing && existing.zona ? existing.zona : null,
    onConfirm: function(result) {
+    // v1.3.1378 — guardar también recordatorioConstante + zona
     if (isEdit) {
      State.set.updateRecordatorio(recId, {
       titulo: result.titulo,
       fecha: result.fecha,
       repite: result.repite,
       recordatorio: result.recordatorio,
+      recordatorioConstante: !!result.recordatorioConstante,
+      zona: result.zona,
       updatedAt: new Date().toISOString()
      });
      if (typeof showToast==='function') showToast('✅ Recordatorio actualizado', 'success');
@@ -30868,6 +31069,8 @@ function _confirmBorrarCuenta(id) {
       fecha: result.fecha,
       repite: result.repite,
       recordatorio: result.recordatorio,
+      recordatorioConstante: !!result.recordatorioConstante,
+      zona: result.zona,
       creado: new Date().toISOString()
      });
      if (typeof showToast==='function') showToast('✅ Recordatorio creado', 'success');
