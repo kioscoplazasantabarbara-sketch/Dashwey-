@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1376-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1377-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1376-dev</title>
+<title>Dashwey v1.3.1377-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8236,6 +8236,288 @@ html:not([data-app-mode]) .alm-hdr-icon-btn[aria-label="Menú"] {
 
 /* ── Fin hero ── */
 
+
+/* ════════════════════════════════════════════════════════════════════════════
+   v1.3.1377 — DateTime Picker (estilo TickTick)
+   API: window._DashweyDateTimePicker.open({ mode, initialValue, onConfirm })
+   Modos: 'datetime' (recordatorios) — fases siguientes añaden 'date','range','recurring'
+   Diseño: bottom sheet → calendario mensual + hora + repetir + recordatorio + zona
+   Android WebView seguro: sin transform en ancestros position:fixed,
+                            sin @keyframes con scale, sin content-visibility,
+                            confirm() reemplazado por _showDestructiveConfirm
+   ════════════════════════════════════════════════════════════════════════════ */
+.dtp-overlay {
+  position: fixed; inset: 0; z-index: 10200;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: flex-end; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity 240ms ease;
+  font-family: var(--font);
+}
+.dtp-overlay.dtp-show { opacity: 1; pointer-events: auto; }
+
+.dtp-sheet {
+  width: 100%; max-width: 560px;
+  background: var(--surface);
+  border-radius: 28px 28px 0 0;
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  max-height: 92vh; overflow-y: auto;
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.18);
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  transform: translateY(100%);
+  transition: transform 280ms cubic-bezier(0.32, 0.72, 0.16, 1);
+}
+.dtp-overlay.dtp-show .dtp-sheet { transform: translateY(0); }
+.dtp-grabber {
+  width: 36px; height: 4px; border-radius: 2px;
+  background: var(--border); margin: 6px auto 12px;
+}
+
+/* Header con tabs + botones */
+.dtp-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.dtp-tabs { display: flex; gap: 4px; flex: 1; }
+.dtp-tab {
+  padding: 6px 14px; border-radius: var(--r-md);
+  background: transparent; border: none;
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--ink-soft); cursor: pointer; font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 180ms, color 180ms;
+}
+.dtp-tab.dtp-tab-active {
+  background: var(--red-s); color: var(--red);
+  font-weight: var(--fw-bold);
+}
+.dtp-btn-x, .dtp-btn-ok {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: none; background: transparent;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 150ms;
+}
+.dtp-btn-x { color: var(--ink-soft); }
+.dtp-btn-ok { color: var(--red); }
+.dtp-btn-x:active, .dtp-btn-ok:active { background: rgba(0,0,0,0.06); }
+
+/* Calendario */
+.dtp-cal-wrap { padding: 0 4px; margin-bottom: 14px; }
+.dtp-cal-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 4px 10px;
+}
+.dtp-cal-nav-title {
+  font-size: var(--fs-base); font-weight: var(--fw-bold);
+  color: var(--ink); text-transform: capitalize;
+}
+.dtp-cal-nav-btn {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: none; background: transparent;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--ink);
+}
+.dtp-cal-nav-btn:active { background: rgba(0,0,0,0.06); }
+
+.dtp-cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.dtp-cal-dow {
+  text-align: center; font-size: 10px; font-weight: var(--fw-bold);
+  letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--ink-soft); padding: 6px 0;
+}
+.dtp-cal-day {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--ink); cursor: pointer;
+  border-radius: 50%; border: none; background: transparent;
+  font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 150ms, color 150ms;
+}
+.dtp-cal-day:active { background: rgba(0,0,0,0.08); }
+.dtp-cal-day.dtp-cal-other { color: rgba(0,0,0,0.22); }
+.dtp-cal-day.dtp-cal-today { color: var(--red); font-weight: var(--fw-xbold); }
+.dtp-cal-day.dtp-cal-selected {
+  background: var(--red); color: #fff;
+}
+.dtp-cal-day.dtp-cal-selected.dtp-cal-today { color: #fff; }
+
+/* Hora — input + chips */
+.dtp-time-section { padding: 8px 0 4px; border-top: 1px solid var(--border); }
+.dtp-section-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 4px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dtp-section-row:active { background: rgba(0,0,0,0.03); }
+.dtp-section-icon {
+  width: 22px; height: 22px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-soft);
+}
+.dtp-section-label {
+  flex: 1; padding-left: 12px;
+  font-size: var(--fs-base); font-weight: var(--fw-semi);
+  color: var(--ink);
+}
+.dtp-section-value {
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--ink-soft);
+}
+.dtp-section-value.dtp-section-value-active {
+  color: var(--red); font-weight: var(--fw-bold);
+}
+.dtp-section-chev {
+  width: 16px; height: 16px; margin-left: 6px;
+  color: var(--ink-soft); flex-shrink: 0;
+}
+
+/* Sub-panel desplegable (repetir / recordatorio) */
+.dtp-subpanel {
+  background: rgba(0,0,0,0.03);
+  border-radius: var(--r-md);
+  padding: 4px 6px;
+  margin: 0 0 10px;
+  display: none;
+}
+.dtp-subpanel.dtp-subpanel-open { display: block; }
+
+.dtp-subpanel-opt {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px;
+  border: none; background: transparent; width: 100%;
+  font-family: var(--font); cursor: pointer;
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--ink); text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: var(--r-sm);
+}
+.dtp-subpanel-opt:active { background: rgba(0,0,0,0.06); }
+.dtp-subpanel-opt.dtp-opt-active { color: var(--red); }
+.dtp-subpanel-opt-check {
+  width: 18px; height: 18px; color: var(--red);
+  display: none;
+}
+.dtp-subpanel-opt.dtp-opt-active .dtp-subpanel-opt-check { display: block; }
+
+/* Custom builder (cada N días/semanas/etc) */
+.dtp-custom-builder {
+  padding: 12px;
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  margin: 6px 0;
+  display: none;
+}
+.dtp-custom-builder.dtp-custom-open { display: block; }
+.dtp-custom-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px;
+}
+.dtp-custom-row:last-child { margin-bottom: 0; }
+.dtp-custom-label {
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  color: var(--ink-soft); min-width: 70px;
+}
+.dtp-custom-num {
+  width: 60px; height: 36px;
+  border: 1.5px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+  font-size: var(--fs-base); font-weight: var(--fw-bold);
+  text-align: center; font-family: var(--font);
+  -webkit-appearance: none;
+}
+.dtp-custom-num:focus {
+  outline: none; border-color: var(--red);
+}
+.dtp-custom-sel {
+  flex: 1; height: 36px;
+  border: 1.5px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+  font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  font-family: var(--font);
+  padding: 0 10px;
+}
+.dtp-custom-sel:focus { outline: none; border-color: var(--red); }
+.dtp-dows {
+  display: flex; gap: 5px; flex-wrap: wrap;
+}
+.dtp-dow-chip {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--surface);
+  font-size: var(--fs-xs); font-weight: var(--fw-bold);
+  color: var(--ink); cursor: pointer; font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+  display: flex; align-items: center; justify-content: center;
+}
+.dtp-dow-chip.dtp-dow-active {
+  background: var(--red); border-color: var(--red); color: #fff;
+}
+
+/* Footer: limpiar / guardar / eliminar */
+.dtp-footer {
+  display: flex; gap: 8px; padding: 12px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.dtp-footer-btn {
+  flex: 1; height: 46px;
+  border-radius: var(--r-md); border: none;
+  font-size: var(--fs-base); font-weight: var(--fw-bold);
+  font-family: var(--font); cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dtp-footer-clear {
+  background: transparent; color: var(--ink-soft);
+  border: 1.5px solid var(--border);
+}
+.dtp-footer-clear:active { background: rgba(0,0,0,0.04); }
+.dtp-footer-delete {
+  background: rgba(139,26,47,0.12); color: var(--red);
+}
+.dtp-footer-delete:active { background: rgba(139,26,47,0.20); }
+
+/* Title input */
+.dtp-title-input {
+  width: 100%;
+  padding: 14px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  font-size: var(--fs-base); font-weight: var(--fw-semi);
+  color: var(--ink); font-family: var(--font);
+  margin-bottom: 12px;
+  -webkit-appearance: none;
+  outline: none;
+}
+.dtp-title-input:focus { border-color: var(--red); }
+
+/* Title del header con icono */
+.dtp-headline {
+  font-size: var(--fs-h3); font-weight: var(--fw-bold);
+  color: var(--ink); margin: 0 0 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* Native time input dentro del sheet — visible y grande */
+.dtp-time-input {
+  height: 44px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--fs-lg); font-weight: var(--fw-bold);
+  text-align: center; font-family: var(--font);
+  padding: 0 12px;
+  -webkit-appearance: none;
+}
+.dtp-time-input:focus { outline: none; border-color: var(--red); }
 
 /* ── ALM cat items ── */
 /* v1.3.1375 — Eliminadas 2 reglas vestigiales que contradecian la definicion
@@ -17488,7 +17770,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1376-dev';
+ const _APP_VERSION = 'v1.3.1377-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -21911,6 +22193,619 @@ const ui = (() => {
    return false; // En caso de error, NO bloquear (degradación segura)
   }
  };
+
+ /* ════════════════════════════════════════════════════════════════════════════
+    v1.3.1377 — DateTime Picker estilo TickTick
+    API global: window._DashweyDateTimePicker.open({...})
+    
+    Modo soportado FASE 1: 'datetime'
+    Próximas fases (no implementadas): 'date', 'time', 'range'
+    
+    Formato de retorno (modo datetime):
+    {
+      fecha:        ISO string (UTC),
+      repite:       null | { tipo, intervalo, diasSemana?, fin? },
+      recordatorio: null | { minutosAntes }
+    }
+    
+    Compatible hacia atrás con shape recordatorios actual:
+    { id, titulo, fecha (ISO), repite: null, creado }
+    
+    NOTA Android WebView: el sheet usa transform en .dtp-sheet (slide up) pero
+    NO hay descendientes con position:fixed que se rompan, ya que el overlay
+    completo es el contenedor fixed (no anidado).
+    ════════════════════════════════════════════════════════════════════════════ */
+ (function() {
+  var _instance = null;
+
+  // ── Helpers internos ──────────────────────────────────────────────
+  var DOWS_ES = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']; // L=0..D=6
+  var DOWS_SHORT = ['L','M','X','J','V','S','D'];
+  var MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+  function _esc(s) {
+   return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Parsea fecha ISO o Date a Date local. Devuelve null si inválida.
+  function _toDate(v) {
+   if (!v) return null;
+   if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+   var d = new Date(v);
+   return isNaN(d.getTime()) ? null : d;
+  }
+  // YYYY-MM-DD local de un Date
+  function _fmtYmd(d) {
+   return d.getFullYear() + '-'
+    + String(d.getMonth()+1).padStart(2,'0') + '-'
+    + String(d.getDate()).padStart(2,'0');
+  }
+  // HH:MM local
+  function _fmtHm(d) {
+   return String(d.getHours()).padStart(2,'0') + ':'
+    + String(d.getMinutes()).padStart(2,'0');
+  }
+  // Lunes-domingo (L=0..D=6) del Date local
+  function _dowMonStart(d) {
+   var dw = d.getDay(); // 0=dom..6=sab
+   return dw === 0 ? 6 : dw - 1;
+  }
+  // ¿mismo día local?
+  function _sameDay(a, b) {
+   return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+  }
+
+  // Resumen humano del estado repite
+  function _summaryRepite(rep) {
+   if (!rep || !rep.tipo) return 'Nunca';
+   var n = rep.intervalo || 1;
+   if (rep.tipo === 'diario')   return n === 1 ? 'Cada día'    : 'Cada ' + n + ' días';
+   if (rep.tipo === 'semanal') {
+    if (rep.diasSemana && rep.diasSemana.length && rep.diasSemana.length < 7) {
+     var letters = rep.diasSemana.map(function(i){ return DOWS_SHORT[i]; }).join('·');
+     return (n === 1 ? 'Cada semana · ' : 'Cada ' + n + ' sem · ') + letters;
+    }
+    return n === 1 ? 'Cada semana' : 'Cada ' + n + ' semanas';
+   }
+   if (rep.tipo === 'mensual')  return n === 1 ? 'Cada mes'    : 'Cada ' + n + ' meses';
+   if (rep.tipo === 'anual')    return n === 1 ? 'Cada año'    : 'Cada ' + n + ' años';
+   return 'Personalizado';
+  }
+  // Resumen humano del recordatorio
+  function _summaryRecord(rec) {
+   if (!rec || rec.minutosAntes == null) return 'Ninguno';
+   var m = rec.minutosAntes;
+   if (m === 0) return 'En el momento';
+   if (m < 60) return m + ' min antes';
+   if (m < 1440) {
+    var h = Math.floor(m / 60);
+    var rm = m % 60;
+    return rm === 0 ? h + ' h antes' : h + 'h ' + rm + 'min antes';
+   }
+   var d = Math.floor(m / 1440);
+   var rh = Math.floor((m % 1440) / 60);
+   return rh === 0 ? d + ' día' + (d>1?'s':'') + ' antes' : d + 'd ' + rh + 'h antes';
+  }
+
+  // ── State del componente (cerrado entre instancias) ───────────────
+  var S = null; // { mode, fecha (Date), repite, recordatorio, viewYear, viewMonth, options }
+
+  // ── Render del calendario ─────────────────────────────────────────
+  function _renderCalendar(root) {
+   var grid = root.querySelector('.dtp-cal-grid');
+   var title = root.querySelector('.dtp-cal-nav-title');
+   if (!grid || !title) return;
+
+   title.textContent = MONTHS_ES[S.viewMonth] + ' ' + S.viewYear;
+
+   // Limpiar (mantener cabeceras DOW)
+   grid.innerHTML = '';
+   // Cabeceras
+   for (var i = 0; i < 7; i++) {
+    var dh = document.createElement('div');
+    dh.className = 'dtp-cal-dow';
+    dh.textContent = DOWS_SHORT[i];
+    grid.appendChild(dh);
+   }
+   // Primer día del mes
+   var first = new Date(S.viewYear, S.viewMonth, 1);
+   var leadMon = _dowMonStart(first); // cuántos días previos (lunes-start)
+   // Total días mes
+   var daysInMonth = new Date(S.viewYear, S.viewMonth + 1, 0).getDate();
+   // Días previos (mes anterior)
+   var prevDays = new Date(S.viewYear, S.viewMonth, 0).getDate();
+   var today = new Date();
+   var sel = S.fecha;
+
+   for (var k = 0; k < 42; k++) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dtp-cal-day';
+    var thisDate;
+    if (k < leadMon) {
+     var dprev = prevDays - leadMon + 1 + k;
+     thisDate = new Date(S.viewYear, S.viewMonth - 1, dprev);
+     btn.classList.add('dtp-cal-other');
+     btn.textContent = String(dprev);
+    } else if (k < leadMon + daysInMonth) {
+     var dn = k - leadMon + 1;
+     thisDate = new Date(S.viewYear, S.viewMonth, dn);
+     btn.textContent = String(dn);
+    } else {
+     var dnxt = k - leadMon - daysInMonth + 1;
+     thisDate = new Date(S.viewYear, S.viewMonth + 1, dnxt);
+     btn.classList.add('dtp-cal-other');
+     btn.textContent = String(dnxt);
+    }
+    if (_sameDay(thisDate, today)) btn.classList.add('dtp-cal-today');
+    if (_sameDay(thisDate, sel))   btn.classList.add('dtp-cal-selected');
+    (function(d) {
+     btn.addEventListener('click', function(){
+      // preservar hora actual
+      var nd = new Date(d);
+      nd.setHours(S.fecha.getHours(), S.fecha.getMinutes(), 0, 0);
+      S.fecha = nd;
+      // Si saltó a otro mes, reposicionar viewYear/Month
+      S.viewYear = nd.getFullYear();
+      S.viewMonth = nd.getMonth();
+      _renderCalendar(root);
+     });
+    })(thisDate);
+    grid.appendChild(btn);
+   }
+  }
+
+  // ── Render sub-panel REPETIR ──────────────────────────────────────
+  function _renderRepetir(root) {
+   var panel = root.querySelector('#dtp-rep-panel');
+   if (!panel) return;
+   var presets = [
+    { tipo: null,        label: 'Nunca' },
+    { tipo: 'diario',    label: 'Cada día' },
+    { tipo: 'semanal',   label: 'Cada semana' },
+    { tipo: 'mensual',   label: 'Cada mes' },
+    { tipo: 'anual',     label: 'Cada año' }
+   ];
+   var html = '';
+   for (var i = 0; i < presets.length; i++) {
+    var p = presets[i];
+    var isActive = (
+     (p.tipo === null && !S.repite) ||
+     (S.repite && S.repite.tipo === p.tipo && (S.repite.intervalo === 1 || !S.repite.intervalo) && (!S.repite.diasSemana || S.repite.diasSemana.length === 0))
+    );
+    html += '<button type="button" class="dtp-subpanel-opt' + (isActive ? ' dtp-opt-active' : '') + '" data-rep="' + (p.tipo || '') + '">'
+     + '<span>' + p.label + '</span>'
+     + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+     + '</button>';
+   }
+   // Personalizado
+   var isCustom = !!(S.repite && (S.repite.intervalo > 1 || (S.repite.diasSemana && S.repite.diasSemana.length > 0 && S.repite.tipo === 'semanal')));
+   html += '<button type="button" class="dtp-subpanel-opt' + (isCustom ? ' dtp-opt-active' : '') + '" data-rep="__custom__">'
+    + '<span>Personalizado…</span>'
+    + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+    + '</button>';
+   // Custom builder
+   var bRep = S.repite && (S.repite.intervalo > 1 || (S.repite.tipo === 'semanal' && S.repite.diasSemana && S.repite.diasSemana.length))
+    ? S.repite : { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+   html += '<div id="dtp-rep-custom" class="dtp-custom-builder' + (isCustom ? ' dtp-custom-open' : '') + '">'
+    + '<div class="dtp-custom-row">'
+    +  '<span class="dtp-custom-label">Cada</span>'
+    +  '<input id="dtp-rep-num" type="number" min="1" max="999" class="dtp-custom-num" value="' + (bRep.intervalo || 1) + '">'
+    +  '<select id="dtp-rep-unit" class="dtp-custom-sel">'
+    +   '<option value="diario"' + (bRep.tipo==='diario'?' selected':'') + '>día(s)</option>'
+    +   '<option value="semanal"' + (bRep.tipo==='semanal'?' selected':'') + '>semana(s)</option>'
+    +   '<option value="mensual"' + (bRep.tipo==='mensual'?' selected':'') + '>mes(es)</option>'
+    +   '<option value="anual"' + (bRep.tipo==='anual'?' selected':'') + '>año(s)</option>'
+    +  '</select>'
+    + '</div>';
+   // Días de semana (solo si tipo=semanal)
+   var dows = (bRep.diasSemana || []);
+   var showDows = (bRep.tipo === 'semanal');
+   html += '<div class="dtp-custom-row" id="dtp-rep-dows-row" style="display:' + (showDows?'flex':'none') + '">'
+    + '<span class="dtp-custom-label">En</span>'
+    + '<div class="dtp-dows">';
+   for (var j = 0; j < 7; j++) {
+    var act = dows.indexOf(j) >= 0;
+    html += '<button type="button" class="dtp-dow-chip' + (act?' dtp-dow-active':'') + '" data-dow="' + j + '">' + DOWS_SHORT[j] + '</button>';
+   }
+   html += '</div></div>';
+   html += '</div>';
+   panel.innerHTML = html;
+
+   // Listeners presets
+   panel.querySelectorAll('[data-rep]').forEach(function(el) {
+    el.addEventListener('click', function() {
+     var v = el.getAttribute('data-rep');
+     if (v === '__custom__') {
+      // Activar custom — preservar lo que haya o usar default semanal
+      S.repite = (S.repite && (S.repite.intervalo > 1 || (S.repite.tipo === 'semanal' && S.repite.diasSemana && S.repite.diasSemana.length)))
+       ? S.repite : { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+     } else if (v === '') {
+      S.repite = null;
+     } else {
+      S.repite = { tipo: v, intervalo: 1, diasSemana: [] };
+     }
+     _renderRepetir(root);
+     _refreshSummaries(root);
+    });
+   });
+   // Listeners custom builder
+   var num = panel.querySelector('#dtp-rep-num');
+   var unit = panel.querySelector('#dtp-rep-unit');
+   if (num && unit) {
+    var commit = function() {
+     var n = parseInt(num.value, 10) || 1;
+     if (n < 1) n = 1;
+     if (n > 999) n = 999;
+     var u = unit.value;
+     var dws = S.repite && S.repite.diasSemana ? S.repite.diasSemana : [];
+     S.repite = { tipo: u, intervalo: n, diasSemana: u === 'semanal' ? dws : [] };
+     // Re-render solo summary y row dows (sin recargar todo el panel para no perder focus)
+     var dowsRow = panel.querySelector('#dtp-rep-dows-row');
+     if (dowsRow) dowsRow.style.display = (u === 'semanal') ? 'flex' : 'none';
+     _refreshSummaries(root);
+    };
+    num.addEventListener('input', commit);
+    unit.addEventListener('change', commit);
+   }
+   panel.querySelectorAll('[data-dow]').forEach(function(el) {
+    el.addEventListener('click', function() {
+     var d = parseInt(el.getAttribute('data-dow'), 10);
+     if (!S.repite) S.repite = { tipo: 'semanal', intervalo: 1, diasSemana: [] };
+     if (!S.repite.diasSemana) S.repite.diasSemana = [];
+     var idx = S.repite.diasSemana.indexOf(d);
+     if (idx >= 0) S.repite.diasSemana.splice(idx, 1);
+     else S.repite.diasSemana.push(d);
+     S.repite.diasSemana.sort();
+     el.classList.toggle('dtp-dow-active');
+     _refreshSummaries(root);
+    });
+   });
+  }
+
+  // ── Render sub-panel RECORDATORIO ─────────────────────────────────
+  function _renderRecord(root) {
+   var panel = root.querySelector('#dtp-rec-panel');
+   if (!panel) return;
+   var presets = [
+    { val: null,  label: 'Ninguno' },
+    { val: 0,     label: 'En el momento' },
+    { val: 5,     label: '5 minutos antes' },
+    { val: 15,    label: '15 minutos antes' },
+    { val: 30,    label: '30 minutos antes' },
+    { val: 60,    label: '1 hora antes' },
+    { val: 1440,  label: '1 día antes' }
+   ];
+   var html = '';
+   var matchedPreset = false;
+   for (var i = 0; i < presets.length; i++) {
+    var p = presets[i];
+    var isActive = (
+     (p.val === null && !S.recordatorio) ||
+     (S.recordatorio && S.recordatorio.minutosAntes === p.val)
+    );
+    if (isActive) matchedPreset = true;
+    html += '<button type="button" class="dtp-subpanel-opt' + (isActive ? ' dtp-opt-active' : '') + '" data-rec="' + (p.val == null ? '' : p.val) + '">'
+     + '<span>' + p.label + '</span>'
+     + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+     + '</button>';
+   }
+   var isCustom = !!(S.recordatorio && !matchedPreset);
+   html += '<button type="button" class="dtp-subpanel-opt' + (isCustom ? ' dtp-opt-active' : '') + '" data-rec="__custom__">'
+    + '<span>Personalizado…</span>'
+    + '<svg class="dtp-subpanel-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+    + '</button>';
+   // Custom builder
+   var ma = (S.recordatorio && S.recordatorio.minutosAntes != null) ? S.recordatorio.minutosAntes : 10;
+   var cUnit = 'min', cVal = ma;
+   if (ma > 0 && ma % 1440 === 0) { cUnit = 'd'; cVal = ma / 1440; }
+   else if (ma > 0 && ma % 60 === 0) { cUnit = 'h'; cVal = ma / 60; }
+   html += '<div id="dtp-rec-custom" class="dtp-custom-builder' + (isCustom ? ' dtp-custom-open' : '') + '">'
+    + '<div class="dtp-custom-row">'
+    +  '<input id="dtp-rec-num" type="number" min="0" max="9999" class="dtp-custom-num" value="' + cVal + '">'
+    +  '<select id="dtp-rec-unit" class="dtp-custom-sel">'
+    +   '<option value="min"' + (cUnit==='min'?' selected':'') + '>minutos antes</option>'
+    +   '<option value="h"' + (cUnit==='h'?' selected':'') + '>horas antes</option>'
+    +   '<option value="d"' + (cUnit==='d'?' selected':'') + '>días antes</option>'
+    +  '</select>'
+    + '</div>'
+    + '</div>';
+   panel.innerHTML = html;
+
+   panel.querySelectorAll('[data-rec]').forEach(function(el) {
+    el.addEventListener('click', function() {
+     var v = el.getAttribute('data-rec');
+     if (v === '__custom__') {
+      // Mantener valor actual o default 10 min
+      if (!S.recordatorio || matchedPreset) S.recordatorio = { minutosAntes: 10 };
+     } else if (v === '') {
+      S.recordatorio = null;
+     } else {
+      S.recordatorio = { minutosAntes: parseInt(v, 10) };
+     }
+     _renderRecord(root);
+     _refreshSummaries(root);
+    });
+   });
+   var num2 = panel.querySelector('#dtp-rec-num');
+   var unit2 = panel.querySelector('#dtp-rec-unit');
+   if (num2 && unit2) {
+    var commit2 = function() {
+     var n = parseInt(num2.value, 10);
+     if (isNaN(n) || n < 0) n = 0;
+     if (n > 9999) n = 9999;
+     var u = unit2.value;
+     var minutos = u === 'min' ? n : (u === 'h' ? n*60 : n*1440);
+     S.recordatorio = { minutosAntes: minutos };
+     _refreshSummaries(root);
+    };
+    num2.addEventListener('input', commit2);
+    unit2.addEventListener('change', commit2);
+   }
+  }
+
+  // ── Refrescar resúmenes (sin recargar todo) ───────────────────────
+  function _refreshSummaries(root) {
+   var sRep = root.querySelector('#dtp-rep-summary');
+   var sRec = root.querySelector('#dtp-rec-summary');
+   if (sRep) {
+    sRep.textContent = _summaryRepite(S.repite);
+    sRep.classList.toggle('dtp-section-value-active', !!S.repite);
+   }
+   if (sRec) {
+    sRec.textContent = _summaryRecord(S.recordatorio);
+    sRec.classList.toggle('dtp-section-value-active', !!S.recordatorio);
+   }
+  }
+
+  // ── Cierre con animación + cleanup ────────────────────────────────
+  function _close(root) {
+   if (!root) return;
+   root.classList.remove('dtp-show');
+   // Fallback timeout porque transitionend es poco fiable en Android WebView
+   setTimeout(function() {
+    if (root && root.parentNode) root.parentNode.removeChild(root);
+    _instance = null;
+   }, 320);
+  }
+
+  // ── API pública ───────────────────────────────────────────────────
+  function open(opts) {
+   opts = opts || {};
+   if (_instance) {
+    // Cerrar instancia previa antes de abrir (anti-doble apertura)
+    _close(_instance);
+    _instance = null;
+   }
+
+   var mode = opts.mode || 'datetime';
+   var initial = _toDate(opts.initialValue) || new Date();
+   if (initial.getMinutes() % 5 !== 0) {
+    // redondear a 5min para legibilidad por defecto
+    initial.setMinutes(Math.round(initial.getMinutes() / 5) * 5, 0, 0);
+   }
+
+   S = {
+    mode: mode,
+    fecha: initial,
+    repite: opts.initialRepite || null,
+    recordatorio: opts.initialRecordatorio || null,
+    viewYear: initial.getFullYear(),
+    viewMonth: initial.getMonth(),
+    titulo: opts.initialTitulo || '',
+    isEdit: !!opts.isEdit,
+    showTitle: opts.showTitle !== false, // default true para recordatorios
+    onConfirm: opts.onConfirm || function(){},
+    onCancel: opts.onCancel || function(){},
+    onDelete: opts.onDelete || null
+   };
+
+   var overlay = document.createElement('div');
+   overlay.className = 'dtp-overlay';
+   _instance = overlay;
+
+   var titleHtml = S.showTitle
+    ? '<input id="dtp-title" class="dtp-title-input" placeholder="¿Qué quieres recordar?" value="' + _esc(S.titulo) + '">'
+    : '';
+
+   overlay.innerHTML = '<div class="dtp-sheet" role="dialog">'
+    + '<div class="dtp-grabber"></div>'
+    + '<div class="dtp-header">'
+    +  '<button type="button" class="dtp-btn-x" aria-label="Cancelar">'
+    +   '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>'
+    +  '</button>'
+    +  '<div class="dtp-tabs"><button type="button" class="dtp-tab dtp-tab-active">Fecha y hora</button></div>'
+    +  '<button type="button" class="dtp-btn-ok" aria-label="Aceptar">'
+    +   '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+    +  '</button>'
+    + '</div>'
+    + titleHtml
+    + '<div class="dtp-cal-wrap">'
+    +  '<div class="dtp-cal-nav">'
+    +   '<button type="button" class="dtp-cal-nav-btn" id="dtp-prev-mo" aria-label="Mes anterior"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>'
+    +   '<div class="dtp-cal-nav-title"></div>'
+    +   '<button type="button" class="dtp-cal-nav-btn" id="dtp-next-mo" aria-label="Mes siguiente"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>'
+    +  '</div>'
+    +  '<div class="dtp-cal-grid"></div>'
+    + '</div>'
+    + '<div class="dtp-time-section">'
+    +  '<div class="dtp-section-row" id="dtp-time-row">'
+    +   '<span class="dtp-section-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg></span>'
+    +   '<span class="dtp-section-label">Hora</span>'
+    +   '<input type="time" id="dtp-time-inp" class="dtp-time-input" value="' + _fmtHm(S.fecha) + '" style="width:auto">'
+    +  '</div>'
+    + '</div>'
+    + '<div class="dtp-time-section">'
+    +  '<div class="dtp-section-row" id="dtp-rep-row">'
+    +   '<span class="dtp-section-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></span>'
+    +   '<span class="dtp-section-label">Repetir</span>'
+    +   '<span class="dtp-section-value' + (S.repite?' dtp-section-value-active':'') + '" id="dtp-rep-summary">' + _summaryRepite(S.repite) + '</span>'
+    +   '<svg class="dtp-section-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>'
+    +  '</div>'
+    +  '<div class="dtp-subpanel" id="dtp-rep-panel"></div>'
+    + '</div>'
+    + '<div class="dtp-time-section">'
+    +  '<div class="dtp-section-row" id="dtp-rec-row">'
+    +   '<span class="dtp-section-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>'
+    +   '<span class="dtp-section-label">Recordatorio</span>'
+    +   '<span class="dtp-section-value' + (S.recordatorio?' dtp-section-value-active':'') + '" id="dtp-rec-summary">' + _summaryRecord(S.recordatorio) + '</span>'
+    +   '<svg class="dtp-section-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>'
+    +  '</div>'
+    +  '<div class="dtp-subpanel" id="dtp-rec-panel"></div>'
+    + '</div>'
+    + '<div class="dtp-footer">'
+    +  '<button type="button" class="dtp-footer-btn dtp-footer-clear" id="dtp-clear">Limpiar</button>'
+    +  (S.isEdit && S.onDelete ? '<button type="button" class="dtp-footer-btn dtp-footer-delete" id="dtp-delete">Eliminar</button>' : '')
+    + '</div>'
+    + '</div>';
+
+   document.body.appendChild(overlay);
+
+   // Render inicial calendario y subpaneles (lazy on first open)
+   _renderCalendar(overlay);
+
+   // ── Interacciones ─────────────────────────────────────────────────
+   // Tap fuera del sheet → cancelar
+   overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) {
+     S.onCancel();
+     _close(overlay);
+    }
+   });
+
+   // X
+   overlay.querySelector('.dtp-btn-x').addEventListener('click', function() {
+    S.onCancel(); _close(overlay);
+   });
+
+   // Navegación mes
+   overlay.querySelector('#dtp-prev-mo').addEventListener('click', function() {
+    S.viewMonth--; if (S.viewMonth < 0) { S.viewMonth = 11; S.viewYear--; }
+    _renderCalendar(overlay);
+   });
+   overlay.querySelector('#dtp-next-mo').addEventListener('click', function() {
+    S.viewMonth++; if (S.viewMonth > 11) { S.viewMonth = 0; S.viewYear++; }
+    _renderCalendar(overlay);
+   });
+
+   // Hora — input nativo
+   var timeInp = overlay.querySelector('#dtp-time-inp');
+   if (timeInp) {
+    timeInp.addEventListener('change', function() {
+     var v = (timeInp.value || '00:00').split(':');
+     var h = parseInt(v[0], 10) || 0;
+     var m = parseInt(v[1], 10) || 0;
+     S.fecha.setHours(h, m, 0, 0);
+    });
+   }
+   // El click en la fila pero NO en el input no hace nada — la hora se edita directo
+   var timeRow = overlay.querySelector('#dtp-time-row');
+   if (timeRow) {
+    timeRow.addEventListener('click', function(e) {
+     // Si tap fuera del input, abrir el input
+     if (e.target.tagName !== 'INPUT' && timeInp) {
+      try { timeInp.focus(); timeInp.click(); } catch(_) {}
+     }
+    });
+   }
+
+   // Repetir — toggle panel
+   var repRow = overlay.querySelector('#dtp-rep-row');
+   var repPanel = overlay.querySelector('#dtp-rep-panel');
+   var repChev = repRow.querySelector('.dtp-section-chev');
+   var repRendered = false;
+   repRow.addEventListener('click', function() {
+    if (!repRendered) { _renderRepetir(overlay); repRendered = true; }
+    repPanel.classList.toggle('dtp-subpanel-open');
+    if (repChev) {
+     repChev.style.transform = repPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
+    }
+   });
+
+   // Recordatorio — toggle panel
+   var recRow = overlay.querySelector('#dtp-rec-row');
+   var recPanel = overlay.querySelector('#dtp-rec-panel');
+   var recChev = recRow.querySelector('.dtp-section-chev');
+   var recRendered = false;
+   recRow.addEventListener('click', function() {
+    if (!recRendered) { _renderRecord(overlay); recRendered = true; }
+    recPanel.classList.toggle('dtp-subpanel-open');
+    if (recChev) {
+     recChev.style.transform = recPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
+    }
+   });
+
+   // Limpiar — reset repite + recordatorio
+   overlay.querySelector('#dtp-clear').addEventListener('click', function() {
+    S.repite = null;
+    S.recordatorio = null;
+    if (repRendered) _renderRepetir(overlay);
+    if (recRendered) _renderRecord(overlay);
+    _refreshSummaries(overlay);
+   });
+
+   // Eliminar
+   var delBtn = overlay.querySelector('#dtp-delete');
+   if (delBtn) {
+    delBtn.addEventListener('click', function() {
+     try {
+      if (typeof window._showDestructiveConfirm === 'function') {
+       window._showDestructiveConfirm({
+        title: 'Eliminar',
+        message: '¿Confirmas eliminar este elemento?',
+        confirmText: 'Eliminar',
+        onConfirm: function() {
+         if (S.onDelete) S.onDelete();
+         _close(overlay);
+        }
+       });
+      } else {
+       if (S.onDelete) S.onDelete();
+       _close(overlay);
+      }
+     } catch(_) {
+      if (S.onDelete) S.onDelete();
+      _close(overlay);
+     }
+    });
+   }
+
+   // OK / confirmar
+   overlay.querySelector('.dtp-btn-ok').addEventListener('click', function() {
+    var titulo = '';
+    if (S.showTitle) {
+     var ti = overlay.querySelector('#dtp-title');
+     titulo = ti ? ti.value.trim() : '';
+     if (!titulo) {
+      if (typeof showToast === 'function') showToast('⚠️ Introduce un título', 'warning');
+      if (ti) ti.focus();
+      return;
+     }
+    }
+    var result = {
+     fecha: S.fecha.toISOString(),
+     repite: S.repite,
+     recordatorio: S.recordatorio
+    };
+    if (S.showTitle) result.titulo = titulo;
+    var keep = false;
+    try { keep = S.onConfirm(result) === true; } catch(e) { console.warn('[DTP] onConfirm error:', e); }
+    if (!keep) _close(overlay);
+   });
+
+   // Mostrar (animación)
+   requestAnimationFrame(function() {
+    overlay.classList.add('dtp-show');
+   });
+  }
+
+  window._DashweyDateTimePicker = { open: open };
+ })();
+
  // Arrancar tras initial sync (3s gap como Loyverse realtime)
  setTimeout(function(){
   try { _autoCierreStart(); } catch(_) {}
@@ -29925,98 +30820,69 @@ function _confirmBorrarCuenta(id) {
  // recId: string → modo edición. null → modo creación.
  // Campos: título, fecha, hora. (Recurrencia se queda en null por ahora.)
  function _openRecordatorioSheet(recId) {
- var existing = null;
- if (recId) {
-  var arr = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
-  existing = arr.find(function(r){ return r && r.id === recId; }) || null;
-  if (!existing) { if (typeof showToast==='function') showToast('⚠️ Recordatorio no encontrado', 'warning'); return; }
- }
-
- var now = existing ? new Date(existing.fecha) : new Date();
- var defFecha = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
- var defHora = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
- var defTitulo = existing ? (existing.titulo || '') : '';
- var isEdit = !!existing;
-
- var modal = document.createElement('div');
- modal.style.cssText = 'position:fixed;inset:0;z-index:10103;background:var(--sheet-overlay);display:flex;align-items:flex-end';
- modal.innerHTML = '<div style="width:100%;background:var(--surface);border-radius:var(--sheet-radius) 28px 0 0;padding:var(--sp-5) 20px calc(20px + env(safe-area-inset-bottom,0px));font-family:var(--font)">'
-  + '<div style="width:32px;height:4px;border-radius:2px;background:var(--border);margin:0 auto 16px"></div>'
-  + '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink);margin-bottom:var(--sp-4)">'
-  + (isEdit ? '✏️ Editar recordatorio' : '⏰ Nuevo recordatorio') + '</div>'
-  + '<div style="display:flex;flex-direction:column;gap:var(--sp-2_5)">'
-  + '<input id="nr-titulo" placeholder="¿Qué quieres recordar?" class="fi" value="'+esc(defTitulo)+'">'
-  + '<div style="display:flex;gap:var(--sp-2)">'
-  + '<div style="flex:1;display:flex;flex-direction:column;gap:3px">'
-  + '<label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:var(--ls-wider);text-transform:uppercase;color:var(--ink-soft)">Fecha</label>'
-  + '<input id="nr-fecha" type="date" value="'+defFecha+'" class="fi">'
-  + '</div>'
-  + '<div style="flex:1;display:flex;flex-direction:column;gap:3px">'
-  + '<label style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);letter-spacing:var(--ls-wider);text-transform:uppercase;color:var(--ink-soft)">Hora</label>'
-  + '<input id="nr-hora" type="time" value="'+defHora+'" class="fi">'
-  + '</div>'
-  + '</div>'
-  + '<div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-1_5)">'
-  + (isEdit ? '<button id="nr-del" style="flex:1;height:50px;border-radius:var(--r-md);background:rgba(139,26,47,0.12);color:var(--red);border:none;font-size:var(--fs-base);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">Eliminar</button>' : '')
-  + '<button id="nr-save" style="flex:2;height:50px;border-radius:var(--r-md);background:var(--red);color:#fff;border:none;font-size:var(--fs-lg);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer">'
-  + (isEdit ? 'Guardar' : 'Crear') + '</button>'
-  + '</div>'
-  + '</div>'
-  + '</div>';
-
- modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
-
- modal.querySelector('#nr-save').addEventListener('click', function(){
-  var titulo = modal.querySelector('#nr-titulo').value.trim();
-  var fecha = modal.querySelector('#nr-fecha').value;
-  var hora = modal.querySelector('#nr-hora').value || '09:00';
-  if (!titulo) { if (typeof showToast==='function') showToast('⚠️ Introduce un título', 'warning'); return; }
-  if (!fecha) { if (typeof showToast==='function') showToast('⚠️ Introduce una fecha', 'warning'); return; }
-  var iso = new Date(fecha + 'T' + hora).toISOString();
-  if (isEdit) {
-   State.set.updateRecordatorio(recId, { titulo: titulo, fecha: iso });
-   if (typeof showToast==='function') showToast('✅ Recordatorio actualizado', 'success');
-  } else {
-   State.set.addRecordatorio({
-    id: 'rec_' + Date.now(),
-    titulo: titulo,
-    fecha: iso,
-    repite: null,
-    creado: new Date().toISOString()
-   });
-   if (typeof showToast==='function') showToast('✅ Recordatorio creado', 'success');
-  }
-  modal.remove();
-  try { dash.render(); } catch(_) {}
- });
-
- if (isEdit) {
-  modal.querySelector('#nr-del').addEventListener('click', function(){
-   if (typeof window._showDestructiveConfirm === 'function') {
-    window._showDestructiveConfirm({
-     title: 'Eliminar recordatorio',
-     message: '¿Eliminar "' + (existing.titulo||'(sin título)') + '"?',
-     confirmText: 'Eliminar',
-     onConfirm: function() {
-      State.set.deleteRecordatorio(recId);
-      modal.remove();
-      try { dash.render(); } catch(_) {}
-      if (typeof showToast==='function') showToast('🗑️ Recordatorio eliminado');
-     }
-    });
-   } else {
-    State.set.deleteRecordatorio(recId);
-    modal.remove();
-    try { dash.render(); } catch(_) {}
-    if (typeof showToast==='function') showToast('🗑️ Recordatorio eliminado');
+  // v1.3.1377 — Reescrita para delegar al nuevo _DashweyDateTimePicker.
+  //   Compatible 100% con shape persistido (id/titulo/fecha/repite/creado).
+  //   Nuevo: soporta repite (objeto) y recordatorio (notificación previa).
+  //
+  //   Hacia atrás: si existing.repite es null, no se rompe — el componente
+  //   acepta initialRepite=null y lo trata como "Nunca".
+  var existing = null;
+  if (recId) {
+   var arr = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
+   existing = arr.find(function(r){ return r && r.id === recId; }) || null;
+   if (!existing) {
+    if (typeof showToast==='function') showToast('⚠️ Recordatorio no encontrado', 'warning');
+    return;
    }
+  }
+  var isEdit = !!existing;
+
+  if (!window._DashweyDateTimePicker || typeof window._DashweyDateTimePicker.open !== 'function') {
+   console.error('[Dashwey] _DashweyDateTimePicker no disponible');
+   if (typeof showToast === 'function') showToast('⚠️ Componente no disponible', 'error');
+   return;
+  }
+
+  window._DashweyDateTimePicker.open({
+   mode: 'datetime',
+   isEdit: isEdit,
+   showTitle: true,
+   initialTitulo: existing ? (existing.titulo || '') : '',
+   initialValue: existing ? existing.fecha : new Date(),
+   initialRepite: existing && existing.repite ? existing.repite : null,
+   initialRecordatorio: existing && existing.recordatorio ? existing.recordatorio : null,
+   onConfirm: function(result) {
+    if (isEdit) {
+     State.set.updateRecordatorio(recId, {
+      titulo: result.titulo,
+      fecha: result.fecha,
+      repite: result.repite,
+      recordatorio: result.recordatorio,
+      updatedAt: new Date().toISOString()
+     });
+     if (typeof showToast==='function') showToast('✅ Recordatorio actualizado', 'success');
+    } else {
+     State.set.addRecordatorio({
+      id: 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      titulo: result.titulo,
+      fecha: result.fecha,
+      repite: result.repite,
+      recordatorio: result.recordatorio,
+      creado: new Date().toISOString()
+     });
+     if (typeof showToast==='function') showToast('✅ Recordatorio creado', 'success');
+    }
+    try { dash.render(); } catch(_) {}
+    return false; // false = cerrar el sheet (default)
+   },
+   onDelete: isEdit ? function() {
+    State.set.deleteRecordatorio(recId);
+    if (typeof showToast==='function') showToast('🗑️ Recordatorio eliminado', 'success');
+    try { dash.render(); } catch(_) {}
+   } : null
   });
  }
 
- document.body.appendChild(modal);
- // Focus el input título
- setTimeout(function(){ try { modal.querySelector('#nr-titulo').focus(); } catch(_){} }, 120);
- }
 
 
  // ── Panel de preferencias de notificaciones ──────────────
