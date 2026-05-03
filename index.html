@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1384-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1385-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1384-dev</title>
+<title>Dashwey v1.3.1385-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -2653,12 +2653,8 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
  overflow-y: auto;
  overflow-x: visible; /* permite que el camión sobresalga sin recortarse */
  -webkit-overflow-scrolling: touch;
- /* v1.3.1384 — overscroll-behavior:contain bloquea el scroll-chaining al padre.
-    Sin esto, el scroll del feed al llegar al límite propagaba al .dash-cards-container,
-    disparaba _snapFbPoll → re-render Agenda → flickering visible.
-    Si el usuario quiere cambiar de card desde Agenda, usa swipe horizontal o tabs. */
- overscroll-behavior-y: contain;
- touch-action: pan-y; /* solo absorbe pan vertical */
+ overscroll-behavior-y: auto; /* scroll-chaining al padre cuando llega al límite */
+ touch-action: pan-y; /* solo absorbe pan vertical, dejando el resto al padre */
 }
 .snap-actividad-wrap::-webkit-scrollbar { display: none; }
 
@@ -8522,6 +8518,7 @@ html:not([data-app-mode]) .alm-hdr-icon-btn[aria-label="Menú"] {
   -webkit-appearance: none;
 }
 .dtp-time-input:focus { outline: none; border-color: var(--red); }
+
 
 /* ── ALM cat items ── */
 /* v1.3.1375 — Eliminadas 2 reglas vestigiales que contradecian la definicion
@@ -17306,18 +17303,6 @@ const Utils = (() => {
   }
  } catch(eFranja) { console.warn('[Dashwey/Period] franja hydrate err:', eFranja); }
 
- // v1.3.1382 — Enganchar dps-desde / dps-hasta al picker TickTick.
- //   Idempotente: si ya está enganchado (por aperturas previas), attachToInput
- //   detecta el flag dataset.dtpAttached y no hace nada.
- try {
-  if (window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-   var _dpsDesde = document.getElementById('dps-desde');
-   var _dpsHasta = document.getElementById('dps-hasta');
-   if (_dpsDesde) window._DashweyDateTimePicker.attachToInput(_dpsDesde, { mode: 'date', headlineText: 'Desde' });
-   if (_dpsHasta) window._DashweyDateTimePicker.attachToInput(_dpsHasta, { mode: 'date', headlineText: 'Hasta' });
-  }
- } catch(_) {}
-
  sheet.classList.add('open');
  }
 
@@ -17621,19 +17606,7 @@ function getLV(id,defaults) { return Utils.getLV(id,defaults); }
 // =========================================================================
 const ui = (() => {
 
- // v1.3.1380 — setFs limpia .has-dc-layout antes de inyectar nuevo HTML.
- //   Sin esto, si la vista previa era Detalle de Cuenta (banca) o cualquier
- //   sheet con layout dc-layout, la clase quedaba pegada en #fs-content y
- //   forzaba overflow:hidden → el formulario nuevo (ej. openEditProv) no
- //   scrolleaba. Cualquier vista que NECESITE has-dc-layout la añade
- //   explícitamente DESPUÉS de setFs (ver patrón existente en líneas
- //   27564, 29573).
- function setFs(html) {
-  var el = document.getElementById('fs-content');
-  if (!el) return;
-  el.classList.remove('has-dc-layout');
-  el.innerHTML = html;
- }
+ function setFs(html) { (document.getElementById('fs-content')||{}).innerHTML = html; }
 
  //
  // CAUSA DEL FLICKERING (v1.2.2):
@@ -17798,7 +17771,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1384-dev';
+ const _APP_VERSION = 'v1.3.1385-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22226,8 +22199,7 @@ const ui = (() => {
     v1.3.1377 — DateTime Picker estilo TickTick
     API global: window._DashweyDateTimePicker.open({...})
     
-    Modo soportado FASE 1: 'datetime'
-    Próximas fases (no implementadas): 'date', 'time', 'range'
+    Modo soportado: 'datetime' (recordatorios)
     
     Formato de retorno (modo datetime):
     {
@@ -22733,13 +22705,6 @@ const ui = (() => {
     var perfil = (window.State && window.State.get && window.State.get.perfil) ? window.State.get.perfil() : null;
     if (perfil && perfil.zona) defaultZona = perfil.zona;
    } catch(_) {}
-   // v1.3.1379 — modo 'recurring' oculta calendario/hora/recordatorio/zona,
-   //   solo muestra el selector Repetir. Usado para periodicidad de proveedor.
-   // v1.3.1381 — modo 'date' muestra solo calendario (sin hora/repetir/recordatorio/zona/título).
-   //   Usado para pickers simples de fecha en formularios financieros.
-   var isRecurring = (mode === 'recurring');
-   var isDateOnly  = (mode === 'date');
-
    S = {
     mode: mode,
     fecha: initial,
@@ -22751,14 +22716,12 @@ const ui = (() => {
     viewMonth: initial.getMonth(),
     titulo: opts.initialTitulo || '',
     isEdit: !!opts.isEdit,
-    // Flags de visibilidad (defaults pensados para 'datetime')
-    showTitle:        opts.showTitle        !== false && !isRecurring && !isDateOnly,
-    showCalendar:     opts.showCalendar     !== false && !isRecurring,
-    showTime:         opts.showTime         !== false && !isRecurring && !isDateOnly,
-    showRepetir:      opts.showRepetir      !== false                 && !isDateOnly,
-    showRecordatorio: opts.showRecordatorio !== false && !isRecurring && !isDateOnly,
-    showZona:         opts.showZona         !== false && !isRecurring && !isDateOnly,
-    headlineText:     opts.headlineText || null, // título opcional del sheet
+    showTitle: opts.showTitle !== false, // default true para recordatorios
+    showCalendar: true,
+    showTime: true,
+    showRepetir: true,
+    showRecordatorio: true,
+    showZona: true,
     onConfirm: opts.onConfirm || function(){},
     onCancel: opts.onCancel || function(){},
     onDelete: opts.onDelete || null
@@ -22768,14 +22731,9 @@ const ui = (() => {
    overlay.className = 'dtp-overlay';
    _instance = overlay;
 
-   // v1.3.1379 — HTML construido condicionalmente segÃºn flags showXxx
    var titleHtml = S.showTitle
     ? '<input id="dtp-title" class="dtp-title-input" placeholder="¿Qué quieres recordar?" value="' + _esc(S.titulo) + '">'
     : '';
-
-   var headerLabel = S.headlineText
-    ? _esc(S.headlineText)
-    : (isRecurring ? 'Periodicidad' : (isDateOnly ? 'Fecha' : 'Fecha y hora'));
 
    var calendarHtml = S.showCalendar
     ? '<div class="dtp-cal-wrap">'
@@ -22840,7 +22798,7 @@ const ui = (() => {
     +  '<button type="button" class="dtp-btn-x" aria-label="Cancelar">'
     +   '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>'
     +  '</button>'
-    +  '<div class="dtp-tabs"><button type="button" class="dtp-tab dtp-tab-active">' + headerLabel + '</button></div>'
+    +  '<div class="dtp-tabs"><button type="button" class="dtp-tab dtp-tab-active">Fecha y hora</button></div>'
     +  '<button type="button" class="dtp-btn-ok" aria-label="Aceptar">'
     +   '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
     +  '</button>'
@@ -22851,20 +22809,16 @@ const ui = (() => {
     + zonaHtml
     + repetirHtml
     + recordatorioHtml
-    // v1.3.1381 — Footer "Limpiar" oculto en modo date (no hay nada que limpiar
-    //   cuando solo seleccionas fecha sin repetir/recordatorio).
-    + (isDateOnly && !(S.isEdit && S.onDelete)
-       ? ''
-       : '<div class="dtp-footer">'
-        +  (isDateOnly ? '' : '<button type="button" class="dtp-footer-btn dtp-footer-clear" id="dtp-clear">Limpiar</button>')
-        +  (S.isEdit && S.onDelete ? '<button type="button" class="dtp-footer-btn dtp-footer-delete" id="dtp-delete">Eliminar</button>' : '')
-        + '</div>')
+    + '<div class="dtp-footer">'
+    +  '<button type="button" class="dtp-footer-btn dtp-footer-clear" id="dtp-clear">Limpiar</button>'
+    +  (S.isEdit && S.onDelete ? '<button type="button" class="dtp-footer-btn dtp-footer-delete" id="dtp-delete">Eliminar</button>' : '')
+    + '</div>'
     + '</div>';
 
    document.body.appendChild(overlay);
 
-   // Render inicial calendario (solo si visible)
-   if (S.showCalendar) _renderCalendar(overlay);
+   // Render inicial calendario y subpaneles (lazy on first open)
+   _renderCalendar(overlay);
 
    // ── Interacciones ─────────────────────────────────────────────────
    // Tap fuera del sheet → cancelar
@@ -22880,21 +22834,15 @@ const ui = (() => {
     S.onCancel(); _close(overlay);
    });
 
-   // Navegación mes (v1.3.1379: guard si calendar oculto)
-   var prevMo = overlay.querySelector('#dtp-prev-mo');
-   var nextMo = overlay.querySelector('#dtp-next-mo');
-   if (prevMo) {
-    prevMo.addEventListener('click', function() {
-     S.viewMonth--; if (S.viewMonth < 0) { S.viewMonth = 11; S.viewYear--; }
-     _renderCalendar(overlay);
-    });
-   }
-   if (nextMo) {
-    nextMo.addEventListener('click', function() {
-     S.viewMonth++; if (S.viewMonth > 11) { S.viewMonth = 0; S.viewYear++; }
-     _renderCalendar(overlay);
-    });
-   }
+   // Navegación mes
+   overlay.querySelector('#dtp-prev-mo').addEventListener('click', function() {
+    S.viewMonth--; if (S.viewMonth < 0) { S.viewMonth = 11; S.viewYear--; }
+    _renderCalendar(overlay);
+   });
+   overlay.querySelector('#dtp-next-mo').addEventListener('click', function() {
+    S.viewMonth++; if (S.viewMonth > 11) { S.viewMonth = 0; S.viewYear++; }
+    _renderCalendar(overlay);
+   });
 
    // Hora — input nativo
    var timeInp = overlay.querySelector('#dtp-time-inp');
@@ -22954,39 +22902,34 @@ const ui = (() => {
     });
    }
 
-   // Repetir — toggle panel (v1.3.1379: guard si showRepetir=false)
+   // Repetir — toggle panel
    var repRow = overlay.querySelector('#dtp-rep-row');
    var repPanel = overlay.querySelector('#dtp-rep-panel');
-   var repChev = repRow ? repRow.querySelector('.dtp-section-chev') : null;
+   var repChev = repRow.querySelector('.dtp-section-chev');
    var repRendered = false;
-   if (repRow && repPanel) {
-    repRow.addEventListener('click', function() {
-     if (!repRendered) { _renderRepetir(overlay); repRendered = true; }
-     repPanel.classList.toggle('dtp-subpanel-open');
-     if (repChev) {
-      repChev.style.transform = repPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
-     }
-    });
-   }
+   repRow.addEventListener('click', function() {
+    if (!repRendered) { _renderRepetir(overlay); repRendered = true; }
+    repPanel.classList.toggle('dtp-subpanel-open');
+    if (repChev) {
+     repChev.style.transform = repPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
+    }
+   });
 
-   // Recordatorio — toggle panel (v1.3.1379: guard si showRecordatorio=false)
+   // Recordatorio — toggle panel
    var recRow = overlay.querySelector('#dtp-rec-row');
    var recPanel = overlay.querySelector('#dtp-rec-panel');
-   var recChev = recRow ? recRow.querySelector('.dtp-section-chev') : null;
+   var recChev = recRow.querySelector('.dtp-section-chev');
    var recRendered = false;
-   if (recRow && recPanel) {
-    recRow.addEventListener('click', function() {
-     if (!recRendered) { _renderRecord(overlay); recRendered = true; }
-     recPanel.classList.toggle('dtp-subpanel-open');
-     if (recChev) {
-      recChev.style.transform = recPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
-     }
-    });
-   }
+   recRow.addEventListener('click', function() {
+    if (!recRendered) { _renderRecord(overlay); recRendered = true; }
+    recPanel.classList.toggle('dtp-subpanel-open');
+    if (recChev) {
+     recChev.style.transform = recPanel.classList.contains('dtp-subpanel-open') ? 'rotate(90deg)' : '';
+    }
+   });
 
-   // Limpiar — reset repite + recordatorio (v1.3.1381: guard si oculto en modo date)
-   var clearBtn = overlay.querySelector('#dtp-clear');
-   if (clearBtn) clearBtn.addEventListener('click', function() {
+   // Limpiar — reset repite + recordatorio
+   overlay.querySelector('#dtp-clear').addEventListener('click', function() {
     S.repite = null;
     S.recordatorio = null;
     if (repRendered) _renderRepetir(overlay);
@@ -23080,91 +23023,7 @@ const ui = (() => {
    });
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // v1.3.1381 — Helper attachToInput
-  //
-  //   Convierte un <input type="date"|"datetime-local"|"time"> nativo en un
-  //   trigger que abre el sheet TickTick en lugar del datepicker nativo.
-  //
-  //   - Mantiene el input visible (mismo CSS, mismo placeholder, misma posición)
-  //   - El value del input sigue siendo formato estándar ISO (YYYY-MM-DD para date)
-  //   - Se intercepta el focus/click → abre sheet → al confirmar, escribe value y dispara 'change'
-  //   - Compatibilidad: si el componente DTP no está disponible, el input nativo sigue funcionando
-  //
-  //   Uso:
-  //     _DashweyDateTimePicker.attachToInput(document.getElementById('mov-fecha'), {
-  //       mode: 'date',
-  //       headlineText: 'Fecha del movimiento'
-  //     });
-  // ════════════════════════════════════════════════════════════════════════════
-  function attachToInput(inputEl, opts) {
-   if (!inputEl) return;
-   opts = opts || {};
-   var mode = opts.mode || 'date';
-
-   // Marca para no doblar bindings si attachToInput se llama 2 veces sobre el mismo input
-   if (inputEl.dataset && inputEl.dataset.dtpAttached === '1') return;
-   if (inputEl.dataset) inputEl.dataset.dtpAttached = '1';
-
-   // Bloquear datepicker nativo: readonly + suprimir click default
-   //   readonly NO bloquea formularios (el value se sigue enviando)
-   //   pero sí el datepicker nativo en Android WebView.
-   inputEl.setAttribute('readonly', 'readonly');
-   // Cursor pointer en lugar de text para señalar interactivo
-   inputEl.style.cursor = 'pointer';
-   // Caret oculto (visual cleaner)
-   inputEl.style.caretColor = 'transparent';
-
-   var openHandler = function(e) {
-    // Prevenir focus/click default del datepicker nativo
-    e.preventDefault();
-    try { inputEl.blur(); } catch(_) {}
-
-    var initialVal = (inputEl.value || '').trim();
-    var initialDate = null;
-    if (initialVal) {
-     // Para 'date' el value es 'YYYY-MM-DD'
-     if (mode === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(initialVal)) {
-      var parts = initialVal.split('-');
-      initialDate = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10), 12, 0, 0);
-     } else {
-      var d = new Date(initialVal);
-      if (!isNaN(d.getTime())) initialDate = d;
-     }
-    }
-
-    open({
-     mode: mode,
-     headlineText: opts.headlineText || null,
-     initialValue: initialDate || new Date(),
-     onConfirm: function(result) {
-      // result.fecha es ISO UTC. Para 'date' devolvemos YYYY-MM-DD local.
-      if (mode === 'date') {
-       var d = new Date(result.fecha);
-       var y = d.getFullYear();
-       var m = String(d.getMonth()+1).padStart(2, '0');
-       var dd = String(d.getDate()).padStart(2, '0');
-       inputEl.value = y + '-' + m + '-' + dd;
-      } else {
-       inputEl.value = result.fecha;
-      }
-      // Disparar 'change' para que el código existente reaccione
-      try {
-       var ev = new Event('change', { bubbles: true });
-       inputEl.dispatchEvent(ev);
-      } catch(_) {}
-      return false; // cerrar sheet
-     }
-    });
-   };
-
-   inputEl.addEventListener('mousedown', openHandler);
-   inputEl.addEventListener('focus', openHandler);
-   // Touch específico para Android: focus no siempre llega antes que click default
-   inputEl.addEventListener('click', openHandler);
-  }
-
-  window._DashweyDateTimePicker = { open: open, attachToInput: attachToInput };
+  window._DashweyDateTimePicker = { open: open };
  })();
 
  // Arrancar tras initial sync (3s gap como Loyverse realtime)
@@ -28217,14 +28076,6 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
   _movSheet.innerHTML = '<div class="mov-sheet-panel">' + html + '</div>';
   document.body.appendChild(_movSheet);
 
-  // v1.3.1381 — Enganchar fecha al picker TickTick
-  try {
-   var _movFecha1 = _movSheet.querySelector('#mov-fecha');
-   if (_movFecha1 && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-    window._DashweyDateTimePicker.attachToInput(_movFecha1, { mode: 'date', headlineText: 'Fecha del movimiento' });
-   }
-  } catch(_) {}
-
   // Fijar altura del scrim en px — window.innerHeight NO cambia con el teclado
   _movSheet.style.height = window.innerHeight + 'px';
 
@@ -28490,16 +28341,6 @@ function _openMovimientoFullscreen() {
  );
  App.ui.openFs('full');
 
- // v1.3.1381 — Enganchar fecha al picker TickTick (tras setFs+openFs)
- requestAnimationFrame(function() {
-  try {
-   var _mfFs = document.getElementById('mov-fecha');
-   if (_mfFs && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-    window._DashweyDateTimePicker.attachToInput(_mfFs, { mode: 'date', headlineText: 'Fecha del movimiento' });
-   }
-  } catch(_) {}
- });
-
  requestAnimationFrame(function() {
   var _syncAmt = function() {
    var inp = document.getElementById('mov-amount-input');
@@ -28722,14 +28563,6 @@ function _openEditMovimientoSheet(id, src) {
 
   document.body.appendChild(sheet);
   requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
-
-  // v1.3.1381 — Enganchar edit-mov-fecha al picker TickTick
-  try {
-   var _emf = sheet.querySelector('#edit-mov-fecha');
-   if (_emf && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-    window._DashweyDateTimePicker.attachToInput(_emf, { mode: 'date', headlineText: 'Fecha del movimiento' });
-   }
-  } catch(_) {}
 
   // Abrir teclado
   setTimeout(function() {
@@ -30303,13 +30136,6 @@ function _confirmBorrarCuenta(id) {
  }, { once: true });
  var confirmBtn = document.getElementById('btn-confirmar-ingreso');
  if (confirmBtn) confirmBtn.addEventListener('click', function() { App.dash._confirmarIngreso(cuentaId); }, { once: true });
- // v1.3.1381 — Enganchar ingreso-fecha al picker TickTick
- try {
-  var _ifEl = document.getElementById('ingreso-fecha');
-  if (_ifEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-   window._DashweyDateTimePicker.attachToInput(_ifEl, { mode: 'date', headlineText: 'Fecha del ingreso' });
-  }
- } catch(_) {}
  });
  }, Utils.ANIM_DELAY);
  }
@@ -30481,14 +30307,6 @@ function _confirmBorrarCuenta(id) {
  setTimeout(function() {
  var fc = document.getElementById('fs-content');
  if (!fc) return;
-
- // v1.3.1381 — Enganchar fm-gasto-fecha al picker TickTick
- try {
-  var _gfEl = fc.querySelector('#fm-gasto-fecha');
-  if (_gfEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-   window._DashweyDateTimePicker.attachToInput(_gfEl, { mode: 'date', headlineText: 'Fecha de pago' });
-  }
- } catch(_) {}
 
  // Botones eliminar gasto
  fc.querySelectorAll('[data-del-gasto]').forEach(function(btn) {
@@ -30669,14 +30487,6 @@ function _confirmBorrarCuenta(id) {
 
  // Listeners post-render
  requestAnimationFrame(function() {
- // v1.3.1381 — Enganchar ingr-fecha al picker TickTick
- try {
-  var _ifEl2 = document.getElementById('ingr-fecha');
-  if (_ifEl2 && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-   window._DashweyDateTimePicker.attachToInput(_ifEl2, { mode: 'date', headlineText: 'Fecha del ingreso' });
-  }
- } catch(_) {}
-
  // Toggle tipo manual / programado
  document.querySelectorAll('[data-tipo]').forEach(function(btn) {
  btn.addEventListener('click', function() {
@@ -31230,12 +31040,10 @@ function _confirmBorrarCuenta(id) {
  // recId: string → modo edición. null → modo creación.
  // Campos: título, fecha, hora. (Recurrencia se queda en null por ahora.)
  function _openRecordatorioSheet(recId) {
-  // v1.3.1377 — Reescrita para delegar al nuevo _DashweyDateTimePicker.
+  // v1.3.1385 — Delega al nuevo _DashweyDateTimePicker.
   //   Compatible 100% con shape persistido (id/titulo/fecha/repite/creado).
-  //   Nuevo: soporta repite (objeto) y recordatorio (notificación previa).
-  //
-  //   Hacia atrás: si existing.repite es null, no se rompe — el componente
-  //   acepta initialRepite=null y lo trata como "Nunca".
+  //   Soporta repite (objeto), recordatorio (notificación previa),
+  //   recordatorioConstante (toggle), zona (zona horaria).
   var existing = null;
   if (recId) {
    var arr = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
@@ -31264,7 +31072,6 @@ function _confirmBorrarCuenta(id) {
    initialRecordatorioConstante: !!(existing && existing.recordatorioConstante),
    initialZona: existing && existing.zona ? existing.zona : null,
    onConfirm: function(result) {
-    // v1.3.1378 — guardar también recordatorioConstante + zona
     if (isEdit) {
      State.set.updateRecordatorio(recId, {
       titulo: result.titulo,
@@ -31290,7 +31097,7 @@ function _confirmBorrarCuenta(id) {
      if (typeof showToast==='function') showToast('✅ Recordatorio creado', 'success');
     }
     try { dash.render(); } catch(_) {}
-    return false; // false = cerrar el sheet (default)
+    return false;
    },
    onDelete: isEdit ? function() {
     State.set.deleteRecordatorio(recId);
@@ -31299,7 +31106,6 @@ function _confirmBorrarCuenta(id) {
    } : null
   });
  }
-
 
 
  // ── Panel de preferencias de notificaciones ──────────────
@@ -33097,21 +32903,10 @@ function _confirmBorrarCuenta(id) {
 
   // CASO 3: semanal/quincenal/mensual con diasEntrega configurados
   var diasEntrega = (prov.diasEntrega && prov.diasEntrega.length) ? prov.diasEntrega : null;
-  // Salto del ciclo en días según periodicidad.
-  //   v1.3.1379 — soporta tanto legacy ('quincenal') como nuevo shape (intervalo).
-  //   - legacy 'quincenal' → 14 días
-  //   - legacy 'mensual' → 30 días
-  //   - nuevo {tipo:'semanal', intervalo:2} → 14 días
-  //   - nuevo {tipo:'semanal', intervalo:N} → 7*N días
-  //   - nuevo {tipo:'mensual', intervalo:N} → 30*N días
-  //   - nuevo {tipo:'anual', intervalo:N}   → 365*N días
+  // Salto del ciclo en días según periodicidad
   var saltoDias = 7;
-  var pInt = period.intervalo || 1;
-  if (period.tipo === 'quincenal')      saltoDias = 14;
-  else if (period.tipo === 'mensual')   saltoDias = 30 * pInt;
-  else if (period.tipo === 'semanal')   saltoDias = 7  * pInt;
-  else if (period.tipo === 'anual')     saltoDias = 365 * pInt;
-  else if (period.tipo === 'diario')    saltoDias = 1  * pInt;
+  if (period.tipo === 'quincenal') saltoDias = 14;
+  else if (period.tipo === 'mensual') saltoDias = 30;
 
   var prevDate = null;
   var nextDate = null;
@@ -33463,12 +33258,6 @@ function _confirmBorrarCuenta(id) {
 
  // ── Panel según tab activo ─────────────────────────────────────────────
  function _snapRenderAgendaPanel(wrap, pedidos, visitas, calcEnt, hoy) {
- // v1.3.1383 — Preservar scrollTop del feed Actividad para evitar
- //   "salto hacia arriba" cuando re-render se dispara durante scroll
- //   (causado por scroll-chaining + observer/poll del padre).
- var _prevScrollWrap = wrap.querySelector('.snap-actividad-wrap');
- var _prevScrollTop = _prevScrollWrap ? _prevScrollWrap.scrollTop : 0;
-
  wrap.innerHTML = '';
 
  var DNAMES = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
@@ -33487,22 +33276,6 @@ function _confirmBorrarCuenta(id) {
   _snapRenderRecordatoriosPanel(wrap, hoy, fmtD);
  } else {
   _snapRenderVisitasPanel(wrap, visitas, hoy, fmtD);
- }
-
- // v1.3.1383 — Restaurar scrollTop del feed Actividad tras re-render.
- //   Sin esto, cualquier evento de fondo (sync FB, predichos) que dispare
- //   re-render durante un scroll del wrap → vuelta abrupta arriba.
- //   Solo aplica si el wrap nuevo se creó (puede no existir si tab cambió).
- if (_prevScrollTop > 0) {
-  var _newScrollWrap = wrap.querySelector('.snap-actividad-wrap');
-  if (_newScrollWrap) {
-   // doble rAF para esperar layout antes de set scrollTop
-   requestAnimationFrame(function() {
-    requestAnimationFrame(function() {
-     try { _newScrollWrap.scrollTop = _prevScrollTop; } catch(_) {}
-    });
-   });
-  }
  }
  }
 
@@ -34161,11 +33934,6 @@ function _confirmBorrarCuenta(id) {
  // y la línea separadora del Insight (mediante CSS class snap-actividad-wrap).
  var scrollWrap = document.createElement('div');
  scrollWrap.className = 'snap-actividad-wrap';
- // v1.3.1384 — Marcar _scrollingUntil para que _snapFbPoll defiera re-render
- //   mientras el feed esté scrolleando activamente. Window de 400ms.
- scrollWrap.addEventListener('scroll', function() {
-  scrollWrap._scrollingUntil = Date.now() + 400;
- }, { passive: true });
 
  var tl = document.createElement('div');
  tl.className = 'snap-tl-v snap-tl-v-actividad';
@@ -36904,18 +36672,6 @@ function _confirmBorrarCuenta(id) {
  // v1.3.1139 FIX#1: respetar flag stale para forzar render tras _snapDoRenderAll
  var _fbIsStale = best.dataset.stale === '1';
  if (_fbCardId === _snapLastRenderedCardId && !_fbIsStale) return;
- // v1.3.1384 — Si Agenda está siendo scrolleado activamente en su feed
- //   interno, defer el re-render. Sin esto, eventos asíncronos (sync FB,
- //   pendingOrders) marcan stale → poll detecta cambio → re-render durante
- //   scroll → flickering visible.
- //   El stale persiste; cuando el scroll del feed termine, el siguiente
- //   poll lo procesará.
- if (_fbCardId === 'agenda' && _fbIsStale) {
-  var _actWrap = document.querySelector('.snap-actividad-wrap');
-  if (_actWrap && _actWrap._scrollingUntil && Date.now() < _actWrap._scrollingUntil) {
-   return; // posponer re-render hasta que termine scroll del feed
-  }
- }
  _snapLastRenderedCardId = _fbCardId;
  delete best.dataset.stale;
  _snapUpdateTitle(_fbCardId);
@@ -43962,166 +43718,74 @@ function _parseIva(iva) {
  }
 
 
- // ════════════════════════════════════════════════════════════════════════════
- //  v1.3.1379 — Adaptador transparente periodicidad legacy ↔ nuevo (TickTick)
- //  
- //  LEGACY: { tipo: 'diario'|'semanal'|'quincenal'|'mensual'|'custom',
- //            fechaInicio?, fechaFin? }
- //  NUEVO:  { tipo: 'diario'|'semanal'|'mensual'|'anual', intervalo: N,
- //            diasSemana: [0..6], fin?: ... }
- //
- //  _periodoToRepite(periodo) → repite (formato TickTick)
- //  _repiteToPeriodo(repite)  → periodo (formato Dashwey legacy compatible)
- //
- //  Casos especiales:
- //  - 'quincenal' legacy → repite semanal con intervalo:2
- //  - 'custom' legacy (rango fechaInicio-fechaFin) → NO se mapea a TickTick.
- //    Se ofrece al usuario como segundo botón "Rango de fechas" separado.
- //
- //  El feed Agenda y _calcCicloProv siguen leyendo el formato legacy: al
- //  guardar siempre serializamos al shape legacy si es expresable; si no,
- //  mantenemos el shape nuevo y _calcCicloProv tiene fallback genérico.
- // ════════════════════════════════════════════════════════════════════════════
- function _periodoToRepite(periodo) {
-  if (!periodo || !periodo.tipo) return null;
-  switch (periodo.tipo) {
-   case 'diario':    return { tipo: 'diario',  intervalo: 1, diasSemana: [], fin: null };
-   case 'semanal':   return { tipo: 'semanal', intervalo: 1, diasSemana: [], fin: null };
-   case 'quincenal': return { tipo: 'semanal', intervalo: 2, diasSemana: [], fin: null };
-   case 'mensual':   return { tipo: 'mensual', intervalo: 1, diasSemana: [], fin: null };
-   case 'anual':     return { tipo: 'anual',   intervalo: 1, diasSemana: [], fin: null };
-   // 'custom' legacy es un rango de fechas; semánticamente NO es recurrencia.
-   //   Devolvemos null para que el sheet TickTick muestre "Nunca" en repite,
-   //   y mostramos el botón "Rango de fechas" aparte (ver UI más abajo).
-   case 'custom': return null;
-   default: return null;
-  }
- }
- function _repiteToPeriodo(repite) {
-  if (!repite || !repite.tipo) return { tipo: 'semanal' };
-  var n = repite.intervalo || 1;
-  if (repite.tipo === 'diario'  && n === 1) return { tipo: 'diario' };
-  if (repite.tipo === 'semanal' && n === 1) return { tipo: 'semanal' };
-  if (repite.tipo === 'semanal' && n === 2) return { tipo: 'quincenal' };
-  if (repite.tipo === 'mensual' && n === 1) return { tipo: 'mensual' };
-  // Casos no expresables en legacy (ej. cada 3 semanas, cada año, días específicos):
-  //   guardamos el shape nuevo completo. _calcCicloProv detecta esto y usa
-  //   intervalo*saltoBase como salto. Si futuro se necesita, ampliar lógica.
-  return { tipo: repite.tipo, intervalo: n, diasSemana: repite.diasSemana || [], fin: repite.fin || null };
- }
-
  function _openProvPeriodSheet(pid) {
-  var p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
-  if (!p) return;
-  var periodo = p.periodicidad || { tipo: 'semanal' };
+ const p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
+ if (!p) return;
+ const periodo = p.periodicidad || { tipo: 'semanal' };
+ // que no existen en el sheet. Los 5 tipos restantes cubren todos los casos reales.
+ const OPTS_PROV = [
+ { t:'diario', i:'📅', l:'Diario', s:'Pedido cada día' },
+ { t:'semanal', i:'📆', l:'Semanal', s:'Una vez por semana' },
+ { t:'quincenal', i:'🔁', l:'Quincenal', s:'Cada 15 días' },
+ { t:'mensual', i:'🗓️', l:'Mensual', s:'Una vez al mes' },
+ { t:'custom', i:'📏', l:'Rango de fechas', s:'Fechas exactas de inicio y fin' },
+ ];
+ const now = new Date();
+ const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
 
-  // Si periodicidad es 'custom' (rango de fechas legacy), abrir el viejo sheet
-  //   que sí maneja rangos. El nuevo TickTick es para recurrencias.
-  if (periodo.tipo === 'custom') {
-   // Mantener UI legacy SOLO para rangos de fechas
-   _openProvPeriodSheetLegacy(pid, periodo);
-   return;
-  }
-
-  if (!window._DashweyDateTimePicker || typeof window._DashweyDateTimePicker.open !== 'function') {
-   console.error('[Dashwey] _DashweyDateTimePicker no disponible');
-   if (typeof showToast === 'function') showToast('⚠️ Componente no disponible', 'error');
-   return;
-  }
-
-  var initialRepite = _periodoToRepite(periodo);
-
-  window._DashweyDateTimePicker.open({
-   mode: 'recurring',
-   headlineText: 'Periodicidad del pedido',
-   showTitle: false,
-   showCalendar: false,
-   showTime: false,
-   showRepetir: true,
-   showRecordatorio: false,
-   showZona: false,
-   initialRepite: initialRepite,
-   isEdit: false, // sin botón eliminar
-   onConfirm: function(result) {
-    var newPeriodo = result.repite ? _repiteToPeriodo(result.repite) : { tipo: 'semanal' };
-    p.periodicidad = newPeriodo;
-    if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
-    _refreshProvPeriodBtn(pid, newPeriodo);
-    return false; // cerrar sheet
-   }
-  });
- }
-
- // v1.3.1379 — Sheet legacy SOLO para rango de fechas (custom).
- //   Reutiliza Utils.openPeriodSheet con un OPTS reducido a una sola opción.
- function _openProvPeriodSheetLegacy(pid, periodo) {
-  var p = State.get.prov(pid) || (_provNuevoPendiente?.id === pid ? _provNuevoPendiente : null);
-  if (!p) return;
-  var OPTS_PROV = [
-   { t:'custom', i:'📏', l:'Rango de fechas', s:'Fechas exactas de inicio y fin' },
-  ];
-  var now = new Date();
-  var toLocal = function(d) { return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
-
-  Utils.openPeriodSheet({
-   title: 'Rango de fechas (periodicidad)',
-   opts: OPTS_PROV,
-   current: periodo.tipo,
-   customDesde: periodo.fechaInicio || toLocal(now),
-   customHasta: periodo.fechaFin || toLocal(new Date(now.getTime() + 30*86400000)),
-   customLabel: 'Aplicar rango',
-   onSelect: function(t) {
-    // Solo 'custom' disponible — si por algún motivo se seleccionara otro,
-    //   redirigir al sheet nuevo TickTick.
-    var newPeriodo = Object.assign({}, periodo, { tipo: t });
-    p.periodicidad = newPeriodo;
-    if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
-    _refreshProvPeriodBtn(pid, newPeriodo);
-   },
-   onCustom: function(desde, hasta) {
-    var newPeriodo = { tipo: 'custom', fechaInicio: desde, fechaFin: hasta };
-    p.periodicidad = newPeriodo;
-    if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
-    _refreshProvPeriodBtn(pid, newPeriodo);
-   }
+ Utils.openPeriodSheet({
+ title: 'Periodicidad del pedido',
+ opts: OPTS_PROV,
+ current: periodo.tipo,
+ customDesde: periodo.fechaInicio || toLocal(now),
+ customHasta: periodo.fechaFin || toLocal(new Date(now.getTime() + 30*86400000)),
+ customLabel: 'Aplicar rango',
+    onSelect: t => {
+      const newPeriodo = Object.assign({}, periodo, { tipo: t });
+      p.periodicidad = newPeriodo;
+      if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
+      _refreshProvPeriodBtn(pid, newPeriodo);
+    },
+    onCustom: (desde, hasta) => {
+      const newPeriodo = { tipo: 'custom', fechaInicio: desde, fechaFin: hasta };
+      p.periodicidad = newPeriodo;
+      if (State.get.prov(pid)) State.set.updateProv(pid, { periodicidad: newPeriodo });
+      _refreshProvPeriodBtn(pid, newPeriodo);
+    },
   });
  }
 
  // Actualizar el botón del form tras seleccionar
  function _refreshProvPeriodBtn(pid, periodo) {
-  var lbl = document.getElementById('pe-period-btn-lbl');
-  var sum = document.getElementById('pe-period-summary');
-  var txt = _periodoResumen(periodo);
-  if (lbl) lbl.textContent = txt || 'Seleccionar periodicidad';
-  if (sum) { sum.textContent = txt ? txt : ''; sum.classList.toggle('visible', !!txt); }
+ const lbl = document.getElementById('pe-period-btn-lbl');
+ const sum = document.getElementById('pe-period-summary');
+ const txt = _periodoResumen(periodo);
+ if (lbl) lbl.textContent = txt || 'Seleccionar periodicidad';
+ if (sum) { sum.textContent = txt ? txt : ''; sum.classList.toggle('visible', !!txt); }
  }
 
- // v1.3.1379 — Resumen extendido: legacy + nuevo shape (intervalo, diasSemana)
+
  function _periodoResumen(periodo) {
-  if (!periodo) return '';
-  // Casos legacy directos
-  switch (periodo.tipo) {
-   case 'diario': return 'Cada día';
-   case 'quincenal': return 'Cada 15 días';
-   case 'custom': {
-    var partes = [];
-    if (periodo.fechaInicio) {
-     var ini = new Date(periodo.fechaInicio).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
-     partes.push('Desde ' + ini);
-    }
-    if (periodo.fechaFin) {
-     var fin = new Date(periodo.fechaFin).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
-     partes.push('hasta ' + fin);
-    }
-    return partes.join(' ') || 'Rango de fechas';
-   }
-  }
-  // Casos con o sin intervalo (legacy 'semanal'/'mensual' = intervalo 1, o nuevo shape)
-  var n = periodo.intervalo || 1;
-  if (periodo.tipo === 'semanal') return n === 1 ? 'Cada semana' : 'Cada ' + n + ' semanas';
-  if (periodo.tipo === 'mensual') return n === 1 ? 'Cada mes'    : 'Cada ' + n + ' meses';
-  if (periodo.tipo === 'anual')   return n === 1 ? 'Cada año'    : 'Cada ' + n + ' años';
-  return '';
+ if (!periodo) return '';
+ switch (periodo.tipo) {
+ case 'diario': return 'Cada día';
+ case 'semanal': return 'Cada semana';
+ case 'quincenal': return 'Cada 15 días';
+ case 'mensual': return 'Cada mes';
+ case 'custom': {
+ const partes = [];
+ if (periodo.fechaInicio) {
+ const ini = new Date(periodo.fechaInicio).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
+ partes.push('Desde ' + ini);
+ }
+ if (periodo.fechaFin) {
+ const fin = new Date(periodo.fechaFin).toLocaleDateString('es-ES', {day:'2-digit',month:'short'});
+ partes.push('hasta ' + fin);
+ }
+ return partes.join(' ') || 'Rango de fechas';
+ }
+ default: return '';
+ }
  }
 
 
@@ -46110,13 +45774,6 @@ const nPending = (State.get.pendingOrders() || [])
   if (formEl && window._trackFormChanges) {
    window._trackFormChanges(formEl, 'nuevo_art');
   }
-  // v1.3.1382 — Enganchar fcad (caducidad) al picker TickTick
-  try {
-   var _fcadEl = document.getElementById('fcad');
-   if (_fcadEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-    window._DashweyDateTimePicker.attachToInput(_fcadEl, { mode: 'date', headlineText: 'Fecha de caducidad' });
-   }
-  } catch(_) {}
  } catch(_e) { console.warn('[ALM] rAF reveal:', _e); }
 }));
  } catch(e) {
@@ -47060,13 +46717,6 @@ function calcIAAnalysis() {
  if (_eaForm && window._trackFormChanges) {
  window._trackFormChanges(_eaForm, 'editar_art_' + prodId);
  }
- // v1.3.1382 — Enganchar ea-cad (caducidad edit) al picker TickTick
- try {
-  var _eaCadEl = document.getElementById('ea-cad');
-  if (_eaCadEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
-   window._DashweyDateTimePicker.attachToInput(_eaCadEl, { mode: 'date', headlineText: 'Fecha de caducidad' });
-  }
- } catch(_) {}
       // v1.3.661: inicializar toggle RE con valor del producto
    const _eaReBtn = document.getElementById('ea-re');
    if (_eaReBtn) _eaReBtn.classList.toggle('on', !!(p && p.re));
