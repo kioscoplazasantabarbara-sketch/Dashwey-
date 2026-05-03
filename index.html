@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1380-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1381-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1380-dev</title>
+<title>Dashwey v1.3.1381-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17782,7 +17782,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1380-dev';
+ const _APP_VERSION = 'v1.3.1381-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22719,7 +22719,10 @@ const ui = (() => {
    } catch(_) {}
    // v1.3.1379 — modo 'recurring' oculta calendario/hora/recordatorio/zona,
    //   solo muestra el selector Repetir. Usado para periodicidad de proveedor.
+   // v1.3.1381 — modo 'date' muestra solo calendario (sin hora/repetir/recordatorio/zona/título).
+   //   Usado para pickers simples de fecha en formularios financieros.
    var isRecurring = (mode === 'recurring');
+   var isDateOnly  = (mode === 'date');
 
    S = {
     mode: mode,
@@ -22733,12 +22736,12 @@ const ui = (() => {
     titulo: opts.initialTitulo || '',
     isEdit: !!opts.isEdit,
     // Flags de visibilidad (defaults pensados para 'datetime')
-    showTitle:        opts.showTitle        !== false && !isRecurring,
+    showTitle:        opts.showTitle        !== false && !isRecurring && !isDateOnly,
     showCalendar:     opts.showCalendar     !== false && !isRecurring,
-    showTime:         opts.showTime         !== false && !isRecurring,
-    showRepetir:      opts.showRepetir      !== false,
-    showRecordatorio: opts.showRecordatorio !== false && !isRecurring,
-    showZona:         opts.showZona         !== false && !isRecurring,
+    showTime:         opts.showTime         !== false && !isRecurring && !isDateOnly,
+    showRepetir:      opts.showRepetir      !== false                 && !isDateOnly,
+    showRecordatorio: opts.showRecordatorio !== false && !isRecurring && !isDateOnly,
+    showZona:         opts.showZona         !== false && !isRecurring && !isDateOnly,
     headlineText:     opts.headlineText || null, // título opcional del sheet
     onConfirm: opts.onConfirm || function(){},
     onCancel: opts.onCancel || function(){},
@@ -22756,7 +22759,7 @@ const ui = (() => {
 
    var headerLabel = S.headlineText
     ? _esc(S.headlineText)
-    : (isRecurring ? 'Periodicidad' : 'Fecha y hora');
+    : (isRecurring ? 'Periodicidad' : (isDateOnly ? 'Fecha' : 'Fecha y hora'));
 
    var calendarHtml = S.showCalendar
     ? '<div class="dtp-cal-wrap">'
@@ -22832,10 +22835,14 @@ const ui = (() => {
     + zonaHtml
     + repetirHtml
     + recordatorioHtml
-    + '<div class="dtp-footer">'
-    +  '<button type="button" class="dtp-footer-btn dtp-footer-clear" id="dtp-clear">Limpiar</button>'
-    +  (S.isEdit && S.onDelete ? '<button type="button" class="dtp-footer-btn dtp-footer-delete" id="dtp-delete">Eliminar</button>' : '')
-    + '</div>'
+    // v1.3.1381 — Footer "Limpiar" oculto en modo date (no hay nada que limpiar
+    //   cuando solo seleccionas fecha sin repetir/recordatorio).
+    + (isDateOnly && !(S.isEdit && S.onDelete)
+       ? ''
+       : '<div class="dtp-footer">'
+        +  (isDateOnly ? '' : '<button type="button" class="dtp-footer-btn dtp-footer-clear" id="dtp-clear">Limpiar</button>')
+        +  (S.isEdit && S.onDelete ? '<button type="button" class="dtp-footer-btn dtp-footer-delete" id="dtp-delete">Eliminar</button>' : '')
+        + '</div>')
     + '</div>';
 
    document.body.appendChild(overlay);
@@ -22961,8 +22968,9 @@ const ui = (() => {
     });
    }
 
-   // Limpiar — reset repite + recordatorio
-   overlay.querySelector('#dtp-clear').addEventListener('click', function() {
+   // Limpiar — reset repite + recordatorio (v1.3.1381: guard si oculto en modo date)
+   var clearBtn = overlay.querySelector('#dtp-clear');
+   if (clearBtn) clearBtn.addEventListener('click', function() {
     S.repite = null;
     S.recordatorio = null;
     if (repRendered) _renderRepetir(overlay);
@@ -23056,7 +23064,91 @@ const ui = (() => {
    });
   }
 
-  window._DashweyDateTimePicker = { open: open };
+  // ════════════════════════════════════════════════════════════════════════════
+  // v1.3.1381 — Helper attachToInput
+  //
+  //   Convierte un <input type="date"|"datetime-local"|"time"> nativo en un
+  //   trigger que abre el sheet TickTick en lugar del datepicker nativo.
+  //
+  //   - Mantiene el input visible (mismo CSS, mismo placeholder, misma posición)
+  //   - El value del input sigue siendo formato estándar ISO (YYYY-MM-DD para date)
+  //   - Se intercepta el focus/click → abre sheet → al confirmar, escribe value y dispara 'change'
+  //   - Compatibilidad: si el componente DTP no está disponible, el input nativo sigue funcionando
+  //
+  //   Uso:
+  //     _DashweyDateTimePicker.attachToInput(document.getElementById('mov-fecha'), {
+  //       mode: 'date',
+  //       headlineText: 'Fecha del movimiento'
+  //     });
+  // ════════════════════════════════════════════════════════════════════════════
+  function attachToInput(inputEl, opts) {
+   if (!inputEl) return;
+   opts = opts || {};
+   var mode = opts.mode || 'date';
+
+   // Marca para no doblar bindings si attachToInput se llama 2 veces sobre el mismo input
+   if (inputEl.dataset && inputEl.dataset.dtpAttached === '1') return;
+   if (inputEl.dataset) inputEl.dataset.dtpAttached = '1';
+
+   // Bloquear datepicker nativo: readonly + suprimir click default
+   //   readonly NO bloquea formularios (el value se sigue enviando)
+   //   pero sí el datepicker nativo en Android WebView.
+   inputEl.setAttribute('readonly', 'readonly');
+   // Cursor pointer en lugar de text para señalar interactivo
+   inputEl.style.cursor = 'pointer';
+   // Caret oculto (visual cleaner)
+   inputEl.style.caretColor = 'transparent';
+
+   var openHandler = function(e) {
+    // Prevenir focus/click default del datepicker nativo
+    e.preventDefault();
+    try { inputEl.blur(); } catch(_) {}
+
+    var initialVal = (inputEl.value || '').trim();
+    var initialDate = null;
+    if (initialVal) {
+     // Para 'date' el value es 'YYYY-MM-DD'
+     if (mode === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(initialVal)) {
+      var parts = initialVal.split('-');
+      initialDate = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10), 12, 0, 0);
+     } else {
+      var d = new Date(initialVal);
+      if (!isNaN(d.getTime())) initialDate = d;
+     }
+    }
+
+    open({
+     mode: mode,
+     headlineText: opts.headlineText || null,
+     initialValue: initialDate || new Date(),
+     onConfirm: function(result) {
+      // result.fecha es ISO UTC. Para 'date' devolvemos YYYY-MM-DD local.
+      if (mode === 'date') {
+       var d = new Date(result.fecha);
+       var y = d.getFullYear();
+       var m = String(d.getMonth()+1).padStart(2, '0');
+       var dd = String(d.getDate()).padStart(2, '0');
+       inputEl.value = y + '-' + m + '-' + dd;
+      } else {
+       inputEl.value = result.fecha;
+      }
+      // Disparar 'change' para que el código existente reaccione
+      try {
+       var ev = new Event('change', { bubbles: true });
+       inputEl.dispatchEvent(ev);
+      } catch(_) {}
+      return false; // cerrar sheet
+     }
+    });
+   };
+
+   inputEl.addEventListener('mousedown', openHandler);
+   inputEl.addEventListener('focus', openHandler);
+   // Touch específico para Android: focus no siempre llega antes que click default
+   inputEl.addEventListener('click', openHandler);
+  }
+
+  window._DashweyDateTimePicker = { open: open, attachToInput: attachToInput };
  })();
 
  // Arrancar tras initial sync (3s gap como Loyverse realtime)
@@ -28109,6 +28201,14 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
   _movSheet.innerHTML = '<div class="mov-sheet-panel">' + html + '</div>';
   document.body.appendChild(_movSheet);
 
+  // v1.3.1381 — Enganchar fecha al picker TickTick
+  try {
+   var _movFecha1 = _movSheet.querySelector('#mov-fecha');
+   if (_movFecha1 && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+    window._DashweyDateTimePicker.attachToInput(_movFecha1, { mode: 'date', headlineText: 'Fecha del movimiento' });
+   }
+  } catch(_) {}
+
   // Fijar altura del scrim en px — window.innerHeight NO cambia con el teclado
   _movSheet.style.height = window.innerHeight + 'px';
 
@@ -28374,6 +28474,16 @@ function _openMovimientoFullscreen() {
  );
  App.ui.openFs('full');
 
+ // v1.3.1381 — Enganchar fecha al picker TickTick (tras setFs+openFs)
+ requestAnimationFrame(function() {
+  try {
+   var _mfFs = document.getElementById('mov-fecha');
+   if (_mfFs && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+    window._DashweyDateTimePicker.attachToInput(_mfFs, { mode: 'date', headlineText: 'Fecha del movimiento' });
+   }
+  } catch(_) {}
+ });
+
  requestAnimationFrame(function() {
   var _syncAmt = function() {
    var inp = document.getElementById('mov-amount-input');
@@ -28596,6 +28706,14 @@ function _openEditMovimientoSheet(id, src) {
 
   document.body.appendChild(sheet);
   requestAnimationFrame(function() { requestAnimationFrame(function() { sheet.classList.add('open'); }); });
+
+  // v1.3.1381 — Enganchar edit-mov-fecha al picker TickTick
+  try {
+   var _emf = sheet.querySelector('#edit-mov-fecha');
+   if (_emf && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+    window._DashweyDateTimePicker.attachToInput(_emf, { mode: 'date', headlineText: 'Fecha del movimiento' });
+   }
+  } catch(_) {}
 
   // Abrir teclado
   setTimeout(function() {
@@ -30169,6 +30287,13 @@ function _confirmBorrarCuenta(id) {
  }, { once: true });
  var confirmBtn = document.getElementById('btn-confirmar-ingreso');
  if (confirmBtn) confirmBtn.addEventListener('click', function() { App.dash._confirmarIngreso(cuentaId); }, { once: true });
+ // v1.3.1381 — Enganchar ingreso-fecha al picker TickTick
+ try {
+  var _ifEl = document.getElementById('ingreso-fecha');
+  if (_ifEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+   window._DashweyDateTimePicker.attachToInput(_ifEl, { mode: 'date', headlineText: 'Fecha del ingreso' });
+  }
+ } catch(_) {}
  });
  }, Utils.ANIM_DELAY);
  }
@@ -30340,6 +30465,14 @@ function _confirmBorrarCuenta(id) {
  setTimeout(function() {
  var fc = document.getElementById('fs-content');
  if (!fc) return;
+
+ // v1.3.1381 — Enganchar fm-gasto-fecha al picker TickTick
+ try {
+  var _gfEl = fc.querySelector('#fm-gasto-fecha');
+  if (_gfEl && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+   window._DashweyDateTimePicker.attachToInput(_gfEl, { mode: 'date', headlineText: 'Fecha de pago' });
+  }
+ } catch(_) {}
 
  // Botones eliminar gasto
  fc.querySelectorAll('[data-del-gasto]').forEach(function(btn) {
@@ -30520,6 +30653,14 @@ function _confirmBorrarCuenta(id) {
 
  // Listeners post-render
  requestAnimationFrame(function() {
+ // v1.3.1381 — Enganchar ingr-fecha al picker TickTick
+ try {
+  var _ifEl2 = document.getElementById('ingr-fecha');
+  if (_ifEl2 && window._DashweyDateTimePicker && _DashweyDateTimePicker.attachToInput) {
+   window._DashweyDateTimePicker.attachToInput(_ifEl2, { mode: 'date', headlineText: 'Fecha del ingreso' });
+  }
+ } catch(_) {}
+
  // Toggle tipo manual / programado
  document.querySelectorAll('[data-tipo]').forEach(function(btn) {
  btn.addEventListener('click', function() {
