@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1412-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1413-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1412-dev</title>
+<title>Dashwey v1.3.1413-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17968,7 +17968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1412-dev';
+ const _APP_VERSION = 'v1.3.1413-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -36076,32 +36076,38 @@ function _confirmBorrarCuenta(id) {
  //   - SÍ cierres cerrados (1 fila agregada por cierre)
  // Si una venta individual aparece aquí → implementación incorrecta.
  // v1.3.1411 — JERARQUÍA VISUAL UNIFICADA con _openDetalleCuenta + Vista global.
- //   Movs llevan: subtitle (notas o "N tickets · fuente"), pendiente, vencido.
- //   Render aplica badge "Pendiente"/"Por confirmar" debajo del importe.
+ //   Movs llevan: subtitle (notas o "N tickets · fuente").
+ // v1.3.1412 — EXCLUIR PENDIENTES: "Últimos movimientos" muestra histórico real.
+ //   Pagos pendientes (Movistar 01-jun, Recibo 28-may) son FUTUROS no últimos.
+ //   Para verlos: Detalle Cuenta o Vista global (con badge dedicado).
  var cierresSnap = State.get.cierresCaja ? State.get.cierresCaja() : [];
  var movs = [];
- // Gastos manuales (origen≠loyverse/tpv, no asociados a cierre)
+ // Gastos manuales (origen≠loyverse/tpv, no asociados a cierre, no pendientes)
  gastosOp.filter(function(g){
   if (g.closureId) return false;
   if (g.origen === 'loyverse' || g.origen === 'tpv') return false;
+  if (window._isPendiente && window._isPendiente(g)) return false; // v1.3.1412: pendientes son futuros
   return true;
  }).forEach(function(g) {
   movs.push({
    nombre: g.nombre||g.concepto||'Gasto',
    subtitle: g.notas || '',
    importe: Math.abs(g.importe||0),
-   fecha: g.fecha||'',
+   // v1.3.1412 FIX: usar fechaPago como fallback (patrón canónico de _openDetalleCuenta)
+   //   Sin esto, gastos importados de BudgetBakers (con solo fechaPago poblado)
+   //   aparecían sin fecha en la card.
+   fecha: g.fecha||g.fechaPago||'',
    color: 'var(--red)',
    sign: '−',
-   pendiente: !!window._isPendiente?.(g),
   });
  });
- // Ingresos manuales (origen≠loyverse/tpv, no asociados a cierre)
+ // Ingresos manuales (origen≠loyverse/tpv, no asociados a cierre, no pendientes)
  // v1.3.1395 FIX UI: ocultar también preliminares del cierre auto en este feed.
  ingresos.filter(function(i){
   if (i.closureId) return false;
   if (i.origen === 'loyverse' || i.origen === 'tpv') return false;
   if (i.origen === 'cierre_caja_auto') return false; // v1.3.1395: nunca como movimiento individual
+  if (window._isPendiente && window._isPendiente(i)) return false; // v1.3.1412: pendientes son futuros
   return true;
  }).forEach(function(i) {
   movs.push({
@@ -36111,7 +36117,6 @@ function _confirmBorrarCuenta(id) {
    fecha: i.fecha||'',
    color: 'var(--ink)',
    sign: '+',
-   pendiente: !!window._isPendiente?.(i),
   });
  });
  // v1.3.1144 HÍBRIDO: cierres cerrados → 1 movimiento agregado por cierre
@@ -36155,40 +36160,27 @@ function _confirmBorrarCuenta(id) {
  : recientes.map(function(m) {
  var _sign = m.sign || '';
  var _fd = '';
- if (m.fecha) { var _md = new Date(m.fecha); var _mns = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; _fd = _md.getDate() + ' ' + _mns[_md.getMonth()]; }
- // v1.3.1411 — JERARQUÍA VISUAL UNIFICADA con _openDetalleCuenta + Vista global
- //   Pendiente: opacity 0.55, importe gris, fecha oculta, badge debajo del importe.
- //   Vencido (pendiente con fecha <= hoy): badge tinte rojo "Por confirmar".
- //   Subtitle: notas (manual) o "N tickets · Dashwey" (cierre real).
- var _esPendiente = !!m.pendiente;
- var _esVencido = false;
- if (_esPendiente && m.fecha) {
-  var _fechaMov = new Date(m.fecha).getTime();
-  _esVencido = isFinite(_fechaMov) && _fechaMov <= Date.now();
+ if (m.fecha) {
+  var _md = new Date(m.fecha);
+  // v1.3.1412: validar que la fecha es parseable antes de formatear
+  if (!isNaN(_md.getTime())) {
+   var _mns = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+   _fd = _md.getDate() + ' ' + _mns[_md.getMonth()];
+  }
  }
- var _rowStyle = _esPendiente ? 'opacity:0.55' : '';
- var _colImporte = _esPendiente ? 'var(--ink-soft)' : m.color;
- var _badgeHtml = '';
- if (_esPendiente) {
-  var _badgeText = _esVencido ? 'Por confirmar' : 'Pendiente';
-  var _badgeStyle = _esVencido
-   ? 'color:#dc2626;background:#fef2f2;border:1px solid #fecaca;'
-   : 'color:var(--ink-soft);background:var(--bg-subtle, #f5f5f5);border:1px solid var(--border);';
-  _badgeHtml = '<div style="margin-top:4px"><span style="display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:10px;letter-spacing:0.4px;text-transform:uppercase;line-height:1.4;' + _badgeStyle + '">' + _badgeText + '</span></div>';
- }
+ // v1.3.1412 — JERARQUÍA VISUAL UNIFICADA. Pendientes excluidos del feed
+ //   (son futuros, no son últimos movimientos). Subtitle: notas o "N tickets · Dashwey".
  var _subtitleHtml = m.subtitle
   ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(m.subtitle) + '</div>'
   : '';
- return '<div class="snap-fc-mov-row" style="' + _rowStyle + '">' +
+ return '<div class="snap-fc-mov-row">' +
  '<div class="snap-fc-mov-name" style="white-space:normal">' +
    '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(m.nombre) + '</div>' +
    _subtitleHtml +
  '</div>' +
  '<div class="snap-fc-mov-right">' +
-   '<div class="snap-fc-mov-amt" style="color:' + _colImporte + '">' + _sign + feur(m.importe) + '</div>' +
-   (_esPendiente
-     ? _badgeHtml
-     : (_fd ? '<div class="snap-fc-mov-date">' + _fd + '</div>' : '')) +
+   '<div class="snap-fc-mov-amt" style="color:' + m.color + '">' + _sign + feur(m.importe) + '</div>' +
+   (_fd ? '<div class="snap-fc-mov-date">' + _fd + '</div>' : '') +
  '</div>' +
  '</div>';
  }).join('');
