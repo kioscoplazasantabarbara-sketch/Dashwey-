@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1417-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1418-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1417-dev</title>
+<title>Dashwey v1.3.1418-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17985,7 +17985,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1417-dev';
+ const _APP_VERSION = 'v1.3.1418-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28556,11 +28556,15 @@ function _toggleCardFromManager(id, btn) {
       _openTicketsDelDia(derivedDay, derivedCuenta || null);
       return;
      }
-     // v1.3.1144 HÍBRIDO: click en cierre real → abre histórico
+     // v1.3.1144 HÍBRIDO: click en cierre real
+     // v1.3.1418: si tiene id, abre tickets del cierre específico vía _openTicketsDelCierre.
+     //   Fallback al histórico genérico solo si no hay id (caso defensivo).
      if (src === 'cierre') {
-      // v1.3.1402: si tiene id, abre tickets del cierre específico (TODO sesión 2)
-      //   por ahora abre el histórico general
-      if (window.App && App.dash && App.dash._openCierreHistorialSheet) App.dash._openCierreHistorialSheet();
+      if (id && window.App && App.dash && App.dash._openTicketsDelCierre) {
+       App.dash._openTicketsDelCierre(id);
+      } else if (window.App && App.dash && App.dash._openCierreHistorialSheet) {
+       App.dash._openCierreHistorialSheet();
+      }
       return;
      }
      _openEditMovimientoSheet(id, src);
@@ -30305,6 +30309,56 @@ function _openEditMovimientoSheet(id, src) {
   } catch(e) {
    console.warn('[TicketsDelDia] err', e);
    try { showToast('⚠️ Error al cargar tickets', 'warning'); } catch(_) {}
+  }
+ }
+
+ // v1.3.1418 — _openTicketsDelCierre: abrir SOLO los tickets de un cierre real
+ //   específico, filtrando por v.closureId === cierreId. Antes: tap en cierre real
+ //   "💰 Cierre del día · N tickets · Dashwey" abría _openCierreHistorialSheet
+ //   genérico (Flujo de Caja card) o no hacía nada (Detalle Cuenta + Vista Global).
+ //   Ahora: muestra exactamente los N tickets que conforman ese cierre.
+ //   Reusa _renderTicketsSheet (mismo render que _openTicketsDelDia).
+ //   Resuelve P2 del backlog 5-may-2026.
+ function _openTicketsDelCierre(cierreId, cuentaIdOpcional) {
+  if (!cierreId) {
+   try { showToast('Cierre no válido', 'warning'); } catch(_) {}
+   return;
+  }
+  try {
+   var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
+   var c = cierres.find(function(x){ return x && !x.deleted && x.id === cierreId; });
+   if (!c) {
+    try { showToast('Cierre no encontrado', 'warning'); } catch(_) {}
+    return;
+   }
+   // Filtrar ventas con closureId === cierreId
+   var todasVentas = (State.get.ventas && State.get.ventas()) || [];
+   var ventasCierre = todasVentas.filter(function(v) {
+    if (!v || v.deleted) return false;
+    return v.closureId === cierreId;
+   }).sort(function(a,b){
+    return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+   });
+
+   // Label legible: "Cierre <jornadaLabel>" + cuenta opcional
+   var label = 'Cierre ' + (c.jornadaLabel || '—');
+   try {
+    var _cid = c.cuentaId || cuentaIdOpcional || null;
+    if (_cid && _cid !== '?') {
+     var _cuentas = (State.get.cuentas && State.get.cuentas()) || [];
+     var _cu = _cuentas.find(function(x){ return x && !x.deleted && x.id === _cid; });
+     if (_cu && _cu.nombre) label += ' · ' + _cu.nombre;
+    }
+   } catch(_) {}
+
+   if (!ventasCierre.length) {
+    try { showToast('Este cierre no tiene tickets asociados', 'info'); } catch(_) {}
+    // Aún así abrimos el sheet vacío para feedback visual claro
+   }
+   _renderTicketsSheet(ventasCierre, label);
+  } catch(e) {
+   console.warn('[TicketsDelCierre] err', e);
+   try { showToast('Error al cargar tickets del cierre', 'warning'); } catch(_) {}
   }
  }
 
@@ -39313,16 +39367,25 @@ function _confirmBorrarCuenta(id) {
      //   No tappable: el resto (cierres reales sin lista de tickets, etc.)
      // v1.3.1415 FIX: src='venta' SIEMPRE es derivado (nunca debe ir a editor de gasto/ingreso).
      //   Sin esto, si derivedDayKey llegaba vacío, el editor mostraba "Movimiento no encontrado".
+     // v1.3.1418 FIX TAP-CIERRE-REAL: src='cierre' con id ahora es tappable y abre
+     //   _openTicketsDelCierre(cierreId) — muestra exactamente los tickets que conforman
+     //   ese cierre (filtrando ventas con closureId === cierreId). Antes: tap en cierre
+     //   real "💰 Cierre del día · N tickets · Dashwey" no hacía nada en Detalle Cuenta.
      var _isDerivado = (m.metaTipo === 'cierre-derivado-loyverse' || m.src === 'venta');
      var _isEditableSrc = (m.src === 'gasto' || m.src === 'ingreso');
      var _editable = _isEditableSrc && !!m.id;
-     var _tappable = _editable || (_isDerivado && !!m.derivedDayKey);
+     var _isCierreReal = (m.src === 'cierre' && !!m.id);
+     var _tappable = _editable || (_isDerivado && !!m.derivedDayKey) || _isCierreReal;
      var _editAttrs = '';
      if (_isDerivado && !!m.derivedDayKey) {
       // Derivado tappable
       _editAttrs = ' data-derived-day="' + m.derivedDayKey + '" data-derived-cuenta="' + (m.derivedCuentaId || '') + '"';
      } else if (_editable) {
       _editAttrs = ' data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"';
+     } else if (_isCierreReal) {
+      // v1.3.1418: cierre real tappable — usar mismos atributos pero src='cierre'
+      //   el handler delegado distingue por src y delega a _openTicketsDelCierre
+      _editAttrs = ' data-mov-id="' + m.id + '" data-mov-src="cierre"';
      }
      // Si _isDerivado pero sin derivedDayKey → no tappable (silencioso, sin toast)
      var _cursorStyle = _tappable ? 'cursor:pointer;' : 'cursor:default;';
@@ -39630,6 +39693,15 @@ function _confirmBorrarCuenta(id) {
          setTimeout(function(){
           try { App.dash._openTicketsDelDia(_capturedDay, _capturedCuenta); } catch(_e) { console.warn('[tap derivado]', _e); }
          }, 320); // duración exacta de la animación de cierre
+         return;
+        }
+        // v1.3.1418: cierre real → abre tickets de ESE cierre (cerrar overlay actual primero)
+        if (_id && _src === 'cierre') {
+         var _capturedCierreId = _id;
+         try { App.ui.closeFs && App.ui.closeFs(); } catch(_) {}
+         setTimeout(function(){
+          try { App.dash._openTicketsDelCierre(_capturedCierreId); } catch(_e) { console.warn('[tap cierre real]', _e); }
+         }, 320);
          return;
         }
         if (_id && _src) { try { App.dash._openEditMovimientoSheet(_id, _src); } catch(_e) {} return; }
@@ -39948,7 +40020,7 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
+ return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, renderVisitasComerciales, renderEventos: renderVisitasComerciales, openAddVisita, _openRecordatorioSheet, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre};
 })();
 
 // ══════════════════════════════════════════
