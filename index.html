@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1411-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1412-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1411-dev</title>
+<title>Dashwey v1.3.1412-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17968,7 +17968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1411-dev';
+ const _APP_VERSION = 'v1.3.1412-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28207,8 +28207,9 @@ function _toggleCardFromManager(id, btn) {
  const _cierres = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
  const _newFcHash = JSON.stringify([
   cuentas.map(c => c.saldo + '|' + c.nombre + '|' + (c.isPrimary ? '1' : '0')),
-  gastos.map(g => g.importe + '|' + g.fecha),
-  ingresos.map(i => i.importe + '|' + i.fecha),
+  // v1.3.1411: incluir estado y notas para invalidar al editar pendiente / subtítulo
+  gastos.map(g => g.importe + '|' + g.fecha + '|' + (g.estado||'') + '|' + (g.notas||'')),
+  ingresos.map(i => i.importe + '|' + i.fecha + '|' + (i.estado||'') + '|' + (i.notas||'')),
   _pedidos.length + '|' + (_pedidos[_pedidos.length-1]?.id||''),
   _mermas.length + '|' + (_mermas[_mermas.length-1]?.id||''),
   _ventas.length + '|' + (_ventas[_ventas.length-1]?.id||''),
@@ -36074,6 +36075,9 @@ function _confirmBorrarCuenta(id) {
  //   - SÍ gastos/ingresos manuales (origen distinto de 'loyverse'/'tpv')
  //   - SÍ cierres cerrados (1 fila agregada por cierre)
  // Si una venta individual aparece aquí → implementación incorrecta.
+ // v1.3.1411 — JERARQUÍA VISUAL UNIFICADA con _openDetalleCuenta + Vista global.
+ //   Movs llevan: subtitle (notas o "N tickets · fuente"), pendiente, vencido.
+ //   Render aplica badge "Pendiente"/"Por confirmar" debajo del importe.
  var cierresSnap = State.get.cierresCaja ? State.get.cierresCaja() : [];
  var movs = [];
  // Gastos manuales (origen≠loyverse/tpv, no asociados a cierre)
@@ -36082,7 +36086,15 @@ function _confirmBorrarCuenta(id) {
   if (g.origen === 'loyverse' || g.origen === 'tpv') return false;
   return true;
  }).forEach(function(g) {
-  movs.push({ nombre: g.nombre||g.concepto||'Gasto', importe: Math.abs(g.importe||0), fecha: g.fecha||'', color: 'var(--red)', sign: '−', pendiente: !!window._isPendiente?.(g) });
+  movs.push({
+   nombre: g.nombre||g.concepto||'Gasto',
+   subtitle: g.notas || '',
+   importe: Math.abs(g.importe||0),
+   fecha: g.fecha||'',
+   color: 'var(--red)',
+   sign: '−',
+   pendiente: !!window._isPendiente?.(g),
+  });
  });
  // Ingresos manuales (origen≠loyverse/tpv, no asociados a cierre)
  // v1.3.1395 FIX UI: ocultar también preliminares del cierre auto en este feed.
@@ -36092,7 +36104,15 @@ function _confirmBorrarCuenta(id) {
   if (i.origen === 'cierre_caja_auto') return false; // v1.3.1395: nunca como movimiento individual
   return true;
  }).forEach(function(i) {
-  movs.push({ nombre: i.concepto||'Ingreso', importe: Math.abs(i.importe||0), fecha: i.fecha||'', color: 'var(--ink)', sign: '+', pendiente: !!window._isPendiente?.(i) });
+  movs.push({
+   nombre: i.concepto||'Ingreso',
+   subtitle: i.notas || '',
+   importe: Math.abs(i.importe||0),
+   fecha: i.fecha||'',
+   color: 'var(--ink)',
+   sign: '+',
+   pendiente: !!window._isPendiente?.(i),
+  });
  });
  // v1.3.1144 HÍBRIDO: cierres cerrados → 1 movimiento agregado por cierre
  // v1.3.1152 EVENT-DRIVEN: si isCached + eventIds, recalcular y usar eventos
@@ -36117,8 +36137,10 @@ function _confirmBorrarCuenta(id) {
   var neto = (Number(c.ventas)||0) + (Number(c.ingresos)||0) - (Number(c.gastos)||0);
   if (neto === 0) return;
   var nT = Number(c.nVentas) || 0;
+  // v1.3.1411 — JERARQUÍA limpia coherente con Vista global / Detalle cuenta
   movs.push({
-   nombre: '💰 Cierre ' + (c.jornadaLabel||'—') + (nT ? ' · ' + nT + 't' : ''),
+   nombre: '💰 Cierre del día',
+   subtitle: nT ? (nT + ' ticket' + (nT !== 1 ? 's' : '') + ' · Dashwey') : 'Dashwey',
    importe: Math.abs(neto),
    fecha: new Date(c.cierreTs).toISOString(),
    color: neto >= 0 ? 'var(--ink)' : 'var(--red)',
@@ -36134,14 +36156,39 @@ function _confirmBorrarCuenta(id) {
  var _sign = m.sign || '';
  var _fd = '';
  if (m.fecha) { var _md = new Date(m.fecha); var _mns = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; _fd = _md.getDate() + ' ' + _mns[_md.getMonth()]; }
- // v1.3.1000 Fase 3: badge pendiente + opacity
- var _pendBadge = m.pendiente ? ' <span style="padding:0 4px;border-radius:var(--r-sm);background:rgba(245,158,11,0.15);color:#B45309;font-size:9px;font-weight:var(--fw-bold);letter-spacing:.3px">⏳</span>' : '';
- var _rowStyle = m.pendiente ? 'opacity:0.72' : '';
+ // v1.3.1411 — JERARQUÍA VISUAL UNIFICADA con _openDetalleCuenta + Vista global
+ //   Pendiente: opacity 0.55, importe gris, fecha oculta, badge debajo del importe.
+ //   Vencido (pendiente con fecha <= hoy): badge tinte rojo "Por confirmar".
+ //   Subtitle: notas (manual) o "N tickets · Dashwey" (cierre real).
+ var _esPendiente = !!m.pendiente;
+ var _esVencido = false;
+ if (_esPendiente && m.fecha) {
+  var _fechaMov = new Date(m.fecha).getTime();
+  _esVencido = isFinite(_fechaMov) && _fechaMov <= Date.now();
+ }
+ var _rowStyle = _esPendiente ? 'opacity:0.55' : '';
+ var _colImporte = _esPendiente ? 'var(--ink-soft)' : m.color;
+ var _badgeHtml = '';
+ if (_esPendiente) {
+  var _badgeText = _esVencido ? 'Por confirmar' : 'Pendiente';
+  var _badgeStyle = _esVencido
+   ? 'color:#dc2626;background:#fef2f2;border:1px solid #fecaca;'
+   : 'color:var(--ink-soft);background:var(--bg-subtle, #f5f5f5);border:1px solid var(--border);';
+  _badgeHtml = '<div style="margin-top:4px"><span style="display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:10px;letter-spacing:0.4px;text-transform:uppercase;line-height:1.4;' + _badgeStyle + '">' + _badgeText + '</span></div>';
+ }
+ var _subtitleHtml = m.subtitle
+  ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(m.subtitle) + '</div>'
+  : '';
  return '<div class="snap-fc-mov-row" style="' + _rowStyle + '">' +
- '<div class="snap-fc-mov-name">' + esc2(m.nombre) + _pendBadge + '</div>' +
+ '<div class="snap-fc-mov-name" style="white-space:normal">' +
+   '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc2(m.nombre) + '</div>' +
+   _subtitleHtml +
+ '</div>' +
  '<div class="snap-fc-mov-right">' +
-   '<div class="snap-fc-mov-amt" style="color:' + m.color + '">' + _sign + feur(m.importe) + '</div>' +
-   (_fd ? '<div class="snap-fc-mov-date">' + _fd + '</div>' : '') +
+   '<div class="snap-fc-mov-amt" style="color:' + _colImporte + '">' + _sign + feur(m.importe) + '</div>' +
+   (_esPendiente
+     ? _badgeHtml
+     : (_fd ? '<div class="snap-fc-mov-date">' + _fd + '</div>' : '')) +
  '</div>' +
  '</div>';
  }).join('');
