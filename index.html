@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1410-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1411-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1410-dev</title>
+<title>Dashwey v1.3.1411-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15689,6 +15689,9 @@ const FinEngine = (() => {
     metaTipo: g.metaTipo,
     transferId: g.transferId || null,
     isTransfer: !!g.transferId,
+    // v1.3.1411 — propagación estado pendiente para jerarquía visual unificada
+    estado: g.estado || 'confirmado',
+    fechaPago: g.fechaPago || null,
    });
   });
 
@@ -15711,6 +15714,9 @@ const FinEngine = (() => {
     metaTipo: i.metaTipo,
     transferId: i.transferId || null,
     isTransfer: !!i.transferId,
+    // v1.3.1411 — propagación estado pendiente para jerarquía visual unificada
+    estado: i.estado || 'confirmado',
+    fechaPago: i.fechaPago || null,
    });
   });
 
@@ -17962,7 +17968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1410-dev';
+ const _APP_VERSION = 'v1.3.1411-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38521,12 +38527,15 @@ function _confirmBorrarCuenta(id) {
     return true;
    }).map(function(t){
     if (t && t.kind === 'venta-dia') {
-     // Relabel: nuestro cierre derivado coherente con el modelo
+     // v1.3.1411 — JERARQUÍA limpia coherente con _openDetalleCuenta v1.3.1408
+     //   Título solo "Cierre del día"; tickets+fuente van como subtitleForzado.
      var nT = t.ventasCount || 0;
+     var subTickets = nT
+      ? (nT + ' ticket' + (nT !== 1 ? 's' : '') + ' · Loyverse')
+      : 'Loyverse';
      return Object.assign({}, t, {
-      concepto: '💰 Cierre del día'
-              + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '')
-              + ' · Loyverse',
+      concepto: '💰 Cierre del día',
+      subtitleForzado: subTickets,
       // metaTipo nuevo para distinguir del venta-dia genérico (auditoría futura)
       metaTipo: 'cierre-derivado-loyverse',
      });
@@ -38551,8 +38560,12 @@ function _confirmBorrarCuenta(id) {
      var ctaIdEff = c.cuentaId || _primCtaIdG;
      var cInfo = (State.get.cuentas() || []).find(function(x){ return x.id === ctaIdEff; });
      var nT = Number(c.nVentas) || 0;
-     var label = '💰 Cierre ' + (c.jornadaLabel || '—')
-              + (nT ? ' · ' + nT + ' ticket' + (nT !== 1 ? 's' : '') : '');
+     // v1.3.1411 — JERARQUÍA limpia coherente con _openDetalleCuenta v1.3.1408
+     //   Título solo "Cierre del día"; tickets+fuente van como subtitleForzado.
+     var label = '💰 Cierre del día';
+     var subTickets = nT
+      ? (nT + ' ticket' + (nT !== 1 ? 's' : '') + ' · Dashwey')
+      : 'Dashwey';
      // 11:00 UTC = 12:00 Madrid invierno / 13:00 verano — siempre mismo día Madrid
      var visualFecha;
      if (c.jornadaLabel && /^\d{4}-\d{2}-\d{2}$/.test(c.jornadaLabel)) {
@@ -38565,6 +38578,7 @@ function _confirmBorrarCuenta(id) {
       id: c.id,
       src: 'cierre',
       concepto: label,
+      subtitleForzado: subTickets, // v1.3.1411
       importe: Math.abs(neto),
       delta: neto,
       fecha: visualFecha,
@@ -38584,10 +38598,13 @@ function _confirmBorrarCuenta(id) {
    //   de cada movimiento al ir más antiguo. Pares de transferencia tienen
    //   delta=0 → saldoTras se mantiene. Esto da extracto consistente con
    //   apps de banca para vista consolidada.
+   //   v1.3.1411 — pendientes (estado='pendiente') NO modifican acc, coherente
+   //   con _bbRecalcSaldos v1.3.1406 (saldo real no incluye pendientes).
    var saldoTras = [];
    var acc = metrics.saldo;
    movs.forEach(function(m){
     saldoTras.push(acc);
+    if (m.estado === 'pendiente') return; // pendiente no afecta acumulado
     acc -= (m.delta || 0);
    });
 
@@ -38669,25 +38686,56 @@ function _confirmBorrarCuenta(id) {
       + '<span style="width:8px;height:8px;border-radius:50%;background:' + (m.cuentaColor||'#999') + ';flex-shrink:0"></span>'
       + esc(m.cuentaNombre || '?')
       + '</span>';
-     // v1.3.1357: subtítulo "× N tickets" eliminado — el concepto ya incluye
-     //   "Cierre del día · N tickets · Loyverse" (origen Loyverse en _bbRecalcSaldos),
-     //   mostrarlo dos veces era ruido visual.
-     var subtitleVenta = '';
+     // v1.3.1411 — JERARQUÍA VISUAL UNIFICADA con _openDetalleCuenta v1.3.1407-1408
+     //   Subtítulo: subtitleForzado (cierres "N tickets · fuente") prevalece;
+     //   sino notas del registro original.
+     //   Pendiente: opacity 0.55, importe gris, badge "Pendiente" debajo,
+     //   saldo intermedio oculto (no representa flujo real).
+     //   Vencido (pendiente con fecha <= hoy): badge tinte rojo "Por confirmar".
+     var subtitle = m.subtitleForzado || '';
+     if (!subtitle && m.src === 'gasto') {
+      var _gObj = (State.get.gastosOp() || []).find(function(g){ return g.id === m.id; });
+      if (_gObj && _gObj.notas) subtitle = _gObj.notas;
+     } else if (!subtitle && m.src === 'ingreso') {
+      var _iObj = (State.get.ingresosFin() || []).find(function(x){ return x.id === m.id; });
+      if (_iObj && _iObj.notas) subtitle = _iObj.notas;
+     }
+     var _esPendiente = (m.estado === 'pendiente');
+     var _esVencido = false;
+     if (_esPendiente && m.fecha) {
+      var _fechaMov = new Date(m.fecha).getTime();
+      _esVencido = isFinite(_fechaMov) && _fechaMov <= Date.now();
+     }
+     var _filaOpacity = _esPendiente ? 'opacity:0.55;' : '';
+     var _colImporte = _esPendiente ? 'var(--ink-soft)' : col;
+     var _badgeHtml = '';
+     if (_esPendiente) {
+      var _badgeText = _esVencido ? 'Por confirmar' : 'Pendiente';
+      var _badgeStyle = _esVencido
+       ? 'color:#dc2626;background:#fef2f2;border:1px solid #fecaca;'
+       : 'color:var(--ink-soft);background:var(--bg-subtle, #f5f5f5);border:1px solid var(--border);';
+      _badgeHtml = '<div style="margin-top:4px"><span style="display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:10px;letter-spacing:0.4px;text-transform:uppercase;line-height:1.4;' + _badgeStyle + '">' + _badgeText + '</span></div>';
+     }
+     var _subtitleHtml = subtitle
+      ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(subtitle) + '</div>'
+      : '';
 
      rows.push(
-      '<div class="fc-move-row gv-row" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border)">'
+      '<div class="fc-move-row gv-row' + (_esPendiente ? ' fc-move-pendiente' : '') + '" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _filaOpacity + '">'
       + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
       +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:var(--lh-tight)">' + _fmtFechaCorta(m.fecha) + '</div>'
       + '</div>'
       + '<div style="flex:1;min-width:0">'
       +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.concepto) + '</div>'
-      +  subtitleVenta
+      +  _subtitleHtml
       +  '<div style="margin-top:2px">' + cuentaBadge + '</div>'
       + '</div>'
-      // v1.3.1357: saldo movido a columna derecha bajo importe (consistencia con cuenta individual)
+      // v1.3.1411: saldo o badge mutuamente excluyentes (badge si pendiente)
       + '<div style="flex-shrink:0;text-align:right">'
-      +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + col + '">' + sign + ' ' + _feur(Math.abs(m.delta || 0)) + '</div>'
-      +  '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:3px">Saldo: ' + _feur(saldoTrasEste) + '</div>'
+      +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + _colImporte + '">' + sign + ' ' + _feur(Math.abs(m.delta || 0)) + '</div>'
+      +  (_esPendiente
+          ? _badgeHtml
+          : '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:3px">Saldo: ' + _feur(saldoTrasEste) + '</div>')
       + '</div>'
       + '</div>'
      );
@@ -38701,18 +38749,10 @@ function _confirmBorrarCuenta(id) {
     ? '<div style="padding:var(--sp-6) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs);opacity:0.6">Cargando ' + movs.length + ' movimientos…</div>'
     : _buildGlobalRowsHtml();
 
-   // KPIs ingresos/gastos
-   var kpiHtml =
-    '<div style="display:flex;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:var(--sp-3)">'
-    + '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center;border-right:1px solid var(--border)">'
-    +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Ingresos</div>'
-    +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--success)">' + _feur(metrics.ingresosTotal) + '</div>'
-    + '</div>'
-    + '<div style="flex:1;padding:var(--sp-2) 8px;text-align:center">'
-    +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide)">Gastos</div>'
-    +  '<div style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--red)">' + _feur(metrics.gastosTotal) + '</div>'
-    + '</div>'
-    + '</div>';
+   // v1.3.1411 — KPI Ingresos/Gastos histórico ELIMINADO de Vista global.
+   //   Razón: sumaba TODA la historia sin filtro temporal — cifras sin contexto
+   //   ("desde hace 3 años"). El balance neto por mes (en cada separador) ya
+   //   ofrece la información temporal relevante.
 
    var html =
     '<div class="dc-layout">'
@@ -38730,7 +38770,6 @@ function _confirmBorrarCuenta(id) {
     +  '<div style="font-size:38px;font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-1.5px;line-height:1">' + _feur(metrics.saldo) + '</div>'
     +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo total</div>'
     + '</div>'
-    + kpiHtml
     + '</div>'
     + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
     + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
