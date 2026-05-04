@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1416-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1417-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1416-dev</title>
+<title>Dashwey v1.3.1417-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -12793,7 +12793,24 @@ const State = (() => {
  //                   subcolecciones dirty también se sincronicen en flush offline.
  //                   Sin esto, al reconectar solo subía el doc raíz y las subcol
  //                   quedaban desincronizadas hasta próximo save() manual.
- _writeFirebaseDual(snapshot).then(ok => {
+ // v1.3.1417 FIX BULK-WRITE: el snapshot de _pendingQueue se construyó offline con
+ //   _archivePayload(_state) → contiene los 6 arrays transaccionales completos.
+ //   Si subcol está activa, esto disparaba MODO BULK al reconectar (dirty Sets
+ //   procesados ya por _DashweyFlushDirty separado, vacíos al llegar aquí) →
+ //   resource-exhausted. Solución: despojar arrays trans del snapshot. Los items
+ //   modificados offline ya están en los dirty Sets persistidos (localStorage
+ //   "dashwey_dirty_items_v1") y se sincronizan por _DashweyFlushDirty automáticamente.
+ //   Aquí solo subimos el doc raíz (proveedores, productos, cuentas, perfil...).
+ var _snap1417f = snapshot;
+ if (window._DashweyUseSubcollections && snapshot && typeof snapshot === 'object') {
+  try {
+   _snap1417f = Object.assign({}, snapshot);
+   ['ventas','gastosOp','ingresosFin','historialPedidos','mermas','facturas'].forEach(function(_k) {
+    if (_snap1417f[_k] !== undefined) delete _snap1417f[_k];
+   });
+  } catch(_) { _snap1417f = snapshot; }
+ }
+ _writeFirebaseDual(_snap1417f).then(ok => {
  if (ok) { _pendingQueue = []; _persistPQ(); /* v1.3.1149 limpiar persistencia */ }
  _isSyncing = false;
  }).catch(() => { _isSyncing = false; });
@@ -17968,7 +17985,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1416-dev';
+ const _APP_VERSION = 'v1.3.1417-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51981,7 +51998,17 @@ _eaRecalc();
  } else if (localTs > remoteTs && localTs > 0 && _hasLocalData) {
  // v1.3.580: solo subir si local es ESTRICTAMENTE más reciente — evita write innecesario cuando remoteTs===localTs
  // v1.3.1140: vía dispatcher dual (root filtrado + subcol) para evitar >1MB en root
- await (window._DashweyWriteDual ? window._DashweyWriteDual(_buildLocalSnapshot()) : fb.write('state', _buildLocalSnapshot()));
+ // v1.3.1417 FIX BULK-WRITE: con subcol activa, pasar rootOnly:true. Antes,
+ //   _buildLocalSnapshot() devolvía los 6 arrays transaccionales completos →
+ //   _writeFirebaseDual recibía data con arrays + dirty Sets vacíos (cold-start
+ //   acaba de bootear) → MODO BULK escribía TODOS los items (3959 ventas + 1702
+ //   gastos + 1426 pedidos) → resource-exhausted. La rama opuesta (remoteTs>localTs)
+ //   ya se arregló en v1.3.1359; esta rama quedó con el mismo bug.
+ //   Con rootOnly:true: solo se sube doc raíz. Las subcolecciones se sincronizan
+ //   independientemente vía _DashweyEnableSubcollections + listeners onSnapshot.
+ var _ro1417 = !!window._DashweyUseSubcollections;
+ var _snap1417 = _ro1417 ? _buildLocalSnapshot({ rootOnly: true }) : _buildLocalSnapshot();
+ await (window._DashweyWriteDual ? window._DashweyWriteDual(_snap1417) : fb.write('state', _snap1417));
  }
  // v1.3.1240 FIX BUG-27: reset incondicional de _DashweyForceLegacyMerge en flujo común.
  // Antes solo se reseteaba dentro de la rama (remoteTs > localTs), dejando el flag residual
@@ -52739,8 +52766,18 @@ window._DashweyDeviceId = (() => {
   // Antes: si había save en vuelo, NO flusheaba → ediciones recientes podían perderse
   // si el usuario cerraba la app antes de que terminara el save anterior.
   // Ahora: siempre intenta flush con el state más actual. Coste extra: 1 write idempotente.
+  // v1.3.1417 FIX BULK-WRITE: pasar rootOnly:true cuando subcol activa. Sin esto,
+  //   _buildLocalSnapshot() incluye los 6 arrays transaccionales (ventas/gastosOp/...)
+  //   completos → _writeFirebaseDual recibe data con arrays + dirty Sets vacíos
+  //   (background no edita) → MODO BULK escribe TODOS los items en cada subcol →
+  //   resource-exhausted observado en producción 4-may-2026.
+  //   Con rootOnly:true: snap NO incluye los arrays trans → _dataTrans vacío en dual
+  //   → ramas BULK no se ejecutan → solo se escribe doc raíz (proveedores, productos,
+  //   cuentas, cierresCaja, perfil...) que es lo que realmente cambió. Las subcol
+  //   ya están sincronizadas vía sus dirty Sets (incremental) o sus propios listeners.
   if (_fb && _fb.ready && navigator.onLine) {
-   var _snap = _buildLocalSnapshot();
+   var _useRootOnly1417 = !!window._DashweyUseSubcollections;
+   var _snap = _buildLocalSnapshot(_useRootOnly1417 ? { rootOnly: true } : undefined);
    if (window._DashweyWriteDual) { window._DashweyWriteDual(_snap); }
    else { _fb.write('state', _snap); }
   }
