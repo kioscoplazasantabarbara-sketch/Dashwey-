@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1413-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1414-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1413-dev</title>
+<title>Dashwey v1.3.1414-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17968,7 +17968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1413-dev';
+ const _APP_VERSION = 'v1.3.1414-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38666,6 +38666,26 @@ function _confirmBorrarCuenta(id) {
     });
     return bal;
    })();
+   // v1.3.1413 — Pendientes agrupados por mes en banner expandible
+   //   Pre-calcular conteo + suma neta de pendientes por mes para mostrar en banner.
+   //   Banner colapsado por defecto. Click → expande filas. Estado en memoria
+   //   (Map per-render). Persistencia simple: si el mes tenía banner expandido,
+   //   se preserva al re-render.
+   var _pendientesPorMesG = (function(){
+    var ag = {}; // mes → { count, sum }
+    movs.forEach(function(m){
+     if (!m || m.estado !== 'pendiente' || !m.fecha) return;
+     var mk = _monthLabel(m.fecha);
+     if (!mk) return;
+     if (!ag[mk]) ag[mk] = { count: 0, sum: 0 };
+     ag[mk].count += 1;
+     ag[mk].sum += (typeof m.delta === 'number' ? m.delta : 0);
+    });
+    return ag;
+   })();
+   // Estado expandido por mes (preservado entre re-renders del mismo modal)
+   if (!window.__dashweyPendExpandG) window.__dashweyPendExpandG = {};
+   var _pendExpand = window.__dashweyPendExpandG;
    var _buildGlobalRowsHtml = function() {
     if (!movs.length) {
      return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en ninguna cuenta</div>';
@@ -38686,6 +38706,25 @@ function _confirmBorrarCuenta(id) {
        + '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-semi);color:' + _balCol + ';text-transform:none;letter-spacing:0">' + _balText + '</span>'
        + '</div>'
       );
+      // v1.3.1413 — Banner pendientes (si hay) justo después del header del mes
+      var _pe = _pendientesPorMesG[mLabel];
+      if (_pe && _pe.count > 0) {
+       var _expanded = !!_pendExpand[mLabel];
+       var _pSum = Math.round(_pe.sum * 100) / 100;
+       var _pSign = _pSum > 0 ? '+' : (_pSum < 0 ? '−' : '');
+       var _pSumTxt = _pSign + _feur(Math.abs(_pSum));
+       var _txt = _pe.count + ' movimiento' + (_pe.count !== 1 ? 's' : '') + ' programado' + (_pe.count !== 1 ? 's' : '') + ' · ' + _pSumTxt;
+       var _caretRot = _expanded ? 'transform:rotate(180deg);' : '';
+       rows.push(
+        '<div class="dc-pend-banner" data-pend-mes="' + esc(mLabel) + '" style="margin:8px 16px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation">'
+        + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
+        +  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>'
+        +  '<span style="font-size:var(--fs-xs);font-weight:var(--fw-semi);color:#dc2626;letter-spacing:0;text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(_txt) + '</span>'
+        + '</div>'
+        + '<svg class="dc-pend-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform 0.2s ease;' + _caretRot + '"><polyline points="6 9 12 15 18 9"/></svg>'
+        + '</div>'
+       );
+      }
       lastMonth = mLabel;
      }
 
@@ -38758,9 +38797,17 @@ function _confirmBorrarCuenta(id) {
      var _subtitleHtml = subtitle
       ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(subtitle) + '</div>'
       : '';
+     // v1.3.1413 — pendientes ocultos en banner colapsable
+     var _pendAttrs = '';
+     var _pendHidden = '';
+     if (_esPendiente) {
+      _pendAttrs = ' data-pend-mes="' + esc(mLabel) + '"';
+      // Si el banner del mes NO está expandido, ocultar la fila
+      if (!_pendExpand[mLabel]) _pendHidden = 'display:none;';
+     }
 
      rows.push(
-      '<div class="fc-move-row gv-row' + (_esPendiente ? ' fc-move-pendiente' : '') + '" style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _filaOpacity + '">'
+      '<div class="fc-move-row gv-row' + (_esPendiente ? ' fc-move-pendiente' : '') + '"' + _pendAttrs + ' style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _filaOpacity + _pendHidden + '">'
       + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
       +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:var(--lh-tight)">' + _fmtFechaCorta(m.fecha) + '</div>'
       + '</div>'
@@ -38861,6 +38908,36 @@ function _confirmBorrarCuenta(id) {
     _cleanup();
     App.ui.closeFs();
    }, { once: true });
+
+   // v1.3.1413 — Toggle banner pendientes (delegado en dc-movs)
+   try {
+    var _movsContG = document.getElementById('dc-movs');
+    if (_movsContG) {
+     _movsContG.addEventListener('click', function(e){
+      var el = e.target;
+      // Buscar ancestor con .dc-pend-banner (max 5 niveles)
+      var banner = null;
+      for (var i=0; i<5 && el && el !== _movsContG; i++) {
+       if (el.classList && el.classList.contains('dc-pend-banner')) { banner = el; break; }
+       el = el.parentElement;
+      }
+      if (!banner) return;
+      var mes = banner.getAttribute('data-pend-mes');
+      if (!mes) return;
+      // Toggle estado en memoria global
+      _pendExpand[mes] = !_pendExpand[mes];
+      var nuevoExpand = _pendExpand[mes];
+      // Rotar caret
+      var caret = banner.querySelector('.dc-pend-caret');
+      if (caret) caret.style.transform = nuevoExpand ? 'rotate(180deg)' : '';
+      // Mostrar/ocultar filas pendientes del mes
+      var filas = _movsContG.querySelectorAll('[data-pend-mes="' + mes.replace(/"/g,'\\"') + '"]:not(.dc-pend-banner)');
+      for (var k=0; k<filas.length; k++) {
+       filas[k].style.display = nuevoExpand ? '' : 'none';
+      }
+     }, { passive: true });
+    }
+   } catch(_){}
 
    // Cleanup también al cerrar por backdrop tap, swipe-down, back Android
    //   El closeFs central ya limpia has-dc-layout (v1.3.1249), pero nuestros
@@ -39109,6 +39186,21 @@ function _confirmBorrarCuenta(id) {
    // v1.3.1347: extraído en función reusable para split fase 1 (shell) + fase 2 (rows)
    //   Permite abrir el sheet INSTANTÁNEO (shell ligero) y pintar las 2670 filas
    //   en el siguiente RAF, evitando bloqueo del main thread (~1s con 2670 movs).
+   // v1.3.1413 — Pendientes agrupados por mes en banner expandible (mismo patrón Vista global)
+   var _pendientesPorMesD = (function(){
+    var ag = {};
+    movs.forEach(function(m){
+     if (!m || m.estado !== 'pendiente' || !m.fecha) return;
+     var mk = _monthLabel(m.fecha);
+     if (!mk) return;
+     if (!ag[mk]) ag[mk] = { count: 0, sum: 0 };
+     ag[mk].count += 1;
+     ag[mk].sum += (typeof m.importe === 'number' ? m.importe : 0);
+    });
+    return ag;
+   })();
+   if (!window.__dashweyPendExpandD) window.__dashweyPendExpandD = {};
+   var _pendExpandD = window.__dashweyPendExpandD;
    var _buildRowsHtml = function() {
     if (movs.length === 0) {
      return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>';
@@ -39126,6 +39218,25 @@ function _confirmBorrarCuenta(id) {
        + esc(mLabel)
        + '</div>'
       );
+      // v1.3.1413 — Banner pendientes (si hay) tras el header del mes
+      var _peD = _pendientesPorMesD[mLabel];
+      if (_peD && _peD.count > 0) {
+       var _expD = !!_pendExpandD[mLabel];
+       var _pSumD = Math.round(_peD.sum * 100) / 100;
+       var _pSignD = _pSumD > 0 ? '+' : (_pSumD < 0 ? '−' : '');
+       var _pSumTxtD = _pSignD + _feur(Math.abs(_pSumD));
+       var _txtD = _peD.count + ' movimiento' + (_peD.count !== 1 ? 's' : '') + ' programado' + (_peD.count !== 1 ? 's' : '') + ' · ' + _pSumTxtD;
+       var _caretRotD = _expD ? 'transform:rotate(180deg);' : '';
+       rows.push(
+        '<div class="dc-pend-banner" data-pend-mes="' + esc(mLabel) + '" style="margin:8px 16px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation">'
+        + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
+        +  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>'
+        +  '<span style="font-size:var(--fs-xs);font-weight:var(--fw-semi);color:#dc2626;letter-spacing:0;text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(_txtD) + '</span>'
+        + '</div>'
+        + '<svg class="dc-pend-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform 0.2s ease;' + _caretRotD + '"><polyline points="6 9 12 15 18 9"/></svg>'
+        + '</div>'
+       );
+      }
       lastMonth = mLabel;
      }
      var col   = m.importe >= 0 ? 'var(--success)' : 'var(--red)';
@@ -39178,9 +39289,16 @@ function _confirmBorrarCuenta(id) {
       _editAttrs = ' data-derived-day="' + m.derivedDayKey + '" data-derived-cuenta="' + (m.derivedCuentaId || '') + '"';
      }
      var _cursorStyle = _tappable ? 'cursor:pointer;' : 'cursor:default;';
+     // v1.3.1413 — pendientes ocultos en banner colapsable
+     var _pendAttrsD = '';
+     var _pendHiddenD = '';
+     if (_esPendiente) {
+      _pendAttrsD = ' data-pend-mes="' + esc(mLabel) + '"';
+      if (!_pendExpandD[mLabel]) _pendHiddenD = 'display:none;';
+     }
      rows.push(
-      '<div class="fc-move-row' + (_tappable ? ' fc-move-editable' : '') + (_esPendiente ? ' fc-move-pendiente' : '') + '"' + _editAttrs
-      + ' style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _cursorStyle + _filaOpacity + 'touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
+      '<div class="fc-move-row' + (_tappable ? ' fc-move-editable' : '') + (_esPendiente ? ' fc-move-pendiente' : '') + '"' + _editAttrs + _pendAttrsD
+      + ' style="display:flex;align-items:flex-start;gap:var(--sp-3);padding:var(--sp-3) 16px;border-bottom:1px solid var(--border);' + _cursorStyle + _filaOpacity + _pendHiddenD + 'touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
       // Fecha (sin icono)
       + '<div style="flex-shrink:0;width:42px;text-align:center;padding-top:2px">'
       +  '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:var(--lh-tight)">' + _fmtFechaCorta(m.fecha) + '</div>'
@@ -39429,10 +39547,31 @@ function _confirmBorrarCuenta(id) {
 
     // ── Tap movimiento → editar / abrir tickets del día ──
     // v1.3.1402: detectar derivados además de editables
+    // v1.3.1413: detectar banner pendientes (toggle expandir/colapsar)
     var movsEl = document.getElementById('dc-movs');
     if (movsEl) {
      movsEl.addEventListener('click', function(e) {
       var el = e.target;
+      // v1.3.1413 — Banner pendientes (prioridad: si hay banner ancestro, toggle)
+      for (var _b=0; _b<5 && el && el !== movsEl; _b++) {
+       if (el.classList && el.classList.contains('dc-pend-banner')) {
+        var _mes = el.getAttribute('data-pend-mes');
+        if (_mes) {
+         _pendExpandD[_mes] = !_pendExpandD[_mes];
+         var _nuevoExp = _pendExpandD[_mes];
+         var _caretD = el.querySelector('.dc-pend-caret');
+         if (_caretD) _caretD.style.transform = _nuevoExp ? 'rotate(180deg)' : '';
+         var _filasD = movsEl.querySelectorAll('[data-pend-mes="' + _mes.replace(/"/g,'\\"') + '"]:not(.dc-pend-banner)');
+         for (var _k=0; _k<_filasD.length; _k++) {
+          _filasD[_k].style.display = _nuevoExp ? '' : 'none';
+         }
+        }
+        return;
+       }
+       el = el.parentElement;
+      }
+      // Re-iniciar el walk para tap mov (ya consumido el del banner si aplicaba)
+      el = e.target;
       for (var _i=0; _i<6 && el && el !== movsEl; _i++) {
        var _id  = el.getAttribute && el.getAttribute('data-mov-id');
        var _src = el.getAttribute && el.getAttribute('data-mov-src');
