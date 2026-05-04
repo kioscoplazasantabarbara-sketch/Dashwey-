@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1404-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1405-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1404-dev</title>
+<title>Dashwey v1.3.1405-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17962,7 +17962,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1404-dev';
+ const _APP_VERSION = 'v1.3.1405-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -22526,6 +22526,14 @@ const ui = (() => {
      try { if (window.App && App.dash && App.dash._renderCierresPendientesBanner) App.dash._renderCierresPendientesBanner(); } catch(_) {}
     }, 500);
    }
+   // v1.3.1405 RECONCILIACIÓN: tras backlog, verificar ventas huérfanas que caen
+   //   en cierres ya creados. Soluciona caso real: ventas Loyverse llegan tarde
+   //   y quedan sin closureId si _autoCierreCrearCierreReal ya pasó.
+   try {
+    if (typeof _reconciliarClosureIdRetroactivo === 'function') {
+     _reconciliarClosureIdRetroactivo();
+    }
+   } catch(_) {}
   } catch(e) {
    console.warn('[AutoCierre/Backlog] err', e);
   }
@@ -22572,9 +22580,127 @@ const ui = (() => {
   }
  }
 
+ // ═══════════════════════════════════════════════════════════════════════
+ // v1.3.1405 — RECONCILIACIÓN POST-SYNC: estampar closureId en ventas tardías
+ //   Las ventas Loyverse pueden llegar a Dashwey DESPUÉS de que se ejecutó
+ //   el cierre automático del día (sync asíncrono, no real-time). Si llegan
+ //   tarde, _autoCierreCrearCierreReal ya pasó y nadie las estampa.
+ //   Resultado: cierre muestra cifra incompleta vs Loyverse Dashboard.
+ //
+ //   Este helper recorre cierres reales cerrados y, para cada venta sin
+ //   closureId que cae dentro del rango temporal de un cierre, le estampa
+ //   el closureId retroactivamente y actualiza los totales del cierre.
+ //
+ //   Idempotente · Universal (cualquier rango horario, incluido nocturno)
+ //   · NO modifica ventas ya estampadas · Respeta filtro cuentaId
+ // ═══════════════════════════════════════════════════════════════════════
+ function _reconciliarClosureIdRetroactivo() {
+  try {
+   if (!window._DashweyInitialSyncDone) return 0;
+   var ventas = (State.get.ventas && State.get.ventas()) || [];
+   var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
+
+   var cierresValidos = cierres.filter(function(c){
+    return c && !c.deleted && c.estado === 'cerrado'
+        && typeof c.aperturaTs === 'number'
+        && c.cuentaId && c.id && c.jornadaLabel;
+   });
+   if (!cierresValidos.length) return 0;
+
+   var perfil = null;
+   try { perfil = State.get.perfil ? State.get.perfil() : null; } catch(_) {}
+   var zona = (perfil && perfil.zona) || 'Europe/Madrid';
+   var hAp = (perfil && perfil.horarioApertura) || '';
+   var hCi = (perfil && perfil.horarioCierre) || '';
+   var hhA = 0, mmA = 0, hhC = 23, mmC = 59;
+   var mAp = hAp.match(/^(\d{2}):(\d{2})$/);
+   var mCi = hCi.match(/^(\d{2}):(\d{2})$/);
+   if (mAp) { hhA = parseInt(mAp[1],10); mmA = parseInt(mAp[2],10); }
+   if (mCi) { hhC = parseInt(mCi[1],10); mmC = parseInt(mCi[2],10); }
+   var esNocturno = (hhA*60+mmA) > (hhC*60+mmC);
+
+   var tzToUtc = function(dKey, hh, mm){
+    try {
+     if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
+      return window._DashweyAutoCierreTzToUtc(dKey, hh, mm, zona);
+     }
+    } catch(_) {}
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
+   };
+
+   // Pre-calcular rango UTC [aperturaTs, cierreTsDiaContable) por cada cierre
+   var rangos = cierresValidos.map(function(c){
+    var cierreKey = c.jornadaLabel;
+    if (esNocturno) {
+     var pa = c.jornadaLabel.split('-');
+     var sig = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+     sig.setUTCDate(sig.getUTCDate() + 1);
+     cierreKey = sig.toISOString().slice(0, 10);
+    }
+    return {
+     cierre: c,
+     id: c.id,
+     cuentaId: c.cuentaId,
+     from: c.aperturaTs,
+     to: tzToUtc(cierreKey, hhC, mmC)
+    };
+   });
+
+   var estampados = 0;
+   var afectados = {}; // cierreId → bool
+   ventas.forEach(function(v){
+    if (!v || v.deleted || v.closureId) return;
+    var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+    if (!isFinite(t)) return;
+    for (var i = 0; i < rangos.length; i++) {
+     var r = rangos[i];
+     if (t >= r.from && t < r.to) {
+      var cidV = v.cuentaId || r.cuentaId;
+      if (cidV !== r.cuentaId) continue; // sigue buscando otro cierre compatible
+      v.closureId = r.id;
+      estampados++;
+      afectados[r.id] = true;
+      try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
+      break;
+     }
+    }
+   });
+
+   if (estampados > 0) {
+    console.info('[Reconciliación v1.3.1405] ✓ ' + estampados + ' ventas tardías estampadas retroactivamente');
+    // Recalcular totales de cada cierre afectado desde scratch
+    cierresValidos.forEach(function(c){
+     if (!afectados[c.id]) return;
+     var ventasCierre = ventas.filter(function(v){
+      return v && !v.deleted && v.closureId === c.id;
+     });
+     var sumNew = ventasCierre.reduce(function(s, v){
+      return s + (typeof v.total === 'number' ? v.total : 0);
+     }, 0);
+     c.ventas = Math.round(sumNew * 100) / 100;
+     c.saldoEsperado = c.ventas;
+     c.saldoReal = c.ventas;
+     c.nVentas = ventasCierre.length;
+     if (!c.eventIds) c.eventIds = { ventas: [], gastos: [], ingresos: [] };
+     c.eventIds.ventas = ventasCierre.map(function(v){return v.id;});
+     try { window._DashweyMarkDirty('cierresCaja', c.id); } catch(_) {}
+    });
+    try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
+    try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
+   }
+   return estampados;
+  } catch(e) {
+   console.warn('[Reconciliación v1.3.1405] err', e);
+   return 0;
+  }
+ }
+
  window._DashweyAutoCierreStart = _autoCierreStart;
  window._DashweyAutoCierreStop = _autoCierreStop;
  window._DashweyAutoCierreCheckBacklog = _autoCierreCheckBacklog;
+ // v1.3.1405 — exponer reconciliación retroactiva para triggers post-sync
+ window._DashweyReconciliarClosureId = _reconciliarClosureIdRetroactivo;
  // v1.3.1361: exponer _autoCierreTzNow para uso desde otros IIFEs (lock mutuo cierre).
  window._DashweyAutoCierreTzNow = _autoCierreTzNow;
  // v1.3.1362 FIX TZ MADRID: exponer _autoCierreTzToUtc para que CierreEngine pueda
@@ -25018,6 +25144,18 @@ const ui = (() => {
      setTimeout(function(){
       try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('loyverse_sync'); } catch(_) {}
      }, 1500);
+     // v1.3.1405 RECONCILIACIÓN: estampar closureId en ventas que llegaron tarde
+     //   (después de que el cierre automático del día ya se ejecutó). Sin esto,
+     //   el cierre muestra cifras incompletas vs Loyverse Dashboard.
+     //   Idempotente · solo escribe si hay ventas huérfanas que caen en cierres reales.
+     try {
+      if (typeof window._DashweyReconciliarClosureId === 'function') {
+       var _nRec = window._DashweyReconciliarClosureId();
+       if (_nRec > 0) {
+        try { App.dash.render && App.dash.render(); } catch(_) {}
+       }
+      }
+     } catch(_) {}
     }
     var msg = '✅ ' + receipts.length + ' tickets → ' + totalVentasCreated + ' ventas + ' + totalIngresosCreated + ' mov.';
     if (totalVentasSkipped > 0 || totalIngresosSkipped > 0) {
