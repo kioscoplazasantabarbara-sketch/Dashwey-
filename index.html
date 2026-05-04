@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1415-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1416-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1415-dev</title>
+<title>Dashwey v1.3.1416-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17968,7 +17968,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1415-dev';
+ const _APP_VERSION = 'v1.3.1416-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29137,13 +29137,20 @@ function _openMovimientoFullscreen() {
 
 function _openEditMovimientoSheet(id, src) {
   if (!id || !src) return;
+  // v1.3.1415 — solo soportar gasto/ingreso. Cualquier otro src (venta, cierre)
+  //   debe rutearse antes desde el handler. Si llega aquí con otro src, log silencioso
+  //   en vez de toast confuso ("Movimiento no encontrado" con doble warning icon).
+  if (src !== 'gasto' && src !== 'ingreso') {
+   try { console.warn('[Dashwey] _openEditMovimientoSheet src no soportado:', src, id); } catch(_){}
+   return;
+  }
   var registro = null;
   if (src === 'gasto') {
    registro = (State.get.gastosOp() || []).find(function(g){ return g.id === id; });
   } else if (src === 'ingreso') {
    registro = (State.get.ingresosFin() || []).find(function(i){ return i.id === id; });
   }
-  if (!registro) { showToast('⚠️ Movimiento no encontrado', 'warning'); return; }
+  if (!registro) { showToast('Movimiento no encontrado', 'warning'); return; }
 
   var nombre = registro.nombre || registro.concepto || '';
   var importe = registro.importe || 0;
@@ -39284,18 +39291,23 @@ function _confirmBorrarCuenta(id) {
       _badgeHtml = '<div style="margin-top:4px"><span style="display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:10px;letter-spacing:0.4px;text-transform:uppercase;line-height:1.4;' + _badgeStyle + '">' + _badgeText + '</span></div>';
      }
      // v1.3.1402 — distinguir 3 tipos: editable (gasto/ingreso) | derivado (venta-dia) | no tappable
-     //   Editable: id+src+NO derivado → abre _openEditMovimientoSheet
-     //   Derivado: metaTipo='cierre-derivado-loyverse' + derivedDayKey → abre _openTicketsDelDia
+     //   Editable: src ∈ {gasto,ingreso} → abre _openEditMovimientoSheet
+     //   Derivado: metaTipo='cierre-derivado-loyverse' O src='venta' → abre _openTicketsDelDia
      //   No tappable: el resto (cierres reales sin lista de tickets, etc.)
-     var _isDerivado = m.metaTipo === 'cierre-derivado-loyverse' && !!m.derivedDayKey;
-     var _editable = !_isDerivado && !!(m.id && m.src);
-     var _tappable = _editable || _isDerivado;
+     // v1.3.1415 FIX: src='venta' SIEMPRE es derivado (nunca debe ir a editor de gasto/ingreso).
+     //   Sin esto, si derivedDayKey llegaba vacío, el editor mostraba "Movimiento no encontrado".
+     var _isDerivado = (m.metaTipo === 'cierre-derivado-loyverse' || m.src === 'venta');
+     var _isEditableSrc = (m.src === 'gasto' || m.src === 'ingreso');
+     var _editable = _isEditableSrc && !!m.id;
+     var _tappable = _editable || (_isDerivado && !!m.derivedDayKey);
      var _editAttrs = '';
-     if (_editable) {
-      _editAttrs = ' data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"';
-     } else if (_isDerivado) {
+     if (_isDerivado && !!m.derivedDayKey) {
+      // Derivado tappable
       _editAttrs = ' data-derived-day="' + m.derivedDayKey + '" data-derived-cuenta="' + (m.derivedCuentaId || '') + '"';
+     } else if (_editable) {
+      _editAttrs = ' data-mov-id="' + m.id + '" data-mov-src="' + m.src + '"';
      }
+     // Si _isDerivado pero sin derivedDayKey → no tappable (silencioso, sin toast)
      var _cursorStyle = _tappable ? 'cursor:pointer;' : 'cursor:default;';
      // v1.3.1413 — pendientes ocultos en banner colapsable
      var _pendAttrsD = '';
