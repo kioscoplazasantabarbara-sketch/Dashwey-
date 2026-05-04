@@ -38594,6 +38594,22 @@ function _confirmBorrarCuenta(id) {
    // v1.3.1347: builder reusable para fase 1+2 de render diferido (mismo patrón
    // que _openDetalleCuenta). Vista global tiene típicamente 2895+ movs en
    // producción → split shell+rows reduce ~1s de stall a ~150ms percibidos.
+   // v1.3.1410 — Balance neto por mes en separador (solo Vista global)
+   //   Pre-calcular suma neta por mes excluyendo pendientes y transferencias.
+   //   Mostrar a la derecha del label MES YYYY: "Balance: +345,00 €".
+   //   En cuenta individual NO se muestra (saldo acumulado por fila ya da ese contexto).
+   var _balancesPorMesG = (function(){
+    var bal = {};
+    movs.forEach(function(m){
+     if (!m || !m.fecha) return;
+     if (m.kind === 'transfer-pair') return; // transferencias internas no son flujo neto
+     if (m.estado === 'pendiente') return;   // pendientes no son flujo real
+     var mk = _monthLabel(m.fecha);
+     if (!mk) return;
+     bal[mk] = (bal[mk] || 0) + (typeof m.delta === 'number' ? m.delta : 0);
+    });
+    return bal;
+   })();
    var _buildGlobalRowsHtml = function() {
     if (!movs.length) {
      return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en ninguna cuenta</div>';
@@ -38603,9 +38619,15 @@ function _confirmBorrarCuenta(id) {
     movs.forEach(function(m, i) {
      var mLabel = _monthLabel(m.fecha);
      if (mLabel && mLabel !== lastMonth) {
+      // v1.3.1410: balance neto del mes a la derecha
+      var _bal = Math.round((_balancesPorMesG[mLabel] || 0) * 100) / 100;
+      var _balCol = _bal > 0 ? 'var(--success)' : (_bal < 0 ? 'var(--red)' : 'var(--ink-soft)');
+      var _balSign = _bal > 0 ? '+' : (_bal < 0 ? '−' : '');
+      var _balText = 'Balance: ' + _balSign + _feur(Math.abs(_bal));
       rows.push(
-       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">'
-       + esc(mLabel)
+       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-3)">'
+       + '<span>' + esc(mLabel) + '</span>'
+       + '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-semi);color:' + _balCol + ';text-transform:none;letter-spacing:0">' + _balText + '</span>'
        + '</div>'
       );
       lastMonth = mLabel;
@@ -39009,22 +39031,6 @@ function _confirmBorrarCuenta(id) {
    // v1.3.1347: extraído en función reusable para split fase 1 (shell) + fase 2 (rows)
    //   Permite abrir el sheet INSTANTÁNEO (shell ligero) y pintar las 2670 filas
    //   en el siguiente RAF, evitando bloqueo del main thread (~1s con 2670 movs).
-   // v1.3.1410 — Balance neto por mes en separador
-   //   Pre-calcular suma neta por mes (ingresos - gastos) excluyendo pendientes.
-   //   Mostrar a la derecha del label MES YYYY: "Balance: +345,00 €" / "−45,30 €" / "0 €"
-   //   Pendientes excluidos: aún no son flujo real consumado.
-   //   Cierres derivados Loyverse SÍ cuentan (representan ingresos reales del día).
-   var _balancesPorMes = (function(){
-    var bal = {};
-    movs.forEach(function(m){
-     if (!m || !m.fecha) return;
-     if (m.estado === 'pendiente') return; // pendientes no entran al balance
-     var mk = _monthLabel(m.fecha);
-     if (!mk) return;
-     bal[mk] = (bal[mk] || 0) + (typeof m.importe === 'number' ? m.importe : 0);
-    });
-    return bal;
-   })();
    var _buildRowsHtml = function() {
     if (movs.length === 0) {
      return '<div style="padding:var(--sp-7) var(--sp-4);text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>';
@@ -39037,15 +39043,9 @@ function _confirmBorrarCuenta(id) {
       // v1.3.1249 FIX UX-SCROLL: separador sticky dentro del scroll (patrón banca).
       //   Mientras hay movimientos de ese mes visibles, la etiqueta queda fija arriba
       //   del scroll. Al pasar al siguiente mes, la etiqueta nueva empuja a la anterior.
-      // v1.3.1410: balance neto del mes a la derecha
-      var _bal = Math.round((_balancesPorMes[mLabel] || 0) * 100) / 100;
-      var _balCol = _bal > 0 ? 'var(--success)' : (_bal < 0 ? 'var(--red)' : 'var(--ink-soft)');
-      var _balSign = _bal > 0 ? '+' : (_bal < 0 ? '−' : '');
-      var _balText = 'Balance: ' + _balSign + _feur(Math.abs(_bal));
       rows.push(
-       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-3)">'
-       + '<span>' + esc(mLabel) + '</span>'
-       + '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-semi);color:' + _balCol + ';text-transform:none;letter-spacing:0">' + _balText + '</span>'
+       '<div class="dc-month-sep" style="position:sticky;top:0;z-index:2;padding:var(--sp-3_5) 16px 6px;font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);background:var(--bg);border-bottom:1px solid var(--border)">'
+       + esc(mLabel)
        + '</div>'
       );
       lastMonth = mLabel;
