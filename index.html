@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1423-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1424-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1423-dev</title>
+<title>Dashwey v1.3.1424-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9012,7 +9012,7 @@ body[data-app-ready="true"] #app {
  <!-- ZONA BOTTOM: skip link + version (flujo normal, NO position:absolute) -->
  <div class="auth-foot">
   <a href="#" id="auth-skip-link" class="auth-skip" onclick="event.preventDefault();_authSkipSafe();return false;">Continuar sin cuenta</a>
-  <span id="auth-footer-ver" class="auth-version">v1.3.1423</span>
+  <span id="auth-footer-ver" class="auth-version">v1.3.1424</span>
  </div>
 </div>
 
@@ -18188,7 +18188,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1423-dev';
+ const _APP_VERSION = 'v1.3.1424-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18608,7 +18608,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1423');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1424');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -55141,29 +55141,87 @@ window._almCarritoOptions = function() {
  Primer back muestra toast. Segundo back cierra la app.
  ═══════════════════════════════════════════════════════════════════ */
 (function() {
- // ── Tabla de capas: [id, clase-open, fn-cierre] ─────────────────
- // Orden = prioridad (primero = más alta)
+ // ── Tabla de capas: [selector, openTest, closeFn, opts] ─────────────
+ //   v1.3.1424 — Refactor:
+ //   • selector: ID ('foo') O clase ('.foo'). El detector busca por ambos.
+ //   • openTest: o un string (clase a comprobar con classList.contains)
+ //               o una función (el, returns boolean) para lógica custom
+ //               o null si la mera presencia del elemento ya implica abierto
+ //   • closeFn:  función de cierre. Si opts.passEl=true, recibe el elemento.
+ //   • opts:     { name, passEl } — name para debug, passEl para inyectar el el.
+ //
+ //   Orden = prioridad (primero = más alta).
+ //   Capas nuevas v1.3.1424:
+ //     - nav-dial (FAB dial)
+ //     - aceptar-popup-overlay (popup destructivo creado en runtime)
+ //     - dtp-overlay (date/time picker)
+ //     - mov-sheet-overlay (editor movimientos, clase no ID)
+ //     - prov-picker-sheet, tpv-qg-sheet, gs-overlay
+ //     - cobro-confirm-overlay, settings-overlay
  const _LAYERS = [
- ['cm-summary-overlay', 'cm-summary-open', function() { try { window._closeCmSummary?.(); } catch(e) {} }],
- ['alm-center-overlay', 'alm-open', function() { try { window._closeAlmOverlay?.(); } catch(e) {} }],
- ['check-modal-overlay', 'cm-open', function() { try { window._checkModal?.close?.(); } catch(e) {} }],
- ['order-selector-overlay', 'os-open', function() { try { window._orderSelector?.close?.(); } catch(e) {} }],
- ['modal-overlay', 'open', function() { try { App?.ui?.closeModal?.(); } catch(e) {} }],
- ['fs-overlay', 'open', function() { try { App?.ui?.closeFs?.(); } catch(e) {} }],
-      ['ss-overlay', 'ss-active', function() { try { window.SideSheet?.closeAll?.(); } catch(e) {} }], // v1.3.535: SideSheet back handler
- ['tickets-sheet', 'open', function() { try { App?.tpv?.closeTickets?.(); } catch(e) {} }],
- ['settings-drawer', 'open', function() { try { App?.ui?.closeSettings?.(); setTimeout(function(){ try{ App?.nav?.goTab?.((typeof nav !== 'undefined' && nav._cTab >= 0) ? nav._cTab : 1); }catch(e){} }, 50); } catch(e) {} }],
- ['whats-new-overlay', 'open', function() { try { App?.ui?.closeWhatsNew?.(); } catch(e) {} }],
- ['tpv-cobro-sheet', 'open', function() { try { App?.tpv?.closeCobro?.(); } catch(e) {} }],
- ['dash-period-sheet', 'open', function() { try { App?.dash?.closeGlobalPeriodPicker?.(); } catch(e) {} }],
+  // ── Custom popups (runtime, máxima prioridad) ──
+  ['nav-dial',                 null,             function() { try { window._navDialClose?.(); } catch(e) {} },              { name: 'nav-dial' }],
+  ['aceptar-popup-overlay',    null,             function() { try { document.getElementById('aceptar-popup-overlay')?.remove(); } catch(e) {} }, { name: 'aceptar-popup' }],
+  ['.dtp-overlay',             'dtp-show',       function(el) { try { el?.classList.remove('dtp-show'); setTimeout(function(){ if (el && el.parentNode) el.parentNode.removeChild(el); }, 320); } catch(e) {} }, { name: 'dtp', passEl: true }],
+  // ── Sheets / overlays con prioridad alta ──
+  ['cm-summary-overlay',       'cm-summary-open', function() { try { window._closeCmSummary?.(); } catch(e) {} },             { name: 'cm-summary' }],
+  ['alm-center-overlay',       'alm-open',       function() { try { window._closeAlmOverlay?.(); } catch(e) {} },             { name: 'alm-center' }],
+  ['check-modal-overlay',      'cm-open',        function() { try { window._checkModal?.close?.(); } catch(e) {} },           { name: 'check-modal' }],
+  ['order-selector-overlay',   'os-open',        function() { try { window._orderSelector?.close?.(); } catch(e) {} },        { name: 'order-selector' }],
+  ['modal-overlay',            'open',           function() { try { App?.ui?.closeModal?.(); } catch(e) {} },                 { name: 'modal' }],
+  ['fs-overlay',               'open',           function() { try { App?.ui?.closeFs?.(); } catch(e) {} },                    { name: 'fs' }],
+  ['ss-overlay',               'ss-active',      function() { try { window.SideSheet?.closeAll?.(); } catch(e) {} },          { name: 'side-sheet' }],
+  // ── Sheets nuevos v1.3.1424 ──
+  ['.mov-sheet-overlay',       'open',           function(el) { try { el?.classList.remove('open'); setTimeout(function(){ if (el && el.parentNode) el.parentNode.removeChild(el); }, 320); } catch(e) {} }, { name: 'mov-sheet', passEl: true }],
+  ['cobro-confirm-overlay',    'visible',        function() { try { App?.tpv?.closeCobro?.(); } catch(e) {} },                { name: 'cobro-confirm' }],
+  ['gs-overlay',               'open',           function() { try { window._gsClose?.(); } catch(e) {} },                     { name: 'gs' }],
+  ['tpv-qg-sheet',             'open',           function() { try { document.getElementById('tpv-qg-sheet')?.classList.remove('open'); } catch(e) {} }, { name: 'tpv-qg' }],
+  ['prov-picker-sheet',        'open',           function() { try { document.getElementById('prov-picker-sheet')?.classList.remove('open'); document.body.style.overflow = ''; } catch(e) {} }, { name: 'prov-picker' }],
+  // ── Existentes ──
+  ['tickets-sheet',            'open',           function() { try { App?.tpv?.closeTickets?.(); } catch(e) {} },              { name: 'tickets' }],
+  ['settings-overlay',         'open',           function() { try { App?.ui?.closeSettings?.(); } catch(e) {} },              { name: 'settings-overlay' }],
+  ['settings-drawer',          'open',           function() { try { App?.ui?.closeSettings?.(); setTimeout(function(){ try{ App?.nav?.goTab?.((typeof nav !== 'undefined' && nav._cTab >= 0) ? nav._cTab : 1); }catch(e){} }, 50); } catch(e) {} }, { name: 'settings-drawer' }],
+  ['whats-new-overlay',        'open',           function() { try { App?.ui?.closeWhatsNew?.(); } catch(e) {} },              { name: 'whats-new' }],
+  ['tpv-cobro-sheet',          'open',           function() { try { App?.tpv?.closeCobro?.(); } catch(e) {} },                { name: 'tpv-cobro' }],
+  ['dash-period-sheet',        'open',           function() { try { App?.dash?.closeGlobalPeriodPicker?.(); } catch(e) {} }, { name: 'dash-period' }],
  ];
 
- function _getCloseFn() {
- for (var i = 0; i < _LAYERS.length; i++) {
- var el = document.getElementById(_LAYERS[i][0]);
- if (el && el.classList.contains(_LAYERS[i][1])) return _LAYERS[i][2];
+ // v1.3.1424 — _findActiveLayer: devuelve { element, closeFn, name } o null.
+ //   Soporta selector ID ('foo') o clase ('.foo'). Si openTest es null, basta
+ //   con que el elemento exista en el DOM (popups creados en runtime).
+ function _findActiveLayer() {
+  for (var i = 0; i < _LAYERS.length; i++) {
+   var sel = _LAYERS[i][0];
+   var openTest = _LAYERS[i][1];
+   var closeFn = _LAYERS[i][2];
+   var opts = _LAYERS[i][3] || {};
+   var el = null;
+   if (sel.charAt(0) === '.') {
+    el = document.querySelector(sel);
+   } else {
+    el = document.getElementById(sel);
+   }
+   if (!el) continue;
+   var isOpen = false;
+   if (openTest === null) {
+    isOpen = true;
+   } else if (typeof openTest === 'function') {
+    try { isOpen = !!openTest(el); } catch(_) { isOpen = false; }
+   } else {
+    isOpen = el.classList.contains(openTest);
+   }
+   if (isOpen) {
+    var fn = opts.passEl ? closeFn.bind(null, el) : closeFn;
+    return { element: el, closeFn: fn, name: opts.name || sel };
+   }
+  }
+  return null;
  }
- return null;
+
+ // Compat: _getCloseFn devuelve solo la función (lo usa _handleBack)
+ function _getCloseFn() {
+  var layer = _findActiveLayer();
+  return layer ? layer.closeFn : null;
  }
 
  // ── Estado del doble-back ────────────────────────────────────────
@@ -55260,9 +55318,134 @@ window._almCarritoOptions = function() {
  // ── Exponer bridge global para evaluateJavascript desde MainActivity ──
  // window._dashweyBack() → llama a _handleBack(true), devuelve "true" (string)
  // MainActivity evalúa este método y NO necesita gestionar lógica de exit.
+ //
+ // v1.3.1424 — Estado del swipe predictivo (declarado ARRIBA por TDZ).
+ //   Si MainActivity invoca _dashweyBack() antes de que el IIFE termine
+ //   de ejecutarse, _pbState debe estar inicializado. var hoisting solo
+ //   eleva la declaración, no el valor literal — por eso el objeto va aquí.
+ var _pbState = {
+  layer: null,         // layer activa cuando onBackStarted
+  origTransform: '',   // estilo original del element
+  origOpacity: '',
+  origTransition: '',
+  edge: 'left',
+ };
+
+ // v1.3.1424: si hay un swipe predictivo en curso (estilos inline pegados
+ //   por onProgress), los limpiamos antes de invocar el cierre normal —
+ //   así la animación CSS del sheet (translateY+opacity) puede ejecutarse
+ //   sin pisado por el transform inline residual.
  window._dashweyBack = function() {
- _handleBack(true);
- return 'true';
+  try {
+   if (_pbState.layer && _pbState.layer.element) {
+    var el = _pbState.layer.element;
+    el.style.transform = _pbState.origTransform;
+    el.style.opacity = _pbState.origOpacity;
+    el.style.transition = _pbState.origTransition;
+    _pbState.layer = null;
+   }
+  } catch(_) {}
+  _handleBack(true);
+  return 'true';
+ };
+
+ // ═══════════════════════════════════════════════════════════════════════
+ // v1.3.1424 — PREDICTIVE BACK PROGRESS API (Android 13+ / 16 premium)
+ //
+ // DORMIDO hasta que MainActivity (Java) lo invoque vía evaluateJavascript.
+ // Si MainActivity sigue usando OnBackPressedCallback legacy, esta API NUNCA
+ // se llama y el comportamiento es idéntico al actual (back binario al final).
+ //
+ // Cuando MainActivity migra a OnBackAnimationCallback (Android 13+):
+ //   onBackStarted    → llama _dashweyBack.onStart(edge)
+ //   onBackProgressed → llama _dashweyBack.onProgress(progress, edge)
+ //   onBackInvoked    → llama _dashweyBack() (commit, igual que ahora)
+ //   onBackCancelled  → llama _dashweyBack.onCancel()
+ //
+ // La API toma la capa activa de _findActiveLayer() y le aplica una
+ // transformación universal premium (translate + scale + opacity dimming).
+ // Cada capa hereda el efecto sin necesidad de tocarla individualmente.
+ //
+ // RESPONSABILIDADES:
+ //   • Tracking del element actualmente bajo gesto (no buscarlo en cada frame)
+ //   • Aplicar transform sin disparar reflow excesivo
+ //   • Restaurar estilos en cancel (con transición spring)
+ //   • Silencioso si no hay capa activa (back to home / exit gesture)
+ // ═══════════════════════════════════════════════════════════════════════
+ // _pbState declarado arriba (junto a _dashweyBack) por TDZ.
+
+ function _pbApplyProgress(layer, progress, edge) {
+  if (!layer || !layer.element) return;
+  var el = layer.element;
+  // Curva ease-out: aceleración inicial, suaviza al final
+  var t = Math.min(1, Math.max(0, progress));
+  var eased = 1 - Math.pow(1 - t, 2);
+  // Translate sutil (16px max) hacia el lado opuesto al borde
+  var tx = (edge === 'right' ? -1 : 1) * eased * 16;
+  // Scale 1 → 0.92 (premium feel)
+  var scale = 1 - eased * 0.08;
+  // Opacity 1 → 0.6
+  var opacity = 1 - eased * 0.4;
+  // CRITICAL: NO transition durante el progress (sigue al dedo en tiempo real)
+  el.style.transition = 'none';
+  el.style.transform = 'translateX(' + tx.toFixed(2) + 'px) scale(' + scale.toFixed(3) + ')';
+  el.style.opacity = opacity.toFixed(3);
+ }
+
+ function _pbReset(layer) {
+  if (!layer || !layer.element) return;
+  var el = layer.element;
+  // Spring curve premium del sistema (--spring-nd: 0.32, 0.72, 0, 1)
+  el.style.transition = 'transform 280ms var(--spring-nd, cubic-bezier(0.32, 0.72, 0, 1)), opacity 220ms ease';
+  el.style.transform = '';
+  el.style.opacity = '';
+  // Cleanup transition tras la animación
+  setTimeout(function() {
+   if (el && el.style) {
+    el.style.transition = '';
+   }
+  }, 320);
+ }
+
+ // onStart: se llama al INICIO del swipe. Capturamos la capa activa.
+ window._dashweyBack.onStart = function(edge) {
+  try {
+   _pbState.layer = _findActiveLayer();
+   _pbState.edge = (edge === 'right') ? 'right' : 'left';
+   if (_pbState.layer && _pbState.layer.element) {
+    var el = _pbState.layer.element;
+    _pbState.origTransform = el.style.transform || '';
+    _pbState.origOpacity = el.style.opacity || '';
+    _pbState.origTransition = el.style.transition || '';
+   }
+  } catch(_) {}
+  return 'true';
+ };
+
+ // onProgress: 0..1 progreso del swipe. NO buscar capa cada frame, usar la cacheada.
+ window._dashweyBack.onProgress = function(progress, edge) {
+  try {
+   if (!_pbState.layer) return 'false';
+   _pbApplyProgress(_pbState.layer, progress, edge || _pbState.edge);
+  } catch(_) {}
+  return 'true';
+ };
+
+ // onCancel: usuario soltó antes de completar → spring de vuelta.
+ window._dashweyBack.onCancel = function() {
+  try {
+   if (_pbState.layer) {
+    _pbReset(_pbState.layer);
+    _pbState.layer = null;
+   }
+  } catch(_) {}
+  return 'true';
+ };
+
+ // Helper debug: identifica la capa activa por nombre.
+ window._dashweyBack.activeLayer = function() {
+  var l = _findActiveLayer();
+  return l ? l.name : null;
  };
 
  // Inicializar tras DOMContentLoaded
