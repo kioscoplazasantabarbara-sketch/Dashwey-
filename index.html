@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1424-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1425-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1424-dev</title>
+<title>Dashwey v1.3.1425-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9012,7 +9012,7 @@ body[data-app-ready="true"] #app {
  <!-- ZONA BOTTOM: skip link + version (flujo normal, NO position:absolute) -->
  <div class="auth-foot">
   <a href="#" id="auth-skip-link" class="auth-skip" onclick="event.preventDefault();_authSkipSafe();return false;">Continuar sin cuenta</a>
-  <span id="auth-footer-ver" class="auth-version">v1.3.1424</span>
+  <span id="auth-footer-ver" class="auth-version">v1.3.1425</span>
  </div>
 </div>
 
@@ -17866,6 +17866,205 @@ const Utils = (() => {
  });
  }
 
+ // ═══════════════════════════════════════════════════════════════════════
+ // v1.3.1425 — INTERACTION POLISH: tap feedback + retry + loading
+ // ═══════════════════════════════════════════════════════════════════════
+
+ // ── tap(el) — feedback visual instantáneo + haptic ─────────────────
+ //   Aplica scale 0.97 + haptic light SIN esperar la operación async.
+ //   Premium feel: el botón responde en <16ms aunque la lógica tarde 200ms.
+ //
+ //   Uso 1 — manual: Utils.tap(btnEl); doSomethingAsync();
+ //   Uso 2 — auto-bind: <button data-tap onclick="..."> (cualquier intensidad)
+ //                      <button data-tap="medium" ...>
+ //   Uso 3 — wrap async: Utils.tap(el, { run: () => fetchSomething() })
+ //
+ //   Idempotente: si ya está animando, ignora taps repetidos en <80ms.
+ function tap(el, opts) {
+  if (!el || !el.style) return;
+  opts = opts || {};
+  // Anti-doble-tap (8 frames a 120Hz = ~67ms)
+  var now = Date.now();
+  if (el._tapAt && (now - el._tapAt) < 80) {
+   if (typeof opts.run === 'function') return opts.run();
+   return;
+  }
+  el._tapAt = now;
+  // Haptic ANTES del visual (perceived <8ms)
+  try { triggerHaptic(opts.haptic || 'light'); } catch(_) {}
+  // Scale visual — usa transform existente si lo hay
+  var prevTransform = el.style.transform || '';
+  var scale = opts.scale || 0.97;
+  el.style.transition = 'transform 80ms cubic-bezier(0.4, 0, 1, 1)';
+  el.style.transform = (prevTransform ? prevTransform + ' ' : '') + 'scale(' + scale + ')';
+  setTimeout(function() {
+   el.style.transition = 'transform 180ms cubic-bezier(0.32, 0.72, 0, 1)';
+   el.style.transform = prevTransform;
+   setTimeout(function() {
+    if (el && el.style) el.style.transition = '';
+   }, 200);
+  }, 90);
+  // Si hay run async, ejecuta después del feedback visual
+  if (typeof opts.run === 'function') {
+   try { return opts.run(); } catch(_) {}
+  }
+ }
+
+ // ── Auto-bind para [data-tap] y clases primary conocidas ───────────
+ //   Listener delegado en document — coste cero si no hay match.
+ //   Activa tap feedback automáticamente. El onclick original sigue corriendo.
+ //   Usar pointerdown en lugar de click para feedback instantáneo (~16ms antes).
+ //
+ //   Detecta:
+ //     1. [data-tap]                — explícito (cualquier intensidad)
+ //     2. .auth-btn                 — CTAs de login/registro
+ //     3. .alm-hdr-icon-btn         — header iconos almacén
+ //     4. .hdr-title-secondary      — títulos clickeables
+ //     5. .btn-tickets-t            — botón tickets TPV
+ //     6. .tpv-right-cobrar         — cobrar TPV
+ //     7. .tpv-dock-cobrar          — cobrar dock TPV
+ //     8. .auth-tab                 — tabs login/registro
+ //     9. .auth-skip                — skip link
+ //     10. .nav-dial-item           — items dial FAB
+ //     11. .bt-tab, .bt-center      — navbar tabs y FAB center
+ //     12. .sd-row                  — settings drawer rows
+ //     13. .tr-retry-btn            — botón Reintentar de toast
+ var _tapAutoSelector = '[data-tap], .auth-btn, .alm-hdr-icon-btn, .hdr-title-secondary, .btn-tickets-t, .tpv-right-cobrar, .tpv-dock-cobrar, .auth-tab, .auth-skip, .nav-dial-item, .bt-tab, .bt-center, .sd-row, .tr-retry-btn';
+ if (typeof document !== 'undefined' && !window.__dashweyTapBound) {
+  window.__dashweyTapBound = true;
+  document.addEventListener('pointerdown', function(ev) {
+   var el = ev.target && ev.target.closest ? ev.target.closest(_tapAutoSelector) : null;
+   if (!el) return;
+   if (el.disabled || el.getAttribute('aria-busy') === 'true') return;
+   // No re-aplicar si el botón ya viene con tap (evita doble haptic)
+   if (el._tapAt && (Date.now() - el._tapAt) < 80) return;
+   var intensity = el.getAttribute('data-tap');
+   if (!intensity || intensity === 'true' || intensity === '') intensity = 'light';
+   try { tap(el, { haptic: intensity }); } catch(_) {}
+  }, { passive: true, capture: true });
+ }
+
+ // ── showToastWithRetry(msg, retryFn, opts) ─────────────────────────
+ //   Toast con botón "Reintentar" inline. Patrón premium para errores
+ //   recuperables (red, sync, importer fallido).
+ //
+ //   Uso: Utils.showToastWithRetry('Error guardando', function() {
+ //          return doSave();
+ //        });
+ //
+ //   El botón Reintentar dispara la función + haptic, oculta toast en éxito.
+ //   Si retryFn devuelve Promise rechazada, mantiene el toast.
+ function showToastWithRetry(msg, retryFn, opts) {
+  opts = opts || {};
+  var existing = document.getElementById('toast-retry');
+  if (existing) try { existing.remove(); } catch(_) {}
+  var toast = document.createElement('div');
+  toast.id = 'toast-retry';
+  toast.className = 'toast-retry';
+  toast.setAttribute('role', 'alert');
+  toast.style.cssText = [
+   'position:fixed', 'left:50%', 'bottom:calc(env(safe-area-inset-bottom,0px) + 88px)',
+   'transform:translateX(-50%) translateY(20px)', 'z-index:11000',
+   'background:var(--ink,#1a1a1a)', 'color:#fff',
+   'border-radius:14px', 'padding:12px 14px 12px 16px',
+   'display:flex', 'align-items:center', 'gap:12px',
+   'font-family:var(--font)', 'font-size:13px', 'font-weight:500',
+   'box-shadow:0 10px 32px rgba(0,0,0,0.32), 0 2px 8px rgba(0,0,0,0.20)',
+   'opacity:0', 'pointer-events:auto',
+   'transition:transform 280ms cubic-bezier(0.32,0.72,0,1), opacity 220ms ease',
+   'max-width:calc(100vw - 32px)', '-webkit-tap-highlight-color:transparent'
+  ].join(';');
+  // Icono warning + mensaje
+  var iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#FFA94D"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+  var msgSpan = '<span style="flex:1;line-height:1.3">' + esc(msg) + '</span>';
+  var btnHtml = '<button class="tr-retry-btn" data-tap="medium" style="background:rgba(255,255,255,0.14);border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;-webkit-tap-highlight-color:transparent;letter-spacing:0.2px">Reintentar</button>';
+  toast.innerHTML = iconSvg + msgSpan + btnHtml;
+  document.body.appendChild(toast);
+  // Animación entrada
+  requestAnimationFrame(function() {
+   requestAnimationFrame(function() {
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+   });
+  });
+  function _close() {
+   if (!toast || !toast.parentNode) return;
+   toast.style.opacity = '0';
+   toast.style.transform = 'translateX(-50%) translateY(20px)';
+   setTimeout(function() { if (toast && toast.parentNode) toast.remove(); }, 240);
+  }
+  // Auto-dismiss tras 8s si no se interactúa (más largo que toast normal)
+  var autoTimer = setTimeout(_close, opts.duration || 8000);
+  // Wire retry button
+  var btn = toast.querySelector('.tr-retry-btn');
+  if (btn) {
+   btn.addEventListener('click', function() {
+    clearTimeout(autoTimer);
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:tr-spin 0.6s linear infinite"></span>';
+    var result;
+    try { result = retryFn(); } catch(e) { result = Promise.reject(e); }
+    Promise.resolve(result).then(function() {
+     _close();
+    }).catch(function() {
+     // Restaurar botón si falla — el user puede reintentar
+     btn.disabled = false;
+     btn.removeAttribute('aria-busy');
+     btn.innerHTML = 'Reintentar';
+     // Re-arm auto-dismiss
+     autoTimer = setTimeout(_close, 6000);
+    });
+   });
+  }
+  return { close: _close };
+ }
+
+ // ── btnLoading(el, asyncFn) — botón con spinner inline durante async ──
+ //   Premium pattern: botón se "ocupa" mientras la operación corre.
+ //   • Disabled durante async (evita doble-tap)
+ //   • Spinner inline reemplaza texto
+ //   • Restaura texto + estado al completar (ok o error)
+ //   • aria-busy para accesibilidad
+ //
+ //   Uso: Utils.btnLoading(btnEl, async function() {
+ //          await doSave();
+ //        });
+ //
+ //   Devuelve la Promise para que el caller pueda encadenar .catch().
+ function btnLoading(el, asyncFn) {
+  if (!el || !el.style) return Promise.resolve();
+  if (el.disabled || el.getAttribute('aria-busy') === 'true') return Promise.resolve();
+  var origHTML = el.innerHTML;
+  var origWidth = el.offsetWidth; // congelar ancho para evitar layout shift
+  el.style.minWidth = origWidth + 'px';
+  el.disabled = true;
+  el.setAttribute('aria-busy', 'true');
+  el.classList.add('btn-loading');
+  // Spinner inline (mismo color que texto del botón)
+  el.innerHTML = '<span class="btn-spinner" style="display:inline-block;vertical-align:middle;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;opacity:0.7;animation:tr-spin 0.6s linear infinite"></span>';
+  var p;
+  try { p = Promise.resolve(asyncFn()); } catch(e) { p = Promise.reject(e); }
+  function _restore() {
+   if (!el) return;
+   el.disabled = false;
+   el.removeAttribute('aria-busy');
+   el.classList.remove('btn-loading');
+   el.innerHTML = origHTML;
+   el.style.minWidth = '';
+  }
+  p.then(_restore, _restore);
+  return p;
+ }
+
+ // ── Inyectar keyframe spin si no existe ─────────────────────────────
+ if (typeof document !== 'undefined' && !document.getElementById('tr-spin-css')) {
+  var st = document.createElement('style');
+  st.id = 'tr-spin-css';
+  st.textContent = '@keyframes tr-spin { to { transform: rotate(360deg); } }';
+  document.head.appendChild(st);
+ }
+
  // ── Formato localizado ─────────────────────────────────────
  function formatDate(date, options) {
  try {
@@ -17941,6 +18140,7 @@ const Utils = (() => {
  }
 
  return { feur, showToast, esc, getLV, haptic, triggerHaptic, showSkeleton, hideSkeleton,
+ tap, showToastWithRetry, btnLoading,
  ANIM_DELAY, TOAST_DURATION, DRAG_THRESHOLD, DEBOUNCE_KB, SPIN_DURATION,
  updateSyncBadge, openPeriodSheet, _onPeriodSheetSel,
  formatDate, formatTime, formatCurrency, getErrorMessage, getImagePlaceholder };
@@ -18188,7 +18388,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1424-dev';
+ const _APP_VERSION = 'v1.3.1425-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18608,7 +18808,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1424');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1425');
  } catch(_) {}
  }
  function hideAuthScreen() {
