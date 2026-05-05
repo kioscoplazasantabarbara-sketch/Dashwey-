@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1419-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1420-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1419-dev</title>
+<title>Dashwey v1.3.1420-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13678,8 +13678,28 @@ const State = (() => {
  save();
  },
  period: (v) => { _state.period = v; save(); },
- settings: (v) => { if (v && v.notifPrefs) { v.notifPrefs = Object.assign({}, _state.settings?.notifPrefs||{}, v.notifPrefs); } _state.settings = Object.assign(_state.settings, v); save(); },
- perfil: (v) => { _state.perfil = Object.assign(_state.perfil || {}, v); save(); },
+ settings: (v) => {
+  // v1.3.1420 FALLA-1 FIX: misma protección que perfil
+  if (v && v.notifPrefs) { v.notifPrefs = Object.assign({}, _state.settings?.notifPrefs||{}, v.notifPrefs); }
+  _state.settings = Object.assign(_state.settings, v);
+  _state.settings._updatedAt = Date.now();
+  if (window._DashweyDebugPerfil) {
+   try { console.log('[SETTINGS_DBG] State.set.settings — keys:', Object.keys(v||{}), '_updatedAt=', _state.settings._updatedAt); } catch(_) {}
+  }
+  save();
+ },
+ perfil: (v) => {
+  // v1.3.1420 FALLA-1 FIX: estampar _updatedAt para last-writer-wins
+  //   Permite a onSnapshot guard descartar perfil remoto VIEJO que pisaría
+  //   cambios locales recientes (race APK↔PWA donde un device con state
+  //   stale escribe perfil viejo y borra el cambio del otro).
+  _state.perfil = Object.assign(_state.perfil || {}, v || {});
+  _state.perfil._updatedAt = Date.now();
+  if (window._DashweyDebugPerfil) {
+   try { console.log('[PERFIL_DBG] State.set.perfil — keys:', Object.keys(v||{}), '_updatedAt=', _state.perfil._updatedAt); } catch(_) {}
+  }
+  save();
+ },
  user: (v) => { _state.user = Object.assign(_state.user || {}, v); save(); },
  syncStatus: (v) => {
  _state.syncStatus = Object.assign(_state.syncStatus || {}, v);
@@ -17985,7 +18005,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1419-dev';
+ const _APP_VERSION = 'v1.3.1420-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51836,6 +51856,12 @@ _eaRecalc();
  _deletedIds: (function(){ try { return window._DashweyLocalDeletedIds.toArray ? window._DashweyLocalDeletedIds.toArray() : []; } catch(_) { return []; } })(),
  syncCommand: (State.get.syncCommand ? State.get.syncCommand() : null),
  };
+ // v1.3.1420 FALLA-1 DEBUG: traza del perfil exacto que se sube
+ if (window._DashweyDebugPerfil) {
+  try {
+   console.log('[BUILD_SNAP_DBG] rootOnly=' + rootOnly + ' perfil._updatedAt=' + (snap.perfil?._updatedAt||0) + ' apertura=' + snap.perfil?.horarioApertura + ' cierre=' + snap.perfil?.horarioCierre);
+  } catch(_) {}
+ }
  // v1.3.1133: solo incluir arrays transaccionales si NO es rootOnly
  // Con subcolecciones activas, estos arrays viven en subcol → no necesitan serializarse aquí
  if (!rootOnly) {
@@ -52052,6 +52078,28 @@ _eaRecalc();
  _safeRemote,
  { settings: _mergedSettings }
  );
+ // v1.3.1420 FALLA-1 FIX — last-writer-wins guard para perfil/settings en cold-start
+ //   Mismo razonamiento que en subscribe('state'): si el cold-start lee un remote
+ //   con perfil._updatedAt anterior al local, el local tiene cambios que aún no
+ //   subieron (ej: cambio offline pendiente, o write previo del propio device).
+ //   Sin esto, el merge inicial pisaría el cambio local con el remoto VIEJO.
+ try {
+  ['perfil','settings'].forEach(function(_lwwKey){
+   var _remoteObj = merged[_lwwKey];
+   if (!_remoteObj || typeof _remoteObj !== 'object') return;
+   var _localGetter = State.get[_lwwKey];
+   var _localObj = (typeof _localGetter === 'function') ? _localGetter() : null;
+   if (!_localObj || typeof _localObj !== 'object') return;
+   var _rTs = +(_remoteObj._updatedAt || 0);
+   var _lTs = +(_localObj._updatedAt || 0);
+   if (_lTs > _rTs && _lTs > 0) {
+    if (window._DashweyDebugPerfil) {
+     try { console.log('[LWW_GUARD/init] skip remote.' + _lwwKey + ' — local más nuevo (rTs=' + _rTs + ' < lTs=' + _lTs + ')'); } catch(_) {}
+    }
+    delete merged[_lwwKey];
+   }
+  });
+ } catch(_) {}
  // v1.3.730: merge por ID para arrays acumulativos
  // v1.3.1135 FIX#3: activar flag ANTES del merge (por si _mergeById llama setters)
  var _prevApp_preMerge = window._DashweyApplyingRemote;
@@ -52179,6 +52227,12 @@ _eaRecalc();
 
  fb.subscribe('state', remoteData => {
  const now = Date.now();
+ // v1.3.1420 FALLA-1 DEBUG: log de snapshot recibido (qué device escribió, perfil que trae)
+ if (window._DashweyDebugPerfil) {
+  try {
+   console.log('[ON_SNAP_DBG] from=' + (remoteData?.user?.lastDeviceId||'?') + ' (own=' + (remoteData?.user?.lastDeviceId === deviceId) + ') | perfil._updatedAt=' + (remoteData?.perfil?._updatedAt||0) + ' apertura=' + remoteData?.perfil?.horarioApertura + ' cierre=' + remoteData?.perfil?.horarioCierre);
+  } catch(_) {}
+ }
 
  // ── Guard 1: grace period post-suscripción ─────────────────
  if (now - _subscribeTs < GRACE_MS) {
@@ -52299,6 +52353,32 @@ _eaRecalc();
    if (x && x.tipo === 'transferencia' && !x.metaTipo) x.metaTipo = 'transfer';
   });
  });
+ // v1.3.1420 FALLA-1 FIX — last-writer-wins guard para perfil y settings
+ //   ANTES: Object.keys(merged).forEach aplicaba State.set.perfil(merged.perfil)
+ //   ciegamente, pisando cambios locales recientes con perfil remoto VIEJO de
+ //   otro device cuyo state estaba stale (race APK↔PWA).
+ //   AHORA: si remote._updatedAt < local._updatedAt, eliminar el campo del merged
+ //   para que el setter NO se llame y el cambio local sobreviva.
+ //   Idempotente, retro-compatible (perfiles legacy sin _updatedAt → default 0).
+ try {
+  ['perfil','settings'].forEach(function(_lwwKey){
+   var _remoteObj = merged[_lwwKey];
+   if (!_remoteObj || typeof _remoteObj !== 'object') return;
+   var _localGetter = State.get[_lwwKey];
+   var _localObj = (typeof _localGetter === 'function') ? _localGetter() : null;
+   if (!_localObj || typeof _localObj !== 'object') return;
+   var _rTs = +(_remoteObj._updatedAt || 0);
+   var _lTs = +(_localObj._updatedAt || 0);
+   if (_lTs > _rTs && _lTs > 0) {
+    if (window._DashweyDebugPerfil) {
+     try { console.log('[LWW_GUARD] skip remote.' + _lwwKey + ' — local más nuevo (rTs=' + _rTs + ' < lTs=' + _lTs + ')'); } catch(_) {}
+    }
+    delete merged[_lwwKey];
+   } else if (window._DashweyDebugPerfil) {
+    try { console.log('[LWW_GUARD] apply remote.' + _lwwKey + ' (rTs=' + _rTs + ' >= lTs=' + _lTs + ')'); } catch(_) {}
+   }
+  });
+ } catch(_) {}
  window._DashweySavingCtrl.isSaving = true;
  // v1.3.1090: también bloquear marcado dirty durante merge monolítico
  // (sin esto, cualquier snapshot remoto → todos los items marcados dirty
@@ -54860,12 +54940,16 @@ window._almCarritoOptions = function() {
  }
 
  // Pantalla principal — sin overlay
- // Si estamos en TPV (0) o Almacén (2), primer back → Dashboard
- // v1.3.384: en modos restringidos (pos/alm/cfo) no redirigir a Dashboard
+ // v1.3.1420 — Regla simplificada (TPV pausado, no más rama tab 0):
+ //   • Si NO estoy en Dashboard (tab 1) → ir a Dashboard
+ //   • Si estoy en Dashboard → primer back: toast "Pulsa atrás otra vez para salir";
+ //                              segundo back en 2s: exitApp (APK) o nada (PWA)
+ // v1.3.384 (preservado): en modos restringidos (pos/alm/cfo) no redirigir
+ //   — la app está en modo dedicado y la única salida es cerrar la app.
  var _curTab = (typeof nav !== 'undefined') ? nav._cTab : -1;
  var _mode = window._DASHWEY_MODE || 'hub';
  var _isRestricted = (_mode === 'pos' || _mode === 'alm' || _mode === 'cfo');
- if (!_isRestricted && (_curTab === 0 || _curTab === 2)) {
+ if (!_isRestricted && _curTab !== 1 && _curTab !== -1) {
  try { App.nav.goTab(1); } catch(e) {}
  _backPressedOnce = false;
  clearTimeout(_backPressTimer);
