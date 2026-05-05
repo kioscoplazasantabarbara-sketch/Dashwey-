@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1426-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1427-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1426-dev</title>
+<title>Dashwey v1.3.1427-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -9026,7 +9026,7 @@ body[data-app-ready="true"] #app {
  <!-- ZONA BOTTOM: skip link + version (flujo normal, NO position:absolute) -->
  <div class="auth-foot">
   <a href="#" id="auth-skip-link" class="auth-skip" onclick="event.preventDefault();_authSkipSafe();return false;">Continuar sin cuenta</a>
-  <span id="auth-footer-ver" class="auth-version">v1.3.1426</span>
+  <span id="auth-footer-ver" class="auth-version">v1.3.1427</span>
  </div>
 </div>
 
@@ -14051,6 +14051,28 @@ const State = (() => {
     //   pero updatedAt garantiza que el merge elige la versión más reciente mientras tanto.
     Object.assign(c, v);
     c.updatedAt = new Date().toISOString();
+    // v1.3.1427 FALLA-SALDO FIX — last-writer-wins per-item para cuentas
+    //   PROBLEMA: _bbRecalcSaldos llama updateCuenta({saldo: N}) en boot/sync.
+    //   Con el sello updatedAt anterior, la cuenta local quedaba "más reciente"
+    //   que la versión remota correcta tras un recalc, aunque el saldoInicial
+    //   local fuera STALE. Resultado: APK al abrir pisaba Firestore con
+    //   saldoInicial viejo, perdiendo el ajuste hecho en otro device.
+    //   FIX: estampar _updatedAt (numérico, LWW) SOLO cuando el cambio toca
+    //   campos persistentes del usuario. Los recalcs de 'saldo' (campo
+    //   derivado) NO actualizan _updatedAt → no compiten con cambios reales.
+    //   Mismo patrón que perfil/settings v1.3.1420.
+    var _PERSISTENT_FIELDS_C = ['saldoInicial','saldoInicialFecha','nombre','tipo','scope','isPrimary','color','deleted','deletedAt'];
+    var _hasPersistentChange_C = false;
+    if (v && typeof v === 'object') {
+     for (var _pi = 0; _pi < _PERSISTENT_FIELDS_C.length; _pi++) {
+      if (Object.prototype.hasOwnProperty.call(v, _PERSISTENT_FIELDS_C[_pi])) {
+       _hasPersistentChange_C = true; break;
+      }
+     }
+    }
+    if (_hasPersistentChange_C) {
+     c._updatedAt = Date.now();
+    }
     save();
    },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
@@ -18402,7 +18424,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1426-dev';
+ const _APP_VERSION = 'v1.3.1427-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18822,7 +18844,7 @@ const ui = (() => {
  // v1.3.1175: actualizar versión footer dinámicamente
  try {
    var _vEl = document.getElementById('auth-footer-ver');
-   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1426');
+   if (_vEl) _vEl.textContent = (typeof _APP_VERSION === 'string' ? _APP_VERSION.replace(/-dev$/,'') : 'v1.3.1427');
  } catch(_) {}
  }
  function hideAuthScreen() {
@@ -52069,8 +52091,14 @@ _eaRecalc();
   }
   var map = {};
   // v1.3.1074: helper timestamp — PRIORIDAD deletedAt, luego updatedAt, luego fecha/createdAt
+  // v1.3.1427 FALLA-SALDO FIX: si el item tiene _updatedAt (numérico, LWW per-item),
+  //   usarlo prioritariamente. Permite que cambios "del usuario" (ej: saldoInicial)
+  //   se sellen con timestamp dedicado que NO se pisa por recalcs derivados (ej: saldo).
+  //   Fallback retro-compatible: items legacy sin _updatedAt usan updatedAt ISO.
   var _ts = function(x) {
    if (!x) return 0;
+   // Prioridad LWW per-item (v1.3.1427)
+   if (typeof x._updatedAt === 'number' && x._updatedAt > 0) return x._updatedAt;
    var f = x.deletedAt || x.updatedAt || x.fecha || x.createdAt || 0;
    if (!f) return 0;
    if (typeof f === 'number') return f;
