@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1429-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1430-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1429-dev</title>
+<title>Dashwey v1.3.1430-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18424,7 +18424,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1429-dev';
+ const _APP_VERSION = 'v1.3.1430-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20823,14 +20823,41 @@ const ui = (() => {
     }
     var provId = 'prov_lv_' + c.id;
     var existing = prevProvById[provId];
-    // v1.3.1266 FIX W-A-43: respeto tombstone proveedor LV (simétrico a W-A-17/18 en productos).
-    //   Si el usuario borró manualmente un proveedor LV, el tombstone YA está en mergedProvs
-    //   desde el loop1 (L18387). Si seguimos al lvCats.forEach y recreamos con mismo provId,
-    //   creamos un DUPLICADO (tombstone + zombi) y _preserveDeleted ve el zombi y no reinjecta
-    //   el tombstone → proveedor reaparece tras re-import.
+    // v1.3.1430 FIX RESURRECT-ON-LV-PRESENCE proveedores — supersedes v1.3.1266.
+    //   Simétrico al fix v1.3.1429 que resolvió el mismo bug en productos.
+    //   Si existing.deleted === true PERO Loyverse confirma que la categoría
+    //   sigue viva (la está enviando ahora en lvCats), el usuario claramente
+    //   la sigue usando en el TPV → resucitar el proveedor preservando id.
+    //
+    //   Caso real producción 6-may-2026: tras resucitar Fanta naranja Lata
+    //   con v1.3.1429, su sourceProv (categoría LV "Bebidas") seguía como
+    //   tombstone. Sin este fix simétrico, los productos vivos no podrían
+    //   vincularse al proveedor correcto.
+    //
+    //   Modelo conceptual: Loyverse es source-of-truth para categorías TPV.
+    //   Si una categoría está en LV → debe existir como proveedor vivo en
+    //   Dashwey. El cleanup de proveedores LV huérfanos (línea ~20945)
+    //   los soft-deletea cuando dejan de aparecer en LV.
+    //
+    //   Anti-zombi del v1.3.1266 sigue garantizado: mutamos `existing` en
+    //   sitio (que ya está en mergedProvs desde loop1) y hacemos return
+    //   sin push del nuevo → cero duplicados.
+    //
+    //   Protección "edited" preservada: si el nombre fue editado antes del
+    //   tombstone (ej. "Coca Cola" en lugar de "Bebidas"), permanece tras
+    //   el resurrect. Solo sourceName se refresca con la categoría LV actual.
     if (existing && existing.deleted) {
-      catIdToProvId[c.id] = provId; // mantener mapeo para items
-      return;
+      existing.deleted = false;
+      delete existing.deletedAt;
+      existing.sourceName = c.name || existing.sourceName || '';
+      existing.loyverseCategoryId = c.id;
+      existing.origen = 'loyverse';
+      // Si NO había nombre editado pre-tombstone, poblarlo con el LV actual
+      if (!existing.nombre) existing.nombre = existing.sourceName || 'Sin nombre';
+      existing.updatedAt = _now;
+      try { console.log('[Loyverse/v1.3.1430] RESURRECT proveedor desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") sourceName=' + existing.sourceName); } catch(_){}
+      catIdToProvId[c.id] = provId; // mapeo para items
+      return; // existing ya está en mergedProvs desde loop1, mutación in-place. NO push.
     }
     // ──────────────────────────────────────────────────────────────────
     // v1.3.1237 — SEPARACIÓN CONCEPTUAL nombre vs sourceName
