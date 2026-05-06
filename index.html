@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1433-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1434-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1433-dev</title>
+<title>Dashwey v1.3.1434-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13872,7 +13872,11 @@ const State = (() => {
  });
  // Registrar tombstone local (defensa adicional)
  try { window._DashweyLocalDeletedIds && window._DashweyLocalDeletedIds.add && window._DashweyLocalDeletedIds.add(id); } catch(_) {}
+ // v1.3.1085: marcado dirty para sync coherente
+ try { window._DashweyMarkDirty('pendingOrders', id); } catch(_) {}
  save();
+ // v1.3.1433 BUG-033 FIX: emit Bus tras remove — sin esto, UI / recalc / watchers quedaban stale.
+ try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  },
  period: (v) => { _state.period = v; save(); },
  settings: (v) => {
@@ -14514,11 +14518,52 @@ const State = (() => {
  removeHistorialPedido: (id) => {
   if (!_state.historialPedidos) return;
   var _h = _state.historialPedidos.find(p => p.id === id);
-  if (_h) { _h.deleted = true; _h.deletedAt = Date.now(); }
+  if (!_h) return;
+  // v1.3.1433 BUG-028 CASCADE FIX: al borrar pedido confirmado, soft-delete también
+  //   el gasto auto vinculado por pedidoId Y revertir saldo si fue aplicado.
+  //   Sin esto, el gasto seguía mutando saldo via _bbRecalcSaldos y aparecía huérfano
+  //   en KPIs/flujo de caja sin pedido asociado visible.
+  var _pedFecha = _h.fecha || null;
+  var _saldoAppliedAt = _h.saldoAppliedAt || null;
+  var _saldoCuentaId = _h.saldoCuentaId || null;
+  var _saldoImporte = _h.saldoImporte || 0;
+  // 1. Soft-delete del pedido
+  _h.deleted = true;
+  _h.deletedAt = Date.now();
   try { window._DashweyLocalDeletedIds.add(id); } catch(_) {}
-  // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
   try { window._DashweyMarkDirty('historialPedidos', id); } catch(_) {}
+  // 2. Soft-delete del gasto auto vinculado (si existe)
+  try {
+   var _gastosArr = _state.gastosOp || [];
+   var _gastoAuto = _gastosArr.find(function(g){
+    return g && (g.id === ('gped_' + id) || g.pedidoId === id);
+   });
+   if (_gastoAuto && !_gastoAuto.deleted) {
+    _gastoAuto.deleted = true;
+    _gastoAuto.deletedAt = Date.now();
+    try { window._DashweyLocalDeletedIds.add(_gastoAuto.id); } catch(_) {}
+    try { window._DashweyMarkDirty('gastosOp', _gastoAuto.id); } catch(_) {}
+   }
+  } catch(_) {}
+  // 3. Revertir saldo si fue aplicado al pedido. _bbRecalcSaldos lo recalculará
+  //    desde eventos no-deleted, pero ajustamos manualmente para coherencia inmediata.
+  //    Si saldoAppliedAt no existía (pedido pendiente nunca aplicó saldo), no hacer nada.
+  try {
+   if (_saldoAppliedAt && _saldoCuentaId && _saldoImporte > 0) {
+    var _cuentaTarget = (_state.cuentas || []).find(function(c){ return c && c.id === _saldoCuentaId; });
+    if (_cuentaTarget) {
+     _cuentaTarget.saldo = (_cuentaTarget.saldo || 0) + _saldoImporte;
+     _cuentaTarget.updatedAt = new Date().toISOString();
+     try { window._DashweyMarkDirty('cuentas', _saldoCuentaId); } catch(_) {}
+    }
+   }
+  } catch(_) {}
+  // Logging health
+  try { window._DashweyHealth && (window._DashweyHealth.cascadesPedido = (window._DashweyHealth.cascadesPedido||0) + 1); } catch(_) {}
   save();
+  // Emit Bus para refrescar UI / re-recalc desde eventos
+  try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
+  try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {}
  },
  removeFactura: (id) => {
   if (!_state.facturas) return;
@@ -14528,6 +14573,9 @@ const State = (() => {
   // v1.3.1085: marcado dirty para Estrategia B (flag OFF no consume)
   try { window._DashweyMarkDirty('facturas', id); } catch(_) {}
   save();
+  // v1.3.1433 BUG-033 FIX: emit Bus tras remove — coherente con removeHistorialPedido / removePendingOrder.
+  try { window.DashweyBus && window.DashweyBus.emit('factura'); } catch(_) {}
+  try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  },
  // v1.3.582: deduplicación por ID — evita duplicados si addVenta se llama dos veces con el mismo payload
  addVenta: (v) => {
@@ -18444,7 +18492,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1433-dev';
+ const _APP_VERSION = 'v1.3.1434-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29762,6 +29810,13 @@ function _openEditMovimientoSheet(id, src) {
   // v1.3.1165: notas/concepto extra que se mostrará gris pequeño bajo el nombre
   var notas = registro.notas || '';
 
+  // v1.3.1433 BUG-019 FIX: detectar origen externo bloqueado para delete.
+  //   loyverse / budgetbakers: protegidos por _guardExt en setters → delete falla silencioso.
+  //   import_loyverse: excepción permitida (sintéticas, no autoritativas).
+  //   En lugar de fail silencioso → botón visualmente bloqueado + mensaje explicativo.
+  var _origen = registro.origen || '';
+  var _isExtBlocked = !!(_origen && (_origen === 'loyverse' || _origen === 'budgetbakers'));
+
   var sheet = document.createElement('div');
   sheet.className = 'mov-sheet-overlay';
   sheet.innerHTML =
@@ -29786,7 +29841,10 @@ function _openEditMovimientoSheet(id, src) {
    //   en línea propia debajo (acción destructiva separada visualmente).
    '<div style="display:flex;gap:var(--sp-2)">' +
    '<button class="mov-submit-btn" id="edit-mov-save" style="flex:2">Guardar cambios</button>' +
-   '<button class="mov-submit-btn" id="edit-mov-del" style="flex:1;background:rgba(139,26,47,0.12);color:var(--red)">Eliminar</button>' +
+   // v1.3.1433 BUG-019: si origen externo (loyverse/budgetbakers), botón visualmente
+   //   bloqueado (opacity, cursor) — al pulsar muestra mensaje explicativo en lugar de
+   //   intentar delete y fallar silencioso. import_loyverse permite borrado normal.
+   '<button class="mov-submit-btn" id="edit-mov-del" style="flex:1;background:rgba(139,26,47,0.12);color:var(--red)' + (_isExtBlocked ? ';opacity:0.5;cursor:not-allowed' : '') + '">Eliminar</button>' +
    '</div>' +
    (registro.estado === 'pendiente'
     ? '<button id="edit-mov-confirm" style="width:100%;height:46px;border-radius:var(--r-md);background:var(--success);color:#fff;border:none;font-size:var(--fs-base);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:var(--sp-1_5)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Confirmar pago</button>'
@@ -29970,6 +30028,15 @@ function _openEditMovimientoSheet(id, src) {
 
   // Eliminar — v1.3.982 cascade: si transferId existe, borra también el gemelo
   document.getElementById('edit-mov-del').addEventListener('click', function() {
+   // v1.3.1433 BUG-019 FIX: items con origen externo bloqueado (loyverse, budgetbakers)
+   //   no se pueden borrar manualmente — los setters tienen guard que neutraliza
+   //   deleted:true, así que sin este guard el delete fallaba silencioso y el item
+   //   reaparecía en próximo render/recalc/sync. Mostramos mensaje explicativo.
+   if (_isExtBlocked) {
+    var _origenLabel = _origen === 'loyverse' ? 'Loyverse' : 'BudgetBakers';
+    showToast('🔒 Movimientos importados desde ' + _origenLabel + ' no se pueden eliminar. Edítalos en su origen.', 'warning');
+    return;
+   }
    var _transferId2 = registro.transferId || null;
    var _msg = _transferId2
     ? '¿Eliminar esta transferencia? Se borrarán ambos movimientos (gasto e ingreso).'
@@ -50883,9 +50950,29 @@ _eaRecalc();
 
  // _histDeleteItem: borra pedido o factura
  var _histDeleteItem = function(tipo, itemId) {
+  // v1.3.1433 BUG-025 FIX: incluir info contextual en confirmación destructiva.
+  //   Antes: "Se eliminará del historial. Esta acción no se puede deshacer."
+  //   Ahora: muestra proveedor + importe + fecha → usuario confirma con conocimiento.
+  var _msg = 'Se eliminará del historial. Esta acción no se puede deshacer.';
+  try {
+   if (tipo !== 'factura') {
+    var _ped = (State.get.historialPedidos() || []).find(function(p){ return p && p.id === itemId; });
+    if (_ped) {
+     var _provName = State.get.prov(_ped.provId)?.nombre || 'Proveedor';
+     var _coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste)
+      ? FinEngine.pedidoCoste(_ped) : 0;
+     var _fechaTxt = '';
+     try { _fechaTxt = new Date(_ped.fecha).toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'numeric'}); } catch(_) {}
+     _msg = '¿Eliminar pedido de ' + _provName + '?\n\n' +
+      'Fecha: ' + _fechaTxt + '\n' +
+      'Importe: ' + (_coste ? _coste.toFixed(2) + '€' : '—') + '\n\n' +
+      'Se borrará el pedido, su gasto asociado y se restaurará el saldo de la cuenta.';
+    }
+   }
+  } catch(_) {}
   window._showDestructiveConfirm({
    title: tipo==='factura' ? 'Borrar factura' : 'Borrar pedido',
-   message: 'Se eliminará del historial. Esta acción no se puede deshacer.',
+   message: _msg,
    confirmLabel: 'Borrar',
    onConfirm: function() {
     try{ if(tipo==='factura'){State.set.removeFactura(itemId);}else{State.set.removeHistorialPedido(itemId);} }catch(_){}
