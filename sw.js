@@ -1,23 +1,25 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Dashwey Service Worker v1.3.1274-dev
-   Cache: dashwey-v1-3-980-dev
+   Dashwey Service Worker
+   CACHE_NAME se actualiza junto con _APP_VERSION en cada deploy.
 
-   ESTRATEGIA DE CACHE v1.0.1:
-   - HTML principal: SIEMPRE network-only (NUNCA se cachea)
-   - version.json / version.txt: siempre red, sin cache
-   - Assets estáticos (iconos, splash): cache-first con fallback
-   - Firebase CDN: network-first sin cachear
-   - Al install: skipWaiting inmediato + limpieza de caches antiguas
-   - Al activate: claim + notificar SW_UPDATED a clientes
-   - skipWaiting: inmediato siempre (manual y automático)
+   ESTRATEGIA DE CACHE v1.0.2 (v1.3.1432):
+   - HTML principal: NETWORK-FIRST con fallback a cache offline.
+     · Con red → descarga fresco + actualiza cache para offline.
+     · Sin red → sirve versión cacheada.
+   - version.json / version.txt: siempre red, sin cache (no-store).
+   - Assets estáticos (iconos, splash): cache-first con fallback a red.
+   - Firebase CDN: network-first sin cachear (con fallback cache si red falla).
+   - Al install: skipWaiting inmediato + limpieza agresiva de caches antiguas.
+   - Al activate: claim + notificar SW_UPDATED a clientes.
+   - skipWaiting: inmediato siempre (manual y automático).
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-1431';
+const CACHE_NAME  = 'dashwey-v1-3-1432';
 const HTML_URL    = 'index.html';
 
-/* Solo pre-cachear assets estáticos mínimos — NUNCA el HTML */
+/* Solo pre-cachear assets estáticos mínimos — el HTML se gestiona en el fetch handler */
 const PRECACHE_URLS = [
-  /* B-7: index.html no se pre-cachea — fetch handler lo sirve siempre de red */
+  /* B-7: index.html no se pre-cachea — fetch handler lo cachea tras primer fetch exitoso */
   /* version.json se sirve siempre de red — no pre-cachear */
 ];
 
