@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1428-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1429-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1428-dev</title>
+<title>Dashwey v1.3.1429-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18424,7 +18424,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1428-dev';
+ const _APP_VERSION = 'v1.3.1429-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20972,15 +20972,58 @@ const ui = (() => {
     var prodId = 'p_lv_' + it.id;
     var existing = prevProdById[prodId];
 
-    // v1.3.1264 FIX P0 W-A-17/18: respeto de tombstone LV.
-    //   Si existing.deleted === true, el usuario borró el artículo manualmente.
-    //   Antes: el loop recreaba el item LV ignorando el tombstone → DUPLICADO
-    //   con mismo id (uno con deleted:true del loop1, otro sin del loop2).
-    //   El segundo (sin deleted) lideraba en _preserveDeleted → "zombi".
-    //   Ahora: skip total. El tombstone ya está en mergedProds desde el loop1.
-    //   Si el usuario quiere recuperar el artículo, debe restaurarlo manualmente
-    //   o re-importarlo tras eliminar el tombstone (futuro: UI explícita).
-    if (existing && existing.deleted) return;
+    // v1.3.1429 FIX RESURRECT-ON-LV-PRESENCE — supersedes v1.3.1264 W-A-17/18.
+    //   Si existing.deleted === true PERO Loyverse confirma que el item sigue
+    //   vivo (lo está enviando ahora en lvItems), el usuario claramente lo
+    //   sigue usando en el TPV → resucitarlo automáticamente preservando id.
+    //
+    //   Caso real producción 6-may-2026: Fanta naranja Lata fue tombstoneado
+    //   en una limpieza pasada. Seguía vendiéndose en Loyverse (6 ventas
+    //   históricas v_lv_*) pero invisible en Dashwey por el "skip total"
+    //   anterior. Imposible restaurar sin tocar código.
+    //
+    //   Modelo conceptual: Loyverse es source-of-truth para catálogo TPV.
+    //   Si un item está en LV → debe estar en Dashwey vivo. El tombstone
+    //   solo tiene sentido cuando LV también lo retiró (cleanup huérfanos
+    //   LV en línea ~21125 lo soft-deletea cuando deja de aparecer).
+    //
+    //   Anti-zombi del v1.3.1264 sigue garantizado: mutamos `existing` en
+    //   sitio (que ya está en mergedProds desde loop1) y hacemos return
+    //   sin push del prod nuevo → cero duplicados.
+    //
+    //   Protección "edited" preservada: si el nombre/pvp/prov fueron
+    //   editados antes del tombstone (los source* lo registraron),
+    //   permanecen tras el resurrect (no se sobrescriben).
+    if (existing && existing.deleted) {
+     existing.deleted = false;
+     delete existing.deletedAt;
+     // Refrescar source* (referencias LV — siempre actuales tras sync)
+     existing.loyverseItemId = it.id;
+     existing.origen = 'loyverse';
+     existing.sourceName = it.item_name || it.name || existing.sourceName || '';
+     // Calcular sourcePvp + sourceBarcode desde el primer variant
+     var _resVariant = (it.variants && it.variants[0]) || {};
+     var _resPvp = parseFloat(_resVariant.default_price || 0) || 0;
+     if (!_resPvp && _resVariant.stores && _resVariant.stores.length > 0) {
+      for (var _resSi = 0; _resSi < _resVariant.stores.length; _resSi++) {
+       var _resSp = parseFloat(_resVariant.stores[_resSi].price || 0) || 0;
+       if (_resSp > 0) { _resPvp = _resSp; break; }
+      }
+     }
+     existing.sourcePvp = _resPvp;
+     existing.sourceBarcode = _resVariant.barcode || '';
+     existing.sourceProv = (it.category_id && catIdToProvId[it.category_id]) || 'prov_lv_nocat';
+     existing.categoria = it.category_id || existing.categoria || '';
+     // Si el producto NO tenía valores user-editados antes del tombstone,
+     // poblarlos con los actuales de LV (caso primera resurrección).
+     if (!existing.nombre) existing.nombre = existing.sourceName || 'Sin nombre';
+     if (typeof existing.pvp !== 'number' || !existing.pvp) existing.pvp = existing.sourcePvp || 0;
+     if (!existing.barcode) existing.barcode = existing.sourceBarcode || '';
+     if (!existing.prov) existing.prov = existing.sourceProv;
+     existing.updatedAt = _now;
+     try { console.log('[Loyverse/v1.3.1429] RESURRECT producto desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") prov=' + existing.prov); } catch(_){}
+     return; // existing ya está en mergedProds desde loop1, mutación in-place. NO push.
+    }
 
     var variant = (it.variants && it.variants[0]) || {};
     // v1.3.1012: fallback pvp desde stores[].price si default_price está vacío
