@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1430-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1431-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1430-dev</title>
+<title>Dashwey v1.3.1431-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18424,7 +18424,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1430-dev';
+ const _APP_VERSION = 'v1.3.1431-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31606,19 +31606,29 @@ function _confirmBorrarCuenta(id) {
  if (importe <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
  const c = State.get.cuentas().find(x => x.id === cuentaId);
  if (!c) return;
- State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
  const _fechaInp = document.getElementById('ingreso-fecha')?.value;
  const _fechaISO = _fechaInp ? new Date(_fechaInp + 'T12:00:00').toISOString() : new Date().toISOString();
+ // v1.3.1431 FIX PENDIENTE-AUTO — detectar fecha futura → estado pendiente
+ //   Coherente con _addGasto y _bbRecalcSaldos (filtra estado==='pendiente').
+ const _hoyISO = new Date().toISOString().slice(0,10);
+ const _fechaIngresoISO = (_fechaInp || _fechaISO.slice(0,10));
+ const _esPendienteAuto = _fechaIngresoISO > _hoyISO;
+ const _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
+ // Sumar saldo solo si NO es pendiente (consistente con _bbRecalcSaldos)
+ if (!_esPendienteAuto) {
+ State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
+ }
  State.set.addIngreso({
   id: 'ing' + Date.now(), fecha: _fechaISO,
   concepto: document.getElementById('ingreso-concepto')?.value?.trim() || 'Ingreso manual',
-  importe, cuentaId
+  importe, cuentaId,
+  estado: _estadoMov, // v1.3.1431
  });
  DashweyBus.emit('ingreso');
  renderFinanciero();
  _calcReset();
  App.ui.closeFs();
- showToast(_feur(importe) + ' añadidos');
+ showToast(_esPendienteAuto ? '⏳ ' + _feur(importe) + ' programados' : _feur(importe) + ' añadidos');
  setTimeout(() => openFinModal('cuentas'), Utils.ANIM_DELAY);
  }
 
@@ -31820,8 +31830,27 @@ function _confirmBorrarCuenta(id) {
  if (!nombre) { showToast('⚠️ Escribe un nombre para el gasto', 'warning'); return; }
  if (importe <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
 
- // Descontar de la cuenta si está asignada
- if (cuentaId) {
+ // ──────────────────────────────────────────────────────────────────
+ // v1.3.1431 FIX PENDIENTE-AUTO — detectar fecha futura → estado pendiente
+ //   Bug 6-may: gastos con fechaPago futura aparecían como realizados,
+ //   restaban del saldo inmediato y NO entraban al banner expandible
+ //   v1.3.1413. Causa: handler defaulteaba estado a 'confirmado' sin
+ //   considerar la fecha de pago.
+ //
+ //   Ahora: si fechaPago > hoy → estado='pendiente', NO mutar saldo manual.
+ //   Coherente con _openMovimientoSheet (línea ~30015) que ya implementa
+ //   este patrón vía toggle UI. Aquí lo aplicamos AUTO por fecha.
+ //
+ //   El listener _recalcSaldosListener (v1.3.1046+) recalcula saldo desde
+ //   eventos vía _bbRecalcSaldos, que ya filtra estado==='pendiente'
+ //   (línea ~24801). Por tanto el saldo permanece correcto sin ajuste manual.
+ // ──────────────────────────────────────────────────────────────────
+ var _hoyISO = new Date().toISOString().slice(0,10);
+ var _esPendienteAuto = fechaPago > _hoyISO;
+ var _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
+
+ // Descontar de la cuenta si está asignada Y NO es pendiente
+ if (cuentaId && !_esPendienteAuto) {
  const c = State.get.cuentas().find(x => x.id === cuentaId);
  if (c) {
  State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) - importe });
@@ -31834,12 +31863,13 @@ function _confirmBorrarCuenta(id) {
  fecha: new Date().toISOString(),
  fechaPago, cuentaId,
  recurrente, frecuencia: periodo,
+ estado: _estadoMov, // v1.3.1431 — pendiente si fecha futura
  });
  // v1.3.1138 FIX#5: emit eliminado — State.set.addGasto ya emite 'gasto' internamente
 
  _calcReset();
  App.ui.closeFs();
- showToast('✅ ' + nombre + ' registrado');
+ showToast(_esPendienteAuto ? '⏳ ' + nombre + ' programado' : '✅ ' + nombre + ' registrado');
  setTimeout(() => openFinModal('gastos'), Utils.ANIM_DELAY);
  }
 
@@ -32000,8 +32030,20 @@ function _confirmBorrarCuenta(id) {
 
  if (importe <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
 
- // Sumar a la cuenta si está asignada
- if (cuentaId) {
+ // ──────────────────────────────────────────────────────────────────
+ // v1.3.1431 FIX PENDIENTE-AUTO — detectar fecha futura → estado pendiente
+ //   Para tipos 'manual' y 'programado'. Tipos 'caja' (venta) y
+ //   'reembolso_proveedor' no aplican (siempre instantáneos por diseño).
+ //   Coherente con _addGasto y _confirmarIngreso. _bbRecalcSaldos ya
+ //   filtra estado==='pendiente' (línea ~24769) — el saldo se mantendrá
+ //   correcto vía recalc post-emit.
+ // ──────────────────────────────────────────────────────────────────
+ var _hoyISO = new Date().toISOString().slice(0,10);
+ var _esPendienteAuto = (_ingresoTipo !== 'caja' && _ingresoTipo !== 'reembolso_proveedor') && fecha > _hoyISO;
+ var _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
+
+ // Sumar a la cuenta si está asignada Y NO es pendiente
+ if (cuentaId && !_esPendienteAuto) {
  var c = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
  if (c) State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
  }
@@ -32047,13 +32089,14 @@ function _confirmBorrarCuenta(id) {
    recurrente,
    frecuencia: _ingresoPeriodo,
    mensualEq,
+   estado: _estadoMov, // v1.3.1431 — pendiente si fecha futura
   });
   DashweyBus.emit('ingreso');
  }
  renderFinanciero();
  _calcReset();
  App.ui.closeFs();
- showToast('✅ ' + _feur(importe) + ' registrados');
+ showToast(_esPendienteAuto ? '⏳ ' + _feur(importe) + ' programados' : '✅ ' + _feur(importe) + ' registrados');
  }
 
 
