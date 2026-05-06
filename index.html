@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1432-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1433-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1432-dev</title>
+<title>Dashwey v1.3.1433-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14076,7 +14076,7 @@ const State = (() => {
     save();
    },
  setPrimaryCuenta: (id) => { _state.cuentas.forEach(function(c){ c.isPrimary = (c.id === id); }); save(); },
- addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; g.estado = g.estado || 'confirmado'; g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
+ addGasto: (g) => { if (g?.id && _state.gastosOp.some(x => x.id === g.id)) return; if(g){ g.scope = g.scope || (_state.settings?.activeScope || 'negocio'); g.metaTipo = g.metaTipo || 'normal'; /* v1.3.1432 BUG-001 FIX: guard fecha futura → estado pendiente. Si caller pasó estado explícito lo respetamos. */ if (!g.estado) { try { var _fechaCheck = g.fechaPago || g.fecha; g.estado = (window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(_fechaCheck)) ? 'pendiente' : 'confirmado'; } catch(_) { g.estado = 'confirmado'; } } g.origen = g.origen || 'manual'; } _state.gastosOp.push(g); try { if (g?.id) window._DashweyMarkDirty('gastosOp', g.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO: setters update (trazabilidad closureId)
  // v1.3.1146 CAPA 1: bloquear intento de poner deleted:true en item externo
  // v1.3.1150 EVENT-DRIVEN: campos inmutables protegidos
@@ -14161,7 +14161,7 @@ const State = (() => {
   save();
  },
  addMerma: (m) => { if (m?.id && _state.mermas.some(x => x.id === m.id)) return; _state.mermas.push(m); try { if (m?.id) window._DashweyMarkDirty('mermas', m.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('merma'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
- addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; v.estado = v.estado || 'confirmado'; v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
+ addIngreso: (v) => { if (!_state.ingresosFin) _state.ingresosFin = []; if (v?.id && _state.ingresosFin.some(x => x.id === v.id)) return; if(v){ v.scope = v.scope || (_state.settings?.activeScope || 'negocio'); v.metaTipo = v.metaTipo || 'normal'; /* v1.3.1432 BUG-001 FIX: guard fecha futura → estado pendiente. Si caller pasó estado explícito lo respetamos. */ if (!v.estado) { try { v.estado = (window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(v.fecha)) ? 'pendiente' : 'confirmado'; } catch(_) { v.estado = 'confirmado'; } } v.origen = v.origen || 'manual'; } _state.ingresosFin.push(v); try { if (v?.id) window._DashweyMarkDirty('ingresosFin', v.id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} /* v1.3.1138 FIX#8 */ },
  // v1.3.1144 HÍBRIDO
  // v1.3.1146 CAPA 1: guard deleted:true items externos
  // v1.3.1150 EVENT-DRIVEN: campos inmutables protegidos
@@ -14435,20 +14435,32 @@ const State = (() => {
       return g && (g.id === _gastoId || g.pedidoId === _pedidoVivo.id);
     });
     if (!_gastoExistente) {
+     // v1.3.1432 BUG-014/034 FIX: gasto auto del pedido respeta fecha futura.
+     //   Antes: estado:'confirmado' HARDCODED. Si el pedido era programado a futuro,
+     //   el gasto se contaba inmediato como confirmado → saldo descontaba antes de tiempo.
+     //   Ahora: usa _DashweyIsFechaFutura sobre la fecha del pedido (coherente con
+     //   los demás callsites del LOTE FECHAS).
+     var _gastoFecha = _pedidoVivo.fecha || new Date().toISOString();
+     var _gastoEstado = 'confirmado';
+     try {
+      if (window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(_gastoFecha)) {
+       _gastoEstado = 'pendiente';
+      }
+     } catch(_) {}
      var _gasto = {
       id: _gastoId,
       nombre: _provNombre,
       concepto: _provNombre,
       importe: _pedCoste,
-      fecha: _pedidoVivo.fecha || new Date().toISOString(),
-      fechaPago: (_pedidoVivo.fecha || new Date().toISOString()).slice(0,10),
+      fecha: _gastoFecha,
+      fechaPago: _gastoFecha.slice(0,10),
       origen: 'pedido',
       pedidoId: _pedidoVivo.id,
       provId: _pedidoVivo.provId || null,
       cuentaId: _cuentaId,
       metaTipo: 'normal',
       scope: 'negocio',
-      estado: 'confirmado',
+      estado: _gastoEstado,
       categoria: 'Compras',
       createdAt: Date.now(),
      };
@@ -14460,7 +14472,15 @@ const State = (() => {
     // EFECTO 2: SALDO — idempotente por flag pedido.saldoAppliedAt
     //   Si ya se aplicó (timestamp presente), NO descontar de nuevo.
     //   Sello permanente en el pedido vivo → sobrevive a retries y multi-device.
-    if (_cuentaId && !_pedidoVivo.saldoAppliedAt) {
+    // v1.3.1432 BUG-014/034 FIX: si gasto auto fue pendiente (pedido futuro),
+    //   NO descontar saldo manual. _bbRecalcSaldos ya excluye pendientes —
+    //   el saldo se mantendrá correcto vía recalc post-emit.
+    //   Detecta tanto el gasto recién creado como uno preexistente pendiente.
+    var _gastoFinal = _gastoExistente || ((_state.gastosOp || []).find(function(g){
+      return g && (g.id === _gastoId || g.pedidoId === _pedidoVivo.id);
+    }));
+    var _saldoSkipPorPendiente = !!(_gastoFinal && _gastoFinal.estado === 'pendiente');
+    if (_cuentaId && !_pedidoVivo.saldoAppliedAt && !_saldoSkipPorPendiente) {
      var _cuentaTarget = (_state.cuentas || []).find(function(c){ return c && c.id === _cuentaId; });
      if (_cuentaTarget) {
       _cuentaTarget.saldo = (_cuentaTarget.saldo || 0) - _pedCoste;
@@ -18424,7 +18444,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1432-dev';
+ const _APP_VERSION = 'v1.3.1433-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23238,6 +23258,43 @@ const ui = (() => {
  // v1.3.1362 FIX TZ MADRID: exponer _autoCierreTzToUtc para que CierreEngine pueda
  //   construir aperturaTs en zona del kiosco (no zona del dispositivo).
  window._DashweyAutoCierreTzToUtc = _autoCierreTzToUtc;
+ // v1.3.1432 LOTE FECHAS — helper canónico para detección "fecha futura".
+ //   Usado por: setters raíz addGasto/addIngreso (guard final), handlers manuales
+ //   y cascade. Resuelve PATRÓN-C (asimetría histórica entre callsites).
+ //
+ //   Política: comparar DÍA, no instante. fecha=hoy 23:59 NO es futura.
+ //   Usa perfil.zona como "hoy" — coherente con Dashboard KPIs y cierres.
+ //
+ //   Acepta: ISO datetime ('2026-05-10T12:00:00...'), fechaPago corta
+ //   ('2026-05-10') o cualquier string parseable por Date.
+ //   Devuelve: true si la fecha del entry es estrictamente posterior a hoy zona.
+ //   Si fecha inválida o ausente → false (estado='confirmado' por defecto).
+ window._DashweyIsFechaFutura = function(fechaIso) {
+  try {
+   if (!fechaIso) return false;
+   // Normalizar a 'YYYY-MM-DD' (acepta ISO datetime o solo fecha)
+   var fechaKey = String(fechaIso).slice(0, 10);
+   if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaKey)) {
+    // Fallback: parse vía Date si no matchea el formato directo
+    var d = new Date(fechaIso);
+    if (isNaN(d.getTime())) return false;
+    fechaKey = d.toISOString().slice(0, 10);
+   }
+   // "Hoy" en zona del kiosco (PATRÓN-F: NUNCA zona dispositivo)
+   var perfil = (window.State && window.State.get && window.State.get.perfil)
+    ? window.State.get.perfil() : null;
+   var zona = (perfil && perfil.zona) || 'Europe/Madrid';
+   var hoyKey;
+   if (typeof window._DashweyAutoCierreTzNow === 'function') {
+    hoyKey = window._DashweyAutoCierreTzNow(zona).dateKey;
+   } else {
+    // Fallback legacy zona dispositivo
+    var now = new Date();
+    hoyKey = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+   }
+   return fechaKey > hoyKey;
+  } catch(_) { return false; }
+ };
  // v1.3.1361 LOCK MUTUO: helper canónico — ¿hay ya un cierre CERRADO para la jornada de HOY (zona Madrid)?
  //   Usado por:
  //     - closeJornada() para bloquear cierre manual si ya existe uno cerrado hoy
@@ -31629,9 +31686,9 @@ function _confirmBorrarCuenta(id) {
  const _fechaISO = _fechaInp ? new Date(_fechaInp + 'T12:00:00').toISOString() : new Date().toISOString();
  // v1.3.1431 FIX PENDIENTE-AUTO — detectar fecha futura → estado pendiente
  //   Coherente con _addGasto y _bbRecalcSaldos (filtra estado==='pendiente').
- const _hoyISO = new Date().toISOString().slice(0,10);
- const _fechaIngresoISO = (_fechaInp || _fechaISO.slice(0,10));
- const _esPendienteAuto = _fechaIngresoISO > _hoyISO;
+ // v1.3.1432 LOTE FECHAS: usar helper canónico _DashweyIsFechaFutura
+ //   (respeta perfil.zona, comparación por dateKey, política unificada).
+ const _esPendienteAuto = !!(window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(_fechaInp || _fechaISO));
  const _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
  // Sumar saldo solo si NO es pendiente (consistente con _bbRecalcSaldos)
  if (!_esPendienteAuto) {
@@ -31861,8 +31918,13 @@ function _confirmBorrarCuenta(id) {
  //   El listener _recalcSaldosListener (v1.3.1046+) recalcula saldo desde
  //   eventos vía _bbRecalcSaldos, que ya filtra estado==='pendiente'.
  // ──────────────────────────────────────────────────────────────────
- var _hoyISO = new Date().toISOString().slice(0,10);
- var _esPendienteAuto = fechaPago > _hoyISO;
+ // ──────────────────────────────────────────────────────────────────
+ // v1.3.1432 LOTE FECHAS: usar helper canónico _DashweyIsFechaFutura
+ //   Antes: var _hoyISO = new Date().toISOString().slice(0,10) → zona dispositivo
+ //   Ahora: respeta perfil.zona (Hung en Vietnam ve fechas Madrid correctamente).
+ //   Política unificada con setters raíz (BUG-001) y otros callsites (BUG-014/020/026/034/045).
+ // ──────────────────────────────────────────────────────────────────
+ var _esPendienteAuto = !!(window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(fechaPago));
  var _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
 
  // Descontar de la cuenta si está asignada Y NO es pendiente
@@ -32053,9 +32115,10 @@ function _confirmBorrarCuenta(id) {
  //   Coherente con _addGasto y _confirmarIngreso. _bbRecalcSaldos ya
  //   filtra estado==='pendiente' — el saldo se mantendrá correcto vía
  //   recalc post-emit.
+ // v1.3.1432 LOTE FECHAS: helper canónico (respeta perfil.zona).
  // ──────────────────────────────────────────────────────────────────
- var _hoyISO = new Date().toISOString().slice(0,10);
- var _esPendienteAuto = (_ingresoTipo !== 'caja' && _ingresoTipo !== 'reembolso_proveedor') && fecha > _hoyISO;
+ var _esPendienteAuto = (_ingresoTipo !== 'caja' && _ingresoTipo !== 'reembolso_proveedor')
+  && !!(window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(fecha));
  var _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
 
  // Sumar a la cuenta si está asignada Y NO es pendiente
