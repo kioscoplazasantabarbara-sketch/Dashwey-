@@ -29787,10 +29787,29 @@ function _openEditMovimientoSheet(id, src) {
    var _transferId = registro.transferId || null;
    var _fechaISO = new Date(nuevaFecha+'T12:00:00').toISOString();
 
+   // ──────────────────────────────────────────────────────────────────
+   // v1.3.1431 FIX PENDIENTE-AUTO en editor — recalcular estado por fecha
+   //   Bug 6-may: editar fecha de un movimiento NO recalculaba estado.
+   //   • Si pasaba de pasado→futuro: seguía 'confirmado' (debería ser pendiente)
+   //   • Si pasaba de futuro→pasado: seguía 'pendiente' (saldo no se aplica)
+   //   También: si un mov tiene estado erróneo del bug pre-fix, abrir editor
+   //   y guardar sin cambios → autocorrige estado.
+   //   Excepción: transferencias y movs con metaTipo especial conservan su
+   //   estado original (no son flujo programable estándar).
+   // ──────────────────────────────────────────────────────────────────
+   var _hoyEdit = new Date().toISOString().slice(0,10);
+   var _esPendEdit = nuevaFecha > _hoyEdit;
+   var _esTransfer = !!_transferId || (registro.metaTipo === 'transfer') || (registro.tipo === 'transferencia');
+   var _esAjuste = (registro.metaTipo === 'ajuste') || (registro.tipo === 'ajuste');
+   var _recalcularEstado = !_esTransfer && !_esAjuste;
+   var _estadoEdit = _recalcularEstado
+    ? (_esPendEdit ? 'pendiente' : 'confirmado')
+    : (registro.estado || 'confirmado');
+
    if (src === 'gasto') {
     var gastos = State.get.gastosOp().map(function(g) {
      if (g.id !== id) return g;
-     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha, notas: nuevasNotas });
+     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha, notas: nuevasNotas, estado: _estadoEdit });
     });
     State.set.setGastos(gastos);
     // Cascade: gemelo en ingresosFin con mismo transferId (importe + fecha + notas)
@@ -29811,7 +29830,7 @@ function _openEditMovimientoSheet(id, src) {
    } else if (src === 'ingreso') {
     var ingresos = State.get.ingresosFin().map(function(i) {
      if (i.id !== id) return i;
-     return Object.assign({}, i, { concepto: nuevoNombre||i.concepto, importe: nuevoImporte, fecha: _fechaISO, notas: nuevasNotas });
+     return Object.assign({}, i, { concepto: nuevoNombre||i.concepto, importe: nuevoImporte, fecha: _fechaISO, notas: nuevasNotas, estado: _estadoEdit });
     });
     State.set.setIngresos(ingresos);
     // Cascade: gemelo en gastosOp con mismo transferId (importe + fecha + notas)
@@ -31836,14 +31855,11 @@ function _confirmBorrarCuenta(id) {
  //   restaban del saldo inmediato y NO entraban al banner expandible
  //   v1.3.1413. Causa: handler defaulteaba estado a 'confirmado' sin
  //   considerar la fecha de pago.
- //
  //   Ahora: si fechaPago > hoy → estado='pendiente', NO mutar saldo manual.
- //   Coherente con _openMovimientoSheet (línea ~30015) que ya implementa
+ //   Coherente con _openMovimientoSheet (~línea 30015) que ya implementa
  //   este patrón vía toggle UI. Aquí lo aplicamos AUTO por fecha.
- //
  //   El listener _recalcSaldosListener (v1.3.1046+) recalcula saldo desde
- //   eventos vía _bbRecalcSaldos, que ya filtra estado==='pendiente'
- //   (línea ~24801). Por tanto el saldo permanece correcto sin ajuste manual.
+ //   eventos vía _bbRecalcSaldos, que ya filtra estado==='pendiente'.
  // ──────────────────────────────────────────────────────────────────
  var _hoyISO = new Date().toISOString().slice(0,10);
  var _esPendienteAuto = fechaPago > _hoyISO;
@@ -32035,8 +32051,8 @@ function _confirmBorrarCuenta(id) {
  //   Para tipos 'manual' y 'programado'. Tipos 'caja' (venta) y
  //   'reembolso_proveedor' no aplican (siempre instantáneos por diseño).
  //   Coherente con _addGasto y _confirmarIngreso. _bbRecalcSaldos ya
- //   filtra estado==='pendiente' (línea ~24769) — el saldo se mantendrá
- //   correcto vía recalc post-emit.
+ //   filtra estado==='pendiente' — el saldo se mantendrá correcto vía
+ //   recalc post-emit.
  // ──────────────────────────────────────────────────────────────────
  var _hoyISO = new Date().toISOString().slice(0,10);
  var _esPendienteAuto = (_ingresoTipo !== 'caja' && _ingresoTipo !== 'reembolso_proveedor') && fecha > _hoyISO;
