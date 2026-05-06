@@ -14,7 +14,7 @@
    - skipWaiting: inmediato siempre (manual y automático).
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-1434';
+const CACHE_NAME  = 'dashwey-v1-3-1435';
 const HTML_URL    = 'index.html';
 
 /* Solo pre-cachear assets estáticos mínimos — el HTML se gestiona en el fetch handler */
