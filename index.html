@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1435-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1436-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1435-dev</title>
+<title>Dashwey v1.3.1436-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15755,7 +15755,10 @@ const FinEngine = (() => {
   if (_isPendiente(i)) return false; // v1.3.1000: excluir pendientes de KPIs
   if (!_matchesScope(i)) return false; // v1.3.1003 Fase 5: scope activo
   // v1.3.1045: excluir ingresos que son contrapartida de ventas (doble conteo)
-  if (i.origen === 'loyverse' || i.origen === 'tpv') return false;
+  // v1.3.1436 BUG-245 FIX: ampliar a 'cierre_caja_auto'. El cierre automático
+  //   directo crea ventas (que ya cuentan como ingreso) y no debe contar también
+  //   como ingreso financiero adicional (doble conteo).
+  if (i.origen === 'loyverse' || i.origen === 'tpv' || i.origen === 'cierre_caja_auto') return false;
   const d = new Date(i.fecha); return d >= range.start && d < range.end;
  })
  .reduce((s, i) => s + (i.importe || 0), 0);
@@ -16628,9 +16631,14 @@ const CierreEngine = (() => {
   const ventasAll = State.get.ventas ? State.get.ventas() : [];
   const gastosAll = State.get.gastosOp ? State.get.gastosOp() : [];
   const ingrAll = State.get.ingresosFin ? State.get.ingresosFin() : [];
-  const vF = _itemsEnRango(ventasAll, aTs, cTs);
-  const gF = _itemsEnRango(gastosAll, aTs, cTs).filter(g => g.metaTipo !== 'transfer');
-  const iF = _itemsEnRango(ingrAll, aTs, cTs).filter(i => i.metaTipo !== 'transfer');
+  // v1.3.1436 BUG-185 FIX: CIERRE-COMPLETE-AGGREGABLE.
+  //   Antes filtraba solo metaTipo !== 'transfer' → ajustes y pendientes inflaban totales.
+  //   Coherente con _isAggregable usado en KPI, FinEngine y recalcularCierre (v1.3.1434 BUG-040).
+  //   Ventas también filtradas por _isAggregable (no solo gastos/ingresos) para simetría.
+  var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
+  const vF = _itemsEnRango(ventasAll, aTs, cTs).filter(_aggCheck);
+  const gF = _itemsEnRango(gastosAll, aTs, cTs).filter(_aggCheck);
+  const iF = _itemsEnRango(ingrAll, aTs, cTs).filter(_aggCheck);
   let totVentas = 0;
   for (const v of vF) {
    // Usar FinEngine si está disponible (ingreso neto real), fallback suma total
@@ -18507,7 +18515,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1435-dev';
+ const _APP_VERSION = 'v1.3.1436-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -18974,6 +18982,36 @@ const ui = (() => {
   try { window._DashweyFirebase?.unsubscribeAll?.(); } catch(_) {}
    try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {}
    try { localStorage.removeItem('dashwey_last_prov_v1'); } catch(_) {}
+  // v1.3.1436 BUG-327/328/329/330 FIX: AUTH-CLEANUP-COHERENT
+  //   authLogout limpia _DashweyDirtyItems, _DashweySaveScheduled, _DashweySubPending,
+  //   _DashweyLastRootDigest, _DashweyLastSyncedSnap, detiene LV realtime y borra
+  //   token LV ANTES del login. authLogin NO replicaba esto → si user A→B sin logout
+  //   intermedio (raro pero posible: cambio cuenta directo), datos cruzados:
+  //   - dirty pendientes del user A se subían al user B
+  //   - LastRootDigest stale podía bypass aplicar snapshot del user B
+  //   - polling Loyverse del user A inyectaba ventas en el user B
+  //   - token LV cifrado del user A se reusaba para el user B
+  //   Réplica simétrica del cleanup de authLogout para coherencia.
+  try {
+   if (window._DashweyDirtyItems) {
+    Object.values(window._DashweyDirtyItems).forEach(s => {
+     if (s instanceof Set) s.clear();
+    });
+   }
+   window._DashweyDirty = false;
+   window._DashweySaveScheduled = false;
+   window._DashweySubPending = {};
+   window._DashweyLastSyncedSnap = {};
+   window._DashweyLastRootDigest = '';
+  } catch(_) {}
+  try { if (window._DashweyLVStopRealtime) window._DashweyLVStopRealtime(); } catch(_) {}
+  try {
+   if (typeof window._DashweyLVTokenRemove === 'function') {
+    window._DashweyLVTokenRemove().catch(function(){});
+   } else {
+    localStorage.removeItem('dashwey_lv_token');
+   }
+  } catch(_) {}
  const res = await fb.login(email, pass);
  if (res.ok) {
  // Limpiar flag de logout intencional
@@ -22820,10 +22858,16 @@ const ui = (() => {
    };
 
    // Estampar closureId en ventas del rango Madrid (misma cuenta)
+   // v1.3.1436 BUG-216 FIX: CIERRE-COMPLETE-AGGREGABLE.
+   //   Antes el modo directo NO filtraba ajustes → ventas con metaTipo='ajuste'
+   //   capturadas en cierre real → totales inflados al recalcular vía eventIds.
+   //   Coherente con _isAggregable usado en CierreEngine.recalcularCierre y totalesJornada.
+   var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
    var ventasAll = (State.get.ventas && State.get.ventas()) || [];
    var eventIdsVentas = [];
    ventasAll.forEach(function(v){
     if (!v || v.deleted || v.closureId) return;
+    if (!_aggCheck(v)) return; // excluir transfer + ajuste + pendiente
     var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
     if (!isFinite(t)) return;
     if (t >= aperturaTs && t < cierreTsDiaContable) {
@@ -52810,13 +52854,16 @@ _eaRecalc();
  //   el merge sobrescribía local con remoto vacío → pérdida silenciosa de datos.
  //   Era la raíz del incidente saldoInicial 5-may (afectó cuentas indirectamente).
  //   Excluido ticketsAbiertos: es estado UI temporal TPV, no histórico crítico.
+ // v1.3.1436 BUG-204 FIX: añadir gruposVenta a la lista de cold-start safe keys.
+ //   Sin esto, en cold-start con remote.gruposVenta vacío + local con grupos creados,
+ //   el merge sobrescribía local con remoto vacío → pérdida silenciosa.
  var _safeArrayKeys = [
   'productos', 'proveedores',
   'ventas', 'historialPedidos', 'pendingOrders',
   'gastosOp', 'ingresosFin',
   'cuentas',
   'mermas', 'recordatorios', 'cierresCaja', 'lotesStock', 'facturas',
-  'visitasComerciales'
+  'visitasComerciales', 'gruposVenta'
  ];
  _safeArrayKeys.forEach(function(k) {
   var localArr = typeof State.get[k] === 'function' ? (State.get[k]() || []) : [];
@@ -52999,6 +53046,14 @@ _eaRecalc();
 
  fb.subscribe('state', remoteData => {
  const now = Date.now();
+ // v1.3.1436 BUG-200 FIX: guard _DashweyInitialSyncDone PRIMERO de todo.
+ //   Sin esto, si llega un onSnapshot ANTES de que InitialSync complete (race
+ //   condition al inicio), los setters se aplican con local incompleto y pueden
+ //   sobrescribir datos que aún no se han hidratado de subcolecciones.
+ //   InitialSync setea el flag a true cuando termina; mientras false, ignorar.
+ if (!window._DashweyInitialSyncDone) {
+  return;
+ }
  // v1.3.1420 FALLA-1 DEBUG: log de snapshot recibido (qué device escribió, perfil que trae)
  if (window._DashweyDebugPerfil) {
   try {
