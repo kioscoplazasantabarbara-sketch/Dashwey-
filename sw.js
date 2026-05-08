@@ -2,13 +2,14 @@
    Dashwey Service Worker
    CACHE_NAME se actualiza junto con _APP_VERSION en cada deploy.
 
-   ESTRATEGIA DE CACHE v1.0.2 (v1.3.1432):
+   ESTRATEGIA DE CACHE v1.0.3 (v1.3.1436 BUG-OFFLINE):
    - HTML principal: NETWORK-FIRST con fallback a cache offline.
      · Con red → descarga fresco + actualiza cache para offline.
-     · Sin red → sirve versión cacheada.
+     · Sin red → sirve versión cacheada (incluido fallback scope root).
    - version.json / version.txt: siempre red, sin cache (no-store).
    - Assets estáticos (iconos, splash): cache-first con fallback a red.
-   - Firebase CDN: network-first sin cachear (con fallback cache si red falla).
+   - Firebase CDN: STALE-WHILE-REVALIDATE (antes era no-store, rompía offline).
+   - Pre-cache en install: Firebase SDKs (best-effort) para arranque offline.
    - Al install: skipWaiting inmediato + limpieza agresiva de caches antiguas.
    - Al activate: claim + notificar SW_UPDATED a clientes.
    - skipWaiting: inmediato siempre (manual y automático).
@@ -17,10 +18,22 @@
 const CACHE_NAME  = 'dashwey-v1-3-1436';
 const HTML_URL    = 'index.html';
 
-/* Solo pre-cachear assets estáticos mínimos — el HTML se gestiona en el fetch handler */
+/* v1.3.1436 BUG-OFFLINE FIX — Lote D
+   Pre-cache crítico para arranque offline:
+   - scope root '/Dashwey-/' (start_url del manifest, sin esto PWA fallaba al
+     arrancar sin red porque solo estaba cacheado /Dashwey-/index.html)
+   - Firebase SDKs (gstatic) — sin esto los import() de línea 10091 fallan offline
+     y la app rompe en arranque (síntoma: pantalla "Sin conexión" persistente).
+   addAll() es atómico: si UNA URL falla, ninguna se cachea. Por eso usamos
+   add() individual con catch para no bloquear el install si gstatic está caído. */
 const PRECACHE_URLS = [
   /* B-7: index.html no se pre-cachea — fetch handler lo cachea tras primer fetch exitoso */
   /* version.json se sirve siempre de red — no pre-cachear */
+];
+const FIREBASE_SDK_URLS = [
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js',
 ];
 
 /* ── Install ────────────────────────────────────────────────────────
@@ -37,7 +50,24 @@ self.addEventListener('install', e => {
         }));
       })
       .then(() => caches.open(CACHE_NAME))
-      .then(c => c.addAll(PRECACHE_URLS).catch(() => {}))
+      .then(c => {
+        /* v1.3.1436 BUG-OFFLINE FIX — Lote D
+           Pre-cache best-effort: si una URL falla (sin red en install),
+           no rompemos toda la instalación. fetch handler las cacheará luego. */
+        const fbPromises = FIREBASE_SDK_URLS.map(url => {
+          return fetch(url, { mode: 'cors' })
+            .then(res => {
+              if (res && (res.status === 200 || res.type === 'opaque')) {
+                return c.put(url, res.clone());
+              }
+            })
+            .catch(() => { /* sin red en install: ignorar, fetch handler lo cubrirá */ });
+        });
+        return Promise.all([
+          c.addAll(PRECACHE_URLS).catch(() => {}),
+          ...fbPromises
+        ]);
+      })
   );
 });
 
@@ -234,9 +264,18 @@ self.addEventListener('fetch', e => {
           return res;
         })
         .catch(() => {
-          /* Sin red: servir desde cache */
+          /* v1.3.1436 BUG-OFFLINE FIX — Lote D
+             Sin red: servir desde cache. Antes el fallback solo intentaba
+             match exacto de la URL pedida. Si el usuario abría PWA con
+             '/Dashwey-/' (start_url manifest, sin index.html), no había
+             match en cache (solo estaba '/Dashwey-/index.html') → caía a la
+             página minimal "Sin conexión" aunque el HTML SÍ estaba cacheado.
+             Ahora: 1) intentar match exacto; 2) si falla, intentar
+             '/Dashwey-/index.html' como fallback universal. */
           return caches.match(e.request).then(cached => {
             if (cached) return cached;
+            return caches.match('/Dashwey-/index.html').then(idxCached => {
+              if (idxCached) return idxCached;
             /* Sin cache tampoco: página mínima de offline */
             return new Response(
               '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
@@ -265,19 +304,40 @@ self.addEventListener('fetch', e => {
               '</body></html>',
               { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
             );
+            });
           });
         })
     );
     return;
   }
 
-  /* Firebase CDN: network-first sin cachear */
+  /* Firebase CDN: stale-while-revalidate
+     v1.3.1436 BUG-OFFLINE FIX — Lote D
+     Antes: cache: 'no-store' + fallback caches.match() que SIEMPRE devolvía
+     undefined porque nunca se cacheaba → import() rompía offline → app
+     no arrancaba (pantalla "Sin conexión" persistente).
+     Ahora: si hay cache, servir cache (rápido); en paralelo refresh red para
+     próxima carga. Sin red, sirve cache silenciosamente. SDKs Firebase no
+     cambian frecuentemente (versión hardcoded 10.12.2), staleness aceptable. */
   if (url.hostname.includes('googleapis.com') ||
       url.hostname.includes('gstatic.com') ||
       url.hostname.includes('firebaseapp.com') ||
       url.hostname.includes('firebase.com')) {
     e.respondWith(
-      fetch(new Request(e.request, { cache: 'no-store' })).catch(() => caches.match(e.request))
+      caches.match(e.request).then(cached => {
+        const fetchPromise = fetch(e.request)
+          .then(res => {
+            if (res && (res.status === 200 || res.type === 'opaque')) {
+              const cloned = res.clone();
+              caches.open(CACHE_NAME).then(c => c.put(e.request, cloned)).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => cached); /* sin red: caer al cache (puede ser undefined) */
+        /* Si hay cache → servir inmediato (rápido).
+           Si no hay cache → esperar red (primer fetch). */
+        return cached || fetchPromise;
+      })
     );
     return;
   }
