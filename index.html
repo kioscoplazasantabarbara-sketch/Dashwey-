@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1436-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1437-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1436-dev</title>
+<title>Dashwey v1.3.1437-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -17502,7 +17502,12 @@ const Utils = (() => {
  try {
  const s = (typeof State !== 'undefined' && State.get?.settings) ? State.get.settings() : null;
  if (s && s.prefHaptic === false) return false;
- } catch(_) {}
+ } catch(e) {
+ // v1.3.1437 BUG-228 FIX: catch antes silencioso → si State.get.settings()
+ //   lanzaba (raro), permitía vibration sin saber por qué. Log warn para
+ //   debug. NO cambia comportamiento de retorno (sigue permitiendo vibration).
+ console.warn('[Haptic] _isHapticAllowed: error leyendo settings, permitiendo vibration por defecto:', e && e.message);
+ }
  return true;
  }
 
@@ -18193,9 +18198,15 @@ const Utils = (() => {
  }
 
  // ── Formato localizado ─────────────────────────────────────
+ // v1.3.1437 BUG-231 FIX: pattern más seguro para leer perfil.idioma.
+ //   Antes State.get?.perfil?.()?.idioma asumía que State.get.perfil es función.
+ //   Si por bug es undefined, lanzaba; try externo lo capturaba mostrando String(date).
+ //   Ahora: chequeo explícito de typeof === 'function' antes de invocar.
+ //   Solo cambio en formatDate/formatTime/getErrorMessage. NO toco formatCurrency
+ //   (devuelve € → riesgo en regla dura "no tocar funciones financieras").
  function formatDate(date, options) {
  try {
- var lang = (typeof State !== 'undefined' && State.get?.perfil?.()?.idioma) || 'es';
+ var lang = (typeof State !== 'undefined' && typeof State.get?.perfil === 'function' && (State.get.perfil() || {}).idioma) || 'es';
  var opts = Object.assign({ day: '2-digit', month: 'short', year: 'numeric' }, options || {});
  return new Date(date).toLocaleDateString(lang, opts);
  } catch(_) { return String(date || ''); }
@@ -18203,7 +18214,7 @@ const Utils = (() => {
 
  function formatTime(date) {
  try {
- var lang = (typeof State !== 'undefined' && State.get?.perfil?.()?.idioma) || 'es';
+ var lang = (typeof State !== 'undefined' && typeof State.get?.perfil === 'function' && (State.get.perfil() || {}).idioma) || 'es';
  return new Date(date).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' });
  } catch(_) { return ''; }
  }
@@ -18222,7 +18233,8 @@ const Utils = (() => {
  // ── Mensajes de error amigables ─────────────────────────────
  function getErrorMessage(error) {
  var code = (error && (error.code || error.message || String(error))) || 'default';
- var lang = (typeof State !== 'undefined' && State.get?.perfil?.()?.idioma) || 'es';
+ // v1.3.1437 BUG-231 FIX: pattern seguro (ver formatDate para racional).
+ var lang = (typeof State !== 'undefined' && typeof State.get?.perfil === 'function' && (State.get.perfil() || {}).idioma) || 'es';
  var MAP = {
  es: {
  'ERR_INTERNET_DISCONNECTED': 'Sin conexión a internet',
@@ -18515,7 +18527,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1436-dev';
+ const _APP_VERSION = 'v1.3.1437-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28393,6 +28405,12 @@ function _toggleCardFromManager(id, btn) {
  // Sin tabs — todo en una sola vista ordenada por fecha.
  // ─────────────────────────────────────────────────────────────────
  let _agendaHash = ''; // v1.2.25: dirty-check
+ // v1.3.1437 BUG-269 FIX: SVG icons hoisted al scope del módulo (antes recreados
+ //   en cada renderAgenda → garbage collection extra). Strings inmutables, perf only.
+ const _AG_ICON_TRUCK = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+ const _AG_ICON_PERSON = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ const _AG_TRACK_TRUCK = '<svg viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+ const _AG_TRACK_PERSON = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
  function renderAgenda() {
  const el = document.getElementById('dash-agenda-list');
  if (!el) return;
@@ -28415,11 +28433,12 @@ function _toggleCardFromManager(id, btn) {
  const diffDays = d => Math.round((d-hoy)/86400000);
 
  // SVG inline sin emojis — camión y persona en trazo fino
- const ICON_TRUCK = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
- const ICON_PERSON = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ // v1.3.1437 BUG-269 FIX: aliases a hoisted (creadas 1 vez fuera de renderAgenda).
+ const ICON_TRUCK = _AG_ICON_TRUCK;
+ const ICON_PERSON = _AG_ICON_PERSON;
  // Track SVG pequeño para el icono animado
- const TRACK_TRUCK = '<svg viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
- const TRACK_PERSON = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ const TRACK_TRUCK = _AG_TRACK_TRUCK;
+ const TRACK_PERSON = _AG_TRACK_PERSON;
 
  const eventos = [];
 
@@ -29410,7 +29429,9 @@ try { _validarCoherenciaFinanciera(); } catch(e) {}
    requestAnimationFrame(function() {
     _movSheet.classList.add('open');
     var panel = _movSheet.querySelector('.mov-sheet-panel');
-    if (panel) panel.scrollTop = 0;
+    // v1.3.1437 BUG-258 FIX: skip scrollTop=0 si ya es 0 (panel recién construido).
+    //   Antes: lectura+escritura forzaba reflow innecesario en cada apertura.
+    if (panel && panel.scrollTop !== 0) panel.scrollTop = 0;
    });
   });
 
