@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1436-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1437-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1436-dev</title>
+<title>Dashwey v1.3.1437-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16239,7 +16239,15 @@ const FinEngine = (() => {
     if (!L || (L.qtyRestante || 0) <= 0) return s;
     return s + (L.qtyRestante || 0) * (L.costeUnit || 0);
    }, 0);
-   return money(valor);
+   // v1.3.1437 BUG-247 FIX: si lotes existen pero todos qtyRestante <= 0,
+   //   `valor` queda en 0 y silenciosamente caemos al fallback legacy. Antes
+   //   no había log → drift invisible. Ahora warn una vez por carga.
+   if (valor === 0 && !window._DashweyValorStockDriftWarned) {
+    window._DashweyValorStockDriftWarned = true;
+    console.warn('[FinEngine] valorStock: ' + lotes.length + ' lotes presentes pero todos agotados (qtyRestante<=0). Cayendo a fallback legacy (precioCompra) — posible drift respecto a coste FIFO real.');
+   }
+   if (valor > 0) return money(valor);
+   // Si valor === 0 cae al fallback abajo (mantiene comportamiento anterior).
   }
   // Fallback legacy: sin FIFO, usar precioCompra actual (drift inevitable)
   return money((State.get.productos() || [])
@@ -16779,6 +16787,8 @@ const CierreEngine = (() => {
    State.set.addCierre(c);
    State.set.setJornadaActiva(c.id);
    console.log('[CierreEngine] ✓ jornada abierta:', c.id, '| saldo inicial:', c.saldoInicial);
+   // v1.3.1437 BUG-298 FIX: emitir 'cierre' tras openJornada para refrescar UI.
+   try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
    return c;
   } catch(e) {
    console.warn('[CierreEngine] openJornada error:', e);
@@ -16886,6 +16896,10 @@ const CierreEngine = (() => {
     console.warn('[CierreEngine] stamp closureId error:', eStamp);
    }
    console.log('[CierreEngine] ✓ jornada cerrada:', c.id, '| diferencia:', diff.toFixed(2) + '€');
+   // v1.3.1437 BUG-298 FIX: emitir 'cierre' tras closeJornada (legacy no lo hacía).
+   //   Coherencia con _autoCierreCrearCierreReal (línea 22899) que ya emite.
+   //   Sin esto, listeners UI no refrescaban tarjetas Dashboard tras cierre manual.
+   try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
    return Object.assign({}, c, vals);
   } catch(e) {
    console.warn('[CierreEngine] closeJornada error:', e);
@@ -17352,7 +17366,9 @@ const Utils = (() => {
  const DEBOUNCE_KB = 60; // ms — debounce keyboard resize
  const SPIN_DURATION = 650; // ms — duración spinner de refresh
 
- function feur(n) { return Number(n || 0).toFixed(2).replace('.', ',') + ' €'; }
+ // v1.3.1437 BUG-225 FIX: NaN es truthy en `||`, antes `feur("abc")` devolvía "NaN €".
+ //   Ahora isFinite() check explícito → fallback a 0 para inputs no numéricos.
+ function feur(n) { var num = Number(n); return (isFinite(num) ? num : 0).toFixed(2).replace('.', ',') + ' €'; }
 
  var _toastTimer = null; // v1.3.530: cancelar timer previo — evita que toast rápido cancele al siguiente
  function showToast(msg, type) {
@@ -18515,7 +18531,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1436-dev';
+ const _APP_VERSION = 'v1.3.1437-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28393,6 +28409,12 @@ function _toggleCardFromManager(id, btn) {
  // Sin tabs — todo en una sola vista ordenada por fecha.
  // ─────────────────────────────────────────────────────────────────
  let _agendaHash = ''; // v1.2.25: dirty-check
+ // v1.3.1437 BUG-269 FIX: SVG icons hoisted al scope superior (antes recreados
+ //   en cada renderAgenda → garbage collection extra). Constantes inmutables.
+ const _AG_ICON_TRUCK = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+ const _AG_ICON_PERSON = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ const _AG_TRACK_TRUCK = '<svg viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+ const _AG_TRACK_PERSON = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
  function renderAgenda() {
  const el = document.getElementById('dash-agenda-list');
  if (!el) return;
@@ -28415,11 +28437,12 @@ function _toggleCardFromManager(id, btn) {
  const diffDays = d => Math.round((d-hoy)/86400000);
 
  // SVG inline sin emojis — camión y persona en trazo fino
- const ICON_TRUCK = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
- const ICON_PERSON = '<svg viewBox="0 0 24 24" stroke-width="1.8" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ // v1.3.1437 BUG-269 FIX: aliases a constantes hoisted (creadas 1 vez, no por render).
+ const ICON_TRUCK = _AG_ICON_TRUCK;
+ const ICON_PERSON = _AG_ICON_PERSON;
  // Track SVG pequeño para el icono animado
- const TRACK_TRUCK = '<svg viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="15" height="13" rx="1.5"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
- const TRACK_PERSON = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+ const TRACK_TRUCK = _AG_TRACK_TRUCK;
+ const TRACK_PERSON = _AG_TRACK_PERSON;
 
  const eventos = [];
 
