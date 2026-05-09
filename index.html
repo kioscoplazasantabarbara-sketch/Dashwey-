@@ -19875,7 +19875,7 @@ const ui = (() => {
   items: [
   { icon: '🔄', name: 'Estado de sincronización claro en Ajustes', desc: 'El indicador debajo de tu correo ahora muestra 3 estados: "Online · Sincronizado" cuando los datos están al día, "Online · Sincronizando…" cuando se están comprobando contra la nube, "Offline" sin conexión. Se actualiza en tiempo real.' },
   { icon: '🛡️', name: 'Sincronización más robusta entre dispositivos', desc: 'Mejoras internas en el sello de tiempo de productos, proveedores, gastos, ingresos y mermas. Edits desde un dispositivo ahora son más resistentes a sobrescritura accidental por sync stale.' },
-  { icon: '🩺', name: 'Diagnóstico al alcance', desc: 'Comandos de consola: _dashweyHealth() y _dashweySanity() para verificar el estado de la app y los datos en cualquier momento.' },
+  { icon: '🩺', name: 'Diagnóstico al alcance', desc: 'Comandos de consola: _dashweyHealth() y _dashweySanity() para verificar el estado de la app y los datos en cualquier momento. Detecta automáticamente si el dispositivo está en zona horaria distinta del kiosco (causa frecuente de fechas desfasadas en pantalla).' },
   ]}]
   },
   'v1.3.744-dev': {
@@ -54019,6 +54019,37 @@ window._DashweyDeviceId = (() => {
     'InitialSyncDone=' + !!window._DashweyInitialSyncDone +
     ' OfflineBoot=' + !!window._DashweyOfflineBoot +
     ' online=' + (typeof navigator !== 'undefined' && navigator.onLine));
+   // v1.3.1438 TZ-SANITY: detectar si la zona horaria del device ≠ zona del kiosco.
+   //   Cuando el device está en zona distinta de perfil.zona ('Europe/Madrid' por defecto),
+   //   varios cálculos UI muestran fechas/jornadas desfasadas (ver BUG_N4_TZ_HARDENING.md).
+   //   En APK Pixel del kiosco no debería ocurrir; en PWA desde laptop sí (caso real
+   //   detectado en sesión 9-may, PC en zona Asia mostraba "Hoy 10 Mayo" siendo 9 may
+   //   23:15 Madrid). Pure read — solo informa, no corrige.
+   try {
+    var perfil = State.get.perfil && State.get.perfil();
+    var zonaKiosco = (perfil && perfil.zona) || 'Europe/Madrid';
+    // Hora actual formateada en zona kiosco
+    var fmtKiosco = new Intl.DateTimeFormat('en-CA', {
+     timeZone: zonaKiosco, year: 'numeric', month: '2-digit', day: '2-digit',
+     hour: '2-digit', hour12: false
+    });
+    var partsK = fmtKiosco.formatToParts(new Date());
+    var getK = function(t){ var p = partsK.find(function(x){return x.type===t;}); return p ? p.value : ''; };
+    var dateKiosco = getK('year') + '-' + getK('month') + '-' + getK('day');
+    var hourKiosco = parseInt(getK('hour'), 10);
+    // Hora actual formateada en zona DEVICE (sin timeZone explícito)
+    var dev = new Date();
+    var dateDev = dev.getFullYear() + '-' + String(dev.getMonth()+1).padStart(2,'0') + '-' + String(dev.getDate()).padStart(2,'0');
+    var hourDev = dev.getHours();
+    if (dateDev !== dateKiosco || hourDev !== hourKiosco) {
+     _add('warn', 'tz_mismatch',
+      'Device en zona distinta del kiosco. Device=' + dateDev + ' ' + hourDev + 'h | Kiosco(' + zonaKiosco + ')=' + dateKiosco + ' ' + hourKiosco + 'h. Algunas fechas pueden mostrarse desfasadas.');
+    } else {
+     _add('ok', 'tz_match', 'Device coincide con zona kiosco (' + zonaKiosco + ')');
+    }
+   } catch(e) {
+    _add('warn', 'tz_check_error', e && e.message);
+   }
   } catch(e) {
    _add('err', 'sanity_throw', e && e.message);
   }
