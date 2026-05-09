@@ -1600,29 +1600,6 @@ body.settings-open .alm-page-header {
  display: flex; align-items: center; gap:var(--sp-1);
  flex-shrink: 0; min-width: 64px;
 }
-/* v1.3.1438 — Badge flotante visible en boot.
-   Position fixed top-right por encima del header sin afectar layout.
-   Se autoesconde tras 3s de 'synced' (Utils.updateSyncBadge auto-fade). */
-.dashwey-sync-badge {
- position: fixed !important;
- top: calc(env(safe-area-inset-top, 0px) + 8px);
- right: 12px;
- z-index: 10499; /* debajo de splash (10501), encima de UI normal */
- padding: 6px 10px;
- background: rgba(255,255,255,0.92);
- backdrop-filter: blur(8px);
- -webkit-backdrop-filter: blur(8px);
- border-radius: 999px;
- box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
- transition: opacity 0.3s ease;
- pointer-events: none;
-}
-/* Si label vacío (modo local idle) → ocultar todo el badge */
-.dashwey-sync-badge:has(#sync-label:empty) { opacity: 0; }
-@supports not (selector(:has(*))) {
- /* Fallback: si :has() no soportado, badge siempre visible si tiene clase activa */
- .dashwey-sync-badge { opacity: 1; }
-}
 #sync-dot {
  width: 6px; height: 6px; border-radius: 50%;
  background: rgba(0,0,0,0.18);
@@ -6419,6 +6396,10 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
 .sd-status { display: flex; align-items: center; gap:var(--sp-1); font-size: var(--fs-xs); color: var(--ink-soft); }
 .sd-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(0,0,0,0.20); display: inline-block; transition: background 0.4s; }
 .sd-dot.online { background: #22C55E; }
+/* v1.3.1438: estado "syncing" — online pero InitialSync no completado.
+   Pulse animado para feedback visual de actividad en curso. */
+.sd-dot.syncing { background: #F59E0B; animation: sd-dot-pulse 1.5s ease-in-out infinite; }
+@keyframes sd-dot-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 .sd-section-lbl { font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: var(--ls-wider); text-transform: uppercase; color: var(--ink-soft); opacity: 0.6; padding: var(--sp-4) var(--sp-5) var(--sp-2); margin: 0; }
 /* Chips de selección inline — método de pago y selectores compactos */
 .sd-chip {
@@ -9175,7 +9156,7 @@ function _authTabSafe(tab) {
  <h1 id="header-title" style="display:none;">DASHBOARD</h1>
  <button id="header-avatar-btn" style="display:none" aria-hidden="true"></button>
  <span id="settings-label" style="display:none">Settings</span>
- <div id="sync-badge" class="dashwey-sync-badge" aria-live="polite"><div id="sync-dot" class="local"></div><span id="sync-label"></span></div>
+ <div id="sync-badge" style="display:none"><div id="sync-dot" class="local"></div><span id="sync-label"></span></div>
  <div id="ctx-switcher" style="display:none"><!-- eliminado v1.3.643 --></div>
  </div>
 
@@ -19407,11 +19388,11 @@ const ui = (() => {
     }
    }
    if (el('sd-email')) el('sd-email').textContent = email;
- // online/offline
- const isOnline = navigator.onLine;
- if (el('sd-status-lbl')) el('sd-status-lbl').textContent = isOnline ? 'Online' : 'Offline';
- const dot = el('sd-status')?.querySelector('.sd-dot');
- if (dot) dot.classList.toggle('online', isOnline);
+ // v1.3.1438: badge sd-status ahora refleja 3 estados combinando red + sync inicial.
+ //   Antes: solo navigator.onLine → "Online" / "Offline" (no decía nada de la sync real).
+ //   Ahora: delega a _dashweyUpdateSdStatus() que también escucha eventos para refresh
+ //          en tiempo real (no solo al abrir Ajustes).
+ try { if (window._dashweyUpdateSdStatus) window._dashweyUpdateSdStatus(); } catch(_) {}
  // settings toggles
  const s = State.get.settings();
 // sd-cierre-sub existe como compat en Almacen header -- actualizar si existe
@@ -19883,8 +19864,8 @@ const ui = (() => {
   sections: [{
   title: '✨ Mejoras de fiabilidad',
   items: [
-  { icon: '🔄', name: 'Indicador de sincronización visible', desc: 'Al abrir la app verás un badge sutil arriba a la derecha que indica si los datos se están sincronizando con la nube. Verde "En línea" cuando termina, amarillo "Sincronizando…" durante el proceso.' },
-  { icon: '🩺', name: 'Diagnóstico al alcance', desc: 'Nuevos comandos de consola: _dashweyHealth() y _dashweySanity() para verificar el estado de la app y los datos en cualquier momento.' },
+  { icon: '🔄', name: 'Estado de sincronización claro en Ajustes', desc: 'El indicador debajo de tu correo ahora muestra 3 estados: "Online · Sincronizado" cuando los datos están al día, "Online · Sincronizando…" cuando se están comprobando contra la nube, "Offline" sin conexión. Se actualiza en tiempo real.' },
+  { icon: '🩺', name: 'Diagnóstico al alcance', desc: 'Comandos de consola: _dashweyHealth() y _dashweySanity() para verificar el estado de la app y los datos en cualquier momento.' },
   ]}]
   },
   'v1.3.744-dev': {
@@ -52809,19 +52790,14 @@ _eaRecalc();
   window._DashweyOfflineBoot = true; // marca para reintento al reconectar
   State.set.syncStatus({ mode: 'local', pendingWrites: (typeof _pendingQueue !== 'undefined' ? _pendingQueue.length : 0) });
   if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
+  // v1.3.1438: notificar UI reactiva (sd-status)
+  try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true, offline: true } })); } catch(_) {}
   return;
  }
 
  // ── Device ID: identificador único por dispositivo ──────────
  // Permite al onSnapshot ignorar snapshots causados por este mismo dispositivo
  const deviceId = window._DashweyDeviceId;
-
- // v1.3.1438: indicar al usuario que la sync inicial está en marcha.
- //   Antes: el badge sólo se actualizaba en eventos online/offline o al final
- //   del merge. Durante 30-60s de cold-start con red lenta, el usuario veía
- //   datos localStorage (potencialmente stale) sin ningún indicador visual de
- //   que aún se estaban verificando. El badge "🟡 Sincronizando…" cubre ese gap.
- try { if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing'); } catch(_) {}
 
  const remote = await fb.read('state');
  if (!remote) {
@@ -52832,6 +52808,8 @@ _eaRecalc();
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
  window._DashweyInitialSyncDone = true;
+ // v1.3.1438: notificar UI reactiva (sd-status)
+ try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true, firstTimeCloud: true } })); } catch(_) {}
  return;
  }
 
@@ -53506,6 +53484,8 @@ _eaRecalc();
  window._DashweyOnLocalWrite = () => {};
  // Marcar sync inicial completado (permite writes a Firebase)
  window._DashweyInitialSyncDone = true;
+ // v1.3.1438: notificar a UI reactiva (sd-status badge en Ajustes)
+ try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true } })); } catch(_) {}
  // v1.3.1135 FIX#1: si había dirty pending durante InitialSync, agendar save ahora
  if (window._DashweyDirty && !window._DashweySaveScheduled) {
   try {
@@ -53900,23 +53880,81 @@ window._DashweyDeviceId = (() => {
  })();
 
  // ══════════════════════════════════════════════════════════════════
- // v1.3.1438 SANITY CHECK — pure-function, zero side effects
+ // v1.3.1438 — sd-status badge reactivo + Sanity Helpers (DevTools)
  //
- // PROPÓSITO: detectar localStorage corrupto/inconsistente al boot SIN tocar
- //   el flujo de hidratación ni los cálculos financieros. Solo lee y reporta.
+ // PROPÓSITO
+ //   El badge "Online/Offline" debajo del email en Ajustes ahora refleja
+ //   3 estados combinando red + sync inicial:
+ //     - 'offline'  → "Offline"            (sin red)
+ //     - 'syncing'  → "Online · Sincronizando…"  (con red pero InitialSync NO completado)
+ //     - 'online'   → "Online · Sincronizado"    (con red e InitialSync completado)
  //
- // FILOSOFÍA (regla dura post-BUG-247):
- //   - NO modifica datos
- //   - NO modifica flujo de control
- //   - NO toca State.set / State.get
- //   - Solo console.log/warn + retorno objeto diagnóstico
+ //   Antes (v1.3.1437): solo "Online/Offline" basado en navigator.onLine,
+ //   actualizándose únicamente al abrir Ajustes. No decía nada del estado real de sync.
  //
- // USO:
- //   _dashweySanity()     → ejecuta verificaciones, devuelve { ok, checks, warnings, errors }
- //   _dashweyHealth()     → wrapper más completo (sanity + flags sync + métricas)
+ // FILOSOFÍA (regla post-BUG-247): este bloque NO toca cálculos financieros,
+ //   NO toca _mergeById, NO modifica guards. Solo lee flags y actualiza UI.
  //
- // PREP día 5: estos helpers son la base de Sanity Helpers DevTools (v1.3.1439).
+ // REACTIVIDAD: el helper se llama también desde:
+ //   1. Apertura de Ajustes (App.ui.openSettings → openSettings inline)
+ //   2. Eventos online/offline del navegador
+ //   3. Custom event 'dashwey:sync-state-changed' (disparado al completar InitialSync)
  // ══════════════════════════════════════════════════════════════════
+ window._dashweyUpdateSdStatus = function _dashweyUpdateSdStatus() {
+  try {
+   var lbl = document.getElementById('sd-status-lbl');
+   var statusEl = document.getElementById('sd-status');
+   var dot = statusEl ? statusEl.querySelector('.sd-dot') : null;
+   if (!lbl || !dot) return; // panel aún no presente
+   var online = (typeof navigator !== 'undefined') && navigator.onLine;
+   var syncDone = !!window._DashweyInitialSyncDone;
+   // Reset clases
+   dot.classList.remove('online', 'syncing');
+   if (!online) {
+    lbl.textContent = 'Offline';
+   } else if (!syncDone) {
+    lbl.textContent = 'Online · Sincronizando…';
+    dot.classList.add('syncing');
+   } else {
+    lbl.textContent = 'Online · Sincronizado';
+    dot.classList.add('online');
+   }
+  } catch(e) { /* silencioso — no romper boot */ }
+ };
+
+ // Listeners reactivos
+ try {
+  window.addEventListener('online', function() { window._dashweyUpdateSdStatus(); });
+  window.addEventListener('offline', function() { window._dashweyUpdateSdStatus(); });
+  window.addEventListener('dashwey:sync-state-changed', function() { window._dashweyUpdateSdStatus(); });
+ } catch(_) {}
+
+ // Sondeo defensivo: cada 2s comprobar si flag InitialSyncDone cambió y refrescar.
+ //   Esto cubre cambios del flag desde código que no dispara el custom event.
+ //   Coste: 1 lectura DOM + 1 comparación booleana cada 2s. Imperceptible.
+ (function _sdStatusPoll() {
+  var _lastSyncDone = null;
+  var _lastOnline = null;
+  setInterval(function() {
+   try {
+    var s = !!window._DashweyInitialSyncDone;
+    var o = (typeof navigator !== 'undefined') && navigator.onLine;
+    if (s !== _lastSyncDone || o !== _lastOnline) {
+     _lastSyncDone = s; _lastOnline = o;
+     window._dashweyUpdateSdStatus();
+    }
+   } catch(_) {}
+  }, 2000);
+ })();
+
+ // Refresh inicial al cargar (cubrir caso boot tardío)
+ setTimeout(function() { try { window._dashweyUpdateSdStatus(); } catch(_) {} }, 500);
+
+ // ── Sanity Helpers DevTools (prep v1.3.1439) ──────────────────────
+ // _dashweySanity()  → checks de integridad localStorage
+ // _dashweyHealth()  → diagnóstico completo (sanity + flags + Firebase)
+ // PURE FUNCTIONS: solo leen, no modifican nada.
+
  window._dashweySanity = function _dashweySanity() {
   var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   var report = { ok: true, checks: [], warnings: [], errors: [] };
@@ -53926,8 +53964,12 @@ window._DashweyDeviceId = (() => {
    else if (level === 'warn') { report.warnings.push(entry); report.ok = false; }
    else if (level === 'err') { report.errors.push(entry); report.ok = false; }
   }
+  function _finish() {
+   var elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0;
+   report.elapsedMs = Math.round(elapsed * 100) / 100;
+   return report;
+  }
   try {
-   // C1: ¿existe State y tiene cuentas?
    if (typeof State === 'undefined' || !State.get) {
     _add('err', 'state_missing', 'State no inicializado');
     return _finish();
@@ -53938,7 +53980,6 @@ window._DashweyDeviceId = (() => {
    } else {
     _add('ok', 'cuentas', cuentas.length + ' cuentas');
    }
-   // C2: saldoInicial razonable (-1M a 10M €) por cuenta
    for (var i = 0; i < cuentas.length; i++) {
     var c = cuentas[i];
     var si = Number(c && c.saldoInicial);
@@ -53946,13 +53987,11 @@ window._DashweyDeviceId = (() => {
      _add('warn', 'saldoInicial_extremo', (c && c.nombre || c && c.id) + ' = ' + si);
     }
    }
-   // C3: dirty queue presente
    try {
     var dirty = !!window._DashweyDirty;
     var dirtyItems = (window._DashweyDirtyItems && Object.keys(window._DashweyDirtyItems).length) || 0;
     _add('ok', 'dirty', 'flag=' + dirty + ' items=' + dirtyItems);
    } catch(_) {}
-   // C4: arrays transaccionales presentes
    var arrs = ['ventas', 'gastosOp', 'historialPedidos', 'productos', 'proveedores'];
    for (var k = 0; k < arrs.length; k++) {
     try {
@@ -53966,18 +54005,12 @@ window._DashweyDeviceId = (() => {
      _add('warn', arrs[k] + '_error', e && e.message);
     }
    }
-   // C5: flags de sync
    _add('ok', 'sync_flags',
     'InitialSyncDone=' + !!window._DashweyInitialSyncDone +
     ' OfflineBoot=' + !!window._DashweyOfflineBoot +
     ' online=' + (typeof navigator !== 'undefined' && navigator.onLine));
   } catch(e) {
    _add('err', 'sanity_throw', e && e.message);
-  }
-  function _finish() {
-   var elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0;
-   report.elapsedMs = Math.round(elapsed * 100) / 100;
-   return report;
   }
   return _finish();
  };
