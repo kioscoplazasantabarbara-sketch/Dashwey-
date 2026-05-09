@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1.3.1437-dev";
+ var CURRENT_CACHE = "dashwey-v1.3.1438-dev";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1437-dev</title>
+<title>Dashwey v1.3.1438-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1599,6 +1599,29 @@ body.settings-open .alm-page-header {
 #sync-badge {
  display: flex; align-items: center; gap:var(--sp-1);
  flex-shrink: 0; min-width: 64px;
+}
+/* v1.3.1438 — Badge flotante visible en boot.
+   Position fixed top-right por encima del header sin afectar layout.
+   Se autoesconde tras 3s de 'synced' (Utils.updateSyncBadge auto-fade). */
+.dashwey-sync-badge {
+ position: fixed !important;
+ top: calc(env(safe-area-inset-top, 0px) + 8px);
+ right: 12px;
+ z-index: 10499; /* debajo de splash (10501), encima de UI normal */
+ padding: 6px 10px;
+ background: rgba(255,255,255,0.92);
+ backdrop-filter: blur(8px);
+ -webkit-backdrop-filter: blur(8px);
+ border-radius: 999px;
+ box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+ transition: opacity 0.3s ease;
+ pointer-events: none;
+}
+/* Si label vacío (modo local idle) → ocultar todo el badge */
+.dashwey-sync-badge:has(#sync-label:empty) { opacity: 0; }
+@supports not (selector(:has(*))) {
+ /* Fallback: si :has() no soportado, badge siempre visible si tiene clase activa */
+ .dashwey-sync-badge { opacity: 1; }
 }
 #sync-dot {
  width: 6px; height: 6px; border-radius: 50%;
@@ -9152,7 +9175,7 @@ function _authTabSafe(tab) {
  <h1 id="header-title" style="display:none;">DASHBOARD</h1>
  <button id="header-avatar-btn" style="display:none" aria-hidden="true"></button>
  <span id="settings-label" style="display:none">Settings</span>
- <div id="sync-badge" style="display:none"><div id="sync-dot" class="local"></div><span id="sync-label"></span></div>
+ <div id="sync-badge" class="dashwey-sync-badge" aria-live="polite"><div id="sync-dot" class="local"></div><span id="sync-label"></span></div>
  <div id="ctx-switcher" style="display:none"><!-- eliminado v1.3.643 --></div>
  </div>
 
@@ -18527,7 +18550,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1437-dev';
+ const _APP_VERSION = 'v1.3.1438-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19855,6 +19878,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1438-dev': {
+   id: 'wn-2026-05-11-v1438',
+  sections: [{
+  title: '✨ Mejoras de fiabilidad',
+  items: [
+  { icon: '🔄', name: 'Indicador de sincronización visible', desc: 'Al abrir la app verás un badge sutil arriba a la derecha que indica si los datos se están sincronizando con la nube. Verde "En línea" cuando termina, amarillo "Sincronizando…" durante el proceso.' },
+  { icon: '🩺', name: 'Diagnóstico al alcance', desc: 'Nuevos comandos de consola: _dashweyHealth() y _dashweySanity() para verificar el estado de la app y los datos en cualquier momento.' },
+  ]}]
+  },
   'v1.3.744-dev': {
    id: 'wn-2026-04-08-v629',
   sections: [{
@@ -52784,6 +52816,13 @@ _eaRecalc();
  // Permite al onSnapshot ignorar snapshots causados por este mismo dispositivo
  const deviceId = window._DashweyDeviceId;
 
+ // v1.3.1438: indicar al usuario que la sync inicial está en marcha.
+ //   Antes: el badge sólo se actualizaba en eventos online/offline o al final
+ //   del merge. Durante 30-60s de cold-start con red lenta, el usuario veía
+ //   datos localStorage (potencialmente stale) sin ningún indicador visual de
+ //   que aún se estaban verificando. El badge "🟡 Sincronizando…" cubre ese gap.
+ try { if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('syncing'); } catch(_) {}
+
  const remote = await fb.read('state');
  if (!remote) {
  // Primera vez en la nube — subir snapshot del estado local (dual: subcol + root filtrado)
@@ -53859,6 +53898,112 @@ window._DashweyDeviceId = (() => {
   // Primer check tras 30s
   setTimeout(_check, _RETRY_INTERVAL);
  })();
+
+ // ══════════════════════════════════════════════════════════════════
+ // v1.3.1438 SANITY CHECK — pure-function, zero side effects
+ //
+ // PROPÓSITO: detectar localStorage corrupto/inconsistente al boot SIN tocar
+ //   el flujo de hidratación ni los cálculos financieros. Solo lee y reporta.
+ //
+ // FILOSOFÍA (regla dura post-BUG-247):
+ //   - NO modifica datos
+ //   - NO modifica flujo de control
+ //   - NO toca State.set / State.get
+ //   - Solo console.log/warn + retorno objeto diagnóstico
+ //
+ // USO:
+ //   _dashweySanity()     → ejecuta verificaciones, devuelve { ok, checks, warnings, errors }
+ //   _dashweyHealth()     → wrapper más completo (sanity + flags sync + métricas)
+ //
+ // PREP día 5: estos helpers son la base de Sanity Helpers DevTools (v1.3.1439).
+ // ══════════════════════════════════════════════════════════════════
+ window._dashweySanity = function _dashweySanity() {
+  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  var report = { ok: true, checks: [], warnings: [], errors: [] };
+  function _add(level, name, info) {
+   var entry = { name: name, info: info };
+   if (level === 'ok') report.checks.push(entry);
+   else if (level === 'warn') { report.warnings.push(entry); report.ok = false; }
+   else if (level === 'err') { report.errors.push(entry); report.ok = false; }
+  }
+  try {
+   // C1: ¿existe State y tiene cuentas?
+   if (typeof State === 'undefined' || !State.get) {
+    _add('err', 'state_missing', 'State no inicializado');
+    return _finish();
+   }
+   var cuentas = (State.get.cuentas && State.get.cuentas()) || [];
+   if (!Array.isArray(cuentas) || cuentas.length === 0) {
+    _add('warn', 'no_accounts', 'Sin cuentas — primer arranque o reset');
+   } else {
+    _add('ok', 'cuentas', cuentas.length + ' cuentas');
+   }
+   // C2: saldoInicial razonable (-1M a 10M €) por cuenta
+   for (var i = 0; i < cuentas.length; i++) {
+    var c = cuentas[i];
+    var si = Number(c && c.saldoInicial);
+    if (isNaN(si) || si < -1000000 || si > 10000000) {
+     _add('warn', 'saldoInicial_extremo', (c && c.nombre || c && c.id) + ' = ' + si);
+    }
+   }
+   // C3: dirty queue presente
+   try {
+    var dirty = !!window._DashweyDirty;
+    var dirtyItems = (window._DashweyDirtyItems && Object.keys(window._DashweyDirtyItems).length) || 0;
+    _add('ok', 'dirty', 'flag=' + dirty + ' items=' + dirtyItems);
+   } catch(_) {}
+   // C4: arrays transaccionales presentes
+   var arrs = ['ventas', 'gastosOp', 'historialPedidos', 'productos', 'proveedores'];
+   for (var k = 0; k < arrs.length; k++) {
+    try {
+     var arr = State.get[arrs[k]] && State.get[arrs[k]]();
+     if (!Array.isArray(arr)) {
+      _add('warn', arrs[k] + '_no_array', typeof arr);
+     } else {
+      _add('ok', arrs[k], arr.length + ' items');
+     }
+    } catch(e) {
+     _add('warn', arrs[k] + '_error', e && e.message);
+    }
+   }
+   // C5: flags de sync
+   _add('ok', 'sync_flags',
+    'InitialSyncDone=' + !!window._DashweyInitialSyncDone +
+    ' OfflineBoot=' + !!window._DashweyOfflineBoot +
+    ' online=' + (typeof navigator !== 'undefined' && navigator.onLine));
+  } catch(e) {
+   _add('err', 'sanity_throw', e && e.message);
+  }
+  function _finish() {
+   var elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0;
+   report.elapsedMs = Math.round(elapsed * 100) / 100;
+   return report;
+  }
+  return _finish();
+ };
+
+ window._dashweyHealth = function _dashweyHealth() {
+  var s = window._dashweySanity ? window._dashweySanity() : null;
+  var h = {
+   version: (typeof _APP_VERSION === 'string') ? _APP_VERSION : 'unknown',
+   timestamp: new Date().toISOString(),
+   sanity: s,
+   sync: {
+    initialDone: !!window._DashweyInitialSyncDone,
+    offlineBoot: !!window._DashweyOfflineBoot,
+    online: (typeof navigator !== 'undefined') ? navigator.onLine : null,
+    deviceId: window._DashweyDeviceId || null,
+    pendingQueue: (typeof _pendingQueue !== 'undefined') ? _pendingQueue.length : null,
+   },
+   firebase: {
+    enabled: !!(window._DashweyFirebase && window._DashweyFirebase.enabled),
+    registered: !!(window._DashweyFirebase && window._DashweyFirebase.isRegistered && window._DashweyFirebase.isRegistered()),
+    uid: (window._DashweyFirebase && window._DashweyFirebase.uid) || null,
+   },
+  };
+  console.log('%c[Dashwey/Health]', 'color:#22C55E;font-weight:bold', h);
+  return h;
+ };
 
  // ── v9.5.73: Inicializar modo Dashboard al arrancar ──────────────────
  try { App.dash._applyDashMode(); } catch(e) {}
