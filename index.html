@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1450";
+ var CURRENT_CACHE = "dashwey-v1-3-1451";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1450-dev</title>
+<title>Dashwey v1.3.1451-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18695,7 +18695,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1450-dev';
+ const _APP_VERSION = 'v1.3.1451-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20023,6 +20023,21 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1451-dev': {
+   id: 'wn-2026-05-12-v1451',
+  sections: [{
+  title: '📅 Agenda fiable con multi-ciclos',
+  items: [
+  { icon: '🎯', name: 'Praviana, Bebidas y Goyo correctos', desc: 'Cuando un proveedor tiene varios días por semana (Praviana pide Lu+Do, Bebidas Ju+Do), Agenda detecta cada día como evento independiente. Ya no marca "Pedido & Entrega" mismo día por error cuando solo es pedido.' },
+  { icon: '🔄', name: 'Pedidos pendientes no ocultan próximos ciclos', desc: 'Antes si Bebidas tenía un pedido pendiente, dejaba de mostrar los próximos ciclos. Ahora oculta solo los ya cubiertos por el pendiente y muestra los siguientes.' },
+  { icon: '📋', name: 'Más cards visibles', desc: 'Los paneles Pedidos y Entregas muestran ahora 8 cards (antes 3). Si hay más, sigue apareciendo "+N pedidos más" abajo.' },
+  ]}, {
+  title: '⚙️ Rangos temporales sensatos',
+  items: [
+  { icon: '📆', name: 'Año limitado a 30 días en Agenda', desc: 'Seleccionar "Año" en Agenda mostrará solo los próximos 30 días con un aviso. El histórico anual sigue disponible en Cuentas. Evita saturar la lista con cientos de eventos.' },
+  { icon: '🎚️', name: 'Custom limitado a 90 días', desc: 'Si seleccionas un rango personalizado mayor a 90 días, Agenda lo recorta automáticamente para mantener fluidez en el dispositivo.' },
+  ]}]
+  },
   'v1.3.1450-dev': {
    id: 'wn-2026-05-11-v1450',
   sections: [{
@@ -34972,6 +34987,43 @@ function _confirmBorrarCuenta(id) {
   return resultados;
  }
 
+ // v1.3.1451 — Aplicar cap visual al rango de Agenda. NO toca KPI.getRange
+ //   (canónico para resto de la app). Solo cuando Agenda usa el rango para
+ //   listar eventos, capamos a 31 días para evitar:
+ //     - Año = 365 días → 500+ cards proyectadas, lag WebView Android
+ //     - Custom muy amplio (>90 días) → mismo problema
+ //
+ //   Inputs: { start, end, period } del KPI.getRange + period original
+ //   Output: { start, end, capped: bool, originalEnd: Date|null }
+ //     capped=true significa que el rango fue acortado y la UI debe avisar.
+ //
+ //   Reglas:
+ //     - Today/Hours: 24h o menos, NO cap
+ //     - Week: 7 días, NO cap
+ //     - Month: 28-31 días, NO cap (cae natural)
+ //     - Year: 365 días → CAP a 31 días desde hoy (con warning)
+ //     - Custom: si end-start > 90 días → CAP a 90 días desde start
+ function _capAgendaRange(rng, period) {
+  if (!rng || !rng.start || !rng.end) return rng;
+  var startTs = rng.start.getTime ? rng.start.getTime() : new Date(rng.start).getTime();
+  var endTs = rng.end.getTime ? rng.end.getTime() : new Date(rng.end).getTime();
+  var spanDays = Math.ceil((endTs - startTs) / 86400000);
+  var hoy = new Date(); hoy.setHours(0,0,0,0);
+  var pType = period && period.type;
+  // Año: capar a 31 días desde hoy
+  if (pType === 'year') {
+   var capEnd = new Date(hoy); capEnd.setDate(hoy.getDate() + 31); capEnd.setHours(23,59,59,999);
+   return { start: hoy, end: capEnd, capped: true, originalEnd: rng.end, capReason: 'year_to_30d' };
+  }
+  // Custom: capar a 90 días si excede
+  if (pType === 'custom' && spanDays > 90) {
+   var capEndC = new Date(rng.start); capEndC.setDate(rng.start.getDate() + 90); capEndC.setHours(23,59,59,999);
+   return { start: rng.start, end: capEndC, capped: true, originalEnd: rng.end, capReason: 'custom_90d' };
+  }
+  // Resto: pass-through
+  return { start: rng.start, end: rng.end, capped: false };
+ }
+
  // v1.3.1450 — Calcula la fecha de entrega que CORRESPONDE a un pedido específico.
  //   diasEntrega: array días entrega del proveedor
  //   fechaPedido: Date del pedido específico
@@ -35149,8 +35201,11 @@ function _confirmBorrarCuenta(id) {
  var period = State.get.period ? State.get.period() : { type:'month', offset:0 };
  var rng = null;
  try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
- var rangeStart = rng ? rng.start : null;
- var rangeEnd = rng ? rng.end : null;
+ // v1.3.1451: cap rango Agenda (year→30d, custom>90→90d) sin tocar KPI.getRange
+ var _capRng = (typeof _capAgendaRange === 'function') ? _capAgendaRange(rng, period) : rng;
+ var rangeStart = _capRng ? _capRng.start : null;
+ var rangeEnd = _capRng ? _capRng.end : null;
+ var _rangeCapped = !!(_capRng && _capRng.capped);
 
  var hoy = new Date(); hoy.setHours(0,0,0,0);
 
@@ -35287,12 +35342,20 @@ function _confirmBorrarCuenta(id) {
   // Ciclos predichos del proveedor — v1.3.1450: TODOS los ciclos en horizonte
   //   Antes: _nextOrderDate solo el primer día → Bebidas con [Ju,Do] solo
   //   proyectaba uno. Ahora itera todos los días configurados.
+  // v1.3.1451: NO skip-all si tiene pendingOrder. Solo skip predichos cuya
+  //   fecha sea ≤ pendingOrder más reciente (stale = ya cubierto). Predichos
+  //   posteriores siguen siendo válidos como próximos ciclos del proveedor.
   var _provsP = State.get.proveedores ? (State.get.proveedores() || []) : [];
-  var _provsConPendienteP = {};
-  _poList.forEach(function(p){ if (p && p.provId) _provsConPendienteP[p.provId] = true; });
+  var _provLatestPendingP = {};
+  _poList.forEach(function(p){
+   if (!p || !p.provId || !p.date) return;
+   var fp = new Date(p.date); if (isNaN(fp.getTime())) return;
+   var prev = _provLatestPendingP[p.provId];
+   if (!prev || fp > prev) _provLatestPendingP[p.provId] = fp;
+  });
   _provsP.forEach(function(prov) {
    if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-   if (_provsConPendienteP[prov.id]) return; // ya tiene pendiente real, no duplicar predicho
+   var _latestPending = _provLatestPendingP[prov.id] || null;
    // Horizonte: si hay rango, hasta el final del rango. Si no, 14 días.
    var _horizonD = 14;
    if (rangeStart && rangeEnd) {
@@ -35303,6 +35366,8 @@ function _confirmBorrarCuenta(id) {
     ? _allUpcomingOrderDates(prov.diasPedido, _hoyMidnight, _horizonD)
     : [];
    _todosFp.forEach(function(fpPred, idx) {
+    // v1.3.1451: skip predicho stale (anterior o igual al pending real activo)
+    if (_latestPending && fpPred <= _latestPending) return;
     if (rangeStart && rangeEnd) {
      var _rSc = new Date(rangeStart); _rSc.setHours(0,0,0,0);
      var _rEc = new Date(rangeEnd); _rEc.setHours(23,59,59,999);
@@ -35788,8 +35853,8 @@ function _confirmBorrarCuenta(id) {
  return;
  }
 
- // Mostrar los primeros 3 pedidos con timeline individual
- pedidos.slice(0, 3).forEach(function(order, idx) {
+ // v1.3.1451: cap visual 3→8 cards. Indicador "+N pedidos más" ya existente abajo.
+ pedidos.slice(0, 8).forEach(function(order, idx) {
  var prov = State.get.prov ? State.get.prov(order.provId) : null;
  var provName = prov ? prov.nombre : order.provId;
  var provIcon = prov ? (prov.icon || '🏪') : '🏪';
@@ -35857,11 +35922,11 @@ function _confirmBorrarCuenta(id) {
  wrap.appendChild(card);
  });
 
- // Si hay más de 3, mostrar contador
- if (pedidos.length > 3) {
+ // v1.3.1451: indicador respeta cap visual 8.
+ if (pedidos.length > 8) {
  var more = document.createElement('div');
  more.style.cssText = 'text-align:center;font-size:var(--fs-xs);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif;padding:var(--sp-1_5) 0 0';
- more.textContent = '+ ' + (pedidos.length - 3) + ' pedidos más';
+ more.textContent = '+ ' + (pedidos.length - 8) + ' pedidos más';
  wrap.appendChild(more);
  }
  // v1.3.1376 — Botón "Nuevo pedido programado" eliminado por redundante.
@@ -35878,7 +35943,8 @@ function _confirmBorrarCuenta(id) {
  return;
  }
 
- visitas.slice(0, 3).forEach(function(visita, idx) {
+ // v1.3.1451: cap visual 3→8 cards. Mismo criterio que panel Pedidos.
+ visitas.slice(0, 8).forEach(function(visita, idx) {
  var prov = State.get.prov ? State.get.prov(visita.provId) : null;
  var provName = prov ? prov.nombre : (visita.agente || 'Pedido');
  var agentName = (prov && prov.agente) ? prov.agente : (visita.agente || '');
@@ -35987,6 +36053,13 @@ function _confirmBorrarCuenta(id) {
 
  wrap.appendChild(card);
  });
+ // v1.3.1451: indicador "+N pedidos más" coherente con panel Entregas
+ if (visitas.length > 8) {
+  var moreV = document.createElement('div');
+  moreV.style.cssText = 'text-align:center;font-size:var(--fs-xs);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif;padding:var(--sp-1_5) 0 0';
+  moreV.textContent = '+ ' + (visitas.length - 8) + ' pedidos más';
+  wrap.appendChild(moreV);
+ }
  // v1.3.1376 — Botón "Nuevo evento" eliminado por redundante.
  //   La creación de visitas comerciales se hace desde el FAB de Agenda.
  }
@@ -36007,8 +36080,12 @@ function _confirmBorrarCuenta(id) {
  var period = State.get.period ? State.get.period() : { type:'month', offset:0 };
  var rng = null;
  try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
- var rangeStart = rng ? rng.start : null;
- var rangeEnd = rng ? rng.end : null;
+ // v1.3.1451: cap rango Agenda (year→30d, custom>90→90d)
+ var _capRngF = (typeof _capAgendaRange === 'function') ? _capAgendaRange(rng, period) : rng;
+ var rangeStart = _capRngF ? _capRngF.start : null;
+ var rangeEnd = _capRngF ? _capRngF.end : null;
+ var _rangeCappedF = !!(_capRngF && _capRngF.capped);
+ var _rangeCapReasonF = _capRngF && _capRngF.capReason;
 
  var hoy0 = new Date(hoy); hoy0.setHours(0,0,0,0);
  var ahora = new Date();
@@ -36058,6 +36135,12 @@ function _confirmBorrarCuenta(id) {
  //   sameDay = true si diasPedido y diasEntrega comparten al menos un día.
  //   Para esos proveedores, generar UN SOLO evento tipo 'pedido_entrega' en
  //   lugar de duplicar en pedido + entrega.
+ //
+ // v1.3.1451 — DEPRECADO uso global. La heurística per-proveedor genera
+ //   falsos positivos cuando comparten UN día pero los demás son distintos.
+ //   Ej: Praviana dp=[Lu,Do] de=[Lu,Ma] comparten Lu pero Do solo es pedido
+ //   y Ma solo es entrega. Reemplazado por _eventoSameDay(provId, fecha)
+ //   que comprueba si ESA FECHA específica es pedido Y entrega.
  var _provSameDay = function(provId) {
   var prov = State.get.prov ? State.get.prov(provId) : null;
   if (!prov) return false;
@@ -36065,6 +36148,26 @@ function _confirmBorrarCuenta(id) {
   var de = prov.diasEntrega || [];
   if (!dp.length || !de.length) return false;
   return dp.some(function(d) { return de.indexOf(d) >= 0; });
+ };
+
+ // v1.3.1451 — sameDay PER-EVENTO: comprueba si una FECHA específica es
+ //   simultáneamente día de pedido Y día de entrega para el proveedor.
+ //   Esto es lo que necesitamos para decidir si un evento concreto debe
+ //   renderizarse como 'pedido_entrega' (ambos) o solo 'pedido' / 'entrega'.
+ //
+ //   Ejemplo Praviana dp=[Lu,Do] de=[Lu,Ma]:
+ //     - Domingo 10 → solo pedido (Do está en dp pero no en de) ✓
+ //     - Lunes 11   → pedido_entrega (Lu está en ambos) ✓
+ //     - Martes 12  → solo entrega (Ma está en de pero no en dp) ✓
+ var _eventoSameDay = function(provId, fechaDate) {
+  var prov = State.get.prov ? State.get.prov(provId) : null;
+  if (!prov || !fechaDate) return false;
+  var dp = prov.diasPedido || [];
+  var de = prov.diasEntrega || [];
+  if (!dp.length || !de.length) return false;
+  var d = new Date(fechaDate);
+  var dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+  return dp.indexOf(dow) >= 0 && de.indexOf(dow) >= 0;
  };
 
  var eventos = [];
@@ -36076,9 +36179,12 @@ function _confirmBorrarCuenta(id) {
   var fp = new Date(p.fecha);
   if (isNaN(fp.getTime())) return;
   if (inRange(fp) && notPastIfTodayInRange(fp)) {
-   // v1.3.1371: si proveedor mismo día, tipo unificado
+   // v1.3.1451: sameDay per-evento. Si la fecha del pedido también es
+   //   día de entrega del proveedor → tipo unificado. Si no, solo pedido.
+   //   Para Praviana dp=[Lu,Do] de=[Lu,Ma]: pedido el Do = solo 'pedido'
+   //   (Do no está en de). Pedido el Lu = 'pedido_entrega' (Lu en ambos).
    eventos.push({
-    tipo: _provSameDay(p.provId) ? 'pedido_entrega' : 'pedido',
+    tipo: _eventoSameDay(p.provId, fp) ? 'pedido_entrega' : 'pedido',
     fecha: fp,
     sortKey: fp.getTime(),
     pedido: p
@@ -36087,14 +36193,15 @@ function _confirmBorrarCuenta(id) {
  });
 
  // 2) Entregas (fecha entrega calculada en periodo)
- //    Si proveedor sameDay → ya se añadió como 'pedido_entrega' arriba, skip.
+ //    Si la fecha del pedido coincide con día entrega del proveedor → ya se
+ //    añadió como 'pedido_entrega' arriba, skip esta entrega para no duplicar.
  //    Si NO sameDay → añadir como entrega distinta del pedido.
  _histPed.forEach(function(p) {
   if (!p || !p.fecha) return;
-  // v1.3.1371: si proveedor mismo día, ya se añadió en sección 1
-  if (_provSameDay(p.provId)) return;
   var fp = new Date(p.fecha);
   if (isNaN(fp.getTime())) return;
+  // v1.3.1451: sameDay per-evento (skip solo si ESTE pedido es sameDay)
+  if (_eventoSameDay(p.provId, fp)) return;
   var fe = calcEntA(p.fecha, p.provId);
   if (isNaN(fe.getTime())) return;
   // Guard adicional: si entrega es el mismo día que el pedido por azar de fechas, no duplicar
@@ -36127,8 +36234,8 @@ function _confirmBorrarCuenta(id) {
   if (!p || !p.date) return;
   var fp = new Date(p.date);
   if (isNaN(fp.getTime())) return;
-  // v1.3.1371: si proveedor sameDay, evento unificado en fecha del pedido
-  if (_provSameDay(p.provId)) {
+  // v1.3.1451: sameDay per-evento (esta fecha específica es pedido Y entrega)
+  if (_eventoSameDay(p.provId, fp)) {
    if (!inRange(fp)) return;
    // Atraso = si la fecha del pedido (=entrega) ya pasó y no se recibió
    var diasAtrasoSD = 0;
@@ -36175,19 +36282,25 @@ function _confirmBorrarCuenta(id) {
  //   por proveedor → Bebidas con [Ju,Do] solo mostraba un ciclo.
  //   - Para cada día configurado en diasPedido, generar ciclo separado
  //   - Pareo correcto pedido→entrega usando _entregaParaPedido
- //   - Si ya hay un pendingOrder reciente del mismo proveedor en el rango,
- //     omitir TODOS los ciclos predichos para evitar duplicación visual
+ //   - Si pendingOrder del proveedor cubre fecha del predicho → skip (stale)
+ //     Si predicho es POSTERIOR al pending → mantener (próximo ciclo)
  //   - Si pasa el día predicho sin acción, simplemente desaparece (filtro 1366)
  var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
  var _pending2 = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
- // Set de provIds que ya tienen un pendingOrder activo (no duplicar predicción)
- var _provsConPendiente = {};
- _pending2.forEach(function(p){ if (p && p.provId) _provsConPendiente[p.provId] = true; });
+ // v1.3.1451: latest pendingOrder.date por proveedor → predichos ≤ esa fecha
+ //   están "ya cubiertos" por el pendiente. Predichos posteriores son
+ //   próximos ciclos legítimos. Antes (skip-all) ocultaba Bebidas Ju+Do.
+ var _provLatestPending = {};
+ _pending2.forEach(function(p){
+  if (!p || !p.provId || !p.date) return;
+  var fp = new Date(p.date); if (isNaN(fp.getTime())) return;
+  var prev = _provLatestPending[p.provId];
+  if (!prev || fp > prev) _provLatestPending[p.provId] = fp;
+ });
 
  _provs.forEach(function(prov) {
   if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-  // Si ya hay pedido pendiente real, no duplicar con predicción
-  if (_provsConPendiente[prov.id]) return;
+  var _latestPendingF = _provLatestPending[prov.id] || null;
   // v1.3.1450: TODOS los días configurados, no solo el primero
   // Horizonte: hasta el final del rango activo o 14 días por defecto
   var _horizonR = 14;
@@ -36198,9 +36311,12 @@ function _confirmBorrarCuenta(id) {
   var _todosFp = (typeof _allUpcomingOrderDates === 'function')
    ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR)
    : [];
-  var _esSameDay = _provSameDay(prov.id);
+  // v1.3.1451: NO precalcular _esSameDay global. Cada fecha tiene su propio
+  //   estado sameDay (Praviana Lu = sameDay, Praviana Do = solo pedido).
   _todosFp.forEach(function(fpPred, idx) {
-   if (_esSameDay) {
+   // v1.3.1451: skip predicho stale (anterior o igual al pending real)
+   if (_latestPendingF && fpPred <= _latestPendingF) return;
+   if (_eventoSameDay(prov.id, fpPred)) {
     if (inRange(fpPred)) {
      eventos.push({
       tipo: 'pedido_entrega',
@@ -36212,7 +36328,7 @@ function _confirmBorrarCuenta(id) {
     }
     return;
    }
-   // Caso normal: días distintos pedido/entrega
+   // Caso normal: días distintos pedido/entrega para esta fecha
    if (inRange(fpPred)) {
     eventos.push({
      tipo: 'pedido',
@@ -36300,6 +36416,22 @@ function _confirmBorrarCuenta(id) {
   wrap.appendChild(empty);
   // v1.3.1367: botón "+ Nuevo recordatorio" eliminado de aquí, ahora en FAB Agenda
   return;
+ }
+
+ // v1.3.1451: si rango fue capado (year→30d, custom>90→90d) avisar arriba.
+ //   Filosofía UX: aplicar cambio silenciosamente seguro + nota informativa
+ //   discreta. NO modal bloqueante. Decisión documentada en propuesta rangos.
+ if (_rangeCappedF) {
+  var capBanner = document.createElement('div');
+  capBanner.style.cssText = 'padding:8px 12px;margin:0 0 8px;border-radius:var(--r-sm);background:var(--bg);font-size:var(--fs-xs);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif;line-height:1.4;border:1px solid var(--border)';
+  if (_rangeCapReasonF === 'year_to_30d') {
+   capBanner.textContent = 'Mostrando próximos 30 días. Para ver histórico anual, ve a Cuentas.';
+  } else if (_rangeCapReasonF === 'custom_90d') {
+   capBanner.textContent = 'Rango limitado a 90 días para mantener fluidez.';
+  } else {
+   capBanner.textContent = 'Rango ajustado para Agenda.';
+  }
+  wrap.appendChild(capBanner);
  }
 
  // Ordenar cronológico ascendente (sortKey ya incluye hora)
@@ -37886,8 +38018,10 @@ function _confirmBorrarCuenta(id) {
  // Calcular rango del periodo actual
  var rng = null;
  try { rng = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
- var rangeStart = rng ? rng.start : null;
- var rangeEnd = rng ? rng.end : null;
+ // v1.3.1451: cap rango Agenda (year→30d, custom>90→90d)
+ var _capRngAg = (typeof _capAgendaRange === 'function') ? _capAgendaRange(rng, period) : rng;
+ var rangeStart = _capRngAg ? _capRngAg.start : null;
+ var rangeEnd = _capRngAg ? _capRngAg.end : null;
 
  // ─────────────────────────────────────────────────────────────────
  // v1.3.1294 — FIX D8 KPI AGENDA (cardId='agenda' fast path).
