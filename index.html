@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1449";
+ var CURRENT_CACHE = "dashwey-v1-3-1450";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1449-dev</title>
+<title>Dashwey v1.3.1450-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18695,7 +18695,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1449-dev';
+ const _APP_VERSION = 'v1.3.1450-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20023,6 +20023,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1450-dev': {
+   id: 'wn-2026-05-11-v1450',
+  sections: [{
+  title: '📅 Múltiples ciclos por proveedor',
+  items: [
+  { icon: '🔄', name: 'Proveedores con varios días por semana', desc: 'Antes los proveedores que tenían varios días de pedido configurados (ej: Bebidas pide jueves Y domingo) solo mostraban un ciclo en Agenda. Ahora se proyectan TODOS: pedido jueves → entrega viernes, pedido domingo → entrega lunes.' },
+  { icon: '🎯', name: 'Pedidos y entregas correctamente emparejados', desc: 'El sistema ahora calcula la entrega que corresponde a cada pedido específico (no la primera global). Praviana, Bebidas y otros proveedores con múltiples ciclos se ven correctamente en Pedidos y Entregas.' },
+  ]}]
+  },
   'v1.3.1449-dev': {
    id: 'wn-2026-05-11-v1449',
   sections: [{
@@ -34939,6 +34948,52 @@ function _confirmBorrarCuenta(id) {
  return null;
  }
 
+ // v1.3.1450 — Helper TODOS los próximos días de pedido en un horizonte.
+ //   Usado para generar TODOS los ciclos predichos por proveedor en lugar de
+ //   solo el primero (bug v1.3.1449: Bebidas con [Ju,Do] solo proyectaba un día).
+ //
+ //   diasPedido: array índices 0..6 (Lu=0…Do=6)
+ //   fromDate: día base
+ //   horizonDays: cuántos días buscar hacia adelante (default 14)
+ //
+ //   Devuelve array de Date ordenado cronológico ascendente.
+ //   Filosofía setup-and-forget: cada día válido del array genera un ciclo
+ //   distinto. Si el proveedor viene 2 veces por semana, se proyectan ambos.
+ function _allUpcomingOrderDates(diasPedido, fromDate, horizonDays) {
+  if (!diasPedido || !diasPedido.length) return [];
+  horizonDays = horizonDays || 14;
+  var base = new Date(fromDate); base.setHours(9, 0, 0, 0);
+  var resultados = [];
+  for (var i = 0; i < horizonDays; i++) {
+   var d = new Date(base); d.setDate(base.getDate() + i);
+   var dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+   if (diasPedido.indexOf(dow) >= 0) resultados.push(d);
+  }
+  return resultados;
+ }
+
+ // v1.3.1450 — Calcula la fecha de entrega que CORRESPONDE a un pedido específico.
+ //   diasEntrega: array días entrega del proveedor
+ //   fechaPedido: Date del pedido específico
+ //
+ //   Devuelve la PRIMERA fecha de entrega después (o el mismo día) del pedido.
+ //   Cubre caso "pide y entrega mismo día" (Goyo: pide Lu entrega Lu).
+ //   También el caso normal: pedido Ju → entrega Vi siguiente.
+ //
+ //   Si no encuentra entrega en 14 días, fallback a pedido + 2 días.
+ function _entregaParaPedido(diasEntrega, fechaPedido) {
+  if (!diasEntrega || !diasEntrega.length) {
+   var fb = new Date(fechaPedido); fb.setDate(fb.getDate() + 2); return fb;
+  }
+  var base = new Date(fechaPedido); base.setHours(9, 0, 0, 0);
+  for (var i = 0; i < 14; i++) {
+   var d = new Date(base); d.setDate(base.getDate() + i);
+   var dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
+   if (diasEntrega.indexOf(dow) >= 0) return d;
+  }
+  var fb2 = new Date(fechaPedido); fb2.setDate(fb2.getDate() + 2); return fb2;
+ }
+
  // v1.3.1372 — Helper de ciclo del proveedor (barra horizontal del feed Agenda).
  //   La barra simula al comercial/repartidor caminando desde la última entrega
  //   hacia la próxima. Una sola lógica para todos los casos.
@@ -35229,35 +35284,58 @@ function _confirmBorrarCuenta(id) {
     }
    }
   });
-  // Ciclos predichos del proveedor (próximo solo, scope rango)
+  // Ciclos predichos del proveedor — v1.3.1450: TODOS los ciclos en horizonte
+  //   Antes: _nextOrderDate solo el primer día → Bebidas con [Ju,Do] solo
+  //   proyectaba uno. Ahora itera todos los días configurados.
   var _provsP = State.get.proveedores ? (State.get.proveedores() || []) : [];
   var _provsConPendienteP = {};
   _poList.forEach(function(p){ if (p && p.provId) _provsConPendienteP[p.provId] = true; });
   _provsP.forEach(function(prov) {
    if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-   if (_provsConPendienteP[prov.id]) return; // ya tiene pendiente, no duplicar predicho
-   var fpPred = (typeof _nextOrderDate === 'function') ? _nextOrderDate(prov.diasPedido, _hoyMidnight) : null;
-   if (!fpPred) return;
+   if (_provsConPendienteP[prov.id]) return; // ya tiene pendiente real, no duplicar predicho
+   // Horizonte: si hay rango, hasta el final del rango. Si no, 14 días.
+   var _horizonD = 14;
    if (rangeStart && rangeEnd) {
-    var _rSc = new Date(rangeStart); _rSc.setHours(0,0,0,0);
-    var _rEc = new Date(rangeEnd); _rEc.setHours(23,59,59,999);
-    if (fpPred >= _rSc && fpPred <= _rEc) {
-     allVisitas.push({
-      provId: prov.id, fecha: fpPred.toISOString(),
-      agente: prov.agente || '', notas: 'Predicho', _src: 'predicho'
-     });
-    }
-    var fePred = calcEnt(fpPred.toISOString(), prov.id);
-    if (fePred && !isNaN(fePred.getTime()) && fePred >= _rSc && fePred <= _rEc) {
-     allPedidos.push({
-      id: '_pred_' + prov.id, provId: prov.id, date: fpPred.toISOString(), items: [], _src: 'predicho'
-     });
-    }
+    var _diffMs = new Date(rangeEnd).getTime() - _hoyMidnight.getTime();
+    _horizonD = Math.max(7, Math.min(60, Math.ceil(_diffMs / 86400000) + 1));
    }
+   var _todosFp = (typeof _allUpcomingOrderDates === 'function')
+    ? _allUpcomingOrderDates(prov.diasPedido, _hoyMidnight, _horizonD)
+    : [];
+   _todosFp.forEach(function(fpPred, idx) {
+    if (rangeStart && rangeEnd) {
+     var _rSc = new Date(rangeStart); _rSc.setHours(0,0,0,0);
+     var _rEc = new Date(rangeEnd); _rEc.setHours(23,59,59,999);
+     // Pedido predicho en rango → tab Pedidos (allVisitas)
+     if (fpPred >= _rSc && fpPred <= _rEc) {
+      allVisitas.push({
+       provId: prov.id, fecha: fpPred.toISOString(),
+       agente: prov.agente || '', notas: 'Predicho', _src: 'predicho'
+      });
+     }
+     // Entrega que CORRESPONDE a este pedido específico
+     var _fePred = (typeof _entregaParaPedido === 'function')
+      ? _entregaParaPedido(prov.diasEntrega || [], fpPred)
+      : null;
+     if (_fePred && !isNaN(_fePred.getTime()) && _fePred >= _rSc && _fePred <= _rEc) {
+      allPedidos.push({
+       id: '_pred_' + prov.id + '_' + idx, provId: prov.id,
+       date: fpPred.toISOString(), items: [], _src: 'predicho',
+       _fechaEntrega: _fePred.toISOString()
+      });
+     }
+    }
+   });
   });
   // Re-sort tras añadir
   allVisitas.sort(function(a,b){ return new Date(a.fecha) - new Date(b.fecha); });
-  allPedidos.sort(function(a,b){ return calcEnt(a.date,a.provId) - calcEnt(b.date,b.provId); });
+  allPedidos.sort(function(a,b){
+   // v1.3.1450: predichos llevan _fechaEntrega exacta calculada por _entregaParaPedido,
+   //   no usar calcEnt(a.date, a.provId) que llama a la heurística vieja.
+   var feA = a._fechaEntrega ? new Date(a._fechaEntrega) : calcEnt(a.date, a.provId);
+   var feB = b._fechaEntrega ? new Date(b._fechaEntrega) : calcEnt(b.date, b.provId);
+   return feA - feB;
+  });
  } catch(e) {
   console.warn('[Dashwey/agenda] error añadiendo pending/predichos a paneles:', e && e.message);
  }
@@ -35323,27 +35401,16 @@ function _confirmBorrarCuenta(id) {
     _nPendEnt++;
    }
   });
-  // v1.3.1368: ciclos predichos del proveedor (próximo solo, scope rango)
-  var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
-  _provs.forEach(function(prov) {
-   if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-   var fpPred = (typeof _nextOrderDate === 'function') ? _nextOrderDate(prov.diasPedido, _hoyMidnight) : null;
-   if (!fpPred) return;
-   if (rangeStart && rangeEnd) {
-    var rS3 = new Date(rangeStart); rS3.setHours(0,0,0,0);
-    var rE3 = new Date(rangeEnd); rE3.setHours(23,59,59,999);
-    if (fpPred >= rS3 && fpPred <= rE3) _nPredPed++;
-    // entrega predicha (basada en diasEntrega)
-    var fePred = calcEnt(fpPred.toISOString(), prov.id);
-    if (fePred && fePred >= rS3 && fePred <= rE3) _nPredEnt++;
-   }
-  });
+  // v1.3.1450: ciclos predichos ya están añadidos a allPedidos/allVisitas arriba.
+  //   El contador anterior (_nPredPed/_nPredEnt) sumaba SOLO un ciclo por
+  //   proveedor mientras que allPedidos/allVisitas ya incluían todos los
+  //   ciclos. Esto causaba doble conteo. Ahora KPI cuenta solo arrays.
  } catch(_) {}
 
  var pedEl = document.getElementById('snap-ped-agenda');
- if (pedEl) pedEl.textContent = (allPedidos.length + _nPendEnt + _nPredEnt) || '0';
+ if (pedEl) pedEl.textContent = (allPedidos.length + _nPendEnt) || '0';
  var visEl = document.getElementById('snap-vis-agenda');
- if (visEl) { visEl.textContent = (allVisitas.length + _nPendPed + _nPredPed) || '0'; }
+ if (visEl) { visEl.textContent = (allVisitas.length + _nPendPed) || '0'; }
 
  // v1.3.1295: contador "Actividad" = suma total de eventos del periodo.
  //   Pedidos (count visitas) + Entregas (count pedidos) + Alertas (count totales,
@@ -35373,8 +35440,8 @@ function _confirmBorrarCuenta(id) {
   }
   // Suma total de eventos para "Actividad"
   // v1.3.1368: incluir pendingOrders + ciclos predichos
-  var _totalPed = (allPedidos.length || 0) + _nPendEnt + _nPredEnt;
-  var _totalVis = (allVisitas.length || 0) + _nPendPed + _nPredPed;
+  var _totalPed = (allPedidos.length || 0) + _nPendEnt;
+  var _totalVis = (allVisitas.length || 0) + _nPendPed;
   var _nActividad = _totalPed + _totalVis + (_nAlrt || 0) + _nRec;
   recEl.textContent = _nActividad || '0';
   // v1.3.1295: si tab Actividad activo, mostrar total en _valEl (cabecera grande)
@@ -35728,7 +35795,9 @@ function _confirmBorrarCuenta(id) {
  var provIcon = prov ? (prov.icon || '🏪') : '🏪';
  var nArts = (order.items || []).length;
  var fechaPed = new Date(order.date);
- var fechaEnt = calcEnt(order.date, order.provId);
+ // v1.3.1450: predichos llevan _fechaEntrega calculada por _entregaParaPedido
+ //   (emparejamiento correcto pedido→entrega). Reales/pending usan calcEnt heurístico.
+ var fechaEnt = order._fechaEntrega ? new Date(order._fechaEntrega) : calcEnt(order.date, order.provId);
  var ahora = new Date();
  // v1.3.1448: detectar predicho/pending para tratamiento visual coherente
  var _esPredicho = order._src === 'predicho';
@@ -36102,13 +36171,12 @@ function _confirmBorrarCuenta(id) {
  });
 
  // v1.3.1368 (Cambio 3) — 2.6) Ciclos predichos del proveedor
- //   Para cada proveedor con diasPedido configurado, calcular el PRÓXIMO ciclo
- //   (pedido + entrega) basado en sus días configurados.
- //   - Solo el próximo (no llenar feed con N ciclos del rango)
- //   - Si cae en rango → mostrar como "Pedido programado" + "Entrega prevista"
- //   - Marca visual "PROGRAMADO" sutil para distinguir de eventos reales
+ //   v1.3.1450 — TODOS los ciclos en horizonte. Antes solo proyectaba uno
+ //   por proveedor → Bebidas con [Ju,Do] solo mostraba un ciclo.
+ //   - Para cada día configurado en diasPedido, generar ciclo separado
+ //   - Pareo correcto pedido→entrega usando _entregaParaPedido
  //   - Si ya hay un pendingOrder reciente del mismo proveedor en el rango,
- //     omitir el ciclo predicho para evitar duplicación visual
+ //     omitir TODOS los ciclos predichos para evitar duplicación visual
  //   - Si pasa el día predicho sin acción, simplemente desaparece (filtro 1366)
  var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
  var _pending2 = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
@@ -36120,48 +36188,58 @@ function _confirmBorrarCuenta(id) {
   if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
   // Si ya hay pedido pendiente real, no duplicar con predicción
   if (_provsConPendiente[prov.id]) return;
-  // Calcular próxima fecha de pedido desde HOY
-  var fpPred = _nextOrderDate(prov.diasPedido, hoy0);
-  if (!fpPred) return;
-  // v1.3.1371: si proveedor sameDay → un solo evento unificado en fpPred
-  if (_provSameDay(prov.id)) {
+  // v1.3.1450: TODOS los días configurados, no solo el primero
+  // Horizonte: hasta el final del rango activo o 14 días por defecto
+  var _horizonR = 14;
+  if (rangeStart && rangeEnd) {
+   var _diffMsR = new Date(rangeEnd).getTime() - hoy0.getTime();
+   _horizonR = Math.max(7, Math.min(60, Math.ceil(_diffMsR / 86400000) + 1));
+  }
+  var _todosFp = (typeof _allUpcomingOrderDates === 'function')
+   ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR)
+   : [];
+  var _esSameDay = _provSameDay(prov.id);
+  _todosFp.forEach(function(fpPred, idx) {
+   if (_esSameDay) {
+    if (inRange(fpPred)) {
+     eventos.push({
+      tipo: 'pedido_entrega',
+      fecha: fpPred,
+      sortKey: fpPred.getTime(),
+      pedido: { id: '_predicho_' + prov.id + '_' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+      _predicho: true
+     });
+    }
+    return;
+   }
+   // Caso normal: días distintos pedido/entrega
    if (inRange(fpPred)) {
     eventos.push({
-     tipo: 'pedido_entrega',
+     tipo: 'pedido',
      fecha: fpPred,
      sortKey: fpPred.getTime(),
-     pedido: { id: '_predicho_' + prov.id, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+     pedido: { id: '_predicho_' + prov.id + '_p' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
      _predicho: true
     });
    }
-   return;
-  }
-  // Caso normal: días distintos
-  // Si cae en rango → añadir como evento "pedido predicho"
-  if (inRange(fpPred)) {
-   eventos.push({
-    tipo: 'pedido',
-    fecha: fpPred,
-    sortKey: fpPred.getTime(),
-    pedido: { id: '_predicho_' + prov.id, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
-    _predicho: true
-   });
-  }
-  // Calcular entrega predicha (basada en pedido predicho + diasEntrega)
-  var fePred = calcEntA(fpPred.toISOString(), prov.id);
-  if (!fePred || isNaN(fePred.getTime())) return;
-  // Si entrega coincide con pedido (mismo día), no duplicar
-  if (fePred.toDateString() === fpPred.toDateString()) return;
-  if (inRange(fePred)) {
-   eventos.push({
-    tipo: 'entrega',
-    fecha: fePred,
-    sortKey: fePred.getTime(),
-    pedido: { id: '_predicho_' + prov.id, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
-    fechaPedido: fpPred,
-    _predicho: true
-   });
-  }
+   // Entrega que CORRESPONDE a este pedido (no la primera global)
+   var fePred = (typeof _entregaParaPedido === 'function')
+    ? _entregaParaPedido(prov.diasEntrega || [], fpPred)
+    : null;
+   if (!fePred || isNaN(fePred.getTime())) return;
+   // Si entrega coincide con pedido (mismo día), no duplicar
+   if (fePred.toDateString() === fpPred.toDateString()) return;
+   if (inRange(fePred)) {
+    eventos.push({
+     tipo: 'entrega',
+     fecha: fePred,
+     sortKey: fePred.getTime(),
+     pedido: { id: '_predicho_' + prov.id + '_e' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+     fechaPedido: fpPred,
+     _predicho: true
+    });
+   }
+  });
  });
 
  // 3) Alertas — productos con problemas. NO tienen fecha real; las pongo en HOY
