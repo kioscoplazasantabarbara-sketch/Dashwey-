@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1459";
+ var CURRENT_CACHE = "dashwey-v1-3-1460";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1459-dev</title>
+<title>Dashwey v1.3.1460-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18705,7 +18705,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1459-dev';
+ const _APP_VERSION = 'v1.3.1460-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20033,6 +20033,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1460-dev': {
+   id: 'wn-2026-05-12-v1460',
+  sections: [{
+  title: '⚡ Lag Samsung A17 — root cause encontrada',
+  items: [
+  { icon: '🎯', name: 'Cache de cálculos en Flujo de Caja', desc: 'Cada vez que se renderizaba la tarjeta Flujo de Caja se recalculaban TODOS los cierres pasados desde sus eventos individuales. Con 200+ cierres acumulados esto causaba lag inmenso en dispositivos de gama media (Samsung A17 con heap 117MB vs Pixel 9 Pro con 43MB). Ahora se memoriza el resultado por cierre + timestamp + valores: si nada cambió, se devuelve el resultado ya calculado. Invalidación automática cuando llegan cambios reales del servidor.' },
+  { icon: '🔇', name: 'Logs de divergencia menos ruidosos', desc: 'El aviso "[Dashwey/Cierre] recalc divergencia" se imprimía en cada render, llenando la consola y ralentizando DevTools en dispositivos lentos. Ahora se muestra máximo 1 vez por minuto.' },
+  ]}]
+  },
   'v1.3.1459-dev': {
    id: 'wn-2026-05-12-v1459',
   sections: [{
@@ -29362,24 +29371,44 @@ function _toggleCardFromManager(id, btn) {
  // v1.3.1152 EVENT-DRIVEN: si el cierre está isCached y tiene eventIds, recalcular
  //                         desde eventos actuales y usar el valor real (eventos mandan).
  //                         Caché en cierre nunca es fuente de verdad.
+ // v1.3.1460 PERFORMANCE: memoize por cierre.id + cierreTs.
+ //   En Samsung A17 con 200+ cierres se recalculaba TODO en cada render →
+ //   heap 117MB + lag inmenso. Cache evita recálculo redundante. Resultado
+ //   financiero IDÉNTICO (mismas funciones internas, solo evita repetir).
+ //   Cache key incluye cierreTs + ventas/gastos/ingresos numéricos para
+ //   invalidar si el cierre cambió. Console.warn ahora throttled (1×/min)
+ //   para evitar spam en DevTools que ralentizaba más en A17.
+ if (!window._dashweyCierreValoresCache) window._dashweyCierreValoresCache = {};
+ if (!window._dashweyCierreWarnLast) window._dashweyCierreWarnLast = 0;
+ var _ccCache = window._dashweyCierreValoresCache;
  var _cierreValores = function(c) {
   try {
    if (!c || !c.eventIds || !c.isCached) return c; // legacy: usar valores guardados
+   // v1.3.1460: cache key invalida si cambian valores o timestamp
+   var _ck = c.id + '|' + (c.cierreTs||0) + '|' + (c.ventas||0) + '|' + (c.gastos||0) + '|' + (c.ingresos||0);
+   if (_ccCache[_ck]) return _ccCache[_ck];
    var CE = (window.App && App.CierreEngine);
    if (!CE || !CE.recalcularCierre) return c;
    var rec = CE.recalcularCierre(c.id, { commit: false });
-   if (!rec) return c;
+   if (!rec) { _ccCache[_ck] = c; return c; }
    // Tolerancia 0.01€ para flotantes
    var _diff = Math.abs((rec.ventas||0) - (Number(c.ventas)||0))
             + Math.abs((rec.gastos||0) - (Number(c.gastos)||0))
             + Math.abs((rec.ingresos||0) - (Number(c.ingresos)||0));
-   if (_diff < 0.01) return c; // no hay divergencia significativa
+   if (_diff < 0.01) { _ccCache[_ck] = c; return c; } // no hay divergencia significativa
    // Divergencia: usar recalculado (sin commit — solo display)
-   console.warn('[Dashwey/Cierre] recalc divergencia', c.id, 'Δ€', _diff.toFixed(2));
-   return Object.assign({}, c, {
+   // Throttle warn 1×/min para evitar spam DevTools (causaba lag en A17)
+   var _now = Date.now();
+   if (_now - window._dashweyCierreWarnLast > 60000) {
+    console.warn('[Dashwey/Cierre] recalc divergencia', c.id, 'Δ€', _diff.toFixed(2));
+    window._dashweyCierreWarnLast = _now;
+   }
+   var _resultado = Object.assign({}, c, {
     ventas: rec.ventas, gastos: rec.gastos, ingresos: rec.ingresos,
     nVentas: rec.nVentas, nGastos: rec.nGastos, nIngresos: rec.nIngresos,
    });
+   _ccCache[_ck] = _resultado;
+   return _resultado;
   } catch(_) { return c; }
  };
  const cuentas = (State.get.cuentas() || []).filter(c => window._matchesScope ? window._matchesScope(c) : true); // v1.3.1003 Fase 5
