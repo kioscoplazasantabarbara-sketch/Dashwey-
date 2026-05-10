@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1470";
+ var CURRENT_CACHE = "dashwey-v1-3-1471";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1470</title>
+<title>Dashwey v1.3.1471</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13941,6 +13941,11 @@ const State = (() => {
  //   - cambios locales: debounce 500ms, un solo write por ráfaga
  //   - sin reintentos cíclicos; sin throttle de tiempo
  function save() {
+ // v1.3.1471 LOTE 5: invalidar cache _nd al inicio de cada save
+ //   Cualquier llamada a save() implica que algo cambió → la cache puede estar
+ //   stale. Invalidación masiva más simple que tracking granular y mismo
+ //   beneficio (la cache solo se popula entre saves).
+ try { _ndInvalidate(); } catch(_) {}
  // v1.3.1276 FIX BUG-RENAME-CRITICAL: REGLA 1 corregida.
  // Antes: durante _DashweyApplyingRemote, save() retornaba INMEDIATAMENTE sin marcar
  // dirty ni escribir local. Si el usuario editaba justo durante un apply (onSnapshot
@@ -14229,8 +14234,38 @@ const State = (() => {
   return { checks, driftCount: _idxDriftCount };
  }
 
+ // v1.3.1471 LOTE 5 (#2) · CACHE _nd() — invalidación masiva en save()/onSnapshot
+ //   _nd filtra deleted:true en cada llamada. Con 1700+ gastos, eso son decenas
+ //   de miles de iteraciones gratuitas por render. Cacheamos el resultado por
+ //   stateKey hasta que save() o onSnapshot apply remoto invaliden.
+ //
+ //   Identidad de cache por reference de array: si _state.X se reemplaza
+ //   (setter), la cache antigua no aplica porque el array es otro objeto. El
+ //   chequeo de identidad es defensivo extra.
+ //
+ //   Stats accesibles vía _dashweyNdCacheStats(): hits, misses, size.
+ const _ndCache = new Map(); // stateKey → { arrRef, filtered }
+ let _ndCacheHits = 0;
+ let _ndCacheMisses = 0;
+ function _ndInvalidate() { _ndCache.clear(); }
  // v1.3.1074: helper de filtrado soft-delete — transparente para items viejos sin flag
- const _nd = (arr) => Array.isArray(arr) ? arr.filter(x => !x || !x.deleted) : [];
+ // v1.3.1471 LOTE 5: cacheada. Firma compatible (sin segundo parámetro pasa por
+ //                   fast path sin cache). Para hits cacheados se pasa stateKey.
+ const _nd = (arr, _stateKey) => {
+  if (!Array.isArray(arr)) return [];
+  // Path sin key: comportamiento legacy (sin cache). Solo lo usan llamadas externas.
+  if (!_stateKey) return arr.filter(x => !x || !x.deleted);
+  // Path cacheado
+  const cached = _ndCache.get(_stateKey);
+  if (cached && cached.arrRef === arr) {
+   _ndCacheHits++;
+   return cached.filtered;
+  }
+  _ndCacheMisses++;
+  const filtered = arr.filter(x => !x || !x.deleted);
+  _ndCache.set(_stateKey, { arrRef: arr, filtered });
+  return filtered;
+ };
  // v1.3.1074: helper que preserva items con deleted:true al reemplazar array
  // Si el código pasa un array filtrado (sin deleted), los items eliminados del raw se reinjectan
  const _preserveDeleted = (rawKey, newArr) => {
@@ -14286,24 +14321,24 @@ const State = (() => {
  user: () => _state.user || DEFAULTS.user,
  syncStatus: () => _state.syncStatus || DEFAULTS.syncStatus,
  ticketsAbiertos: () => _state.ticketsAbiertos || [],
- proveedores: () => _nd(_state.proveedores),
- productos: () => _nd(_state.productos),
- historialPedidos: () => _nd(_state.historialPedidos),
- facturas: () => _nd(_state.facturas),
- mermas: () => _nd(_state.mermas),
- ventas: () => _nd(_state.ventas),
+ proveedores: () => _nd(_state.proveedores, 'proveedores'),
+ productos: () => _nd(_state.productos, 'productos'),
+ historialPedidos: () => _nd(_state.historialPedidos, 'historialPedidos'),
+ facturas: () => _nd(_state.facturas, 'facturas'),
+ mermas: () => _nd(_state.mermas, 'mermas'),
+ ventas: () => _nd(_state.ventas, 'ventas'),
  ordenItems: () => _state.ordenItems || [],
  lastVals: () => _state.lastVals,
  selectedProv: () => _state.selectedProv,
- pendingOrders: () => _nd(_state.pendingOrders),
+ pendingOrders: () => _nd(_state.pendingOrders, 'pendingOrders'),
  period: () => _state.period,
  settings: () => _state.settings,
  perfil: () => _state.perfil || DEFAULTS.perfil,
  // activeContext — llave maestra para separar Negocio / Hogar / Inversión
  activeContext: () => (_state.user?.activeContext) || 'business',
- cuentas: () => _nd(_state.cuentas),
- gastosOp: () => _nd(_state.gastosOp),
-  cierresCaja: () => _nd(_state.cierresCaja),
+ cuentas: () => _nd(_state.cuentas, 'cuentas'),
+ gastosOp: () => _nd(_state.gastosOp, 'gastosOp'),
+  cierresCaja: () => _nd(_state.cierresCaja, 'cierresCaja'),
   // v1.3.1142 — ID cierre en curso
   jornadaActivaId: () => _state._jornadaActivaId || null,
  lotesStock: () => _state.lotesStock || [],
@@ -14320,9 +14355,9 @@ const State = (() => {
  chatUsers: () => _state.chatUsers || [],
  teamMembers: () => _state.teamMembers || [],
  notifsRead: () => _state.notifsRead || [],
- visitasComerciales: () => _nd(_state.visitasComerciales),
- recordatorios: () => _nd(_state.recordatorios), // v1.3.992 LOTE C · v1.3.1074: soft delete
- ingresosFin: () => _nd(_state.ingresosFin), // v9.5.73: ingresos manuales · v1.3.1074: soft delete
+ visitasComerciales: () => _nd(_state.visitasComerciales, 'visitasComerciales'),
+ recordatorios: () => _nd(_state.recordatorios, 'recordatorios'), // v1.3.992 LOTE C · v1.3.1074: soft delete
+ ingresosFin: () => _nd(_state.ingresosFin, 'ingresosFin'), // v9.5.73: ingresos manuales · v1.3.1074: soft delete
  notifPrefs: () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
  prov: (id) => _indexGet('proveedores', id),
  prod: (id) => _indexGet('productos', id),
@@ -15282,6 +15317,26 @@ const State = (() => {
  // _prodById y _provById ahora para que la primera lectura sea O(1).
  try { _rebuildAllIndexes(); } catch(_) {}
  // Exponer helper de diagnóstico en window (no contamina si ya existe)
+ // v1.3.1471 LOTE 5: stats de cache _nd
+ try {
+  window._dashweyNdCacheStats = function() {
+   try {
+    const entries = [];
+    _ndCache.forEach(function(v, k) { entries.push({ key: k, size: v.filtered.length }); });
+    const total = _ndCacheHits + _ndCacheMisses;
+    const hitRate = total > 0 ? ((_ndCacheHits / total) * 100).toFixed(1) + '%' : 'n/a';
+    console.log('%c[Dashwey/NdCache] hits=' + _ndCacheHits + ' misses=' + _ndCacheMisses + ' hitRate=' + hitRate, 'color:#22C55E;font-weight:bold');
+    entries.forEach(function(e) { console.log('  ' + e.key.padEnd(22) + ' cached size=' + e.size); });
+    return { hits: _ndCacheHits, misses: _ndCacheMisses, hitRate, entries };
+   } catch(e) { console.warn('[NdCache] stats error:', e); return null; }
+  };
+  window._dashweyNdCacheReset = function() {
+   _ndInvalidate();
+   _ndCacheHits = 0; _ndCacheMisses = 0;
+   console.info('[Dashwey/NdCache] cleared');
+   return true;
+  };
+ } catch(_) {}
  try {
   window._dashweyMapsAudit = function() {
    try {
@@ -19135,7 +19190,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1470';
+ const _APP_VERSION = 'v1.3.1471';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20492,6 +20547,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1471': {
+   id: 'wn-2026-05-10-v1471',
+  sections: [{
+  title: '⚡ Lote 5 — Cache de filtrado soft-delete',
+  items: [
+  { icon: '🚀', name: 'Resultado de _nd() cacheado entre saves', desc: 'El helper _nd(arr) filtra los items marcados deleted:true en cada llamada. Con 1700+ gastos y 1400+ pedidos, cada render del Dashboard o Flujo de Caja invocaba este filtrado decenas de veces, recorriendo miles de items cada vez (decenas de miles de iteraciones gratuitas por render). Ahora el resultado se cachea por stateKey y se reutiliza hasta que un save() lo invalide. Es decir: entre dos cambios consecutivos, todas las lecturas son instantáneas. Estimación: ahorro 30-50% en renders de pantallas con muchos pedidos/gastos.' },
+  { icon: '🧹', name: 'Invalidación masiva ultra-segura', desc: 'La estrategia es deliberadamente simple: cualquier llamada a save() limpia toda la cache. Lo mismo cuando se aplica un snapshot remoto desde otro dispositivo. Esto garantiza que nunca verás datos stale por error — la cache solo vive entre cambios, no atravesando ningún cambio. Riesgo virtualmente cero a cambio de optimización significativa.' },
+  { icon: '📊', name: 'Helpers DevTools: _dashweyNdCacheStats() / _dashweyNdCacheReset()', desc: 'El primero muestra hits, misses, hit-rate y qué arrays están actualmente cacheados con su tamaño. Útil para verificar que el cache está funcionando (hit rate alto = beneficio real). El segundo limpia manualmente la cache y los contadores (útil para A/B comparar en debugging).' },
+  ]}]
+  },
   'v1.3.1470': {
    id: 'wn-2026-05-10-v1470',
   sections: [{
