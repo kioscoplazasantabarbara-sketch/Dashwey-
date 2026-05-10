@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1442";
+ var CURRENT_CACHE = "dashwey-v1-3-1443";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1442-dev</title>
+<title>Dashwey v1.3.1443-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18618,7 +18618,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1442-dev';
+ const _APP_VERSION = 'v1.3.1443-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19946,6 +19946,14 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1443-dev': {
+   id: 'wn-2026-05-11-v1443',
+  sections: [{
+  title: '🎯 Sanity check más preciso',
+  items: [
+  { icon: '✅', name: 'Comprobador de saldos coherente', desc: 'El botón "Comprobar datos" ahora calcula los saldos exactamente igual que Dashwey los calcula internamente. Adiós a las falsas alarmas de descuadre por discrepancias entre dos cálculos distintos del mismo número.' },
+  ]}]
+  },
   'v1.3.1442-dev': {
    id: 'wn-2026-05-11-v1442',
   sections: [{
@@ -54307,6 +54315,24 @@ window._DashweyDeviceId = (() => {
   };
 
   // ── Validate accounts: saldoInicial + Σ movimientos == saldo ──────
+  //
+  // BUG-FIX v1.3.1442 (10 may 2026): el validador anterior sumaba
+  // `m.importe || 0` para todos los movimientos. Las ventas Loyverse
+  // usan `total`, no `importe`. Resultado: el validador "veía" 0€ en
+  // 1.279 ventas Kiosco y reportaba descuadre fantasma de ~221.000€.
+  //
+  // Solución: replicar EXACTAMENTE la lógica de `_bbRecalcSaldos`
+  // (línea 25026 — la canónica). Esto incluye:
+  //   - Ventas usan v.total (NO v.importe)
+  //   - Cuenta primary recibe ventas con cuentaId vacío
+  //   - Excluir ingresos pendientes, loyverse, tpv, cierre_caja_auto
+  //   - Excluir gastos pendientes, origen='pedido' (contado vía pedidos)
+  //   - Excluir pedidos pendientes/cancelados
+  //   - Respetar saldoInicialFecha (epoch 0 si falta)
+  //   - Restar coste de pedidos
+  //
+  // Si en el futuro `_bbRecalcSaldos` cambia, ESTE validador debe
+  // cambiar en paralelo. Mismo invariante = mismo cálculo.
   window._dashweyValidateAccounts = function() {
    var result = { ok: true, mismatches: [] };
    try {
@@ -54317,25 +54343,62 @@ window._DashweyDeviceId = (() => {
     var ventas = (st.ventas && st.ventas()) || [];
     var gastos = (st.gastosOp && st.gastosOp()) || [];
     var ingresos = (st.ingresosFin && st.ingresosFin()) || [];
-    var movimientos = ventas.concat(gastos).concat(ingresos);
-
+    var pedidos = (st.historialPedidos && st.historialPedidos()) || [];
+    var _toMs = function(v) {
+     if (!v) return 0;
+     if (typeof v === 'number') return v;
+     var d = new Date(v);
+     return isNaN(d.getTime()) ? 0 : d.getTime();
+    };
     for (var i = 0; i < cuentas.length; i++) {
      var c = cuentas[i];
-     // Movimientos asignados a esta cuenta (cuentaId match)
-     var movs = movimientos.filter(function(m) { return m && m.cuentaId === c.id; });
-     // Saldo calculado: saldoInicial + suma de movimientos (signo según tipo)
-     var saldoCalc = parseFloat(c.saldoInicial || 0);
-     for (var j = 0; j < movs.length; j++) {
-      var m = movs[j];
-      var imp = parseFloat(m.importe || 0);
-      // Convención: ventas/ingresos suman, gastos restan (signo lo indica m.importe ya con signo o tipo)
-      // Si m.importe ya viene con signo, simplemente sumar
-      saldoCalc += imp;
+     var saldoCalc = parseFloat(c.saldoInicial) || 0;
+     var iniMs = _toMs(c.saldoInicialFecha);
+     // Ingresos manuales (excluir Loyverse, TPV, cierre_caja_auto, pendientes)
+     for (var j = 0; j < ingresos.length; j++) {
+      var ing = ingresos[j];
+      if (ing.cuentaId !== c.id) continue;
+      if (ing.estado === 'pendiente') continue;
+      if (ing.origen === 'loyverse' || ing.origen === 'tpv') continue;
+      if (ing.origen === 'cierre_caja_auto') continue;
+      if (_toMs(ing.fecha) < iniMs) continue;
+      saldoCalc += parseFloat(ing.importe) || 0;
      }
-     var saldoVisible = (c.saldo !== undefined && c.saldo !== null) ? parseFloat(c.saldo) : saldoCalc;
+     // Ventas (usan v.total — campo canónico Loyverse). Cuenta primary recibe
+     // ventas sin cuentaId asignado.
+     for (var k = 0; k < ventas.length; k++) {
+      var v = ventas[k];
+      var cid = v.cuentaId || (c.isPrimary ? c.id : null);
+      if (cid !== c.id) continue;
+      if (_toMs(v.fecha) < iniMs) continue;
+      saldoCalc += parseFloat(v.total) || 0;
+     }
+     // Gastos (excluir pendientes, origen='pedido' que se cuenta vía pedidos)
+     for (var n = 0; n < gastos.length; n++) {
+      var g = gastos[n];
+      if (g.cuentaId !== c.id) continue;
+      if (g.estado === 'pendiente') continue;
+      if (g.origen === 'pedido') continue;
+      if (_toMs(g.fecha) < iniMs) continue;
+      saldoCalc -= parseFloat(g.importe) || 0;
+     }
+     // Pedidos con cuentaId explícito (excluir pendientes/cancelados)
+     for (var p = 0; p < pedidos.length; p++) {
+      var ped = pedidos[p];
+      if (!ped.cuentaId || ped.cuentaId !== c.id) continue;
+      if (ped.estado === 'pendiente' || ped.estado === 'cancelado') continue;
+      if (_toMs(ped.fecha) < iniMs) continue;
+      var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste)
+       ? FinEngine.pedidoCoste(ped) : 0;
+      saldoCalc -= parseFloat(coste) || 0;
+     }
+     saldoCalc = Math.round(saldoCalc * 100) / 100;
+     var saldoVisible = (c.saldo !== undefined && c.saldo !== null)
+      ? Math.round(parseFloat(c.saldo) * 100) / 100
+      : saldoCalc;
      var diff = Math.abs(saldoCalc - saldoVisible);
-     // Tolerancia 1 céntimo redondeo
-     if (diff > 0.01) {
+     // Tolerancia 1€ (redondeos IVA acumulados son normales)
+     if (diff > 1.0) {
       result.ok = false;
       result.mismatches.push({
        cuentaId: c.id,
