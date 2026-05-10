@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1440";
+ var CURRENT_CACHE = "dashwey-v1-3-1441";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1440-dev</title>
+<title>Dashwey v1.3.1441-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18618,7 +18618,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1440-dev';
+ const _APP_VERSION = 'v1.3.1441-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19946,6 +19946,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1441-dev': {
+   id: 'wn-2026-05-11-v1441',
+  sections: [{
+  title: '🩹 Mejoras de fiabilidad',
+  items: [
+  { icon: '🔄', name: 'Comprobación al arrancar más precisa', desc: 'La comprobación automática al abrir Dashwey ahora espera a que todos los datos estén estables antes de validar. Adiós a las falsas alarmas de descuadre durante los primeros segundos.' },
+  { icon: '✅', name: 'Aviso que se cierra solo si todo se resolvió', desc: 'Si el aviso de descuadre detecta que los datos volvieron a estar correctos (porque la sincronización terminó), se cierra automáticamente. Sin avisos huérfanos.' },
+  ]}]
+  },
   'v1.3.1440-dev': {
    id: 'wn-2026-05-11-v1440',
   sections: [{
@@ -54318,6 +54327,15 @@ window._DashweyDeviceId = (() => {
   };
 
   // ── Toast crítico persistente con [Reintentar] ────────────────────
+  // BUG-FIX v1.3.1441 (10 may 2026): el toast quedaba "huérfano" si los
+  // datos volvían a estar OK tras la primera ejecución (caso típico:
+  // auto-trigger boot disparado en momento stale → datos correctos en
+  // los 30-60s siguientes → toast seguía mostrando descuadre antiguo).
+  // Solución: auto-revalidación silenciosa cada 10s. Si la nueva
+  // ejecución devuelve 'ok'/'fixed', cerrar toast automáticamente.
+  // Filosofía setup-and-forget: si el problema se resolvió solo, no
+  // mantener el aviso.
+  var _criticalToastReval = null;
   function _showCriticalToast(msg, onRetry) {
    _hideCriticalToast(); // siempre limpiar previo
    var t = document.createElement('div');
@@ -54344,9 +54362,47 @@ window._DashweyDeviceId = (() => {
    // Forzar reflow y mostrar
    void t.offsetWidth;
    t.classList.add('show');
+   // Auto-revalidación silenciosa cada 10s — cierra toast si datos OK ahora
+   _startCriticalToastReval();
+  }
+  function _startCriticalToastReval() {
+   _stopCriticalToastReval();
+   _criticalToastReval = setInterval(function() {
+    // Si toast ya no está visible, cancelar
+    if (!document.getElementById('dashwey-toast-critical')) {
+     _stopCriticalToastReval();
+     return;
+    }
+    // Re-chequeo silencioso pure-read (NO usa runSanity completo para
+    // evitar mostrar otro toast). Solo ejecuta accounts validation.
+    try {
+     var validate = window._dashweyValidateAccounts;
+     var sanity = window._dashweySanity;
+     if (typeof validate !== 'function' || typeof sanity !== 'function') return;
+     var s = sanity();
+     var a = validate();
+     // Si NO hay errors críticos y cuentas cuadran → datos están bien ahora
+     var sanityErrors = (s && s.errors && s.errors.length > 0);
+     var accountsBad = (a && a.ok === false);
+     if (!sanityErrors && !accountsBad) {
+      console.log('[Sanity/criticalToast] datos OK, auto-cerrando toast');
+      _hideCriticalToast();
+      _stopCriticalToastReval();
+     }
+    } catch (e) {
+     console.warn('[Sanity/criticalToast] reval err:', e && e.message);
+    }
+   }, 10000); // cada 10s
+  }
+  function _stopCriticalToastReval() {
+   if (_criticalToastReval) {
+    clearInterval(_criticalToastReval);
+    _criticalToastReval = null;
+   }
   }
   function _hideCriticalToast() {
    var t = document.getElementById('dashwey-toast-critical');
+   _stopCriticalToastReval();
    if (!t) return;
    t.classList.remove('show');
    setTimeout(function() { try { t.remove(); } catch(_){} }, 320);
@@ -54486,6 +54542,9 @@ window._DashweyDeviceId = (() => {
   };
 
   // ── Feedback al usuario según tabla spec ──────────────────────────
+  // BUG-FIX v1.3.1441: si tras una ejecución manual/retry el resultado
+  // es OK o fixed, cerrar el toast crítico previo si seguía visible.
+  // Coherente con auto-revalidación: la última ejecución gana.
   function _showFeedback(record) {
    var trigger = record.trigger;
    var result = record.result;
@@ -54493,6 +54552,8 @@ window._DashweyDeviceId = (() => {
 
    try {
     if (result === 'ok') {
+     // Cerrar toast crítico previo si existe (datos OK ahora)
+     _hideCriticalToast();
      // Manual → toast verde, Auto → silencio total
      if (trigger === 'manual' && typeof showToast === 'function') {
       showToast('Todo en orden', 'success');
@@ -54500,6 +54561,7 @@ window._DashweyDeviceId = (() => {
      return;
     }
     if (result === 'fixed') {
+     _hideCriticalToast();
      // Tras resync exitoso (manual o auto) → toast amarillo
      if (typeof showToast === 'function') {
       showToast('Datos actualizados', 'info');
@@ -54507,6 +54569,10 @@ window._DashweyDeviceId = (() => {
      return;
     }
     if (result === 'warning') {
+     // Warning de cuentas: si hay toast crítico previo más severo, mantener
+     // el más reciente (el warning lo reemplaza solo si era de la misma raíz).
+     // Para simplicidad y transparencia: cerrar toast previo y mostrar warning.
+     _hideCriticalToast();
      if (typeof showToast === 'function') {
       showToast('⚠️ ' + (msg || 'Aviso'), 'warning');
      }
@@ -54579,23 +54645,59 @@ window._DashweyDeviceId = (() => {
   };
 
   // ── Trigger automático al boot (1× por sesión, post-hidratación) ──
-  // Espera a que _DashweyInitialSyncDone === true para no falsear chequeos
+  // Espera a que _DashweyInitialSyncDone === true Y datos estables.
+  //
+  // BUG-FIX v1.3.1441 (10 may 2026): el delay 800ms NO bastaba en APK con
+  // red lenta. _DashweyInitialSyncDone===true solo indica que _doInitialSync
+  // arrancó; los onSnapshot subsiguientes (que reescriben localStorage con
+  // datos correctos) pueden tardar 30-60s adicionales en producción real.
+  // El auto-trigger a 800ms capturaba snapshot stale → toast falso de
+  // descuadre que persistía aun cuando los datos ya se habían corregido.
+  //
+  // Solución: tras InitialSyncDone, esperar QUIETUD de cambios (ningún
+  // onSnapshot durante 5s consecutivos) antes de ejecutar Sanity.
+  // Hard timeout 90s (después de eso, ejecutar igual; otra cosa va mal).
   (function _scheduleAutoBoot() {
    var attempts = 0;
    var MAX_ATTEMPTS = 60; // 30s a 500ms cada uno
    function _check() {
     attempts++;
     if (window._DashweyInitialSyncDone === true) {
-     // Pequeño delay extra para que onSnapshot drene cola
-     setTimeout(function() {
-      try { window._dashweyRunSanity({ trigger: 'auto' }); } catch(_){}
-     }, 800);
+     _waitForQuietThenRun();
      return;
     }
     if (attempts < MAX_ATTEMPTS) {
      setTimeout(_check, 500);
     }
     // Si tras 30s no completó initial sync, no auto-trigger (otra cosa pasa)
+   }
+   // Espera "quietud": ningún cambio en _DashweyDirty/onSnapshot durante 5s.
+   // Limita espera total a 90s — alineado con APK slow-network 60-90s.
+   function _waitForQuietThenRun() {
+    var QUIET_MS = 5000;       // 5s sin cambios = estable
+    var HARD_TIMEOUT_MS = 90000; // 90s máx
+    var startedAt = Date.now();
+    var lastChangeAt = Date.now();
+    function _onChange() { lastChangeAt = Date.now(); }
+    // Escuchar señales de cambio. Estas son las mismas que sd-status escucha.
+    try {
+     window.addEventListener('dashwey:sync-state-changed', _onChange);
+    } catch(_) {}
+    var _checkQuiet = setInterval(function() {
+     var since = Date.now() - lastChangeAt;
+     var totalElapsed = Date.now() - startedAt;
+     if (since >= QUIET_MS || totalElapsed >= HARD_TIMEOUT_MS) {
+      clearInterval(_checkQuiet);
+      try { window.removeEventListener('dashwey:sync-state-changed', _onChange); } catch(_) {}
+      // Verificación final: si NO se completó initial sync de verdad
+      // (raro), aborta sin toast. Filosofía setup-and-forget: silencio.
+      if (window._DashweyInitialSyncDone !== true) {
+       console.log('[Sanity/autoBoot] aborted: initial sync not done');
+       return;
+      }
+      try { window._dashweyRunSanity({ trigger: 'auto' }); } catch(_){}
+     }
+    }, 1000);
    }
    // Esperar 2s tras DOMContentLoaded para no competir con boot
    if (document.readyState === 'complete' || document.readyState === 'interactive') {
