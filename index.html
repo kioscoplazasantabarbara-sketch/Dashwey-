@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1461";
+ var CURRENT_CACHE = "dashwey-v1-3-1462";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1461-dev</title>
+<title>Dashwey v1.3.1462-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18705,7 +18705,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1461-dev';
+ const _APP_VERSION = 'v1.3.1462-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20033,6 +20033,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1462-dev': {
+   id: 'wn-2026-05-12-v1462',
+  sections: [{
+  title: '🎯 Cierres caja multi-device — fix definitivo',
+  items: [
+  { icon: '🔁', name: 'IDs deterministas para cierres automáticos', desc: 'Antes, cuando dos dispositivos (móvil + APK + Pixel) ejecutaban el cierre automático del mismo día con timestamps distintos (zona horaria, momento exacto), creaban DOS cierres en Firestore para el mismo evento. Resultado: el dispositivo guardaba el suyo con datos parciales mientras el otro tenía los completos. APK mostraba 17.92€ / 16 tickets cuando debería ser 223.27€ / 135. AHORA el ID se construye desde la fecha + cuenta. Mismo evento → mismo ID → Firestore deduplica naturalmente. Imposible duplicación.' },
+  { icon: '🛠️', name: 'Herramienta de limpieza duplicados', desc: 'Para los cierres duplicados ya existentes (creados antes del fix), expuesto window._DashweyDedupCierres() que agrupa por día+cuenta, conserva el cierre con MÁS ventas registradas y marca los demás como eliminados. Ejecutar UNA vez tras instalar v1.3.1462.' },
+  ]}]
+  },
   'v1.3.1461-dev': {
    id: 'wn-2026-05-12-v1461',
   sections: [{
@@ -23137,8 +23146,9 @@ const ui = (() => {
    // ═══════════════════════════════════════════════════════════════════════
    // MODO REVISAR (default): ingreso preliminar pendiente de revisión
    // ═══════════════════════════════════════════════════════════════════════
+   // v1.3.1462: ID determinista por dateKey + cuentaId
    var ingreso = {
-    id: 'cierre_auto_' + now,
+    id: 'cierre_auto_' + hoy + '_' + cuentaId,
     importe: info.bruto,
     fecha: new Date(now).toISOString(),
     cuentaId: cuentaId,
@@ -23227,7 +23237,17 @@ const ui = (() => {
    }
 
    // Construir cierre real
-   var cierreId = 'cierre_auto_directo_' + now;
+   // v1.3.1462 FIX MULTI-DEVICE: ID determinista por dateKey + cuentaId.
+   //   ANTES: 'cierre_auto_directo_' + now → IDs diferentes en cada device
+   //          (Vietnam vs España = timestamps distintos para mismo evento contable)
+   //   PROBLEMA: dos devices ejecutaban cierre auto del mismo día con
+   //             timestamps distintos → 2 cierres en Firestore con misma
+   //             jornadaLabel pero IDs diferentes → APK guardaba uno parcial
+   //             (con menos ventas si sync no había llegado todavía).
+   //   FIX: ID determinista construido del dateKey + cuentaId. Cualquier
+   //        device produce el MISMO ID para el mismo evento. Firestore
+   //        last-write-wins natural deduplica. Idempotency.
+   var cierreId = 'cierre_auto_' + dateKey + '_' + cuentaId;
    var cierreReal = {
     id: cierreId,
     jornadaLabel: dateKey,
@@ -23541,8 +23561,9 @@ const ui = (() => {
      }
     } else {
      // Modo revisar: registrar preliminar retroactivo (comportamiento original)
+     // v1.3.1462: ID determinista por dateKey + cuentaId (mismo motivo que cierre directo)
      var ingreso = {
-      id: 'cierre_auto_' + cierreTs + '_' + Math.random().toString(36).slice(2,7),
+      id: 'cierre_auto_' + candidateKey + '_' + perfil.cierreCajaCuentaDestino,
       importe: info.bruto,
       fecha: new Date(cierreTs).toISOString(),
       cuentaId: perfil.cierreCajaCuentaDestino,
@@ -23754,6 +23775,52 @@ const ui = (() => {
  window._DashweyAutoCierreCheckBacklog = _autoCierreCheckBacklog;
  // v1.3.1405 — exponer reconciliación retroactiva para triggers post-sync
  window._DashweyReconciliarClosureId = _reconciliarClosureIdRetroactivo;
+ // v1.3.1462 — herramienta para limpiar cierres duplicados pre-existentes.
+ //   Tras introducir IDs deterministas, cierres antiguos creados con IDs
+ //   timestamp pueden seguir duplicados en Firestore. Esta función agrupa
+ //   por jornadaLabel+cuentaId, conserva el cierre con MÁS eventIds.ventas
+ //   y marca el resto como deleted.
+ window._DashweyDedupCierres = function(opts) {
+  opts = opts || {};
+  var dryRun = opts.dryRun !== false; // default dryRun=true por seguridad
+  var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
+  var groups = {};
+  cierres.forEach(function(c){
+   if (!c || c.deleted || c.estado !== 'cerrado') return;
+   if (!c.jornadaLabel || !c.cuentaId) return;
+   var key = c.jornadaLabel + '|' + c.cuentaId;
+   if (!groups[key]) groups[key] = [];
+   groups[key].push(c);
+  });
+  var keepers = [], toDelete = [];
+  Object.keys(groups).forEach(function(k){
+   var arr = groups[k];
+   if (arr.length === 1) { keepers.push(arr[0]); return; }
+   // Ordenar por nº eventIds.ventas DESC (más completo primero)
+   arr.sort(function(a,b){
+    var na = (a.eventIds && a.eventIds.ventas && a.eventIds.ventas.length) || 0;
+    var nb = (b.eventIds && b.eventIds.ventas && b.eventIds.ventas.length) || 0;
+    return nb - na;
+   });
+   keepers.push(arr[0]);
+   for (var i = 1; i < arr.length; i++) toDelete.push(arr[i]);
+  });
+  console.info('[DedupCierres]', { groups: Object.keys(groups).length, keepers: keepers.length, toDelete: toDelete.length, dryRun: dryRun });
+  toDelete.forEach(function(c){
+   var n = (c.eventIds && c.eventIds.ventas && c.eventIds.ventas.length) || 0;
+   console.info('  [borrar]', c.jornadaLabel, c.id.slice(-12), '·', (c.ventas||0).toFixed(2), '€ /', c.nVentas, 'ticks · eventIds:', n);
+  });
+  if (dryRun) {
+   console.warn('[DedupCierres] DRY RUN — pasa { dryRun: false } para borrar realmente');
+   return { keepers: keepers.length, toDelete: toDelete.length, dryRun: true };
+  }
+  // Marcar deleted en cada uno (vía updateCierre para preservar tombstone + sync)
+  toDelete.forEach(function(c){
+   try { State.set.updateCierre(c.id, { deleted: true }); } catch(e) { console.warn('[DedupCierres] err update', c.id, e); }
+  });
+  console.info('[DedupCierres] ✓ ' + toDelete.length + ' duplicados marcados deleted');
+  return { keepers: keepers.length, deleted: toDelete.length, dryRun: false };
+ };
  // v1.3.1361: exponer _autoCierreTzNow para uso desde otros IIFEs (lock mutuo cierre).
  window._DashweyAutoCierreTzNow = _autoCierreTzNow;
  // v1.3.1362 FIX TZ MADRID: exponer _autoCierreTzToUtc para que CierreEngine pueda
