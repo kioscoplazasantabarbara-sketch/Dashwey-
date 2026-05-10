@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1441";
+ var CURRENT_CACHE = "dashwey-v1-3-1442";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1441-dev</title>
+<title>Dashwey v1.3.1442-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18618,7 +18618,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1441-dev';
+ const _APP_VERSION = 'v1.3.1442-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -19946,6 +19946,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1442-dev': {
+   id: 'wn-2026-05-11-v1442',
+  sections: [{
+  title: '🛡️ Saldos blindados',
+  items: [
+  { icon: '✅', name: 'Saldos siempre fiables', desc: 'Los saldos de cuenta ya no pueden mostrar valores erróneos durante el arranque. Si Dashwey detecta que aún no tiene todos los datos, espera. Si detecta un cálculo sospechoso (cambio masivo respecto al saldo actual), no lo guarda. Resultado: Dashboard siempre muestra saldos correctos.' },
+  { icon: '🩹', name: 'Auto-reparación silenciosa', desc: 'Cuando los datos terminan de llegar tras el arranque, Dashwey recalcula automáticamente y corrige cualquier saldo que pudiera haberse mostrado con datos incompletos. Sin intervención del usuario.' },
+  ]}]
+  },
   'v1.3.1441-dev': {
    id: 'wn-2026-05-11-v1441',
   sections: [{
@@ -25041,6 +25050,44 @@ const ui = (() => {
     var d = new Date(v);
     return isNaN(d.getTime()) ? 0 : d.getTime();
    };
+   // ═══════════════════════════════════════════════════════════════
+   // v1.3.1442 FIX-SALDO-RACE — protección contra datos parciales
+   // ═══════════════════════════════════════════════════════════════
+   //
+   // BUG observado (10 may 2026, PWA + APK): saldo persistido cuenta
+   // Kiosco mostraba -213.567,64 € cuando el saldo correcto al ejecutar
+   // recalc con datos completos era 8.580,71 €. Diff: 222.148,35 €.
+   //
+   // RAÍZ: race condition. _bbRecalcSaldos se dispara vía listeners
+   // (DashweyBus emit 'venta'/'gasto'/'ingreso') ANTES de que las
+   // subcollections Firestore terminen de hidratar. Calcula con array
+   // PARCIAL → escribe c.saldo erróneo → propaga a Firestore → otros
+   // dispositivos lo leen como "verdad".
+   //
+   // SOLUCIÓN — 3 capas defensivas:
+   //
+   // LAYER 1 — INITIAL SYNC GUARD: si _DashweyInitialSyncDone aún no
+   //   es true, NO recalcular. Marcar _DashweyRecalcPending=true para
+   //   que se ejecute cuando termine la hidratación. La self-healing.
+   //
+   // LAYER 2 — SANITY CHECK del resultado: tras calcular, comparar
+   //   contra el saldo persistido. Si el cambio es "absurdo" (cruzar
+   //   de positivo a negativo MASIVO, magnitud > 5x el actual, etc.)
+   //   NO sobrescribir. Es señal de datos parciales aún. Log warn.
+   //
+   // LAYER 3 — SELF-HEAL: cuando _DashweyInitialSyncDone pasa a true,
+   //   se dispara el recalc pendiente (handler abajo en este script).
+   //   Si entonces obtiene resultado coherente, SÍ escribe → cuenta
+   //   sana sola.
+   //
+   // FILOSOFÍA setup-and-forget: el usuario nunca tiene que pulsar
+   // "Recalcular saldos manual". Dashwey se cura sola.
+   var _initialSyncReady = (window._DashweyInitialSyncDone === true);
+   if (!_initialSyncReady) {
+    // LAYER 1: marcar pending y abortar
+    window._DashweyRecalcPending = true;
+    return;
+   }
    cuentas.forEach(function(c) {
     var saldoCalc = parseFloat(c.saldoInicial) || 0;
     // v1.3.1080: fecha del saldoInicial. Sin ella → epoch 0 (todos los movs cuentan).
@@ -25110,8 +25157,41 @@ const ui = (() => {
      saldoCalc -= (parseFloat(coste)||0);
     });
     saldoCalc = Math.round(saldoCalc * 100) / 100;
+    var saldoActual = Math.round((parseFloat(c.saldo)||0) * 100) / 100;
+    // ═══ LAYER 2 — SANITY CHECK DEL RESULTADO ═══
+    //
+    // Detectar resultado "absurdo" que indique datos parciales:
+    //   (a) cambio > 50.000 € en magnitud absoluta
+    //   (b) cruza de positivo a negativo (o viceversa) Y diff > 10.000 €
+    //   (c) magnitud actual ≥ 100 y nuevo cálculo es 0 (suspicious empty)
+    //
+    // En cualquiera de los 3 casos: NO sobrescribir, log warn,
+    // marcar pending para reintentar cuando datos terminen de llegar.
+    var diff = Math.abs(saldoCalc - saldoActual);
+    var crossesZero = (saldoCalc * saldoActual) < 0;
+    var magnitudActual = Math.abs(saldoActual);
+    var sospechoso = false;
+    var razonSospecha = '';
+    if (saldoActual !== 0 && diff > 50000) {
+     sospechoso = true;
+     razonSospecha = 'diff_grande:' + diff.toFixed(2) + '€';
+    } else if (saldoActual !== 0 && crossesZero && diff > 10000) {
+     sospechoso = true;
+     razonSospecha = 'cross_zero_grande:' + saldoActual.toFixed(2) + '→' + saldoCalc.toFixed(2);
+    } else if (magnitudActual >= 100 && saldoCalc === 0) {
+     sospechoso = true;
+     razonSospecha = 'collapse_a_zero:' + saldoActual.toFixed(2) + '→0';
+    }
+    if (sospechoso) {
+     console.warn('[Dashwey/recalcSaldos] RESULTADO SOSPECHOSO — NO sobrescribiendo. Cuenta:', c.nombre, '·', razonSospecha, '· counts:', {
+      ventas: ventas.length, gastos: gastos.length, ingresos: ingresos.length, pedidos: pedidos.length
+     });
+     // Marcar pending para que se reintente cuando llegue más data
+     window._DashweyRecalcPending = true;
+     return; // siguiente cuenta
+    }
     // v1.3.1135 FIX#5: solo actualizar si cambió — evita write espúreo y emit 'cuenta' innecesario
-    if (Math.round((parseFloat(c.saldo)||0) * 100) / 100 !== saldoCalc) {
+    if (saldoActual !== saldoCalc) {
      State.set.updateCuenta(c.id, { saldo: saldoCalc });
     }
    });
@@ -25120,6 +25200,30 @@ const ui = (() => {
  }
  // Exposición pública para llamadas desde cualquier módulo
  window._recalcSaldosCuentas = _bbRecalcSaldos;
+ // ═══ LAYER 3 — SELF-HEAL: ejecutar recalc pendiente cuando InitialSync ═══
+ // Si durante boot _bbRecalcSaldos abortó por LAYER 1 o LAYER 2 marcando
+ // _DashweyRecalcPending, este watcher lo reintentará cuando los datos
+ // estén completos. Polling 1s × 60 = 60s máx, suficiente para boots
+ // lentos (red china validada en knowledge: T=60-90s clean state).
+ (function _watchPendingRecalc() {
+  var attempts = 0;
+  var MAX = 60;
+  var iv = setInterval(function() {
+   attempts++;
+   if (attempts >= MAX) { clearInterval(iv); return; }
+   if (!window._DashweyRecalcPending) return;
+   if (window._DashweyInitialSyncDone !== true) return;
+   if (window._DashweyApplyingRemote === true) return;
+   if (window._DashweyRecalcInProgress === true) return;
+   if (window._DashweySavingCtrl && window._DashweySavingCtrl.isSaving) return;
+   // Datos listos: limpiar flag y ejecutar
+   window._DashweyRecalcPending = false;
+   try {
+    console.log('[Dashwey/recalcSaldos] self-heal disparado tras hidratación');
+    _bbRecalcSaldos();
+   } catch(e) { console.warn('[Dashwey/recalcSaldos] self-heal err:', e && e.message); }
+  }, 1000);
+ })();
 
  // ── v1.3.1018: Revertir import BudgetBakers ────────────────────
  // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
