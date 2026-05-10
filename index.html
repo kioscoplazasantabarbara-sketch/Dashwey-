@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1468";
+ var CURRENT_CACHE = "dashwey-v1-3-1469";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1468</title>
+<title>Dashwey v1.3.1469</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11179,38 +11179,159 @@ window._dashweyCircuitReset = function() {
 };
 
 
-// ── v1.3.1467 LOTE A · TIMERS INVENTORY ──────────────────────────
-// Inventario pasivo de setInterval activos en la app. Útil para audit.
-// Helper: _dashweyTimers() — lista intervals registrados.
-// Nota: solo cubre los wraps explícitos. El wrap no se aplica retroactivamente.
+// ── v1.3.1469 LOTE C · TIMERS MANAGER (expandido) ──────────────────
+// Sistema de inventario + pausa-on-hidden para timers no críticos.
+// API:
+//   _DashweyTimers.list()             → array de timers registrados
+//   _DashweyTimers.count()            → número total
+//   _DashweyTimers.markPausable(id)   → marca timer pausable cuando app en bg
+//   _DashweyTimers.label(id, name)    → asigna nombre opcional al timer
+// Helpers consola:
+//   _dashweyTimers()                  → tabla legible en DevTools
+//   _dashweyTimersPause()             → fuerza pausa manual
+//   _dashweyTimersResume()            → fuerza resume manual
+// Pause/Resume automáticos en document.visibilitychange.
+// Cero contacto con datos. Cero cambio a timers críticos.
 window._DashweyTimers = window._DashweyTimers || (function() {
- var _registry = [];
+ var _registry = []; // [{ id, ms, fn, at, caller, label, pausable, paused }]
  var _origSI = window.setInterval;
+ var _origCI = window.clearInterval;
+ var _appHidden = false;
+
+ // Wrap setInterval — captura fn + ms para poder reanudar
  try {
   window.setInterval = function(fn, ms) {
    var id = _origSI.apply(window, arguments);
    try {
     var caller = (new Error()).stack || '';
     var firstLine = caller.split('\n')[2] || '';
-    _registry.push({ id: id, ms: ms, at: Date.now(), caller: firstLine.trim().slice(0, 120) });
+    _registry.push({
+     id: id, ms: ms, fn: fn,
+     at: Date.now(),
+     caller: firstLine.trim().slice(0, 120),
+     label: null, pausable: false, paused: false
+    });
    } catch(_) {}
    return id;
   };
  } catch(_) {}
+
+ // Wrap clearInterval — eliminar del registry
+ try {
+  window.clearInterval = function(id) {
+   try {
+    for (var i = _registry.length - 1; i >= 0; i--) {
+     if (_registry[i].id === id) { _registry.splice(i, 1); break; }
+    }
+   } catch(_) {}
+   return _origCI.apply(window, arguments);
+  };
+ } catch(_) {}
+
+ function _findEntry(id) {
+  for (var i = 0; i < _registry.length; i++) {
+   if (_registry[i].id === id) return _registry[i];
+  }
+  return null;
+ }
+
+ function markPausable(id, label) {
+  var e = _findEntry(id);
+  if (!e) return false;
+  e.pausable = true;
+  if (label) e.label = label;
+  // Si la app está oculta ahora mismo, pausar inmediato
+  if (_appHidden && !e.paused) {
+   try { _origCI.call(window, e.id); e.paused = true; } catch(_) {}
+  }
+  return true;
+ }
+
+ function setLabel(id, label) {
+  var e = _findEntry(id);
+  if (e) { e.label = label; return true; }
+  return false;
+ }
+
+ function pauseMarked() {
+  var n = 0;
+  for (var i = 0; i < _registry.length; i++) {
+   var e = _registry[i];
+   if (e.pausable && !e.paused) {
+    try { _origCI.call(window, e.id); e.paused = true; n++; } catch(_) {}
+   }
+  }
+  return n;
+ }
+
+ function resumeMarked() {
+  var n = 0;
+  for (var i = 0; i < _registry.length; i++) {
+   var e = _registry[i];
+   if (e.pausable && e.paused && typeof e.fn === 'function') {
+    try {
+     // Re-crear el interval con el mismo fn+ms. Devuelve nuevo id.
+     // Actualizamos e.id para que markPausable/clear sigan funcionando.
+     var newId = _origSI.call(window, e.fn, e.ms);
+     e.id = newId; e.paused = false; n++;
+    } catch(_) {}
+   }
+  }
+  return n;
+ }
+
+ // Listener visibilitychange — solo si document existe
+ try {
+  if (typeof document !== 'undefined' && document.addEventListener) {
+   document.addEventListener('visibilitychange', function() {
+    try {
+     var hidden = (document.visibilityState === 'hidden');
+     if (hidden && !_appHidden) {
+      _appHidden = true;
+      var n = pauseMarked();
+      if (n > 0) console.info('[Dashwey/Timers] paused ' + n + ' background-safe timer(s) on hidden');
+     } else if (!hidden && _appHidden) {
+      _appHidden = false;
+      var r = resumeMarked();
+      if (r > 0) console.info('[Dashwey/Timers] resumed ' + r + ' timer(s) on visible');
+     }
+    } catch(_) {}
+   });
+  }
+ } catch(_) {}
+
  return {
-  list: function() { return _registry.slice(); },
-  count: function() { return _registry.length; }
+  list: function() {
+   return _registry.map(function(e) {
+    return { id: e.id, ms: e.ms, at: e.at, caller: e.caller, label: e.label, pausable: e.pausable, paused: e.paused };
+   });
+  },
+  count: function() { return _registry.length; },
+  markPausable: markPausable,
+  label: setLabel,
+  pauseMarked: pauseMarked,
+  resumeMarked: resumeMarked
  };
 })();
 window._dashweyTimers = function() {
  try {
   var t = window._DashweyTimers.list();
-  console.log('%c[Dashwey/Timers] ' + t.length + ' intervals registrados', 'color:#22C55E;font-weight:bold');
+  var paused = t.filter(function(x){return x.paused;}).length;
+  var pausable = t.filter(function(x){return x.pausable;}).length;
+  console.log('%c[Dashwey/Timers] ' + t.length + ' total · ' + pausable + ' pausables · ' + paused + ' actualmente pausados', 'color:#22C55E;font-weight:bold');
   t.forEach(function(r) {
-   console.log('  id=' + r.id + ' every ' + r.ms + 'ms @ ' + new Date(r.at).toLocaleTimeString() + ' · ' + r.caller);
+   var marks = (r.pausable ? '⏸️' : '  ') + (r.paused ? '🟡' : '🟢');
+   var name = r.label ? ('[' + r.label + '] ') : '';
+   console.log('  ' + marks + ' id=' + r.id + ' every ' + r.ms + 'ms · ' + name + r.caller);
   });
   return t;
  } catch(_) { return []; }
+};
+window._dashweyTimersPause = function() {
+ try { return window._DashweyTimers.pauseMarked(); } catch(_) { return 0; }
+};
+window._dashweyTimersResume = function() {
+ try { return window._DashweyTimers.resumeMarked(); } catch(_) { return 0; }
 };
 
 window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
@@ -18916,7 +19037,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1468';
+ const _APP_VERSION = 'v1.3.1469';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20273,6 +20394,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1469': {
+   id: 'wn-2026-05-10-v1469',
+  sections: [{
+  title: '🔋 Lote C — Ahorro de batería en segundo plano',
+  items: [
+  { icon: '⏸️', name: 'Pausa automática de timers no críticos en background', desc: 'Cuando la app entra en segundo plano (cambias de app o bloqueas la pantalla), los timers no críticos se pausan automáticamente. En este deploy, el sondeo de estado de sincronización (que comprobaba cada 2 segundos si había cambios online/offline) ahora se pausa cuando la app no está visible. Al volver a abrirla, se reanuda inmediatamente. Cero coste cuando la app está en uso, ahorro real cuando no. Los timers críticos (cierre automático cada 60s, comprobación de notificaciones) NO se pausan — siguen funcionando.' },
+  { icon: '🔍', name: 'Timer manager con inventario detallado', desc: 'El helper _dashweyTimers() ahora muestra una tabla con: id, frecuencia, etiqueta, si es pausable, y si está actualmente pausado. Útil para diagnosticar comportamientos extraños (timers duplicados tras re-hidratación de Firebase). Helpers nuevos: _dashweyTimersPause() y _dashweyTimersResume() para forzar manualmente desde DevTools.' },
+  { icon: '🛡️', name: 'Tracking exacto de timers creados y eliminados', desc: 'Antes el manager solo registraba creación. Ahora también detecta cuando un timer se elimina con clearInterval — el registry refleja el estado real en todo momento. Imprescindible para detectar leaks (si el contador sube indefinidamente sin bajar).' },
+  ]}]
+  },
   'v1.3.1468': {
    id: 'wn-2026-05-10-v1468',
   sections: [{
@@ -55208,11 +55339,13 @@ window._DashweyDeviceId = (() => {
 
  // Sondeo defensivo: cada 2s comprobar si flag InitialSyncDone cambió y refrescar.
  //   Esto cubre cambios del flag desde código que no dispara el custom event.
- //   Coste: 1 lectura DOM + 1 comparación booleana cada 2s. Imperceptible.
+ //   Coste: 1 lectura DOM + 1 comparación booleana cada 2s. Imperceptible en foreground.
+ //   v1.3.1469 LOTE C: marcado pausable — se pausa automáticamente cuando la
+ //                    app entra background (ahorro batería real, audit + reanuda al volver visible).
  (function _sdStatusPoll() {
   var _lastSyncDone = null;
   var _lastOnline = null;
-  setInterval(function() {
+  var _iv = setInterval(function() {
    try {
     var s = !!window._DashweyInitialSyncDone;
     var o = (typeof navigator !== 'undefined') && navigator.onLine;
@@ -55222,6 +55355,11 @@ window._DashweyDeviceId = (() => {
     }
    } catch(_) {}
   }, 2000);
+  try {
+   if (window._DashweyTimers && window._DashweyTimers.markPausable) {
+    window._DashweyTimers.markPausable(_iv, 'sd-status-poll');
+   }
+  } catch(_) {}
  })();
 
  // Refresh inicial al cargar (cubrir caso boot tardío)
