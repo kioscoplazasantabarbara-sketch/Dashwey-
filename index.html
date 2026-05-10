@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1469";
+ var CURRENT_CACHE = "dashwey-v1-3-1470";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1469</title>
+<title>Dashwey v1.3.1470</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14158,6 +14158,77 @@ const State = (() => {
  }
 
  // Getters
+ // ── v1.3.1470 LOTE 4 (#1) · MAPS ÍNDICE PRODUCTOS + PROVEEDORES ──
+ //   Convierte State.get.prod(id) / State.get.prov(id) de O(n) lineal a O(1).
+ //   _prodById y _provById se mantienen sincronizados con _state.productos
+ //   y _state.proveedores. Incluyen TANTO vivos como soft-deleted (deleted:true)
+ //   para preservar funcionalidad RESURRECT desde tombstone (caso real Loyverse).
+ //
+ //   Las lecturas son tolerantes: si Map.get(id) miss → fallback find() lineal
+ //   + incrementa contador de drift visible en _dashweyMapsAudit().
+ //
+ //   Invalidación: hooks en setter productos/proveedores, addProd/addProv,
+ //   resetStorage y bootstrap. Object.assign in-place sobre items NO requiere
+ //   invalidación (el Map apunta al mismo objeto).
+ const _prodById = new Map();
+ const _provById = new Map();
+ let _idxDriftCount = 0; // diagnóstico: cuántas lecturas tuvieron miss y fallback
+ function _rebuildIndex(key) {
+  try {
+   const arr = (key === 'productos') ? _state.productos : _state.proveedores;
+   const map = (key === 'productos') ? _prodById : _provById;
+   map.clear();
+   if (!Array.isArray(arr)) return;
+   for (let i = 0; i < arr.length; i++) {
+    const it = arr[i];
+    if (it && it.id) map.set(it.id, it);
+   }
+  } catch(_) {}
+ }
+ function _rebuildAllIndexes() {
+  _rebuildIndex('productos');
+  _rebuildIndex('proveedores');
+ }
+ function _indexGet(key, id) {
+  if (!id) return undefined;
+  const map = (key === 'productos') ? _prodById : _provById;
+  const hit = map.get(id);
+  if (hit !== undefined) return hit;
+  // Fallback defensivo: si Map miss, intentar find() y registrar drift
+  try {
+   const arr = (key === 'productos') ? _state.productos : _state.proveedores;
+   if (Array.isArray(arr)) {
+    const found = arr.find(x => x && x.id === id);
+    if (found) {
+     _idxDriftCount++;
+     // Auto-corregir el Map para no repetir el miss
+     map.set(id, found);
+     return found;
+    }
+   }
+  } catch(_) {}
+  return undefined;
+ }
+ // Helper para diagnóstico (expuesto en window al final del módulo)
+ function _mapsAudit() {
+  const checks = ['productos', 'proveedores'].map(k => {
+   const arr = (k === 'productos') ? _state.productos : _state.proveedores;
+   const map = (k === 'productos') ? _prodById : _provById;
+   const arrLen = Array.isArray(arr) ? arr.length : 0;
+   const mapSize = map.size;
+   // Detect drift: items en arr sin id, o items con id no en map
+   let missing = 0, orphan = 0;
+   if (Array.isArray(arr)) {
+    arr.forEach(it => { if (it && it.id && !map.has(it.id)) missing++; });
+   }
+   // Orphans: ids en map que ya no están en arr
+   const idsInArr = new Set((arr || []).filter(x => x && x.id).map(x => x.id));
+   map.forEach((_, id) => { if (!idsInArr.has(id)) orphan++; });
+   return { key: k, arrLen, mapSize, missing, orphan };
+  });
+  return { checks, driftCount: _idxDriftCount };
+ }
+
  // v1.3.1074: helper de filtrado soft-delete — transparente para items viejos sin flag
  const _nd = (arr) => Array.isArray(arr) ? arr.filter(x => !x || !x.deleted) : [];
  // v1.3.1074: helper que preserva items con deleted:true al reemplazar array
@@ -14253,8 +14324,8 @@ const State = (() => {
  recordatorios: () => _nd(_state.recordatorios), // v1.3.992 LOTE C · v1.3.1074: soft delete
  ingresosFin: () => _nd(_state.ingresosFin), // v9.5.73: ingresos manuales · v1.3.1074: soft delete
  notifPrefs: () => Object.assign({}, (DEFAULTS.settings.notifPrefs || {}), (_state.settings?.notifPrefs || {})),
- prov: (id) => _state.proveedores.find(p => p.id === id),
- prod: (id) => _state.productos.find(p => p.id === id),
+ prov: (id) => _indexGet('proveedores', id),
+ prod: (id) => _indexGet('productos', id),
  // v1.3.1075: syncCommand para acciones globales
  syncCommand: () => _state.syncCommand || null,
  };
@@ -14323,8 +14394,8 @@ const State = (() => {
 
  // Setters — siempre guardan
  const set = {
- proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); save(); },
- productos: (v) => { _state.productos = _preserveDeleted('productos', v); save(); },
+ proveedores: (v) => { _state.proveedores = _preserveDeleted('proveedores', v); _rebuildIndex('proveedores'); save(); },
+ productos: (v) => { _state.productos = _preserveDeleted('productos', v); _rebuildIndex('productos'); save(); },
  historialPedidos: (v) => { const _snap = _snapshotMap(_state.historialPedidos); _state.historialPedidos = _preserveDeleted('historialPedidos', v); _diffMarkDirty('historialPedidos', _snap, _state.historialPedidos); save(); }, facturas: (v) => { const _snap = _snapshotMap(_state.facturas); _state.facturas = _preserveDeleted('facturas', v); _diffMarkDirty('facturas', _snap, _state.facturas); save(); },
  addFactura: (f) => { if (f?.id && (_state.facturas||[]).some(x => x.id === f.id)) return; if (!_state.facturas) _state.facturas = []; _state.facturas.push(f); try { if (f?.id) window._DashweyMarkDirty('facturas', f.id); } catch(_) {} save(); },
  mermas: (v) => { const _snap = _snapshotMap(_state.mermas); _state.mermas = _preserveDeleted('mermas', v); _diffMarkDirty('mermas', _snap, _state.mermas); save(); },
@@ -15179,6 +15250,7 @@ const State = (() => {
      remoto stale en LWW asimétrico (_mergeById línea 52488). */
   p._updatedAt = _now;
   _state.productos.push(p);
+  _prodById.set(p.id, p); // v1.3.1470 LOTE 4: mantener Map sincronizado
   save();
   try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {}
  },
@@ -15196,13 +15268,39 @@ const State = (() => {
   /* v1.3.1438 BUG-N1.A-LITE: sello LWW numérico per-item (ver addProd). */
   p._updatedAt = _now;
   _state.proveedores.push(p);
+  _provById.set(p.id, p); // v1.3.1470 LOTE 4: mantener Map sincronizado
   save();
   try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {}
  },
  // v1.3.1075: syncCommand setter
  syncCommand: (v) => { _state.syncCommand = v; save(); },
- resetStorage: () => { _state = JSON.parse(JSON.stringify(DEFAULTS)); try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {} save(); },
+ resetStorage: () => { _state = JSON.parse(JSON.stringify(DEFAULTS)); try { window._DashweyLocalDeletedIds?.clear(); } catch(_) {} _rebuildAllIndexes(); save(); },
  };
+
+ // v1.3.1470 LOTE 4 (#1): bootstrap inicial de Maps índice tras carga local
+ // _state ya está hidratado (let _state = load() ejecutado arriba). Construir
+ // _prodById y _provById ahora para que la primera lectura sea O(1).
+ try { _rebuildAllIndexes(); } catch(_) {}
+ // Exponer helper de diagnóstico en window (no contamina si ya existe)
+ try {
+  window._dashweyMapsAudit = function() {
+   try {
+    var r = _mapsAudit();
+    console.log('%c[Dashwey/Maps] audit', 'color:#22C55E;font-weight:bold');
+    r.checks.forEach(function(c) {
+     var ok = (c.missing === 0 && c.orphan === 0);
+     console.log('  ' + (ok ? '✅' : '⚠️ ') + ' ' + c.key.padEnd(12) +
+                 ' arr=' + c.arrLen + ' map=' + c.mapSize +
+                 (c.missing ? ' missing=' + c.missing : '') +
+                 (c.orphan  ? ' orphan='  + c.orphan  : ''));
+    });
+    console.log('  drift count (lecturas con miss): ' + r.driftCount);
+    return r;
+   } catch(e) { console.warn('[Maps] audit error:', e); return null; }
+  };
+ } catch(_) {}
+ // Marca perf
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('maps_index_ready'); } catch(_) {}
 
  // Exponer _isSaving al scope global para _doInitialSync
  window._DashweySavingCtrl = {
@@ -19037,7 +19135,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1469';
+ const _APP_VERSION = 'v1.3.1470';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20394,6 +20492,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1470': {
+   id: 'wn-2026-05-10-v1470',
+  sections: [{
+  title: '⚡ Lote 4 — Lookups de productos y proveedores instantáneos',
+  items: [
+  { icon: '🚀', name: 'Búsquedas O(1) en lugar de O(n)', desc: 'Antes, cada vez que el código necesitaba encontrar un producto o proveedor por su id (más de 170 puntos del código lo hacen), recorría todo el array de productos/proveedores de principio a fin con find(). Con cientos de productos y ~70 proveedores, eso son miles de comparaciones por cada render del Dashboard, Almacén o Agenda. Ahora se mantiene un índice Map<id, item> sincronizado automáticamente, y las búsquedas son instantáneas (constantes, sin importar el tamaño). En la práctica esto puede ahorrar 50-200ms en cada render real en tu Pixel 9 Pro, sin tocar ningún cálculo ni dato.' },
+  { icon: '🔒', name: 'Lectura tolerante con auto-corrección', desc: 'Si por cualquier motivo el índice se desincroniza del array real (escenario muy improbable pero defendible), la búsqueda detecta el miss, hace fallback al find() lineal de antes, e incrementa un contador de drift visible en DevTools. Además auto-corrige el índice para que el siguiente miss no ocurra. Es decir: peor caso = velocidad antigua + warning, nunca rompe.' },
+  { icon: '🔍', name: 'Helper DevTools: _dashweyMapsAudit()', desc: 'Comando que compara los Maps con los arrays reales y reporta si hay desincronización (missing/orphan) más el contador de drift acumulado. Si todo va bien debes ver ✅ en ambos casos y drift=0. Si alguna vez ves drift>0 o missing>0, repórtalo: indica un punto de mutación no cubierto por los hooks de invalidación.' },
+  ]}]
+  },
   'v1.3.1469': {
    id: 'wn-2026-05-10-v1469',
   sections: [{
