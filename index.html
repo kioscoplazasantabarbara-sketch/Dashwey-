@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1448";
+ var CURRENT_CACHE = "dashwey-v1-3-1449";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1448-dev</title>
+<title>Dashwey v1.3.1449-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18695,7 +18695,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1448-dev';
+ const _APP_VERSION = 'v1.3.1449-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20023,6 +20023,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1449-dev': {
+   id: 'wn-2026-05-11-v1449',
+  sections: [{
+  title: '🔧 Agenda — fixes visuales',
+  items: [
+  { icon: '🎯', name: 'KPI Entregas coherente', desc: 'Antes el contador decía "ENTREGAS 4" pero el KPI grande mostraba "Sin entregas". Ahora el KPI grande respeta el hero del próximo evento y no contradice el contador.' },
+  { icon: '📏', name: 'Cards programadas con escala correcta', desc: 'Los pedidos previstos ya no muestran fechas extrañas como "JU 30 ABR" cuando en realidad solo falta una semana. La barra del ciclo ahora representa exactamente un ciclo de pedido (semanal por defecto).' },
+  ]}]
+  },
   'v1.3.1448-dev': {
    id: 'wn-2026-05-11-v1448',
   sections: [{
@@ -34133,6 +34142,18 @@ function _confirmBorrarCuenta(id) {
  // A mitad del giro (720°) cambia el texto — invisible en ese frame.
  function _snapFlipText(el, newText) {
  if (!el) return;
+ // v1.3.1449: si el elemento está intencionalmente oculto (display:none inline),
+ //   NO ejecutar la animación (que reactivaría display y haría visible un elemento
+ //   que el resto de UI ocultó deliberadamente). Defense-in-depth para evitar que
+ //   escritores legacy resuciten elementos del modo Snap. Caso real: tras hero
+ //   próximo evento (v1.3.1447), snap-val-agenda queda oculto pero animaciones
+ //   antiguas lo reactivaban con texto stale ("Sin entregas").
+ if (el.style.display === 'none') {
+  // Solo actualizar el texto silenciosamente para que cuando se vuelva visible
+  // tenga el contenido correcto. Pero NO animar ni cambiar display.
+  el.textContent = newText;
+  return;
+ }
  // Cancelar timers anteriores si la animación estaba en curso
  if (el._snapFlipTimer1) { clearTimeout(el._snapFlipTimer1); el._snapFlipTimer1 = null; }
  if (el._snapFlipTimer2) { clearTimeout(el._snapFlipTimer2); el._snapFlipTimer2 = null; }
@@ -35857,15 +35878,29 @@ function _confirmBorrarCuenta(id) {
  }
 
  // Timeline horizontal — v1.3.1029: label izquierdo = última visita realizada del proveedor
- var _histPedidos = State.get.historialPedidos ? State.get.historialPedidos() : [];
- var _ultimaVisita = _histPedidos
-  .filter(function(p){ return p.provId === visita.provId && p.estado === 'recibido'; })
-  .sort(function(a,b){ return new Date(b.fecha) - new Date(a.fecha); })[0];
- var _startLabel = _ultimaVisita ? fmtD(new Date(_ultimaVisita.fecha)) : 'Sin datos';
- // v1.3.1035: con historial real — misma lógica de días restantes
- if (_ultimaVisita) {
-  // pct ya calculado correctamente arriba — no sobreescribir
-  // _ultimaVisita solo afecta a _startLabel (etiqueta izquierda)
+ // v1.3.1449 FIX BUG-4: para PREDICHOS, usar fecha del ciclo previo en lugar de
+ //   última visita histórica. La última real puede ser de hace 10+ días si el
+ //   proveedor lleva tiempo sin actividad → barra visualmente rara con "JU 30 ABR".
+ //   Para predichos la barra debe representar UN ciclo (semana o quincena).
+ var _startLabel;
+ if (_esPredicho || _esPending) {
+  // Ciclo previo = fecha predicha - periodicidad. Si periodicidad no calculable,
+  // default 7 días (cadencia semanal típica del kiosco).
+  var _periodMs = 7 * 86400000;
+  try {
+   var _periodTipo = (prov && prov.periodicidad && prov.periodicidad.tipo) || 'semanal';
+   if (_periodTipo === 'quincenal') _periodMs = 14 * 86400000;
+   else if (_periodTipo === 'mensual') _periodMs = 30 * 86400000;
+  } catch(_) {}
+  var _cicloPrevio = new Date(fechaVis.getTime() - _periodMs);
+  _startLabel = fmtD(_cicloPrevio);
+ } else {
+  // Eventos reales: como antes, usar última visita realizada
+  var _histPedidos = State.get.historialPedidos ? State.get.historialPedidos() : [];
+  var _ultimaVisita = _histPedidos
+   .filter(function(p){ return p.provId === visita.provId && p.estado === 'recibido'; })
+   .sort(function(a,b){ return new Date(b.fecha) - new Date(a.fecha); })[0];
+  _startLabel = _ultimaVisita ? fmtD(new Date(_ultimaVisita.fecha)) : 'Sin datos';
  }
  // v1.3.1448: mid label adaptado al tipo de evento
  //   predicho/pending → "Programado"; real → "Preparar"
@@ -37833,11 +37868,18 @@ function _confirmBorrarCuenta(id) {
 
  var valEl = document.getElementById('snap-val-agenda');
  if (valEl) {
- var _agendaValText = proxEnt
- ? DNAMES[proxEnt.getDay()===0?6:proxEnt.getDay()-1] + ' ' +
- String(proxEnt.getDate()).padStart(2,'0') + ' ' + MON[proxEnt.getMonth()]
- : 'Sin entregas';
- _snapFlipText(valEl, _agendaValText);
+ // v1.3.1449 FIX BUG-1: solo escribir/animar el legacy KPI si está VISIBLE.
+ //   Tras v1.3.1447, este elemento se oculta cuando hay hero próximo evento.
+ //   _snapFlipText reactiva display:'' lo que reaparecería con texto stale
+ //   ("Sin entregas" cuando hay 4 entregas reales). Skip si no es visible.
+ var _valVisible = valEl.style.display !== 'none';
+ if (_valVisible) {
+  var _agendaValText = proxEnt
+  ? DNAMES[proxEnt.getDay()===0?6:proxEnt.getDay()-1] + ' ' +
+  String(proxEnt.getDate()).padStart(2,'0') + ' ' + MON[proxEnt.getMonth()]
+  : 'Sin entregas';
+  _snapFlipText(valEl, _agendaValText);
+ }
  }
  var deltaEl = document.getElementById('snap-delta-agenda');
  var prov = proxPed ? State.get.prov(proxPed.provId) : null;
