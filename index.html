@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1464";
+ var CURRENT_CACHE = "dashwey-v1-3-1465";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1464-dev</title>
+<title>Dashwey v1.3.1465-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11284,6 +11284,14 @@ window._DashweyDrainPendingSnapshots = function() {
 
 window._DashweyApplySubcollectionSnapshot = function(stateKey, remoteItems) {
  try {
+  /* v1.3.1465 BUG-200-SUBCOL: guard _DashweyInitialSyncDone PRIMERO, simétrico
+     con subscribe('state') handler (L54099, v1.3.1436 BUG-200 FIX). Si onSnapshot
+     subcol llega entre el subscribe (durante _DashweyEnableSubcollections, ~600
+     líneas antes del flag final) y _DashweyInitialSyncDone=true, el merge se
+     aplica sobre _state parcial → pérdida de datos locales no hidratados aún.
+     Tras el primer InitialSync, el flag queda true permanentemente salvo en
+     login/logout/register, donde explícitamente se vuelve a false. */
+  if (!window._DashweyInitialSyncDone) return;
   // Guard: grace period post-suscripción (1000ms)
   const subscribeTs = window._DashweySubSubscribeTs?.[stateKey] || 0;
   if (Date.now() - subscribeTs < 1000) return;
@@ -18725,7 +18733,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1464-dev';
+ const _APP_VERSION = 'v1.3.1465-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20082,13 +20090,14 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
-  'v1.3.1464-dev': {
-   id: 'wn-2026-05-13-v1464',
+  'v1.3.1465-dev': {
+   id: 'wn-2026-05-13-v1465',
   sections: [{
-  title: '🕒 Coherencia multi-device en cierres, pedidos y registro',
+  title: '🛡️ Coherencia multi-device y arranque más seguro',
   items: [
-  { icon: '🛡️', name: 'Sello de tiempo en cierres y pedidos', desc: 'Cierres de caja, pedidos y cuentas ahora estampan un sello numérico de tiempo en cada creación y actualización. El sistema de sincronización (last-writer-wins) usa este sello para elegir la versión más reciente cuando dos dispositivos editan el mismo elemento casi a la vez. Cambio aditivo: no modifica datos existentes ni cómo se ven en pantalla.' },
+  { icon: '🕒', name: 'Sello de tiempo en cierres, pedidos y cuentas', desc: 'Cierres de caja, pedidos y cuentas ahora estampan un sello numérico de tiempo en cada creación y actualización. El sistema de sincronización (last-writer-wins) usa este sello para elegir la versión más reciente cuando dos dispositivos editan el mismo elemento casi a la vez. Cambio aditivo: no modifica datos existentes ni cómo se ven en pantalla.' },
   { icon: '🔐', name: 'Registro de cuenta más limpio', desc: 'Crear una cuenta nueva (registro) ahora limpia las mismas variables internas que se limpian al cerrar sesión: cambios pendientes en cola, polling de Loyverse del contexto previo y flags de sincronización. Sin esto, había un escenario raro (registro tras saltar el login o cambio directo entre cuentas sin logout) donde datos del contexto previo podían contaminar la cuenta recién creada. Ahora es siempre simétrico.' },
+  { icon: '🚧', name: 'Arranque protegido de datos parciales', desc: 'Durante el arranque de la app, las suscripciones a las subcolecciones de Firestore (ventas, gastos, ingresos, pedidos, mermas, facturas) se registran ANTES de que termine la sincronización inicial. Si llegaba un snapshot remoto en ese intervalo, el merge se aplicaba sobre datos locales aún no hidratados completamente, pudiendo pisar valores que todavía iban a llegar. Ahora cualquier snapshot subcol que llegue durante esa ventana se descarta. Tras completar la sincronización inicial, todo vuelve al flujo normal. Mismo patrón que ya protegía al documento raíz desde v1.3.1436, ahora extendido a las subcolecciones.' },
   ]}]
   },
   'v1.3.1462-dev': {
@@ -54393,6 +54402,12 @@ _eaRecalc();
   if (_Bus) {
    _Bus.on('_subcollection_snapshot', (payload) => {
     try {
+     /* v1.3.1465 BUG-200-SUBCOL: guard _DashweyInitialSyncDone defensa en
+        profundidad. _DashweyApplySubcollectionSnapshot ya lo tiene, pero si
+        algún futuro emisor saltea ese helper y emite el evento directamente,
+        este guard protege el path de aplicación final igual que el handler
+        de subscribe('state'). */
+     if (!window._DashweyInitialSyncDone) return;
      if (!window._DashweyUseSubcollections) return; // guard adicional
      const { stateKey, items } = payload || {};
      if (!stateKey || !Array.isArray(items)) return;
