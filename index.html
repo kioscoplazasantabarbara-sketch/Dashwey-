@@ -13219,6 +13219,17 @@ const State = (() => {
  setTimeout(function() {
   try { if (window._DashweyAutoHeal) window._DashweyAutoHeal('online'); } catch(_) {}
  }, 1500);
+ // v1.3.1462: tras volver online, dar tiempo a sync Loyverse y luego
+ //   ejecutar backlog cierre auto. Procesa días que se saltaron offline.
+ //   Delay 30s: suficiente para que loyverse_sync traiga ventas frescas.
+ setTimeout(function() {
+  try {
+   if (navigator.onLine && window._DashweyAutoCierreCheckBacklog) {
+    console.info('[AutoCierre/Backlog] retry tras volver online');
+    window._DashweyAutoCierreCheckBacklog(7);
+   }
+  } catch(_) {}
+ }, 30000);
  });
  window.addEventListener('offline', function() {
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
@@ -20039,6 +20050,7 @@ const ui = (() => {
   title: '🎯 Cierres caja multi-device — fix definitivo',
   items: [
   { icon: '🔁', name: 'IDs deterministas para cierres automáticos', desc: 'Antes, cuando dos dispositivos (móvil + APK + Pixel) ejecutaban el cierre automático del mismo día con timestamps distintos (zona horaria, momento exacto), creaban DOS cierres en Firestore para el mismo evento. Resultado: el dispositivo guardaba el suyo con datos parciales mientras el otro tenía los completos. APK mostraba 17.92€ / 16 tickets cuando debería ser 223.27€ / 135. AHORA el ID se construye desde la fecha + cuenta. Mismo evento → mismo ID → Firestore deduplica naturalmente. Imposible duplicación.' },
+  { icon: '✈️', name: 'Cierre auto NO se ejecuta sin conexión', desc: 'Las ventas Loyverse vienen de su API externa, no de Firestore. Sin red, el dispositivo solo tiene datos parciales en cache. Si el cierre auto se disparaba en ese estado (caso real: vuelo China→España 7-8 may), creaba un cierre incompleto. Ahora el cierre auto se pospone si no hay conexión y se ejecuta automáticamente al volver online (con delay para que Loyverse traiga ventas frescas primero).' },
   { icon: '🛠️', name: 'Herramienta de limpieza duplicados', desc: 'Para los cierres duplicados ya existentes (creados antes del fix), expuesto window._DashweyDedupCierres() que agrupa por día+cuenta, conserva el cierre con MÁS ventas registradas y marca los demás como eliminados. Ejecutar UNA vez tras instalar v1.3.1462.' },
   ]}]
   },
@@ -23123,6 +23135,11 @@ const ui = (() => {
  //   'directo': crea cierre real directamente con closureId estampado en ventas
  function _autoCierreRegistrarPreliminar(perfil) {
   try {
+   // v1.3.1462 GUARD OFFLINE: ver _autoCierreCrearCierreReal para razón completa.
+   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    console.warn('[AutoCierre] sin conexión → posponer cierre hasta volver online (datos Loyverse pueden estar incompletos)');
+    return false;
+   }
    var cuentaId = perfil.cierreCajaCuentaDestino;
    if (!cuentaId) return false;
    var info = _autoCierreCalcBruto(perfil);
@@ -23192,6 +23209,17 @@ const ui = (() => {
  // ═══════════════════════════════════════════════════════════════════════════
  function _autoCierreCrearCierreReal(perfil, info, dateKey, cuentaId, zona, now) {
   try {
+   // v1.3.1462 GUARD OFFLINE: NO ejecutar cierre auto si el device está sin
+   //   conexión. Las ventas Loyverse vienen de API externa (no Firestore).
+   //   Sin red → APK puede tener datos parciales en cache → cierre incompleto.
+   //   Cuando vuelva online, backlog procesará el día pendiente con datos
+   //   completos. Esto previene el caso "vuelo China→España" donde APK creó
+   //   cierre con 16 ventas mientras PWA tenía 135 (causaba duplicación).
+   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    console.warn('[AutoCierre/Directo] sin conexión → posponer cierre ' + dateKey + ' hasta volver online (datos Loyverse pueden estar incompletos)');
+    return false;
+   }
+
    var importe = info.bruto;
    var nTickets = info.nTickets;
 
@@ -23430,6 +23458,12 @@ const ui = (() => {
  function _autoCierreCheckBacklog(maxDiasAtras) {
   try {
    if (!window._DashweyInitialSyncDone) return;
+   // v1.3.1462 GUARD OFFLINE: backlog también requiere red. Si offline,
+   //   esperar al evento 'online' que disparará un retry desde initial sync.
+   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    console.info('[AutoCierre/Backlog] sin conexión → posponer hasta volver online');
+    return;
+   }
    var perfil = null;
    try { perfil = State.get.perfil ? State.get.perfil() : null; } catch(_) {}
    if (!perfil) return;
