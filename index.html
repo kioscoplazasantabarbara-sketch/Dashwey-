@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1462";
+ var CURRENT_CACHE = "dashwey-v1-3-1463";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1462-dev</title>
+<title>Dashwey v1.3.1463-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14089,7 +14089,7 @@ const State = (() => {
  }
  }, // no save: solo en memoria
  lastVal: (id, vals) => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
- addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); c.updatedAt = c.updatedAt || new Date().toISOString(); c.createdAt = c.createdAt || c.updatedAt; } _state.cuentas.push(c); save(); },
+ addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); c.updatedAt = c.updatedAt || new Date().toISOString(); c.createdAt = c.createdAt || c.updatedAt; if (typeof c._updatedAt !== 'number') c._updatedAt = Date.now(); /* v1.3.1463 BUG-N1.A-LITE: LWW guard per-field espera _updatedAt numérico */ } _state.cuentas.push(c); save(); },
  setLotesStock: (v) => { _state.lotesStock = Array.isArray(v) ? v : []; save(); },
  addLoteStock: (l) => { if (!_state.lotesStock) _state.lotesStock = []; if (l?.id && _state.lotesStock.some(x => x.id === l.id)) return; _state.lotesStock.push(l); save(); },
 
@@ -14276,6 +14276,9 @@ const State = (() => {
     c.estado = c.estado || 'abierto';
     c.scope = c.scope || (_state.settings?.activeScope || 'negocio');
     c.createdAt = c.createdAt || Date.now();
+    /* v1.3.1463 BUG-N1.A-LITE: sello universal de tiempo para LWW multi-device */
+    if (typeof c._updatedAt !== 'number') c._updatedAt = Date.now();
+    if (!c.updatedAt) c.updatedAt = new Date(c._updatedAt).toISOString();
    }
    _state.cierresCaja.push(c);
    try { if (c?.id) window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', c.id); } catch(_) {}
@@ -14304,6 +14307,9 @@ const State = (() => {
     console.warn('[Dashwey/Guard] updateCierre: inmutables bloqueados', c.id, ':', _bc.join(','));
    }
    Object.assign(c, vals);
+   /* v1.3.1463 BUG-N1.A-LITE: refresh sello tras cualquier mutación */
+   c._updatedAt = Date.now();
+   c.updatedAt = new Date(c._updatedAt).toISOString();
    try { window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', id); } catch(_) {}
    save();
    try { window.DashweyBus && window.DashweyBus.emit('cierre_caja'); } catch(_) {}
@@ -14575,6 +14581,9 @@ const State = (() => {
  var _isNewPedido = !_existing;
 
  if (_isNewPedido) {
+   /* v1.3.1463 BUG-N1.A-LITE: sello universal de tiempo para LWW multi-device */
+   if (typeof p._updatedAt !== 'number') p._updatedAt = Date.now();
+   if (!p.updatedAt) p.updatedAt = new Date(p._updatedAt).toISOString();
    _state.historialPedidos.push(p);
    try { window._DashweyMarkDirty('historialPedidos', p.id); } catch(_) {}
    // FIFO: solo crear lotes para pedidos NUEVOS — re-entry no debe duplicar lotes
@@ -18716,7 +18725,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1462-dev';
+ const _APP_VERSION = 'v1.3.1463-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20044,6 +20053,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1463-dev': {
+   id: 'wn-2026-05-13-v1463',
+  sections: [{
+  title: '🕒 Sello de tiempo en cierres y pedidos',
+  items: [
+  { icon: '🛡️', name: 'Coherencia multi-device para cierres y pedidos', desc: 'Hasta ahora, los cierres de caja y pedidos no llevaban un sello numérico de tiempo (_updatedAt). Sin él, si dos dispositivos editaban el mismo cierre o pedido casi a la vez, la sincronización podía dejar la versión equivocada como ganadora. Ahora cada cierre nuevo, cada actualización de cierre, cada pedido y cada cuenta se estampan con el momento exacto de la modificación. El sistema de sincronización (last-writer-wins) tiene la información que necesita para elegir siempre la versión más reciente.' },
+  { icon: '🔧', name: 'Mejora interna invisible', desc: 'Cambio aditivo y silencioso. No cambia datos existentes ni cómo se ven los cierres en pantalla. Solo añade un campo numérico que el merge entre dispositivos necesitaba para funcionar bien.' },
+  ]}]
+  },
   'v1.3.1462-dev': {
    id: 'wn-2026-05-12-v1462',
   sections: [{
