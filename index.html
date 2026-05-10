@@ -158,7 +158,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1451";
+ var CURRENT_CACHE = "dashwey-v1-3-1452";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +177,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1451-dev</title>
+<title>Dashwey v1.3.1452-dev</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18695,7 +18695,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1451-dev';
+ const _APP_VERSION = 'v1.3.1452-dev';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20023,6 +20023,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1452-dev': {
+   id: 'wn-2026-05-12-v1452',
+  sections: [{
+  title: '🎯 Hero y Entregas con sentido',
+  items: [
+  { icon: '⏰', name: 'Hero muestra el evento más próximo', desc: 'Antes el hero podía decir "Pedido · Goyo MAÑANA" cuando había un pedido a Praviana HOY pero la hora típica (9:00) ya había pasado. Ahora compara contra el día completo: si hay evento HOY aún sin hacer, se muestra primero.' },
+  { icon: '🚚', name: 'Entregas solo cuando hay pedido real', desc: 'Antes la pestaña Entregas mostraba todas las entregas predichas (basadas en ciclos del proveedor). Ahora solo aparecen las entregas que tienen un pedido real en almacén. Tiene más sentido: una entrega solo existe cuando has pedido la mercancía.' },
+  { icon: '📋', name: 'Pedidos siguen siendo recurrentes', desc: 'Los Pedidos en agenda siguen mostrándose siempre (es la visita programada del proveedor, ocurre semanal aunque no necesites mercancía). La diferencia es semántica con Entregas, que son consecuencia de un pedido específico.' },
+  ]}]
+  },
   'v1.3.1451-dev': {
    id: 'wn-2026-05-12-v1451',
   sections: [{
@@ -35372,23 +35382,16 @@ function _confirmBorrarCuenta(id) {
      var _rSc = new Date(rangeStart); _rSc.setHours(0,0,0,0);
      var _rEc = new Date(rangeEnd); _rEc.setHours(23,59,59,999);
      // Pedido predicho en rango → tab Pedidos (allVisitas)
+     // v1.3.1452: pedidos SIEMPRE recurrentes (visita comercial garantizada).
      if (fpPred >= _rSc && fpPred <= _rEc) {
       allVisitas.push({
        provId: prov.id, fecha: fpPred.toISOString(),
        agente: prov.agente || '', notas: 'Predicho', _src: 'predicho'
       });
      }
-     // Entrega que CORRESPONDE a este pedido específico
-     var _fePred = (typeof _entregaParaPedido === 'function')
-      ? _entregaParaPedido(prov.diasEntrega || [], fpPred)
-      : null;
-     if (_fePred && !isNaN(_fePred.getTime()) && _fePred >= _rSc && _fePred <= _rEc) {
-      allPedidos.push({
-       id: '_pred_' + prov.id + '_' + idx, provId: prov.id,
-       date: fpPred.toISOString(), items: [], _src: 'predicho',
-       _fechaEntrega: _fePred.toISOString()
-      });
-     }
+     // v1.3.1452: NO añadir entrega predicha a allPedidos. Una entrega solo
+     //   existe tras un pedido real en almacén (decisión semántica Hung).
+     //   El tab Entregas solo muestra: pendingOrders + historialPedidos reales.
     }
    });
   });
@@ -35554,12 +35557,16 @@ function _confirmBorrarCuenta(id) {
   if (heroEl && heroIcon && heroTitle && heroSub) {
    var _candidatos = [];
    var _now = new Date();
+   // v1.3.1452 — comparar contra HOY 00:00, no hora exacta. Antes los pedidos
+   //   con fecha 09:00 quedaban filtrados si abrías la app por la tarde
+   //   ("Realizar pedido · Goyo MAÑANA" cuando había Praviana HOY).
+   var _hoy00Hero = new Date(_now); _hoy00Hero.setHours(0,0,0,0);
    // Pedidos próximos (allVisitas tiene fecha de pedido)
    // v1.3.1448: texto accionable "Realizar pedido · X" en lugar de "Pedido · X"
    allVisitas.forEach(function(v) {
     if (!v || !v.fecha) return;
     var fp = new Date(v.fecha);
-    if (isNaN(fp.getTime()) || fp < _now) return;
+    if (isNaN(fp.getTime()) || fp < _hoy00Hero) return;
     var prov = State.get.prov ? State.get.prov(v.provId) : null;
     var nom = (prov && prov.nombre) || v.provId || 'Proveedor';
     _candidatos.push({
@@ -35572,10 +35579,13 @@ function _confirmBorrarCuenta(id) {
    });
    // Entregas próximas (allPedidos: calcular fecha entrega)
    // v1.3.1448: texto accionable "Recibir entrega · X" en lugar de "Entrega · X"
+   // v1.3.1452: SOLO entregas reales (con pedido pendiente), NO predichas.
+   //   Una entrega solo existe tras un pedido real en almacén.
    allPedidos.forEach(function(p) {
     if (!p || !p.date) return;
-    var fe = calcEnt(p.date, p.provId);
-    if (!fe || isNaN(fe.getTime()) || fe < _now) return;
+    if (p._src === 'predicho') return; // entregas predichas excluidas del hero
+    var fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
+    if (!fe || isNaN(fe.getTime()) || fe < _hoy00Hero) return;
     var prov = State.get.prov ? State.get.prov(p.provId) : null;
     var nom = (prov && prov.nombre) || p.provId || 'Proveedor';
     var nArts = (p.items && p.items.length) || 0;
@@ -35593,7 +35603,7 @@ function _confirmBorrarCuenta(id) {
    _recsHero.forEach(function(r) {
     if (!r || !r.fecha) return;
     var fr = new Date(r.fecha);
-    if (isNaN(fr.getTime()) || fr < _now) return;
+    if (isNaN(fr.getTime()) || fr < _hoy00Hero) return;
     var _recTitle = r.titulo ? ('Recordatorio · ' + r.titulo) : 'Recordatorio';
     _candidatos.push({
      ts: fr.getTime(),
@@ -36316,19 +36326,9 @@ function _confirmBorrarCuenta(id) {
   _todosFp.forEach(function(fpPred, idx) {
    // v1.3.1451: skip predicho stale (anterior o igual al pending real)
    if (_latestPendingF && fpPred <= _latestPendingF) return;
-   if (_eventoSameDay(prov.id, fpPred)) {
-    if (inRange(fpPred)) {
-     eventos.push({
-      tipo: 'pedido_entrega',
-      fecha: fpPred,
-      sortKey: fpPred.getTime(),
-      pedido: { id: '_predicho_' + prov.id + '_' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
-      _predicho: true
-     });
-    }
-    return;
-   }
-   // Caso normal: días distintos pedido/entrega para esta fecha
+   // v1.3.1452: predichos SOLO como tipo 'pedido' (incluso si sameDay).
+   //   Decisión semántica Hung: entregas solo si pedido real en almacén.
+   //   Pedido sameDay sin pedido real → solo es "visita pedido", no entrega.
    if (inRange(fpPred)) {
     eventos.push({
      tipo: 'pedido',
@@ -36338,23 +36338,8 @@ function _confirmBorrarCuenta(id) {
      _predicho: true
     });
    }
-   // Entrega que CORRESPONDE a este pedido (no la primera global)
-   var fePred = (typeof _entregaParaPedido === 'function')
-    ? _entregaParaPedido(prov.diasEntrega || [], fpPred)
-    : null;
-   if (!fePred || isNaN(fePred.getTime())) return;
-   // Si entrega coincide con pedido (mismo día), no duplicar
-   if (fePred.toDateString() === fpPred.toDateString()) return;
-   if (inRange(fePred)) {
-    eventos.push({
-     tipo: 'entrega',
-     fecha: fePred,
-     sortKey: fePred.getTime(),
-     pedido: { id: '_predicho_' + prov.id + '_e' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
-     fechaPedido: fpPred,
-     _predicho: true
-    });
-   }
+   // v1.3.1452: NO push 'entrega' ni 'pedido_entrega' predicho.
+   //   Entregas predichas excluidas del feed completo (tab "Todo" + Entregas).
   });
  });
 
