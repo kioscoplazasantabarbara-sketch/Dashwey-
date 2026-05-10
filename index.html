@@ -116,6 +116,7 @@
  document.documentElement.setAttribute('data-app-mode', _mode);
  document.addEventListener('DOMContentLoaded', function() {
  if (document.body) document.body.setAttribute('data-app-mode', _mode);
+  try { window._DashweyPerfMark && window._DashweyPerfMark('dom_content_loaded'); } catch(_) {}
  }, { once: true });
  } catch(e) {
  window._DASHWEY_MODE = 'hub';
@@ -130,6 +131,39 @@
  almacen: true,
  dashboard: true,
  };
+
+ // ── v1.3.1467 LOTE A · BOOT TELEMETRY HARNESS ────────────────────────
+ // Mide el tiempo real de los hitos del arranque. Cero coste en producción
+ // (un timestamp + un set en objeto). Ver tabla: _dashweyBoot()
+ try {
+  window._DashweyPerfMarks = window._DashweyPerfMarks || {};
+  window._DashweyPerfT0 = window._DashweyPerfT0 || (
+   (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+  );
+  window._DashweyPerfMark = function(label) {
+   try {
+    var t = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var rel = Math.round((t - window._DashweyPerfT0) * 10) / 10;
+    window._DashweyPerfMarks[label] = rel;
+   } catch(_) {}
+  };
+  window._dashweyBoot = function() {
+   try {
+    var marks = window._DashweyPerfMarks || {};
+    var keys = Object.keys(marks).sort(function(a,b){ return marks[a] - marks[b]; });
+    console.log('%c[Dashwey/Boot] timeline (ms desde script init)', 'color:#22C55E;font-weight:bold');
+    var prev = 0;
+    keys.forEach(function(k) {
+     var t = marks[k];
+     var delta = Math.round((t - prev) * 10) / 10;
+     console.log('  ' + (t + 'ms').padEnd(10) + ' (+' + delta + 'ms) ' + k);
+     prev = t;
+    });
+    return marks;
+   } catch(_e) { console.warn('[Boot] error:', _e); return null; }
+  };
+  window._DashweyPerfMark('script_init');
+ } catch(_) {}
 
  /* Stub vacío — splash eliminado del HEAD, función real definida en body */
  window._hideSplash = function() {};
@@ -158,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1466";
+ var CURRENT_CACHE = "dashwey-v1-3-1467";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -177,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1466-dev</title>
+<title>Dashwey v1.3.1467</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11029,6 +11063,41 @@ window._dashweyCircuitReset = function() {
  return { ok: true };
 };
 
+
+// ── v1.3.1467 LOTE A · TIMERS INVENTORY ──────────────────────────
+// Inventario pasivo de setInterval activos en la app. Útil para audit.
+// Helper: _dashweyTimers() — lista intervals registrados.
+// Nota: solo cubre los wraps explícitos. El wrap no se aplica retroactivamente.
+window._DashweyTimers = window._DashweyTimers || (function() {
+ var _registry = [];
+ var _origSI = window.setInterval;
+ try {
+  window.setInterval = function(fn, ms) {
+   var id = _origSI.apply(window, arguments);
+   try {
+    var caller = (new Error()).stack || '';
+    var firstLine = caller.split('\n')[2] || '';
+    _registry.push({ id: id, ms: ms, at: Date.now(), caller: firstLine.trim().slice(0, 120) });
+   } catch(_) {}
+   return id;
+  };
+ } catch(_) {}
+ return {
+  list: function() { return _registry.slice(); },
+  count: function() { return _registry.length; }
+ };
+})();
+window._dashweyTimers = function() {
+ try {
+  var t = window._DashweyTimers.list();
+  console.log('%c[Dashwey/Timers] ' + t.length + ' intervals registrados', 'color:#22C55E;font-weight:bold');
+  t.forEach(function(r) {
+   console.log('  id=' + r.id + ' every ' + r.ms + 'ms @ ' + new Date(r.at).toLocaleTimeString() + ' · ' + r.caller);
+  });
+  return t;
+ } catch(_) { return []; }
+};
+
 window._DashweyWriteSubcollectionBatch = async function(stateKey, items) {
  const fb = window._DashweyFirebase;
  if (!fb?.enabled || !fb?.ready || !fb.isRegistered?.()) return false;
@@ -11856,7 +11925,7 @@ window._adminCleanFirestoreVentasDups = async function(opts) {
 //
 // Uso:
 //   const r = await window._dashweyRunSyncCertification();
-//   console.log(JSON.stringify(r.summary, null, 2));
+// v1.3.1467 LOTE A: línea console.log de summary removida (estaba comentada)
 // ──────────────────────────────────────────────────────────────────
 window._dashweyRunSyncCertification = async function(opts) {
  opts = opts || {};
@@ -13035,7 +13104,7 @@ const State = (() => {
   trigger = trigger || 'unknown';
   try {
    if (window._DashweyAutoHealing) {
-    console.log('[Dashwey/AutoHeal] skip (in_progress):', trigger);
+    console.info('[Dashwey/AutoHeal] skip (in_progress):', trigger);
     return { ok: false, skipped: 'in_progress' };
    }
    if (!window._DashweyInitialSyncDone) {
@@ -13043,7 +13112,7 @@ const State = (() => {
    }
    const now = Date.now();
    if (now - _autoHealThrottleTs < 30000) {
-    console.log('[Dashwey/AutoHeal] skip (throttle 30s):', trigger);
+    console.info('[Dashwey/AutoHeal] skip (throttle 30s):', trigger);
     return { ok: false, skipped: 'throttled' };
    }
    _autoHealThrottleTs = now;
@@ -13065,7 +13134,7 @@ const State = (() => {
     console.warn('[Dashwey/AutoHeal] flush error:', eFlush);
    }
 
-   console.log('[Dashwey/AutoHeal] ✓ trigger=' + trigger + ' | purged=' + (scanResult.purged || 0) + ' | flushed=' + (flushResult.flushed || 0));
+   console.info('[Dashwey/AutoHeal] ✓ trigger=' + trigger + ' | purged=' + (scanResult.purged || 0) + ' | flushed=' + (flushResult.flushed || 0));
    return { ok: true, trigger, purged: scanResult.purged || 0, flushed: flushResult.flushed || 0 };
   } catch(e) {
    console.warn('[Dashwey/AutoHeal] error:', e);
@@ -13439,7 +13508,7 @@ const State = (() => {
  // Log informativo (solo si hay huérfanos)
  var _orphanCount = Object.keys(_orphanProdIds).length;
  if (_orphanCount > 0) {
-  console.log('[Dashwey] v1.3.1289 cleanup: ' + _orphanCount + ' productos huérfanos detectados (demos hard-deleted, resto soft-deleted)');
+  console.info('[Dashwey] v1.3.1289 cleanup: ' + _orphanCount + ' productos huérfanos detectados (demos hard-deleted, resto soft-deleted)');
  }
 
  // ── Cascade a colecciones dependientes ──
@@ -13617,7 +13686,7 @@ const State = (() => {
    _recSeenIds[migId] = 1;
    _migrated++;
   });
-  if (_migrated > 0) console.log('[Dashwey] Migrados ' + _migrated + ' recordatorios desde visitasComerciales legacy');
+  if (_migrated > 0) console.info('[Dashwey] Migrados ' + _migrated + ' recordatorios desde visitasComerciales legacy');
  }
  return _migrateDemoData(loaded);
  } catch(e) {
@@ -13817,14 +13886,13 @@ const State = (() => {
   }
  }, 30000);
  // v1.3.1085: dispatcher dual — OFF = doc monolítico (actual), ON = subcolecciones
- console.log('[SAVE_ORIGIN] LOCAL'); // v1.3.1130: log origen
- console.log('[SAVE] START');        // v1.3.1130: log vida save
+ // v1.3.1467 LOTE A: SAVE_ORIGIN/START removidos — info siguiente cubre métricas
  _writeFirebaseDual(_fbPayloadCapped)
  .then(() => {
  clearTimeout(_watchdog1127);
  _isSaving = false;
  console.info('[Dashwey sync] ✓ local:', (_t1FB - _t0Sync) + 'ms | firebase:', (Date.now() - _t1FB) + 'ms | total:', (Date.now() - _t0Sync) + 'ms');
- console.log('[SAVE] SUCCESS'); // v1.3.1130
+ // v1.3.1467 LOTE A: SAVE SUCCESS removido — info anterior cubre
  // v1.3.1237: tracking para _dashweyRunSyncCertification SYNC_LATENCY
  try { window._DashweyLastSaveAt = Date.now(); } catch(_) {}
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
@@ -13843,7 +13911,7 @@ const State = (() => {
  _lastSavedHash = ''; // legacy — ya no se usa pero limpio por seguridad
  window._DashweyDirty = true; // v1.3.1074: re-marcar para reintentar en próximo save()
  console.warn('[Dashwey sync] ✗ firebase write failed:', err?.message || err);
- console.log('[SAVE] ERROR', err?.message || err); // v1.3.1130
+ // v1.3.1467 LOTE A: SAVE ERROR removido — warn anterior cubre
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('error');
  // v1.3.1130: en error NO agendamos auto-retry. El próximo setter local lo recogerá vía debounce.
  _dirtyDuringSave = false;
@@ -16984,7 +17052,7 @@ const CierreEngine = (() => {
   try {
    State.set.addCierre(c);
    State.set.setJornadaActiva(c.id);
-   console.log('[CierreEngine] ✓ jornada abierta:', c.id, '| saldo inicial:', c.saldoInicial);
+   console.info('[CierreEngine] ✓ jornada abierta:', c.id, '| saldo inicial:', c.saldoInicial);
    return c;
   } catch(e) {
    console.warn('[CierreEngine] openJornada error:', e);
@@ -17087,11 +17155,11 @@ const CierreEngine = (() => {
      isCached: true, // agregados son derivables, no autoritativos
      cachedAt: Date.now(),
     });
-    console.log('[CierreEngine] event-driven → ventas:' + eventIds.ventas.length + ' gastos:' + eventIds.gastos.length + ' ingresos:' + eventIds.ingresos.length);
+    console.info('[CierreEngine] event-driven → ventas:' + eventIds.ventas.length + ' gastos:' + eventIds.gastos.length + ' ingresos:' + eventIds.ingresos.length);
    } catch(eStamp) {
     console.warn('[CierreEngine] stamp closureId error:', eStamp);
    }
-   console.log('[CierreEngine] ✓ jornada cerrada:', c.id, '| diferencia:', diff.toFixed(2) + '€');
+   console.info('[CierreEngine] ✓ jornada cerrada:', c.id, '| diferencia:', diff.toFixed(2) + '€');
    return Object.assign({}, c, vals);
   } catch(e) {
    console.warn('[CierreEngine] closeJornada error:', e);
@@ -17827,7 +17895,7 @@ const Utils = (() => {
    const cfg = sheet?._periodConfig;
    const desdeRaw = document.getElementById('dps-desde')?.value;
    const hastaRaw = document.getElementById('dps-hasta')?.value;
-   console.log('[Dashwey/Period] apply click', { desdeRaw, hastaRaw });
+   console.info('[Dashwey/Period] apply click', { desdeRaw, hastaRaw });
    if (!desdeRaw || !hastaRaw) { showToast('⚠️ Selecciona ambas fechas', 'warning'); return; }
    const desdeH = document.getElementById('dps-desde-h')?.value || '00:00';
    const hastaH = document.getElementById('dps-hasta-h')?.value || '23:59';
@@ -17844,10 +17912,10 @@ const Utils = (() => {
     const newHastaRaw = nextDay.getFullYear() + '-' + pad(nextDay.getMonth()+1) + '-' + pad(nextDay.getDate());
     hasta = newHastaRaw + 'T' + hastaH + ':00';
     dEnd = new Date(hasta);
-    console.log('[Dashwey/Period] auto-avance día siguiente — rango cruza medianoche:', hasta);
+    console.info('[Dashwey/Period] auto-avance día siguiente — rango cruza medianoche:', hasta);
     showToast('📅 Rango cruza medianoche → Hasta = día siguiente');
    }
-   console.log('[Dashwey/Period] parsed', { desde, hasta, startTime: dStart.getTime(), endTime: dEnd.getTime() });
+   console.info('[Dashwey/Period] parsed', { desde, hasta, startTime: dStart.getTime(), endTime: dEnd.getTime() });
    if (isNaN(dStart.getTime()) || isNaN(dEnd.getTime())) {
     showToast('⚠️ Fechas inválidas', 'warning'); return;
    }
@@ -17856,11 +17924,11 @@ const Utils = (() => {
    }
    // v1.3.1109: delay 180ms antes de cerrar sheet → evita tap-through a elementos detrás (flechas ◀▶)
    if (cfg?.onCustom) {
-    console.log('[Dashwey/Period] aplicando via cfg.onCustom');
+    console.info('[Dashwey/Period] aplicando via cfg.onCustom');
     cfg.onCustom(desde, hasta);
     setTimeout(function(){ try { _onPeriodSheetClose(); } catch(_) {} }, 180);
    } else if (window.App?.dash?.applyGlobalCustom) {
-    console.log('[Dashwey/Period] aplicando via applyGlobalCustom fallback');
+    console.info('[Dashwey/Period] aplicando via applyGlobalCustom fallback');
     window.App.dash.applyGlobalCustom();
    }
   } catch(e) {
@@ -18733,7 +18801,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1466-dev';
+ const _APP_VERSION = 'v1.3.1467';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20090,6 +20158,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1467': {
+   id: 'wn-2026-05-10-v1467',
+  sections: [{
+  title: '🧹 Lote A — Limpieza interna y telemetría de arranque',
+  items: [
+  { icon: '⏱️', name: 'Telemetría de arranque (DevTools)', desc: 'Nuevos helpers de consola para diagnosticar cuánto tarda realmente el arranque en cada dispositivo. Escribe _dashweyBoot() en DevTools para ver una tabla con los hitos del boot (parse del HTML, carga del DOM, hidratación) con tiempos en milisegundos. Cero coste en producción: un timestamp y una asignación. Aporta datos reales sobre el comportamiento del Pixel 9 Pro APK frente a la PWA, para priorizar mejoras futuras con evidencia en vez de a ojo.' },
+  { icon: '🔇', name: 'Consola más limpia: 41 logs ascendidos o eliminados', desc: 'Reorganización de 41 mensajes operacionales internos. Eliminados 9 mensajes redundantes (debug de save() que duplicaba info ya presente, debug de charts que ejecutaba en cada render). Ascendidos 30+ mensajes operacionales útiles (AutoHeal, Period, SyncCmd, Onboarding, Loyverse limpieza, Cierre jornada, PTR) de console.log a console.info para que se puedan filtrar correctamente. Ascendidos 2 mensajes importantes (Loyverse 402 plan Free, Sanity abortado) a console.warn. Sin impacto funcional: solo limpieza de niveles de log.' },
+  { icon: '📋', name: 'Inventario de timers periódicos', desc: 'Nuevo helper _dashweyTimers() que lista los setInterval activos en la app con su frecuencia y dónde se crearon. Útil para verificar que no se acumulan timers duplicados entre re-hidrataciones de Firebase. Solo observación: no cambia comportamiento.' },
+  ]}]
+  },
   'v1.3.1466-dev': {
    id: 'wn-2026-05-13-v1466',
   sections: [{
@@ -21406,7 +21484,7 @@ const ui = (() => {
          updatedAt: new Date(_now).toISOString()
         });
         mergedProvs[_mi] = _mig;
-        try { console.log('[LV/auto-match] manual "' + _matchManual.nombre + '" → categoría LV "' + c.name + '" (provId preservado: ' + _matchManual.id + ')'); } catch(_){}
+        try { console.info('[LV/auto-match] manual "' + _matchManual.nombre + '" → categoría LV "' + c.name + '" (provId preservado: ' + _matchManual.id + ')'); } catch(_){}
         break;
        }
       }
@@ -21448,7 +21526,7 @@ const ui = (() => {
       // Si NO había nombre editado pre-tombstone, poblarlo con el LV actual
       if (!existing.nombre) existing.nombre = existing.sourceName || 'Sin nombre';
       existing.updatedAt = _now;
-      try { console.log('[Loyverse/v1.3.1430] RESURRECT proveedor desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") sourceName=' + existing.sourceName); } catch(_){}
+      try { console.info('[Loyverse/v1.3.1430] RESURRECT proveedor desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") sourceName=' + existing.sourceName); } catch(_){}
       catIdToProvId[c.id] = provId; // mapeo para items
       return; // existing ya está en mergedProvs desde loop1, mutación in-place. NO push.
     }
@@ -21641,7 +21719,7 @@ const ui = (() => {
      if (!existing.barcode) existing.barcode = existing.sourceBarcode || '';
      if (!existing.prov) existing.prov = existing.sourceProv;
      existing.updatedAt = _now;
-     try { console.log('[Loyverse/v1.3.1429] RESURRECT producto desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") prov=' + existing.prov); } catch(_){}
+     try { console.info('[Loyverse/v1.3.1429] RESURRECT producto desde tombstone:', existing.id, '("' + (existing.nombre||'?') + '") prov=' + existing.prov); } catch(_){}
      return; // existing ya está en mergedProds desde loop1, mutación in-place. NO push.
     }
 
@@ -21939,7 +22017,7 @@ const ui = (() => {
       var _fbref = (typeof fb !== 'undefined') ? fb : (window._DashweyFirebase || null);
       if (_fbref && _fbref.ready && typeof _fbref.purge === 'function') {
        var _purgeOk = await _fbref.purge();
-       if (_purgeOk) console.log('[Reset] Firebase document purged');
+       if (_purgeOk) console.info('[Reset] Firebase document purged');
       }
      } catch(eFb) { console.warn('[Reset] Firebase purge:', eFb); }
      // 4. Limpiar tombstones del dispositivo emisor
@@ -22343,7 +22421,7 @@ const ui = (() => {
   try {
    var result = _compactAuto(900);
    if (!result.skipped && result.capas.length > 0) {
-    console.log('[Dashwey/Compact auto]', result.startKB + 'KB → ' + result.endKB + 'KB', result.capas);
+    console.info('[Dashwey/Compact auto]', result.startKB + 'KB → ' + result.endKB + 'KB', result.capas);
     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     try { App.dash.render(); } catch(_) {}
    }
@@ -25630,7 +25708,7 @@ const ui = (() => {
    // Datos listos: limpiar flag y ejecutar
    window._DashweyRecalcPending = false;
    try {
-    console.log('[Dashwey/recalcSaldos] self-heal disparado tras hidratación');
+    console.info('[Dashwey/recalcSaldos] self-heal disparado tras hidratación');
     _bbRecalcSaldos();
    } catch(e) { console.warn('[Dashwey/recalcSaldos] self-heal err:', e && e.message); }
   }, 1000);
@@ -26245,7 +26323,7 @@ const ui = (() => {
     .then(function(r) {
      // v1.3.1044: 402 = límite plan Loyverse Free (tickets viejos) → tratar como fin natural
      if (r.status === 402) {
-      console.log('[Loyverse] 402 recibido — límite plan Free alcanzado. Commit con ' + acc.length + ' tickets descargados.');
+      console.warn('[Loyverse] 402 recibido — límite plan Free alcanzado. Commit con ' + acc.length + ' tickets descargados.');
       _lvCommitReceipts(acc, st, true); // flag limitePlan
       return null;
      }
@@ -26453,7 +26531,7 @@ const ui = (() => {
         } catch(_eU) {}
        });
        ventasBBDuplicadasEliminadas = idsAEliminar.length;
-       console.log('[Loyverse] FIX 1252: ' + ventasBBDuplicadasEliminadas + ' ventas v_lvsum_* duplicadas soft-deleted (días con API: ' + Array.from(diasConApiBatch).join(',') + ')');
+       console.info('[Loyverse] FIX 1252: ' + ventasBBDuplicadasEliminadas + ' ventas v_lvsum_* duplicadas soft-deleted (días con API: ' + Array.from(diasConApiBatch).join(',') + ')');
       }
      }
     } catch(eDup) { console.warn('[Loyverse] Error fix dup v_lvsum_*:', eDup); }
@@ -26491,7 +26569,7 @@ const ui = (() => {
        ingresosBBEliminados = ingresosAll.length - ingresosKeep.length;
        if (ingresosBBEliminados > 0) {
         State.set.setIngresos(ingresosKeep);
-        console.log('[Loyverse] Limpieza solape: ' + ingresosBBEliminados + ' ingresos BB categoría "Ingresos por ventas" eliminados (fecha >= ' + minLvDate.toISOString().slice(0,10) + ')');
+        console.info('[Loyverse] Limpieza solape: ' + ingresosBBEliminados + ' ingresos BB categoría "Ingresos por ventas" eliminados (fecha >= ' + minLvDate.toISOString().slice(0,10) + ')');
        }
       }
      }
@@ -27352,7 +27430,7 @@ const dash = (() => {
     try {
      if (merged && merged.syncCommand && typeof window._DashweyApplySyncCommand === 'function') {
       var _appliedR = window._DashweyApplySyncCommand(merged.syncCommand, 'remote-ptr');
-      if (_appliedR) { console.log('[Dashwey/PTR] Reset remoto aplicado en refresh dashboard'); return; }
+      if (_appliedR) { console.info('[Dashwey/PTR] Reset remoto aplicado en refresh dashboard'); return; }
      }
     } catch(_) {}
     // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
@@ -27685,7 +27763,7 @@ const dash = (() => {
  const diffMs = cEnd - cStart;
  const diffHrs = diffMs / 3600000;
  const diffDays = diffMs / 86400000;
- console.log('[Chart custom]', { customStart: period.customStart, customEnd: period.customEnd, diffHrs, ventasCount: ventas.length });
+ // v1.3.1467 LOTE A: chart custom debug removido
 
  if (diffHrs > 0 && diffHrs <= 48) {
   // Granularidad horaria — buckets de 1 hora
@@ -27696,7 +27774,7 @@ const dash = (() => {
    const idx = Math.floor((d - cStart) / 3600000);
    if (idx >= 0 && idx < nBuckets) buckets[idx] += _vtAmt(v);
   });
-  console.log('[Chart custom horario]', { nBuckets, buckets: buckets.map(b=>b.toFixed(2)) });
+  // v1.3.1467 LOTE A: chart custom horario debug removido
   // v1.3.1114: X labels cada ~3 horas para mejor lectura (hasta 5 etiquetas)
   const fmtH = d => String(d.getHours()).padStart(2,'0') + 'h';
   const step = Math.max(1, Math.ceil(nBuckets / 5));
@@ -33796,7 +33874,7 @@ function _confirmBorrarCuenta(id) {
  const config = sheet?._periodConfig;
  const desdeRaw = document.getElementById('dps-desde')?.value;
  const hastaRaw = document.getElementById('dps-hasta')?.value;
- console.log('[Dashwey/Period] _applyPeriodSheet', { desdeRaw, hastaRaw });
+ console.info('[Dashwey/Period] _applyPeriodSheet', { desdeRaw, hastaRaw });
  if (!desdeRaw || !hastaRaw) { showToast('⚠️ Selecciona ambas fechas', 'warning'); return; }
  // v1.3.1259: leer hora desde franja global (única fuente de verdad).
  //   Inputs dps-desde-h y dps-hasta-h ahora son ocultos — los rellenamos
@@ -37546,8 +37624,7 @@ function _confirmBorrarCuenta(id) {
     try { coste = FinEngine.pedidoCoste ? FinEngine.pedidoCoste(p) : 0; } catch(_e) {}
     return { fecha: p.fecha, valor: coste || 0 };
    });
-   console.log('[Chart compras] pedidos totales:', State.get.historialPedidos ? State.get.historialPedidos().length : 0,
-    '| en periodo:', _peds.length, '| range:', _range ? (_range.start.toISOString().slice(0,10) + ' → ' + _range.end.toISOString().slice(0,10)) : 'none');
+   // v1.3.1467 LOTE A: chart compras debug removido
   } else {
    // rendimiento: mantener arquitectura existente via ventasEnPeriodo
    var _ventas = KPI.ventasEnPeriodo ? (KPI.ventasEnPeriodo(period) || []) : [];
@@ -37686,7 +37763,7 @@ function _confirmBorrarCuenta(id) {
   vals = new Array(7).fill(0); labels = ['—','—','—','—','—','—','—'];
  }
 
- console.log('[Chart ' + cardId + '] vals sum:', vals.reduce(function(s,v){return s+v;},0).toFixed(2), '| buckets:', vals.length);
+ // v1.3.1467 LOTE A: chart vals sum debug removido
 
  // ── 3. LAYOUT — altura fija via CSS (160px), no depende de clientHeight ──
  var n    = vals.length;
@@ -50073,7 +50150,7 @@ _eaRecalc();
   try {
    if (merged && merged.syncCommand && typeof window._DashweyApplySyncCommand === 'function') {
     var _appliedA = window._DashweyApplySyncCommand(merged.syncCommand, 'remote-alm');
-    if (_appliedA) { console.log('[Dashwey/PTR] Reset remoto aplicado en almRefresh'); return; }
+    if (_appliedA) { console.info('[Dashwey/PTR] Reset remoto aplicado en almRefresh'); return; }
    }
   } catch(_) {}
   // v1.3.1074: merge por ID con deletedAt (soft delete multi-dispositivo)
@@ -53607,7 +53684,7 @@ _eaRecalc();
   // v1.3.1078: ignorar comandos expirados — un dispositivo nuevo NO debe re-ejecutar
   // un reset histórico; el estado actual de Firebase ya refleja el resultado
   if ((Date.now() - cmd.at) > _SYNC_CMD_TTL_MS) {
-   console.log('[Dashwey/SyncCmd] Comando expirado (>24h), ignorando:', cmd.kind, 'at=' + cmd.at);
+   console.info('[Dashwey/SyncCmd] Comando expirado (>24h), ignorando:', cmd.kind, 'at=' + cmd.at);
    _setLastCommandSeen(cmd.at); // marcar como visto para no re-evaluar
    return false;
   }
@@ -53616,11 +53693,11 @@ _eaRecalc();
   // nuevo en una cuenta existente. NO ejecutar — solo marcar como visto.
   // El snapshot remoto ya refleja el estado post-reset, aplicarlo otra vez borraría datos.
   if (seen === 0 && origin === 'remote' && (cmd.kind === 'total' || cmd.kind === 'clean-catalog' || cmd.kind === 'clean-trans')) {
-   console.log('[Dashwey/SyncCmd] Primera conexión de este dispositivo — marcando comando histórico como visto sin re-ejecutar:', cmd.kind);
+   console.info('[Dashwey/SyncCmd] Primera conexión de este dispositivo — marcando comando histórico como visto sin re-ejecutar:', cmd.kind);
    _setLastCommandSeen(cmd.at);
    return false;
   }
-  console.log('[Dashwey/SyncCmd] Ejecutando', cmd.kind, 'origen=' + origin + ' at=' + cmd.at);
+  console.info('[Dashwey/SyncCmd] Ejecutando', cmd.kind, 'origen=' + origin + ' at=' + cmd.at);
   // Bloquear writes durante el proceso para que los sets no generen save spam
   if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
   try {
@@ -54238,7 +54315,7 @@ _eaRecalc();
     if (_applied) {
      // Reset aplicado — descartar el resto del merge (el state remoto ya no es relevante,
      // porque _applySyncCommand ya limpió nuestro local). Salir del onSnapshot handler.
-     console.log('[Dashwey/SyncCmd] Reset remoto aplicado — saltando merge de este snapshot');
+     console.info('[Dashwey/SyncCmd] Reset remoto aplicado — saltando merge de este snapshot');
      window._DashweySavingCtrl.isSaving = false;
      return;
     }
@@ -54625,7 +54702,7 @@ _eaRecalc();
                      + (State.get.gastosOp?.()?.length || 0)
                      + (State.get.historialPedidos?.()?.length || 0);
      if (_localTrans > 0) {
-      console.log('[Onboarding] Histórico transaccional local presente (' + _localTrans + ' items) — NO mostrar onboarding');
+      console.info('[Onboarding] Histórico transaccional local presente (' + _localTrans + ' items) — NO mostrar onboarding');
       return;
      }
     } catch(_) {}
@@ -54633,7 +54710,7 @@ _eaRecalc();
     var _u = State.get.user();
     if (_u && _u.uid) {
      // Lectura explícita del remoto — si hay cuentas ahí, aplicarlas y NO mostrar onboarding
-     console.log('[Onboarding] Usuario autenticado sin cuentas locales — verificando remoto...');
+     console.info('[Onboarding] Usuario autenticado sin cuentas locales — verificando remoto...');
      fb.read('state').then(function(remote) {
       try {
        // GUARD B-2 (v1.3.1421): user con histórico previo se detecta también por
@@ -54654,7 +54731,7 @@ _eaRecalc();
        if (remote && Array.isArray(remote.cuentas)) {
         var cuentasActivas = remote.cuentas.filter(function(c){ return c && !c.deleted; });
         if (cuentasActivas.length > 0) {
-         console.log('[Onboarding] Cuentas encontradas en remoto (' + cuentasActivas.length + ') — aplicando, NO mostrar onboarding');
+         console.info('[Onboarding] Cuentas encontradas en remoto (' + cuentasActivas.length + ') — aplicando, NO mostrar onboarding');
          // Aplicar TODO el snapshot remoto (no solo cuentas) para consistencia
          if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
          try {
@@ -54685,7 +54762,7 @@ _eaRecalc();
        //   El user verá Dashboard vacío de cuentas pero con histórico, y puede
        //   crear cuentas manualmente desde Settings sin pasar por onboarding.
        if (_hasHistory) {
-        console.log('[Onboarding] Histórico remoto presente (schemaVersion=2 o arrays trans) sin cuentas activas — NO mostrar onboarding');
+        console.info('[Onboarding] Histórico remoto presente (schemaVersion=2 o arrays trans) sin cuentas activas — NO mostrar onboarding');
         return;
        }
        // Confirmado: remoto también vacío → mostrar onboarding
@@ -54819,7 +54896,7 @@ try {
    } catch(_) {}
   });
   if (_purgedTotal > 0) {
-   console.log('[Dashwey/AutoPurgaExt] Purgados ' + _purgedTotal + ' items externos soft-deleted (zombies).');
+   console.info('[Dashwey/AutoPurgaExt] Purgados ' + _purgedTotal + ' items externos soft-deleted (zombies).');
    try { window._DashweyDirty = true; } catch(_) {}
   }
  }
@@ -54853,7 +54930,7 @@ try {
    } catch(_) {}
   });
   if (_bfCount > 0 || _bfSkippedExt > 0) {
-   console.log('[Dashwey/Backfill] Marcados ' + _bfCount + ' deleted:true | skipped externos: ' + _bfSkippedExt);
+   console.info('[Dashwey/Backfill] Marcados ' + _bfCount + ' deleted:true | skipped externos: ' + _bfSkippedExt);
    try { window._DashweyDirty = true; } catch(_) {} // forzar sync próximo save
   }
  }
@@ -55408,7 +55485,7 @@ window._DashweyDeviceId = (() => {
      var sanityErrors = (s && s.errors && s.errors.length > 0);
      var accountsBad = (a && a.ok === false);
      if (!sanityErrors && !accountsBad) {
-      console.log('[Sanity/criticalToast] datos OK, auto-cerrando toast');
+      console.info('[Sanity/criticalToast] datos OK, auto-cerrando toast');
       _hideCriticalToast();
       _stopCriticalToastReval();
      }
@@ -55715,7 +55792,7 @@ window._DashweyDeviceId = (() => {
       // Verificación final: si NO se completó initial sync de verdad
       // (raro), aborta sin toast. Filosofía setup-and-forget: silencio.
       if (window._DashweyInitialSyncDone !== true) {
-       console.log('[Sanity/autoBoot] aborted: initial sync not done');
+       console.warn('[Sanity/autoBoot] aborted: initial sync not done');
        return;
       }
       try { window._dashweyRunSanity({ trigger: 'auto' }); } catch(_){}
