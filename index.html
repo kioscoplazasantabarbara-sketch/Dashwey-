@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1486";
+ var CURRENT_CACHE = "dashwey-v1-3-1487";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1486</title>
+<title>Dashwey v1.3.1487</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13543,10 +13543,9 @@ const State = (() => {
  window.addEventListener('online', function() {
  if (typeof Utils !== 'undefined') {
  Utils.updateSyncBadge('syncing');
- // v1.3.435: toast solo si hay datos pendientes reales
- if (_pendingQueue.length > 0) {
- Utils.showToast('✅ Conectado — sincronizando datos', 'success');
- }
+ // v1.3.1487 BUG-2TOASTS: eliminado toast '✅ Conectado — sincronizando datos'.
+ //   El pill UI ya muestra "Sincronizando..." cuando corresponde. Doble notificación
+ //   confunde y compite con el resto del feedback de sync.
  }
  // v1.3.1153 FIX C1+A2: si el cold start fue offline, completar _doInitialSync ahora
  //                      antes de cualquier flush. Esto garantiza que el state remoto
@@ -14517,18 +14516,30 @@ const State = (() => {
  selectedProv: (v) => { _state.selectedProv = v; save(); },
  pendingOrders: (v) => { _state.pendingOrders = _preserveDeleted('pendingOrders', v); save(); },
  // addPendingOrder: añade un pedido pendiente SIN actualizar stock
+ // v1.3.1487 BUG-SYNC-PEDIDOS: sello _updatedAt + emit bus para multi-device sync.
+ //   pendingOrders va por path root (NO está en _DashweySubcollectionMap),
+ //   pero el bus 'pedido' avisa a watchers locales para que re-rendericen.
  addPendingOrder: (p) => {
  if (!_state.pendingOrders) _state.pendingOrders = [];
+ if (p && typeof p._updatedAt !== 'number') p._updatedAt = Date.now();
+ if (p && !p.updatedAt) p.updatedAt = new Date(p._updatedAt).toISOString();
  _state.pendingOrders.push(p);
  save();
+ try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  },
  // updatePendingOrder: actualiza status (o cualquier campo) de un pending order por id
+ // v1.3.1487 BUG-SYNC-PEDIDOS: sello _updatedAt para LWW + emit bus.
  updatePendingOrder: (id, updates) => {
  if (!_state.pendingOrders) return;
  const idx = _state.pendingOrders.findIndex(o => o.id === id);
  if (idx !== -1) {
- _state.pendingOrders[idx] = Object.assign({}, _state.pendingOrders[idx], updates);
+ const _now = Date.now();
+ _state.pendingOrders[idx] = Object.assign({}, _state.pendingOrders[idx], updates, {
+  _updatedAt: _now,
+  updatedAt: new Date(_now).toISOString()
+ });
  save();
+ try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  }
  },
  // removePendingOrder: SOFT-DELETE de un pedido pendiente.
@@ -16454,9 +16465,11 @@ const FinEngine = (() => {
   _base += _base1 * _ivaFactor(_ivaRaw);
  }
  // v1.3.642: cargos extra (RE, Punto Verde, cargo custom)
+ // v1.3.1487 BUG-3: añadido descuento que RESTA del total (no suma).
  var _ce = ped.cargosExtra || {};
  var _extra = (_ce.re || 0) + (_ce.puntoVerde || 0) + ((_ce.custom && _ce.custom.importe) || 0);
- return _base + _extra;
+ var _descuento = (_ce.descuento || 0);
+ return _base + _extra - _descuento;
  }
 
  // ── Utilidad: gastoMensual equivalente (respeta periodicidad) ────
@@ -19298,7 +19311,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1486';
+ const _APP_VERSION = 'v1.3.1487';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20655,6 +20668,18 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1487': {
+   id: 'wn-2026-05-11-v1487',
+  sections: [{
+  title: '🐛 Lote bugs críticos 11 may PM',
+  items: [
+  { icon: '🔄', name: 'Pedidos programados ahora sincronizan entre dispositivos', desc: 'BUG P0 CRÍTICO reportado: al crear o aceptar un pedido programado en Samsung, NO aparecía en Pixel. Root cause encontrado tras investigación profunda: con subcolecciones activas, el handler onSnapshot del doc raíz hace SKIP de aplicar setters si un "digest" del payload no cambia. El digest incluía solo schemaVersion + cuentas.length + productos.length + settings keys. PERO pendingOrders vive SOLO en el doc raíz (NO está en _DashweySubcollectionMap como ventas/gastos/facturas que van por subcol). Resultado: Samsung añade pedido a pendingOrders[], escribe doc raíz, Pixel recibe onSnapshot, calcula digest idéntico → SKIP → pedido perdido en sync. Fix: añadidos pendingOrders.length + visitasComerciales.length + recordatorios.length + proveedores.length al digest. Estos arrays viven SOLO en root y sus cambios DEBEN propagarse. Bonus: setters addPendingOrder/updatePendingOrder ahora sellan _updatedAt + emiten DashweyBus("pedido"), coherente con removePendingOrder.' },
+  { icon: '💰', name: 'Cargos adicionales en pedidos: defaults limpios + descuento', desc: 'BUG P0 reportado: factura Matutano 112,67€ (subtotal 101,14 + IVA 10,11 + R.E. 1,42), Dashwey modal mostraba "Total con cargos 112,67€" correcto, PERO al pulsar "Pedido recibido" el gasto creado era -111,25€ — faltaba el 1,42€ del recargo. Causa: el panel "Impuestos" pre-rellenaba RE al 5,2% automático al abrir, pero el cálculo del gasto leía directamente del input. Si el usuario no abría el panel o cerraba antes de confirmar, el valor se perdía. Solución de producto (decisión 11 may): (1) defaults siempre 0,00 — el usuario introduce manualmente el importe exacto que aparece en la factura física. (2) Texto simplificado: "Recargo de equivalencia" en vez de "Recargo equiv. (5,2%)". Evita asumir que todos los proveedores tienen RE y que siempre es 5,2%. (3) Añadida cuarta línea "Descuento" que RESTA del total (antes solo se podían sumar cargos). Coherente con facturas reales que a veces traen descuentos pactados. FinEngine.pedidoCoste ahora calcula: base + RE + Punto Verde + Otros - Descuento.' },
+  { icon: '📝', name: 'Editar precio de un artículo en pedido programado recalcula KPIs', desc: 'BUG P1 reportado: al hacer long-press sobre un artículo en un pedido programado y editar el precio/cajas, la fila del artículo se actualizaba pero los KPIs del pedido (Inversión, Venta est., Ganancia, ROI, Margen, Score) seguían mostrando los valores antiguos. Root cause: renderArticulos() solo re-renderiza el HTML de las filas; los totales se calculan al inicio del _ldcAbrirDetallePedido y quedan congelados. Fix: tras guardar la edición, cerrar y reabrir el modal (setTimeout 220ms para que la animación de cierre complete). Todos los totales se recalculan desde cero con los nuevos precios. Si el re-abrir falla por alguna razón, fallback al renderArticulos original (no se pierde nada).' },
+  { icon: '🔕', name: 'Solo 1 toast de sincronización al iniciar', desc: 'BUG UX reportado: al abrir la app salían DOS toasts seguidos: "✅ Conectado — sincronizando datos" y "☁️ Datos sincronizados". El primer toast se disparaba en el evento "online" (cuando el dispositivo recuperaba red tras boot offline) y el segundo al final de _doInitialSync. En cold-start con red intermitente ambos podían dispararse a la vez. Fix: eliminados ambos toasts — el pill UI (esquina inferior central) ya muestra "Sincronizando..." en amarillo y "Sincronizado" en verde sin necesidad de toast adicional. Filosofía UX 9 may: "No bombardear al usuario con notificaciones redundantes". El badge sutil reemplaza al toast invasivo.' },
+  { icon: '🛡️', name: 'Comprobación de saldos automática al arrancar: deshabilitada', desc: 'BUG UX reportado: aparecía toast amarillo "Cuenta Kiosco descuadra X€" al abrir la app, pero al instante siguiente desaparecía porque la sincronización terminaba y los saldos cuadraban. Causa: el sanity-check auto-trigger ejecutaba tras quietud post-_DashweyInitialSyncDone, pero en redes lentas (APK gama-media) onSnapshots tardíos podían llegar 60-90s después y reescribir saldos. El warning era una falsa alarma transitoria. Fix radical: deshabilitada COMPLETAMENTE la ejecución automática del sanity-check al arranque. Solo se ejecuta cuando el usuario pulsa el botón manual del header (icono escudo en Almacén). Filosofía setup-and-forget: si hay un problema real, el usuario lo descubrirá al revisar; mientras no haya intervención humana, no molestar con alarmas potencialmente falsas. El código queda preparado por si en el futuro se reactiva con otra estrategia (ej. una vez/día).' },
+  ]}]
+  },
   'v1.3.1486': {
    id: 'wn-2026-05-11-v1486',
   sections: [{
@@ -48854,9 +48879,10 @@ function _parseIva(iva) {
     +'<div id="ldc-impuestos-panel" style="display:none;background:var(--bg);border-radius:var(--r-md);padding:var(--sp-2_5) 12px;margin-bottom:var(--sp-2)">'
     +'<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);margin-bottom:var(--sp-2)">Cargos adicionales</div>'
     +'<div style="display:flex;flex-direction:column;gap:var(--sp-1_5)">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:var(--fs-sm);color:var(--ink)">Recargo equiv. (5,2%)</span><input id="ldc-imp-re" type="number" step="0.01" min="0" placeholder="0,00" inputmode="decimal" style="width:80px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);text-align:right;padding:0 8px;font-family:var(--font)"></div>'
+    +'<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:var(--fs-sm);color:var(--ink)">Recargo de equivalencia</span><input id="ldc-imp-re" type="number" step="0.01" min="0" placeholder="0,00" inputmode="decimal" style="width:80px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);text-align:right;padding:0 8px;font-family:var(--font)"></div>'
     +'<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:var(--fs-sm);color:var(--ink)">Punto Verde</span><input id="ldc-imp-pv" type="number" step="0.01" min="0" placeholder="0,00" inputmode="decimal" style="width:80px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);text-align:right;padding:0 8px;font-family:var(--font)"></div>'
     +'<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:var(--fs-sm);color:var(--ink)">Impuesto adicional</span><input id="ldc-imp-extra" type="number" step="0.01" min="0" placeholder="0,00" inputmode="decimal" style="width:80px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);text-align:right;padding:0 8px;font-family:var(--font)"></div>'
+    +'<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:var(--fs-sm);color:var(--ink)">Descuento</span><input id="ldc-imp-desc" type="number" step="0.01" min="0" placeholder="0,00" inputmode="decimal" style="width:80px;height:32px;border:1px solid var(--border);border-radius:var(--r-sm2);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);text-align:right;padding:0 8px;font-family:var(--font)"></div>'
     +'</div>'
     +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--sp-2);padding-top:8px;border-top:1px solid var(--border)"><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Total con cargos</span><span id="ldc-imp-total" style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(totalInv)+'</span></div>'
     +'</div>'
@@ -49005,9 +49031,11 @@ function _parseIva(iva) {
         var _ymd=_now.getFullYear()+''+String(_now.getMonth()+1).padStart(2,'0')+String(_now.getDate()).padStart(2,'0');
         var _fid='FAC-'+_ymd+'-'+String(Math.floor(Math.random()*900)+100);
         // Leer impuestos adicionales si panel abierto
-        var _reVal=parseFloat((document.getElementById('ldc-imp-re')||{}).value)||0;
-        var _pvVal=parseFloat((document.getElementById('ldc-imp-pv')||{}).value)||0;
-        var _exVal=parseFloat((document.getElementById('ldc-imp-extra')||{}).value)||0;
+        // v1.3.1487 BUG-3: defaults 0,00 (sin pre-cálc 5.2% auto). Añadido descuento.
+        var _reVal = parseFloat((document.getElementById('ldc-imp-re')||{}).value)||0;
+        var _pvVal = parseFloat((document.getElementById('ldc-imp-pv')||{}).value)||0;
+        var _exVal = parseFloat((document.getElementById('ldc-imp-extra')||{}).value)||0;
+        var _dcVal = parseFloat((document.getElementById('ldc-imp-desc')||{}).value)||0;
         // Construir lineas de factura
         var _lineas=(_ord.items||[]).map(function(it){
          var _p=State.get.prod(it.prodId)||{};
@@ -49024,12 +49052,13 @@ function _parseIva(iva) {
         var _subBase=_lineas.reduce(function(s,l){return s+l.importeBase;},0);
         var _totIva=_lineas.reduce(function(s,l){return s+l.importeIva;},0);
         var _totRE=_reVal+_pvVal+_exVal;
+        // v1.3.1487 BUG-3: descuento RESTA al total de la factura
         var _factura={
          id:_fid,fecha:_now.toISOString(),provId:_ord.provId,
          provNombre:_pv.nombre||'',provCif:_pv.cif||'',provDireccion:_pv.direccion||'',
          items:_lineas,subtotalBase:_subBase,totalIva:_totIva,
-         totalRE:_totRE,total:_subBase+_totIva+_totRE,
-         impuestos:{re:_reVal,pv:_pvVal,extra:_exVal}
+         totalRE:_totRE,descuento:_dcVal,total:_subBase+_totIva+_totRE-_dcVal,
+         impuestos:{re:_reVal,pv:_pvVal,extra:_exVal,descuento:_dcVal}
         };
         try{State.set.addFactura(_factura);}catch(_){}
         try{showToast('🟢 Factura '+_fid+' emitida');}catch(_){}
@@ -49060,15 +49089,19 @@ function _parseIva(iva) {
         // Sin esto el pedido desaparece sin rastro y nunca llega a comprasPeriodo/Dashboard
         // v1.3.1174 FIX: leer panel impuestos LDC (RE/PV/Custom) antes de confirmar
         // Antes se descartaban silenciosamente — el gasto generado no incluía cargos extra
+        // v1.3.1487 BUG-3: defaults 0,00. Si usuario abrió panel y puso valores, se respetan.
+        //   Si NO abrió panel, todo queda en 0 (sin recargo automático). Añadido descuento.
         var _re_v1174 = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
         var _pv_v1174 = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
         var _ex_v1174 = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
+        var _dc_v1487 = parseFloat(document.getElementById('ldc-imp-desc')?.value || 0) || 0;
         var _cargosExtra_v1174 = null;
-        if (_re_v1174 > 0 || _pv_v1174 > 0 || _ex_v1174 > 0) {
+        if (_re_v1174 > 0 || _pv_v1174 > 0 || _ex_v1174 > 0 || _dc_v1487 > 0) {
          _cargosExtra_v1174 = {
           re:         Math.round(_re_v1174 * 100) / 100,
           puntoVerde: Math.round(_pv_v1174 * 100) / 100,
           custom:     _ex_v1174 > 0 ? { label: 'Otros', importe: Math.round(_ex_v1174 * 100) / 100 } : null,
+          descuento:  _dc_v1487 > 0 ? Math.round(_dc_v1487 * 100) / 100 : 0,
          };
         }
         var _pedConfirmado = {
@@ -49108,18 +49141,20 @@ function _parseIva(iva) {
       _bImp.style.color = open ? '' : '#fff';
       _bImp.style.borderColor = open ? '' : 'var(--red)';
       if (!open) {
-       // Pre-calcular RE (5.2%)
-       var _reEl = document.getElementById('ldc-imp-re');
-       if (_reEl && !_reEl.value) _reEl.value = (totalInv * 0.052).toFixed(2);
-       // Listener en tiempo real para recalcular total
+       // v1.3.1487 BUG-3: eliminado pre-cálculo automático RE 5.2%.
+       //   Decisión producto: defaults 0,00 — usuario decide manualmente la cantidad
+       //   exacta de la factura. Evita asumir que todos los proveedores tienen RE.
+       // Listener en tiempo real para recalcular total (incluye descuento)
        var _updateImpTotal = function() {
         var re = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
         var pv = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
         var ex = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
+        var dc = parseFloat(document.getElementById('ldc-imp-desc')?.value || 0) || 0;
         var tot = document.getElementById('ldc-imp-total');
-        if (tot) tot.textContent = feur(totalInv + re + pv + ex);
+        // v1.3.1487 BUG-3: descuento RESTA del total
+        if (tot) tot.textContent = feur(totalInv + re + pv + ex - dc);
        };
-       ['ldc-imp-re','ldc-imp-pv','ldc-imp-extra'].forEach(function(id) {
+       ['ldc-imp-re','ldc-imp-pv','ldc-imp-extra','ldc-imp-desc'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener('input', _updateImpTotal);
        });
@@ -49219,8 +49254,17 @@ function _parseIva(iva) {
          } catch(_e) { console.warn('[LDC longpress] updatePendingOrder failed:', _e); }
         }
         _modalEl.remove();
-        renderArticulos();
         try { Utils.triggerHaptic('selection'); } catch(_) {}
+        // v1.3.1487 BUG-EDIT-TOTAL: re-abrir LDC para recalcular totalInv/Vta/ganancia/margen/roi/score.
+        //   renderArticulos() solo re-renderiza filas, NO los KPIs/score (definidos fuera del scope).
+        //   Cerrar + reabrir es la forma más segura de sincronizar todo.
+        try {
+         App.ui.closeFs();
+         setTimeout(function(){ App.alm._ldcAbrirDetallePedido(orderId); }, 220);
+        } catch(_e2) {
+         // Fallback: si re-open falla, al menos re-renderizar artículos
+         try { renderArticulos(); } catch(_) {}
+        }
        });
       }, 500); // 500ms long press
      }, { passive: true });
@@ -55263,7 +55307,11 @@ _eaRecalc();
   }
  } catch(eRecalc) { console.warn('[InitSync] recalc post-merge falló:', eRecalc && eRecalc.message); }
  _renderAll();
- showToast('☁️ Datos sincronizados');
+ // v1.3.1487 BUG-2TOASTS: eliminado toast 'Datos sincronizados' tras merge inicial.
+ //   El usuario ya ve el badge/pill verde "Sincronizado" en UI — el toast era redundante
+ //   y aparecía a la vez que '✅ Conectado — sincronizando datos' (L13548) en cold-start
+ //   offline → reconexión. Un solo indicador visual es suficiente. Filosofía UX 9 may:
+ //   "No bombardear con notificaciones".
   // v1.3.1237: tras merge inicial — desactivar override legacy y suscribir subcol
   try { window._DashweyForceLegacyMerge = false; } catch(_) {}
   // v1.3.1359 FIX BUG-LOOP COLD-START: eliminado setTimeout que subía _buildLocalSnapshot
@@ -55394,13 +55442,23 @@ _eaRecalc();
  // v1.3.1135 FIX#4: Guard 4 — con subcol activa, si el snapshot del doc raíz
  // NO trae cambios estructurales (mismo schemaVersion y keys conocidas idénticas),
  // SKIP para no aplicar setters en vano. Los arrays trans vienen por handler subcol.
+ // v1.3.1487 BUG-SYNC-PEDIDOS FIX: añadidos pendingOrders/visitasComerciales/recordatorios
+ //   al digest. Estos arrays viven SOLO en root (NO están en _DashweySubcollectionMap)
+ //   y sus cambios DEBEN propagarse vía este handler. Antes los pedidos creados en
+ //   otro device se descartaban silenciosamente porque cuentas/productos/settings no
+ //   cambiaban → digest idéntico → SKIP. Resultado: Samsung crea pedido Matutano,
+ //   Pixel nunca lo recibe. Incluir el length de estos arrays restaura sync correcto.
  try {
   if (window._DashweyUseSubcollections === true) {
    var _lastRootDigest = window._DashweyLastRootDigest || '';
-   // Firma simple: schemaVersion + cuentas.length + productos.length + settings keys count
+   // Firma extendida: incluye arrays SOLO-ROOT que cambian por acción usuario
    var _digest = (remoteData?._schemaVersion || 0) + '|' +
                  (remoteData?.cuentas?.length || 0) + '|' +
                  (remoteData?.productos?.length || 0) + '|' +
+                 (remoteData?.pendingOrders?.length || 0) + '|' +
+                 (remoteData?.visitasComerciales?.length || 0) + '|' +
+                 (remoteData?.recordatorios?.length || 0) + '|' +
+                 (remoteData?.proveedores?.length || 0) + '|' +
                  Object.keys(remoteData?.settings || {}).length;
    if (_digest === _lastRootDigest) {
     return; // sin cambios estructurales — skip aplicar
@@ -56797,6 +56855,17 @@ window._DashweyDeviceId = (() => {
      // el más reciente (el warning lo reemplaza solo si era de la misma raíz).
      // Para simplicidad y transparencia: cerrar toast previo y mostrar warning.
      _hideCriticalToast();
+     // v1.3.1487 BUG-SANITY-AUTO: en auto-trigger NO mostrar warnings transitorios.
+     //   Razón: tras boot, onSnapshot tardíos pueden cambiar saldos hasta 60-90s
+     //   después de quietud. Mostrar "Kiosco descuadra X€" en ese momento es
+     //   alarma falsa — al instante siguiente los datos llegan y se equilibran.
+     //   Filosofía setup-and-forget: si auto detecta warning, persistir hipótesis
+     //   en consola pero NO molestar; el usuario verá el resultado real al pulsar
+     //   el botón manual de comprobar datos.
+     if (trigger === 'auto') {
+      console.info('[Dashwey/Sanity] auto-trigger warning silenciado (puede ser transitorio): ' + (msg || 'sin msg'));
+      return;
+     }
      if (typeof showToast === 'function') {
       showToast('⚠️ ' + (msg || 'Aviso'), 'warning');
      }
@@ -56924,12 +56993,24 @@ window._DashweyDeviceId = (() => {
     }, 1000);
    }
    // Esperar 2s tras DOMContentLoaded para no competir con boot
-   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    setTimeout(_check, 2000);
-   } else {
-    document.addEventListener('DOMContentLoaded', function() {
+   // v1.3.1487 BUG-SANITY-BOOT: deshabilitado completamente el auto-trigger al arranque.
+   //   Razón: aun esperando _DashweyInitialSyncDone + quietud 5s, en redes lentas (APK
+   //   slow-network) onSnapshot tardíos llegan 60-90s después. El warning se mostraba
+   //   y desaparecía solo a los pocos segundos — falsa alarma. Filosofía setup-and-forget:
+   //   sanity automático solo se ejecuta cuando el usuario pulsa el botón manual del
+   //   header (icono escudo en Almacén). Si hay un problema real, lo descubrirá al revisar.
+   //   El auto-trigger se queda en código para futuras estrategias (ej. una vez/día).
+   var _AUTO_SANITY_BOOT_DISABLED = true;
+   if (!_AUTO_SANITY_BOOT_DISABLED) {
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
      setTimeout(_check, 2000);
-    });
+    } else {
+     document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(_check, 2000);
+     });
+    }
+   } else {
+    console.info('[Dashwey/Sanity] auto-trigger al arranque DESHABILITADO (v1.3.1487) — usar botón manual del header');
    }
   })();
 
