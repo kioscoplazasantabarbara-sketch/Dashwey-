@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1480";
+ var CURRENT_CACHE = "dashwey-v1-3-1481";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1480</title>
+<title>Dashwey v1.3.1481</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19228,7 +19228,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1480';
+ const _APP_VERSION = 'v1.3.1481';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20585,6 +20585,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1481': {
+   id: 'wn-2026-05-11-v1481',
+  sections: [{
+  title: '🎯 Reordenar artículo — fix definitivo del bug "aleatorio"',
+  items: [
+  { icon: '🐛', name: 'Causa raíz: comparación strict de categorías con undefined vs ""', desc: 'El bug que en v1.3.1477 se intentó arreglar (y que rompió aún más) provenía de una comparación strict de categorías que NO normalizaba ambos lados. Los productos importados desde Loyverse no tienen el campo `cat` definido (cat:undefined); los productos manuales sí lo tienen vacío explícito (cat:""). Al pulsar "Mover", el código hacía `cat = prod.cat || ""` (lo normalizaba a "") y luego buscaba `p.cat === cat` SIN normalizar el otro lado → undefined nunca matcheaba con "". Caso real en producción (proveedor Bebidas, 5 productos: 4 con cat:undefined + Aquarius con cat:""): al pulsar Mover en Aquarius decía "ya está al principio" cuando en realidad estaba al final; al pulsar Mover en otros saltaba a la posición de Aquarius (la única posición donde había match con cat=""). De ahí el "movimiento aleatorio aparente".' },
+  { icon: '🔧', name: 'Fix: helper _normCat trata undefined/null/""/" Bebidas " como equivalentes', desc: 'Helper interno _normCat normaliza el valor de categoría: undefined y null → "" (sin categoría), strings → trim() + toLowerCase(). Esto permite que "Bebidas", "BEBIDAS", "  bebidas " y "bebidas" se traten como la misma categoría (tolerante a variaciones tipográficas y a mayúsculas inconsistentes). AMBOS lados de la comparación pasan por _normCat → ahora cat:undefined matchea con cat:undefined, y el "sin categoría" agrupa correctamente a los productos sin categoría asignada. Además se preserva el filtro por proveedor (introducido en v1.3.1477 y que era correcto): el reorden busca el primero de la misma categoría DENTRO del mismo proveedor, no en todo el catálogo global. Cobertura: BUG-AUD-15.' },
+  { icon: '✅', name: 'Test forense validado mentalmente antes del deploy', desc: 'Con los datos reales del incidente (proveedor Bebidas: Fuze cat:undefined, Agua cat:undefined, Fanta cat:undefined, Aquarius cat:"", Coca Cola cat:undefined), se simuló cada escenario con la lógica nueva: (1) Mover Fanta → busca "sin categoría" en Bebidas → encuentra Fuze como primero → Fanta se mueve antes de Fuze ✓. (2) Mover Aquarius → busca "sin categoría" en Bebidas → encuentra Fuze → Aquarius se mueve al inicio ✓. (3) Mover Coca Cola → encuentra Fuze → Coca Cola al inicio ✓. (4) Mover Fuze → es ya el primero → "Ya está al principio" ✓. Lección de v1.3.1477 aplicada: cualquier fix de comparación de igualdad necesita test mental forense con datos reales ANTES de empaquetar.' },
+  ]}]
+  },
   'v1.3.1480': {
    id: 'wn-2026-05-11-v1480',
   sections: [{
@@ -52333,24 +52343,58 @@ _eaRecalc();
  }
 
  function _catReorderArt(id) {
+ // v1.3.1481 BUG-AUD-15 FIX (corregido tras v1.3.1477 fallido).
+ //
+ // BUG ORIGINAL (pre-1481):
+ //   Comparación `p.cat === cat` después de `const cat = prod.cat || ''`.
+ //   Si prod.cat era undefined o "", `cat` se normalizaba a `''`. PERO los
+ //   demás productos seguían con `p.cat = undefined`, así que `p.cat === ''`
+ //   NO matcheaba productos con cat undefined. Resultado:
+ //     - Si todos los productos del proveedor tenían cat=undefined Y se
+ //       movía uno con cat="" (Aquarius) → findIndex devolvía el propio
+ //       producto → "ya está al principio" cuando NO estaba.
+ //     - Si se movía uno con cat=undefined y existía OTRO con cat="" →
+ //       saltaba a la posición del cat="", no al inicio de su grupo real.
+ //
+ // INTENTO PREVIO v1.3.1477 (revertido):
+ //   Solo añadió filtro por proveedor (`p.prov === provOwner`) pero NO tocó
+ //   la comparación strict de cat → bug persistía con comportamiento aún
+ //   más errático ("aleatorio aparente"). Detectado en producción con
+ //   proveedor Bebidas (4 productos cat=undefined + 1 cat=""), revertido a
+ //   v1.3.1478.
+ //
+ // FIX v1.3.1481:
+ //   Helper _normCat trata undefined / null / "" / espacios como equivalentes
+ //   (todos → "sin categoría" interno). Ambos lados de la comparación pasan
+ //   por _normCat. Comparación case-insensitive con trim para tolerar
+ //   variaciones tipográficas ("Bebidas" === "BEBIDAS  " === " bebidas").
+ //   Filtro por proveedor preservado de v1.3.1477 (correcto entonces, sigue
+ //   correcto ahora) para que el reorden afecte solo al bloque visible.
+ const _normCat = (c) => {
+  if (c == null) return '';
+  return String(c).trim().toLowerCase();
+ };
  const prods = State.get.productos();
  const idx = prods.findIndex(p => p.id === id);
  if (idx < 0) return;
  const prod = prods[idx];
- const cat = prod.cat || '';
+ const catNorm = _normCat(prod.cat);
+ const provOwner = prod.prov;
 
- // Encontrar el primer artículo de la misma categoría
- const firstInCat = prods.findIndex(p => p.cat === cat);
+ // Encontrar el primer artículo de la misma categoría Y mismo proveedor
+ const firstInCat = prods.findIndex(p => _normCat(p.cat) === catNorm && p.prov === provOwner);
 
  if (firstInCat === idx) {
  showToast('ℹ️ Ya está al principio de su categoría');
  return;
  }
 
- // Reordenar: extraer el artículo e insertarlo antes del primero de su cat
+ // Reordenar: extraer el artículo e insertarlo antes del primero de su cat+prov
  const reordered = [...prods];
- reordered.splice(idx, 1); // quitar de posición actual
- reordered.splice(firstInCat, 0, prod); // insertar al inicio de la cat
+ reordered.splice(idx, 1);
+ // Tras splice, recalcular firstInCat por seguridad (puede haber shift)
+ const newFirstInCat = reordered.findIndex(p => _normCat(p.cat) === catNorm && p.prov === provOwner);
+ reordered.splice(newFirstInCat >= 0 ? newFirstInCat : 0, 0, prod);
  State.set.productos(reordered);
 
  // Refresh completo
@@ -52360,7 +52404,9 @@ _eaRecalc();
  const prov = State.get.prov(sel);
  const sheet = document.getElementById('orden-catalogo-sheet');
  if (sheet) sheet.innerHTML = '' /* catálogo inline activo — sheet legacy eliminado Fase A */;
- showToast('⬆️ ' + prod.nombre + ' movido al inicio de ' + (cat || 'su categoría'));
+ // Etiqueta visible: usar valor original si lo había, "su categoría" si era vacío
+ const catLabel = (prod.cat && String(prod.cat).trim()) ? String(prod.cat).trim() : 'su categoría';
+ showToast('⬆️ ' + prod.nombre + ' movido al inicio de ' + catLabel);
  }
 
  function _catDeleteArt(id) {
