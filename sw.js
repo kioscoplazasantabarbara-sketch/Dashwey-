@@ -15,7 +15,7 @@
    - skipWaiting: inmediato siempre (manual y automático).
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-1479';
+const CACHE_NAME  = 'dashwey-v1-3-1480';
 const HTML_URL    = 'index.html';
 
 /* v1.3.1436 BUG-OFFLINE FIX — Lote D
@@ -311,16 +311,58 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  /* Firebase CDN: stale-while-revalidate
-     v1.3.1436 BUG-OFFLINE FIX — Lote D
-     Antes: cache: 'no-store' + fallback caches.match() que SIEMPRE devolvía
-     undefined porque nunca se cacheaba → import() rompía offline → app
-     no arrancaba (pantalla "Sin conexión" persistente).
-     Ahora: si hay cache, servir cache (rápido); en paralelo refresh red para
-     próxima carga. Sin red, sirve cache silenciosamente. SDKs Firebase no
-     cambian frecuentemente (versión hardcoded 10.12.2), staleness aceptable. */
-  if (url.hostname.includes('googleapis.com') ||
-      url.hostname.includes('gstatic.com') ||
+  /* v1.3.1480 BUG-MEM-01 FIX — fetch handler selectivo
+     ─────────────────────────────────────────────────────────────────
+     Antes (v1.3.1479 y anteriores): la rama de googleapis.com cacheaba
+     TODAS las llamadas a *.googleapis.com con stale-while-revalidate,
+     incluyendo Firestore Listen (URLs con timestamp único cada llamada),
+     Identity Toolkit (auth), Secure Token (refresh). Resultado: el cache
+     SW crecía sin freno (58.5 MB acumulados en una sesión típica) →
+     memoria heap inflada (Response objects retenidos) → boot lento y
+     lag generalizado en producción.
+
+     Ahora: SOLO se cachean Firebase SDKs estáticos (versión hardcoded
+     10.12.2 desde gstatic.com), que son inmutables. Cualquier otra URL
+     hacia googleapis.com / cloudfunctions.net / *.run.app pasa directo
+     a fetch sin tocar el cache.
+
+     Patrones SIEMPRE network-only (nunca cache):
+     - firestore.googleapis.com (Firestore Listen + writes)
+     - identitytoolkit.googleapis.com (auth signIn)
+     - securetoken.googleapis.com (token refresh)
+     - cloudfunctions.net (Loyverse proxy)
+     - run.app (Cloud Run)
+     - any URL with query params (?...) — heurística para APIs dinámicas
+  */
+  const _isNeverCacheUrl = (u) => {
+    const h = u.hostname;
+    if (h.includes('firestore.googleapis.com')) return true;
+    if (h.includes('identitytoolkit.googleapis.com')) return true;
+    if (h.includes('securetoken.googleapis.com')) return true;
+    if (h.includes('firebaseinstallations.googleapis.com')) return true;
+    if (h.includes('fcm.googleapis.com')) return true;
+    if (h.includes('fcmregistrations.googleapis.com')) return true;
+    if (h.includes('cloudfunctions.net')) return true;
+    if (h.endsWith('.run.app')) return true;
+    /* Heurística: cualquier googleapis.com NO-gstatic con query string
+       es API dinámica (Firestore, RTDB, etc.). gstatic.com sin query
+       son SDKs cacheables. */
+    if (h.includes('googleapis.com') && u.search && u.search.length > 0) return true;
+    return false;
+  };
+
+  if (_isNeverCacheUrl(url)) {
+    /* Network-only sin cache. Si falla, propagar error al cliente. */
+    e.respondWith(fetch(e.request));
+    return;
+  }
+
+  /* Firebase SDKs estáticos (gstatic.com) + Firebase app hosting:
+     stale-while-revalidate (versión hardcoded, staleness aceptable).
+     v1.3.1436 BUG-OFFLINE FIX — Lote D: si cache vacío, esperar red.
+     v1.3.1480: scope reducido a gstatic.com + firebaseapp.com + firebase.com
+     (NO googleapis.com — ese ya quedó atrapado por _isNeverCacheUrl arriba). */
+  if (url.hostname.includes('gstatic.com') ||
       url.hostname.includes('firebaseapp.com') ||
       url.hostname.includes('firebase.com')) {
     e.respondWith(
@@ -342,7 +384,27 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  /* Assets estáticos (iconos, splash images, etc.): cache-first con fallback a red */
+  /* Assets estáticos del propio dominio (iconos, splash images): cache-first
+     v1.3.1480 BUG-MEM-01 FIX — guard contra cross-origin no contemplado.
+     Antes: cualquier fetch que no matcheara las ramas anteriores se cacheaba.
+     Esto capturaba accidentalmente subdominios de Google y otros, contribuyendo
+     al crecimiento descontrolado del cache.
+     Ahora: solo se cachean recursos same-origin (el propio dominio del PWA).
+     Cross-origin no contemplado → network-only, sin tocar cache.
+     NOTA: same-origin con query string SÍ se cachea, porque son assets
+     versionados (ej. icon-192.png?v=9.5.74, manifest.json?v=v1.3.893-dev). */
+  const _scope = self.registration.scope || self.location.origin + '/';
+  const _scopeOrigin = new URL(_scope).origin;
+  const _isSameOrigin = (url.origin === _scopeOrigin);
+
+  if (!_isSameOrigin) {
+    /* Cross-origin no contemplado en ramas anteriores → network-only.
+       Previene crecimiento del cache con URLs externas no esperadas. */
+    e.respondWith(fetch(e.request).catch(() => Response.error()));
+    return;
+  }
+
+  /* Assets estáticos same-origin: cache-first con fallback a red */
   e.respondWith(
     caches.match(e.request)
       .then(cached => {
