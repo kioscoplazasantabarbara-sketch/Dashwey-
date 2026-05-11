@@ -55,6 +55,27 @@
  }
  return fn;
  };
+ /* ── Dashwey.utils.attachPassive v1.3.1486 ──────────────────────────
+    Wrapper que registra un listener TOUCH con passive:true explícito.
+    Antes había 55 touch listeners sin declarar passive — el browser
+    asumía passive por defecto pero emitía warning:
+    "[Intervention] Added non-passive event listener to a scroll-blocking event"
+    Este helper hace explícita la intención. Uso:
+      Dashwey.utils.attachPassive(el, 'touchstart', handler);
+      Dashwey.utils.attachPassive(el, 'touchmove', handler);
+    Si necesitas e.preventDefault() (NO passive), usa addEventListener nativo.
+    Migración: oportunística. Cuando se edite cada zona con touch listener,
+    sustituir el addEventListener por este helper. No big-bang rewrite. */
+ Dashwey.utils.attachPassive = function(target, event, handler, opts) {
+  if (!target || typeof target.addEventListener !== 'function') return;
+  var options = { passive: true };
+  if (opts && typeof opts === 'object') {
+   if (opts.once) options.once = true;
+   if (opts.capture) options.capture = true;
+   // passive SIEMPRE true en este helper. Si necesitas false, no uses este wrapper.
+  }
+  target.addEventListener(event, handler, options);
+ };
  /* ── HEAD BOOTSTRAP v9.5.107 ────────────────────────────────────────
  Sin splash activo en HEAD. La función real _hideSplash() se define
  más adelante en el body y SOBRESCRIBE este stub automáticamente.
@@ -202,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1485";
+ var CURRENT_CACHE = "dashwey-v1-3-1486";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -221,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1485</title>
+<title>Dashwey v1.3.1486</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -451,6 +472,21 @@
  --dur-emphasis: 340ms; /* énfasis: transiciones complejas */
  --dur-enter: 280ms; /* entrada: sheets, modales */
  --dur-exit: 200ms; /* salida: siempre menor que entrada */
+ /* ── v1.3.1486 FASE A: tokens unificados de press feedback ──────
+    Antes había 15 valores distintos de scale en :active across la app
+    (0.85 a 0.992). Falta de consistencia hacía que botones similares
+    se sintieran diferentes. Estos 4 tokens son la "tabla de presets"
+    semánticos. Migración OPORTUNÍSTICA: cuando se edite cada zona,
+    sustituir scale(0.XX) por var(--press-scale-XX). No se hace big-bang
+    rewrite — riesgoso y sin valor inmediato. */
+ --press-scale-sm: 0.96;    /* mini buttons, chips, toggles, badges */
+ --press-scale-md: 0.94;    /* botones standard, items lista */
+ --press-scale-lg: 0.92;    /* primary actions, FAB, CTA */
+ --press-scale-xl: 0.88;    /* heavy/destructive actions, hero CTA */
+ /* Duración del press feedback — coherente con --dur-micro pero más rápido
+    para que no se sienta lento. M3 spec: 100-150ms */
+ --press-dur: 100ms;
+ --press-ease: var(--ease-out);
  /* Aliases funcionales */
  --ctx-accent: var(--red);
  --text: var(--ink);
@@ -18208,6 +18244,14 @@ const Utils = (() => {
  dragCrossing: 14,               // superar umbral de swipe
  longPress: 36,                  // pulsación larga detectada — golpe seco
  reject: [22, 40, 22, 40, 22],   // = error
+ // ── v1.3.1486 P1 FIX: tipo 'warning' faltante ───────────────
+ // Antes había 2 llamadas a triggerHaptic('warning') en código pero
+ // el patrón no existía. Caía al fallback 'selection' (12ms) = tick
+ // genérico, indistinguible de un tap normal. Pierde el matiz semántico
+ // de "atención". Patrón: golpe firme + reverberación leve =
+ // "ojo con esto pero no es error".
+ warning: [18, 30],              // atención — pre-acción reversible
+ caution: [18, 30],              // = warning (alias)
  };
 
  // Debounce state — 1 vibración por acción real
@@ -18268,6 +18312,11 @@ const Utils = (() => {
  dragCrossing: () => Haptics.vibrate ? Haptics.vibrate({ duration: 12 }) : Haptics.impact({ style: ImpactStyle?.Light || 'LIGHT' }),
  longPress: () => Haptics.impact({ style: ImpactStyle?.Heavy || 'HEAVY' }),
  reject: () => Haptics.notification({ type: 'ERROR' }),
+ // v1.3.1486 P1 FIX: warning/caution semánticos
+ //   Capacitor Haptics tiene type: 'WARNING' nativo — preferible al pattern
+ //   web fallback. Si no soportado, cae al impact medium.
+ warning: () => Haptics.notification({ type: 'WARNING' }),
+ caution: () => Haptics.notification({ type: 'WARNING' }),
  };
  const fn = capMap[type] || capMap.light;
  fn();
@@ -19249,7 +19298,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1485';
+ const _APP_VERSION = 'v1.3.1486';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20606,6 +20655,17 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1486': {
+   id: 'wn-2026-05-11-v1486',
+  sections: [{
+  title: '✨ Premium feel — fase A (foundations)',
+  items: [
+  { icon: '⚠️', name: 'Haptic warning ya existe (P1 FIX)', desc: 'En el código había 2 llamadas a triggerHaptic("warning") pero el patrón nunca se definió en _HAPTIC_PATTERNS ni en el bridge Capacitor. Resultado: caía silenciosamente al fallback "selection" (tick de 12ms), indistinguible de un tap normal. Pierde el matiz semántico de "atención, pero no error". Fix: patrón web fallback [18, 30] (golpe firme + reverberación leve) y en Capacitor usa Haptics.notification({type: "WARNING"}) nativo. Alias "caution" también añadido para semántica clara. Cobertura: P1 del análisis premium.' },
+  { icon: '🎯', name: 'Tokens unificados de press feedback (foundations P2)', desc: 'Auditoría detectó 15 valores distintos de scale en :active across la app (de 0.85 a 0.992). Botones similares se sentían diferentes según la zona, rompiendo la sensación de sistema coherente. Ahora hay 4 tokens semánticos en CSS: --press-scale-sm (0.96, mini buttons/chips), --press-scale-md (0.94, botones standard), --press-scale-lg (0.92, primary actions/FAB), --press-scale-xl (0.88, heavy/destructive). Además --press-dur (100ms) y --press-ease coherentes. CRÍTICO: NO se migran los 48 botones de golpe — eso sería big-bang rewrite arriesgado. Migración OPORTUNÍSTICA: cuando se edite cada zona, se sustituye scale(0.XX) por var(--press-scale-XX). Backlog incremental, riesgo cero. Cobertura: P2 del análisis premium.' },
+  { icon: '👆', name: 'Helper attachPassive para touch listeners (foundations P3)', desc: 'Análisis detectó 55 touch listeners sin declarar passive explícito, lo que generaba constantes warnings "[Intervention] Added non-passive event listener to a scroll-blocking event". Aunque el browser asume passive por defecto en algunos casos, las versiones modernas son cada vez más estrictas. Nuevo helper Dashwey.utils.attachPassive(el, event, handler, opts) que hace passive:true EXPLÍCITO. Soporta options once/capture. Migración: oportunística — cuando se edite cada zona con touch listener, sustituir addEventListener por este helper. Los listeners actuales siguen funcionando intactos hasta su migración natural. Cobertura: P3 del análisis premium.' },
+  { icon: '📋', name: 'Roadmap premium establecido', desc: 'Fase A (esta versión): tokens + helpers + fixes puntuales. Fase B (cuando Hung tenga PC + Android Studio): activar Predictive Back de Android 13+ migrando MainActivity.java de OnBackPressedCallback a OnBackAnimationCallback — el código JS ya está listo desde v1.3.1424 (window._dashweyBack.onStart/onProgress/onCancel), solo falta que Java lo invoque. Cuando se complete, deslizar desde el borde mostrará la modal/sheet activo siguiendo el dedo en tiempo real con scale + opacity dim (feel nativo Android 14). Fase C (post-26 may): page transitions premium con shared elements. Fase D: micro-improvements oportunísticos durante edits normales (stagger lists, ripple, squircle morph). Fase E (junio): Perception Layer ya planificado.' },
+  ]}]
+  },
   'v1.3.1485': {
    id: 'wn-2026-05-11-v1485',
   sections: [{
