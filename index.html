@@ -13600,34 +13600,22 @@ const State = (() => {
  const _DEMO_PROD_IDS = ['p1','p2','p3','p4','p5','p6','p7','p8','p9','p10'];
 
  // v1.3.995: limpieza dirigida por el usuario — whitelist + listas explícitas
- // Whitelist proveedores reales (captura 18 abr 2026). Todo proveedor cuyo
- // nombre NO esté en esta lista se elimina.
- const _PROV_WHITELIST_NAMES = [
-  'Amazon Prime',
-  'Coca Cola Euro Pacific Partners',
-  'Distribuciones Goyo S.A',
-  'Gluck & Sweet S.L.U',
-  'Fiesta Colombina S.L.U'
- ];
- // Productos demo específicos (por nombre) solicitados para eliminar
- const _DEMO_PROD_NAMES = [
-  'Fanta Naranja 33cl',
-  'Kinder Joy 36uds',
-  'Patatas Lays 40g',
-  'Chaskis Maíz 24uds',
-  'Mahou 5* 33cl',
-  'Coca Cola 33cl',
-  'Cruzcampo 33cl'
- ];
- // Productos demo específicos por ID (sin nombre o con ID crudo visible)
- const _DEMO_PROD_IDS_EXTRA = [
-  'p1774285172407',
-  'p1774145290031',
-  'p1774213436469',
-  'p1774145509338',
-  'p1774152973986',
-  'p1774015123630'
- ];
+ // v1.3.1487 BUG-DEMO-NAMES NEUTRALIZADO:
+ //   Las listas _PROV_WHITELIST_NAMES + _DEMO_PROD_NAMES + _DEMO_PROD_IDS_EXTRA
+ //   se vacían intencionalmente. Razones:
+ //   (1) Su misión (limpiar seeds antiguos de abril 2026) está cumplida hace meses.
+ //   (2) Riesgo latente: si Hung crea un producto manual o LV con nombre coincidente
+ //       ("Coca Cola 33cl", "Fanta Naranja 33cl") y createdAt no se hidrata bien
+ //       (caso real: productos LV antiguos con createdAt:undefined), el filtro
+ //       hace HARD-delete cada boot sin tombstone, sin log, sin recuperación.
+ //   (3) Caso confirmado: Fanta Naranja 33cl creado 29 abril, borrado 8 minutos
+ //       después por este filtro. Otros productos con createdAt corrupto siguen
+ //       en riesgo.
+ //   Mantenemos _DEMO_PROD_IDS (p1-p10) porque esos IDs nunca se generan
+ //   espontáneamente: son seeds explícitos imposibles de confundir con datos reales.
+ const _PROV_WHITELIST_NAMES = []; // vacío — la whitelist ya no filtra nada
+ const _DEMO_PROD_NAMES = [];      // vacío — protege productos con nombre demo
+ const _DEMO_PROD_IDS_EXTRA = [];  // vacío — protege IDs específicos legacy
 
  function _migrateDemoData(state) {
  // v1.3.994: LIMPIEZA UNIVERSAL ESTRICTA
@@ -15155,7 +15143,12 @@ const State = (() => {
       id: _gastoId,
       nombre: _provNombre,
       concepto: _provNombre,
-      importe: _pedCoste,
+      // v1.3.1487 BUG-EDIT-DECIMALS: redondear a 2 decimales antes de guardar.
+      //   _pedCoste viene de operaciones float (precio × IVA factor) que acumulan
+      //   imprecisión IEEE 754 (ej. 101.14 × 1.1 = 111.25400000000001). El editor
+      //   de movimientos mostraba el float crudo "111.25400000" → confuso.
+      //   Redondear en el callsite es seguro (no toca FinEngine que se respeta).
+      importe: Math.round(_pedCoste * 100) / 100,
       fecha: _gastoFecha,
       fechaPago: _gastoFecha.slice(0,10),
       origen: 'pedido',
@@ -20677,6 +20670,9 @@ const ui = (() => {
   { icon: '💰', name: 'Cargos adicionales en pedidos: defaults limpios + descuento', desc: 'BUG P0 reportado: factura Matutano 112,67€ (subtotal 101,14 + IVA 10,11 + R.E. 1,42), Dashwey modal mostraba "Total con cargos 112,67€" correcto, PERO al pulsar "Pedido recibido" el gasto creado era -111,25€ — faltaba el 1,42€ del recargo. Causa: el panel "Impuestos" pre-rellenaba RE al 5,2% automático al abrir, pero el cálculo del gasto leía directamente del input. Si el usuario no abría el panel o cerraba antes de confirmar, el valor se perdía. Solución de producto (decisión 11 may): (1) defaults siempre 0,00 — el usuario introduce manualmente el importe exacto que aparece en la factura física. (2) Texto simplificado: "Recargo de equivalencia" en vez de "Recargo equiv. (5,2%)". Evita asumir que todos los proveedores tienen RE y que siempre es 5,2%. (3) Añadida cuarta línea "Descuento" que RESTA del total (antes solo se podían sumar cargos). Coherente con facturas reales que a veces traen descuentos pactados. FinEngine.pedidoCoste ahora calcula: base + RE + Punto Verde + Otros - Descuento.' },
   { icon: '📝', name: 'Editar precio de un artículo en pedido programado recalcula KPIs', desc: 'BUG P1 reportado: al hacer long-press sobre un artículo en un pedido programado y editar el precio/cajas, la fila del artículo se actualizaba pero los KPIs del pedido (Inversión, Venta est., Ganancia, ROI, Margen, Score) seguían mostrando los valores antiguos. Root cause: renderArticulos() solo re-renderiza el HTML de las filas; los totales se calculan al inicio del _ldcAbrirDetallePedido y quedan congelados. Fix: tras guardar la edición, cerrar y reabrir el modal (setTimeout 220ms para que la animación de cierre complete). Todos los totales se recalculan desde cero con los nuevos precios. Si el re-abrir falla por alguna razón, fallback al renderArticulos original (no se pierde nada).' },
   { icon: '🔕', name: 'Solo 1 toast de sincronización al iniciar', desc: 'BUG UX reportado: al abrir la app salían DOS toasts seguidos: "✅ Conectado — sincronizando datos" y "☁️ Datos sincronizados". El primer toast se disparaba en el evento "online" (cuando el dispositivo recuperaba red tras boot offline) y el segundo al final de _doInitialSync. En cold-start con red intermitente ambos podían dispararse a la vez. Fix: eliminados ambos toasts — el pill UI (esquina inferior central) ya muestra "Sincronizando..." en amarillo y "Sincronizado" en verde sin necesidad de toast adicional. Filosofía UX 9 may: "No bombardear al usuario con notificaciones redundantes". El badge sutil reemplaza al toast invasivo.' },
+  { icon: '🔢', name: 'Importes en editor de movimientos sin decimales basura', desc: 'BUG reportado: al editar un gasto de Matutano, el campo importe mostraba "111.25400000€" en lugar de "111,25€". Causa: cálculos como precio × (1 + IVA) acumulan imprecisión IEEE 754 (ej. 101.14 × 1.1 = 111.25400000000001). El float crudo se guardaba en gasto.importe y el editor lo mostraba literal. Fix doble: (1) addPedido redondea _pedCoste a 2 decimales antes de guardar el gasto. (2) El editor de movimientos formatea importeRaw con toFixed(2) al mostrar. Gastos antiguos con decimales basura se autocorregirán al editarlos.' },
+  { icon: '🛑', name: 'Aviso al borrar proveedor con artículos', desc: 'BUG-PROV-1 reportado: borrar un proveedor con artículos asignados los dejaba colgados de un tombstone, invisibles en Almacén (los filtros UI los ocultan). El 6 may se perdieron así 4 productos Coca-Cola (Fuze Maracuyá, Agua Aquabona, Aquarius Limón) cuando se borró el proveedor "Coca Cola" buscando consolidar. Fix: confirmarBorrarProv ahora cuenta primero los productos vivos asignados al proveedor. Si hay 1 o más, muestra mensaje informativo ("Tiene N artículos asignados. Mueve primero los artículos a otro proveedor antes de eliminar este") con haptic warning, en lugar del confirm destructivo. Filosofía: prevenir mejor que recuperar.' },
+  { icon: '🧨', name: 'Listas de auto-borrado demo desactivadas (peligro latente eliminado)', desc: 'BUG-DEMO-NAMES detectado en auditoría 11 may: existían listas _PROV_WHITELIST_NAMES, _DEMO_PROD_NAMES y _DEMO_PROD_IDS_EXTRA en _migrateDemoData (ejecuta en cada boot) que hacían HARD-delete de productos cuyo nombre coincidía con seeds antiguos de abril 2026. La protección por origen+createdAt fallaba con productos LV antiguos cuyo createdAt nunca se sello (caso real: Fanta Naranja Lata con createdAt:undefined). Resultado: productos manuales o LV con nombre matching ("Fanta Naranja 33cl", "Coca Cola 33cl", "Mahou 5* 33cl"...) podían ser borrados silenciosamente en boot, sin tombstone ni log ni recuperación. Esas listas demo cumplieron su misión hace meses (limpiar fixtures iniciales) y ahora solo son riesgo. Fix: vaciadas las 3 listas a []. _DEMO_PROD_IDS (p1-p10) se mantiene porque esos IDs son imposibles de generar espontáneamente. Caso confirmado: Fanta Naranja 33cl creado 29 abril, borrado 8 minutos después por este filtro.' },
   { icon: '🛡️', name: 'Comprobación de saldos automática al arrancar: deshabilitada', desc: 'BUG UX reportado: aparecía toast amarillo "Cuenta Kiosco descuadra X€" al abrir la app, pero al instante siguiente desaparecía porque la sincronización terminaba y los saldos cuadraban. Causa: el sanity-check auto-trigger ejecutaba tras quietud post-_DashweyInitialSyncDone, pero en redes lentas (APK gama-media) onSnapshots tardíos podían llegar 60-90s después y reescribir saldos. El warning era una falsa alarma transitoria. Fix radical: deshabilitada COMPLETAMENTE la ejecución automática del sanity-check al arranque. Solo se ejecuta cuando el usuario pulsa el botón manual del header (icono escudo en Almacén). Filosofía setup-and-forget: si hay un problema real, el usuario lo descubrirá al revisar; mientras no haya intervención humana, no molestar con alarmas potencialmente falsas. El código queda preparado por si en el futuro se reactiva con otra estrategia (ej. una vez/día).' },
   ]}]
   },
@@ -31354,7 +31350,11 @@ function _openEditMovimientoSheet(id, src) {
   if (!registro) { showToast('Movimiento no encontrado', 'warning'); return; }
 
   var nombre = registro.nombre || registro.concepto || '';
-  var importe = registro.importe || 0;
+  // v1.3.1487 BUG-EDIT-DECIMALS: redondear a 2 decimales para mostrar en input.
+  //   Sin esto, importes con cargos extra (RE/PV/etc) podían acumular precisión
+  //   IEEE 754 y mostrarse como "111.25400000000" → confuso para el usuario.
+  var importeRaw = registro.importe || 0;
+  var importe = (Math.round(importeRaw * 100) / 100).toFixed(2);
   var fecha = (registro.fecha || registro.fechaPago || '').slice(0,10) || new Date().toISOString().slice(0,10);
   // v1.3.1165: notas/concepto extra que se mostrará gris pequeño bajo el nombre
   var notas = registro.notas || '';
@@ -48212,6 +48212,27 @@ function _parseIva(iva) {
 
  function confirmarBorrarProv(id) {
  const p = State.get.prov(id); if (!p) return;
+ // v1.3.1487 BUG-PROV-1 FIX: bloquear borrado si tiene productos vivos.
+ //   Antes: borrar proveedor dejaba productos colgados del tombstone (5 productos
+ //   Coca-Cola perdidos así el 6 may, 4 productos huérfanos detectados el 11 may
+ //   en auditoría). Ahora: contar productos vivos primero; si hay, mostrar aviso
+ //   con instrucciones claras en lugar del confirm destructivo.
+ //   Filosofía: prevenir mejor que recuperar. El usuario es consciente de mover
+ //   sus productos a otro proveedor antes de borrar.
+ try {
+  var _prods = State.get.productos() || [];
+  var _conProds = _prods.filter(function(pr){ return pr && !pr.deleted && pr.prov === id; });
+  if (_conProds.length > 0) {
+   try { if (window.Utils) Utils.triggerHaptic('warning'); } catch(_){}
+   window._showDestructiveConfirm({
+    title: 'No se puede eliminar',
+    message: '"' + p.nombre + '" tiene ' + _conProds.length + ' artículo' + (_conProds.length === 1 ? '' : 's') + ' asignado' + (_conProds.length === 1 ? '' : 's') + '.\n\nMueve primero los artículos a otro proveedor antes de eliminar este.',
+    confirmText: 'Entendido',
+    onConfirm: function() {} // solo informativo
+   });
+   return;
+  }
+ } catch(eGuard) { console.warn('[borrarProv guard] error contando productos:', eGuard); }
  // v1.3.427: _showDestructiveConfirm en lugar de FS inline fragil
  window._showDestructiveConfirm({
  title: 'Eliminar proveedor',
