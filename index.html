@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1487";
+ var CURRENT_CACHE = "dashwey-v1-3-1488";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1487</title>
+<title>Dashwey v1.3.1488</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11093,7 +11093,68 @@ window._DashweySubcollectionMap = {
 // aplicación de snapshots remotos de subcolecciones para evitar que
 // el setter masivo marque como dirty los items recién recibidos del remoto.
 // El handler DashweyBus lo pone en true antes de setear y false después.
-window._DashweyApplyingRemote = false;
+//
+// v1.3.1488 BUG-FLAG-PEGADO FIX: contador semafórico anti race condition.
+//   Antes: boolean simple con patrón prev=flag; flag=true; ... flag=prev
+//   no soportaba anidamiento paralelo. Si 2 handlers entraban al mismo tiempo:
+//     T0: A → prev=false, flag=true
+//     T1: B → prev=TRUE (captura valor pegado), flag=true
+//     T2: A timeout → flag=prev=false  ✓
+//     T3: B timeout → flag=prev=TRUE  ✗ PEGADO INDEFINIDO
+//   Síntoma producción 11 may: laptop tras 5min con _DashweyApplyingRemote=true,
+//   bloqueando _DashweyMarkDirty → pedidos nuevos no marcan dirty → no se suben
+//   a Firestore subcol → otros devices nunca los reciben.
+//
+//   Solución: API nueva acquire/release explícita. El setter público
+//   mantiene compatibilidad mínima (set true = noop si ya está true, set false
+//   = forzar 0). Los callsites legacy mantienen su patrón sin cambios.
+//   Watchdog (abajo) limpia counters huérfanos como defensa última.
+window._DashweyApplyingRemoteCount = 0;
+Object.defineProperty(window, '_DashweyApplyingRemote', {
+  get: function() { return window._DashweyApplyingRemoteCount > 0; },
+  set: function(v) {
+    // Setter idempotente para compat con código legacy que hace `prev = flag; flag = true; ... flag = prev`.
+    // El comportamiento legacy es BOOLEAN simple sin contador. Mantenemos eso:
+    //   set true → asegurar count >= 1 (idempotente, no incrementa si ya>0)
+    //   set false → forzar count = 0 (release total)
+    // Para anidamiento real usar window._DashweyApplyingAcquire/_Release directamente.
+    if (v === true) {
+      if (window._DashweyApplyingRemoteCount === 0) window._DashweyApplyingRemoteCount = 1;
+    } else if (v === false) {
+      window._DashweyApplyingRemoteCount = 0;
+    }
+  },
+  configurable: true
+});
+// API nueva para anidamiento real (counter atómico)
+window._DashweyApplyingAcquire = function() { window._DashweyApplyingRemoteCount++; };
+window._DashweyApplyingRelease = function() { window._DashweyApplyingRemoteCount = Math.max(0, window._DashweyApplyingRemoteCount - 1); };
+// Helper de emergencia para resetear (debug + recovery manual)
+window._DashweyResetApplyingRemote = function() {
+  const wasStuck = window._DashweyApplyingRemoteCount;
+  window._DashweyApplyingRemoteCount = 0;
+  if (wasStuck > 0) console.warn('[Dashwey/Flag] reset _DashweyApplyingRemote (counter pegado en', wasStuck, ')');
+  return wasStuck;
+};
+
+// v1.3.1488 WATCHDOG auto-recovery: cada 30s, si el counter lleva >10s sin
+// volver a 0, lo resetea forzadamente. Defensa última contra cualquier
+// futura race condition que se nos escape. Log warning + recovery silencioso.
+(function _stuckFlagWatchdog(){
+  let _lastZeroAt = Date.now();
+  setInterval(function(){
+    if (window._DashweyApplyingRemoteCount === 0) {
+      _lastZeroAt = Date.now();
+      return;
+    }
+    const stuckMs = Date.now() - _lastZeroAt;
+    if (stuckMs > 10000) {
+      console.warn('[Dashwey/Watchdog] _DashweyApplyingRemoteCount pegado en', window._DashweyApplyingRemoteCount, 'durante', stuckMs, 'ms — reseteando');
+      window._DashweyApplyingRemoteCount = 0;
+      _lastZeroAt = Date.now();
+    }
+  }, 30000);
+})();
 
 // v1.3.1088: helper para acceder a State — en esta app State vive dentro del
 // cierre del IIFE App (window.App.State) y NO siempre está en window.State
@@ -19304,7 +19365,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1487';
+ const _APP_VERSION = 'v1.3.1488';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20661,6 +20722,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1488': {
+   id: 'wn-2026-05-11-v1488',
+   sections: [{
+    title: '🚨 Fix crítico sync — flag pegado',
+    items: [
+     { icon: '🔓', name: 'Sync entre dispositivos restaurado (flag pegado)', desc: 'BUG P0 CRÍTICO descubierto 11 may PM: tras crear el proveedor Bebidas en laptop, los pedidos nuevos creados en Pixel NO aparecían en laptop ni Samsung. Investigación profunda en consola: window._DashweyApplyingRemote=true pegado durante 5+ minutos sin liberarse. Este flag bloquea _DashweyMarkDirty (impide que items nuevos se marquen para subida a Firestore subcol). Resultado: pedidos creados localmente nunca alcanzaban Firestore, otros devices nunca los recibían. Root cause: race condition en el patrón "prev=flag; flag=true; finally flag=prev" usado en 9 sitios distintos. Si dos handlers entran en paralelo y el segundo captura prev=true (porque el primero ya lo había puesto), al terminar el segundo restaura flag=true permanentemente. Fix: getter/setter idempotente con contador interno. Set true cuando ya >0 = noop. Set false = release total. Más watchdog auto-recovery cada 30s que detecta el flag pegado >10s y lo resetea con warning. Defensa última contra cualquier futura race condition. Comando manual de emergencia: window._DashweyResetApplyingRemote(). ETA estimada de pérdidas: 0 — los pedidos no se borraron, simplemente no se sincronizaron. Tras desbloquear el flag, crear/editar cualquier pedido fuerza un nuevo write que propaga al resto.' }
+    ]
+   }]
+  },
   'v1.3.1487': {
    id: 'wn-2026-05-11-v1487',
   sections: [{
