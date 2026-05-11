@@ -19,6 +19,16 @@
 <meta name="theme-color" content="#F7F2F2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0C0C0E" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" id="theme-color-meta" content="#F7F2F2">
+<!-- v1.3.1484 OPT-BOOT-03: modulepreload de Firebase SDKs en HEAD.
+     Sin esto, el browser solo descubre estos imports cuando el parser llega al
+     bloque module del body (~L10405), retrasando la descarga.
+     Con modulepreload, el browser inicia descarga en PARALELO al parsing HTML.
+     Ganancia esperada: -100ms Pixel, -300ms gama-media. SW cache hace efectivo
+     desde 2ª visita; en cold-start de instalación es donde más se nota.
+     Si los recursos ya están en SW cache, modulepreload es no-op (no daña). -->
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js" crossorigin="anonymous">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js" crossorigin="anonymous">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js" crossorigin="anonymous">
  <script>
  /* ── DASHWEY NAMESPACE v1.2.85 ──────────────────────────────────────
  Espacio de nombres global. Se inicializa aquí — antes que cualquier
@@ -192,7 +202,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1483";
+ var CURRENT_CACHE = "dashwey-v1-3-1484";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +221,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1483</title>
+<title>Dashwey v1.3.1484</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19239,7 +19249,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1483';
+ const _APP_VERSION = 'v1.3.1484';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20596,6 +20606,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1484': {
+   id: 'wn-2026-05-11-v1484',
+  sections: [{
+  title: '🚀 Optimización boot — modulepreload + idle deferral',
+  items: [
+  { icon: '⚡', name: 'Pre-carga paralela de Firebase SDKs (OPT-BOOT-03)', desc: 'Hasta v1.3.1483 los SDKs de Firebase (app + auth + firestore) se descargaban únicamente cuando el parser HTML llegaba al <script type="module"> en el body — bastante tarde en el boot. Con modulepreload hint en el HEAD, el browser inicia las descargas en PARALELO al parsing del HTML, sin bloquearlo. Ganancia esperada: 100-300 ms en cold-start (más visible en gama-media como A17). Si los SDKs ya están en el SW cache, el modulepreload es no-op (no daña). No toca lógica, solo añade 3 tags <link rel="modulepreload"> en el HEAD. Riesgo cero.' },
+  { icon: '🛌', name: 'Migración LV sourceNames con requestIdleCallback (OPT-BOOT-04)', desc: 'La migración runtime que rellena sourceName en proveedores Loyverse antiguos sin él (idempotente, fire-and-forget) usaba setTimeout(2000) fijo. El problema: ese timing podía coincidir con el primer sync Loyverse o renders pesados. Cambio: usar requestIdleCallback con timeout 3000ms — el navegador ejecuta cuando el thread está REALMENTE idle (no pintando frames, no procesando input). Fallback a setTimeout 2000 si requestIdleCallback no está disponible (defensivo). Beneficio: el migración no compite con tareas críticas del boot, especialmente en A17 y similares donde cada ms libre del main thread cuenta.' },
+  { icon: '📐', name: 'Mediciones para validar el impacto', desc: 'Tras deploy, ejecutar window._dashweyBoot() en DevTools para ver la tabla de hitos del boot con timing real del dispositivo. Comparar antes/después: la ganancia esperada está en el tramo entre script_init y la primera escritura de Firestore. Si no se ve mejora, el SW cache ya estaba cubriendo el caso (boot tras 1ª instalación). El primer arranque tras instalar v1.3.1484 (cuando el SW aún no tiene los SDKs cacheados) es donde más se nota.' },
+  ]}]
+  },
   'v1.3.1483': {
    id: 'wn-2026-05-11-v1483',
   sections: [{
@@ -55234,9 +55254,21 @@ _eaRecalc();
 
  // v1.3.1237: migración sourceName proveedores LV (idempotente, fire-and-forget)
  // Solo afecta proveedores origen='loyverse' sin sourceName. No bloquea el flujo.
- setTimeout(function() {
+ // v1.3.1484 OPT-BOOT-04: usar requestIdleCallback en lugar de setTimeout fijo.
+ //   requestIdleCallback espera a que el navegador esté ACTUALMENTE idle (no
+ //   pintando frames, no procesando inputs). Mejor que setTimeout 2000ms que
+ //   puede coincidir con sync Loyverse, render, etc. Fallback a setTimeout 2000
+ //   si el navegador no soporta requestIdleCallback (todos los moderno sí,
+ //   pero defensivo). Timeout 3000ms como safety en idle callback: si en 3s
+ //   no hay idle, ejecutar igualmente.
+ var _migrateSourceNamesDeferred = function() {
   try { window._DashweyMigrateLVSourceNames && window._DashweyMigrateLVSourceNames(); } catch(_) {}
- }, 2000);
+ };
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(_migrateSourceNamesDeferred, { timeout: 3000 });
+ } else {
+  setTimeout(_migrateSourceNamesDeferred, 2000);
+ }
 
  // -- Sync en tiempo real ─────────────────────────────────────
  // Grace period: ignorar el primer disparo de onSnapshot (siempre se dispara
