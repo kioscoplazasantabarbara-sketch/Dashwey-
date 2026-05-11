@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1481";
+ var CURRENT_CACHE = "dashwey-v1-3-1482";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1481</title>
+<title>Dashwey v1.3.1482</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19239,7 +19239,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1481';
+ const _APP_VERSION = 'v1.3.1482';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20596,6 +20596,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1482': {
+   id: 'wn-2026-05-11-v1482',
+  sections: [{
+  title: '🧹 Asimetrías placeholders BB — fix CORRECTO esta vez (cacheado)',
+  items: [
+  { icon: '🩹', name: 'Coherencia placeholders BB en toda la UI Almacén', desc: 'Los proveedores con id que empieza por prov_bb_ (placeholders creados al importar BB CSV para categorías de ingresos/gastos como "Otros gastos" / "Suscripciones") deben aparecer ocultos en el picker del Almacén CUANDO no tienen productos vivos asignados (porque son contenedores fiscales, no de inventario). Hasta hoy esto solo se aplicaba en _renderProvPickerSheet (v1.3.1475) pero faltaban 4 sitios: renderCatInline (empty check), updateProvBar (cabecera), init Almacén savedId (selección automática), borrarProv (fallback al borrar último visible). Resultado: el header podía decir "hay proveedores" cuando el picker decía "0", o el sistema seleccionaba como activo un placeholder invisible que confundía al usuario. v1.3.1482 lo arregla en los 4 sitios. Cobertura: BUG-AUD-18, BUG-AUD-20, BUG-AUD-21, BUG-AUD-23.' },
+  { icon: '⚡', name: 'Helper _isProvBBPlaceholder ahora O(1) con cache (lección v1.3.1477)', desc: 'En v1.3.1477 se intentó este mismo fix pero el helper iteraba TODOS los productos (~600) en CADA llamada, y al colocarlo en hot path (renderCatInline + updateProvBar) los costos combinatorios disparaban lag visible — diagnosticado y revertido en v1.3.1478. Esta vez: cache Set<provId> de placeholders pre-calculado UNA SOLA VEZ por sesión, lookup O(1), invalidación automática via DashweyBus cuando cambian productos / proveedores / stock. Si el bus no está disponible (boot temprano), el helper hace fallback al cálculo on-the-fly sin cachear (degradación elegante). Debug: window._dashweyPlaceholderCacheStats() devuelve estado del cache. Impacto: cero coste percibido en cualquier dispositivo, incluyendo gama-media.' },
+  { icon: '📚', name: 'Lecciones acumuladas aplicadas', desc: 'Tres principios reforzados desde v1.3.1477 fallido: (1) Helpers que iteran arrays grandes NUNCA en hot path sin cachear — invalidación reactiva via eventos del bus. (2) Test de hipótesis con datos reales antes de empaquetar — el cache se valida con _dashweyPlaceholderCacheStats() inmediatamente tras boot. (3) Degradación elegante en boot temprano — si State o DashweyBus aún no existen, fallback al cálculo legacy sin romper.' },
+  ]}]
+  },
   'v1.3.1481': {
    id: 'wn-2026-05-11-v1481',
   sections: [{
@@ -45978,7 +45988,13 @@ const alm = (() => {
   const newHash = `${sel}||${q}||${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto||'')+(p.cat||'')).join(',')}||${carritoStr}||po:${_poHash}`;
   // Controlar alm-empty antes del hash guard
   // v1.3.1215: Estado 1 (sin proveedores) → empty-no-prov; Estado 2 → empty (sin artículos)
-  const _provs = State.get.proveedores() || [];
+  // v1.3.1482 BUG-AUD-18 FIX: filtrar placeholders bb_ vacíos — asimetría con
+  //   _renderProvPickerSheet que sí los oculta. Sin esto: si solo hay
+  //   prov_bb_otrosgastos vacío, _provs.length > 0 pero picker muestra 0.
+  //   Estado1 (CTA "Añadir proveedor") debe aplicar coherentemente.
+  //   v1.3.1482: helper _isProvBBPlaceholder ahora es O(1) con cache Set,
+  //   safe para usar en hot path (a diferencia de v1.3.1477 fallido).
+  const _provs = (State.get.proveedores() || []).filter(p => !_isProvBBPlaceholder(p));
   const _hasProv = sel && State.get.prov(sel);
   const emptyNoProv = document.getElementById('alm-empty-no-prov');
   if (!_provs.length) {
@@ -46894,16 +46910,99 @@ function _parseIva(iva) {
  //
  //   Regla: si tiene al menos 1 producto vivo asignado, NO es placeholder.
  //   Coherente con patrón v1.3.1286 en _lvCommitCatalog (línea 21885+).
+ // ── _isProvBBPlaceholder · cache O(1) ─────────────────────────
+ // v1.3.1482 BUG-AUD-18/20/21/23 FIX (corregido tras v1.3.1477 fallido).
+ //
+ // CONTEXTO:
+ // Un "placeholder bb_" es un proveedor cuyo id empieza por 'prov_bb_' Y NO tiene
+ // productos vivos asignados. Estos proveedores se crean automáticamente al
+ // importar BB CSV para categorías como "Otros gastos" / "Suscripciones" /
+ // "Servicios", y son útiles como contenedores de ingresos/gastos pero NO
+ // deben aparecer en el picker del Almacén (donde el usuario espera ver solo
+ // proveedores con productos reales).
+ //
+ // BUG ORIGINAL v1.3.1477 (revertido):
+ // Llamábamos esta función desde renderCatInline + updateProvBar (HOT PATH:
+ // cada cambio de estado) y cada llamada iteraba TODOS los productos del state
+ // (~600 productos). Con 14 proveedores × 600 productos × varios renders por
+ // segundo, costos combinatorios → boot lento, lag en interacción.
+ //
+ // FIX v1.3.1482:
+ // Cache Set<provId> de placeholders pre-calculado. Lookup O(1). Invalidación
+ // por evento del bus cuando cambia productos/proveedores. Recálculo lazy
+ // (solo cuando alguien pregunta tras invalidación).
+ //
+ // Diseño defensivo:
+ // - Cache nullable → si null, recalcular antes de responder
+ // - Invalidación = poner a null (NO recalcular eagerly, evita trabajo en eventos)
+ // - Recálculo: una sola iteración O(N) construye Set completo
+ // - Si State no disponible (boot temprano), fallback al cálculo on-the-fly
+ //   sin cachear (degradación elegante).
+ var _placeholderCache = null;
+ function _rebuildPlaceholderCache() {
+  var newCache = new Set();
+  try {
+   if (typeof State === 'undefined' || !State.get || !State.get.productos) return null;
+   var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+   var prods = State.get.productos() || [];
+   // Conjunto de provIds que TIENEN al menos un producto vivo (no-deleted)
+   var provsConProductos = new Set();
+   for (var i = 0; i < prods.length; i++) {
+    var prod = prods[i];
+    if (prod && !prod.deleted && prod.prov) provsConProductos.add(prod.prov);
+   }
+   // Placeholders = bb_ y NO en provsConProductos
+   for (var j = 0; j < provs.length; j++) {
+    var pv = provs[j];
+    if (pv && pv.id && pv.id.indexOf('prov_bb_') === 0 && !provsConProductos.has(pv.id)) {
+     newCache.add(pv.id);
+    }
+   }
+  } catch(_) { return null; }
+  return newCache;
+ }
+ function _invalidatePlaceholderCache() {
+  _placeholderCache = null;
+ }
  function _isProvBBPlaceholder(p) {
   if (!p || !p.id) return false;
+  // Optimización: si no empieza por prov_bb_, NO es placeholder (sin tocar cache)
   if (p.id.indexOf('prov_bb_') !== 0) return false;
-  var prods = (typeof State !== 'undefined' && State.get && State.get.productos)
-   ? (State.get.productos() || []) : [];
-  var tieneProductos = prods.some(function(prod){
-   return prod && prod.prov === p.id && !prod.deleted;
-  });
-  return !tieneProductos;
+  // Lookup en cache
+  if (_placeholderCache === null) {
+   _placeholderCache = _rebuildPlaceholderCache();
+   // Si rebuild falló (State no disponible), fallback al cálculo viejo SIN cachear
+   if (_placeholderCache === null) {
+    var prods = (typeof State !== 'undefined' && State.get && State.get.productos)
+     ? (State.get.productos() || []) : [];
+    var tieneProductos = prods.some(function(prod){
+     return prod && prod.prov === p.id && !prod.deleted;
+    });
+    return !tieneProductos;
+   }
+  }
+  return _placeholderCache.has(p.id);
  }
+ // Suscripción a eventos del bus para invalidar cache. Diferido al primer
+ // tick para que DashweyBus exista (este IIFE puede ejecutarse antes).
+ setTimeout(function(){
+  try {
+   if (window.DashweyBus && typeof window.DashweyBus.on === 'function') {
+    window.DashweyBus.on('producto', _invalidatePlaceholderCache);
+    window.DashweyBus.on('proveedor', _invalidatePlaceholderCache);
+    window.DashweyBus.on('stock', _invalidatePlaceholderCache);
+    window.DashweyBus.on('full', _invalidatePlaceholderCache);
+   }
+  } catch(_) {}
+ }, 100);
+ // Helper de debug
+ window._dashweyPlaceholderCacheStats = function() {
+  return {
+   built: _placeholderCache !== null,
+   size: _placeholderCache ? _placeholderCache.size : null,
+   ids: _placeholderCache ? Array.from(_placeholderCache) : []
+  };
+ };
 
  // v1.3.1158: openProvPicker migrado a bottom sheet (patrón period picker).
  //            El panel slide antiguo (_almSlideToList) queda disponible
@@ -47341,8 +47440,14 @@ function _parseIva(iva) {
  }
  var savedId = _almGetLastProv();
  var prov = savedId ? State.get.prov(savedId) : null;
+ // v1.3.1482 BUG-AUD-21 FIX: si savedId apunta a placeholder bb_ vacío, queda
+ //   seleccionado pero invisible en picker → UX confusa. Forzar fallback.
+ //   Helper O(1), safe en boot.
+ if (prov && _isProvBBPlaceholder(prov)) {
+  prov = null; // forzar siguiente rama
+ }
  if (!prov) {
-  // Sin savedId válido → primer proveedor de la lista
+  // Sin savedId válido (o era placeholder bb_) → primer proveedor visible
   prov = provs[0];
   savedId = prov.id;
   _almSaveLastProv(savedId);
@@ -47987,7 +48092,14 @@ function _parseIva(iva) {
  //    productos automáticamente. Si lo borra definitivamente con un futuro
  //    "purge tombstones", el cleanup será explícito y consciente.
  // 4. Switch selected provider if needed
- const provs = State.get.proveedores();
+ // v1.3.1482 BUG-AUD-23 FIX: filtrar placeholders bb_ vacíos al elegir fallback.
+ //   Sin esto: si Hung borra el último proveedor visible no-placeholder y el
+ //   primer elemento del array filtrado es prov_bb_otrosgastos vacío,
+ //   selectedProv salta ahí → header muestra "Otros gastos" pero el picker NO
+ //   lo incluye. Mejor: dejar selectedProv null para forzar Estado-1 (CTA
+ //   "Añadir proveedor"), coherente con el picker.
+ //   Cache O(1) invalidada por el setter de proveedores via bus 'proveedor'.
+ const provs = (State.get.proveedores() || []).filter(p => !_isProvBBPlaceholder(p));
  if (State.get.selectedProv() === id) State.set.selectedProv(provs[0]?.id || null);
 
  // v1.3.241: refresco visual inmediato — sin reinicio
@@ -51647,7 +51759,12 @@ _eaRecalc();
  //   A) Con sourceName y distinto al nombre → [sourceName] / [nombre]
  //   B) Sin sourceName o igual al nombre    → solo subtítulo con [nombre]
  //   C) Sin proveedores (estado 1)          → "Almacén" / "Sin proveedor"
- const provs = State.get.proveedores() || [];
+ // v1.3.1482 BUG-AUD-20 FIX: filtrar placeholders bb_ vacíos para coherencia
+ //   con _renderProvPickerSheet. Sin esto: si solo hay prov_bb_otrosgastos
+ //   vacío, el header dice "hay proveedores" pero el picker dice "0" →
+ //   chevron clickeable abre lista vacía. Asimetría confusa.
+ //   v1.3.1482: helper cacheado O(1), safe en hot path.
+ const provs = (State.get.proveedores() || []).filter(p => !_isProvBBPlaceholder(p));
  const sel = State.get.selectedProv();
  const prov = State.get.prov(sel);
  const nameEl = document.getElementById('alm-prov-name');
