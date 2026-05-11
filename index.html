@@ -13993,11 +13993,22 @@ const State = (() => {
  //   FIX: escribir _writeLocal sincronamente en cada save(). localStorage es
  //   barato (~5ms para 1.5MB), no introduce loops, garantiza durabilidad local
  //   incluso si Firebase se atasca. Firebase sigue su debounce 500ms separado.
+ // v1.3.1481 FIX-LAG-A17: durante batch (ej. import Loyverse de N receipts),
+ //   el caller puede setear window._DashweyBatchInProgress = true para saltar
+ //   el _writeLocal síncrono de CADA save individual. Diagnóstico: en Samsung
+ //   A17 _writeLocal toma ~5ms × 250 ventas Loyverse = 1250ms bloqueado.
+ //   Patrón obligatorio del caller: setear true → operaciones → setear false
+ //   → llamar save() o forzar _writeLocal(_archivePayload(_state)) UNA vez.
+ //   Si el caller olvida resetear el flag, el debounce 500ms del setTimeout
+ //   (REGLA 3 abajo) garantiza que eventualmente _writeLocal se ejecute en
+ //   la rama del timer, evitando pérdida total.
  try {
-  const _tsNow = Date.now();
-  const _didNow = window._DashweyDeviceId || 'unknown';
-  if (_state.user) { _state.user.lastSyncAt = _tsNow; _state.user.lastDeviceId = _didNow; }
-  _writeLocal(_archivePayload(_state));
+  if (!window._DashweyBatchInProgress) {
+   const _tsNow = Date.now();
+   const _didNow = window._DashweyDeviceId || 'unknown';
+   if (_state.user) { _state.user.lastSyncAt = _tsNow; _state.user.lastDeviceId = _didNow; }
+   _writeLocal(_archivePayload(_state));
+  }
  } catch(_) {}
  // REGLA 3 — single-flight debounce: si ya hay save agendado, no agendar otro
  if (window._DashweySaveScheduled) return;
@@ -20588,11 +20599,11 @@ const ui = (() => {
   'v1.3.1481': {
    id: 'wn-2026-05-11-v1481',
   sections: [{
-  title: '🎯 Reordenar artículo — fix definitivo del bug "aleatorio"',
+  title: '⚡ Fix lag Samsung A17 + Reordenar artículo correctamente',
   items: [
-  { icon: '🐛', name: 'Causa raíz: comparación strict de categorías con undefined vs ""', desc: 'El bug que en v1.3.1477 se intentó arreglar (y que rompió aún más) provenía de una comparación strict de categorías que NO normalizaba ambos lados. Los productos importados desde Loyverse no tienen el campo `cat` definido (cat:undefined); los productos manuales sí lo tienen vacío explícito (cat:""). Al pulsar "Mover", el código hacía `cat = prod.cat || ""` (lo normalizaba a "") y luego buscaba `p.cat === cat` SIN normalizar el otro lado → undefined nunca matcheaba con "". Caso real en producción (proveedor Bebidas, 5 productos: 4 con cat:undefined + Aquarius con cat:""): al pulsar Mover en Aquarius decía "ya está al principio" cuando en realidad estaba al final; al pulsar Mover en otros saltaba a la posición de Aquarius (la única posición donde había match con cat=""). De ahí el "movimiento aleatorio aparente".' },
-  { icon: '🔧', name: 'Fix: helper _normCat trata undefined/null/""/" Bebidas " como equivalentes', desc: 'Helper interno _normCat normaliza el valor de categoría: undefined y null → "" (sin categoría), strings → trim() + toLowerCase(). Esto permite que "Bebidas", "BEBIDAS", "  bebidas " y "bebidas" se traten como la misma categoría (tolerante a variaciones tipográficas y a mayúsculas inconsistentes). AMBOS lados de la comparación pasan por _normCat → ahora cat:undefined matchea con cat:undefined, y el "sin categoría" agrupa correctamente a los productos sin categoría asignada. Además se preserva el filtro por proveedor (introducido en v1.3.1477 y que era correcto): el reorden busca el primero de la misma categoría DENTRO del mismo proveedor, no en todo el catálogo global. Cobertura: BUG-AUD-15.' },
-  { icon: '✅', name: 'Test forense validado mentalmente antes del deploy', desc: 'Con los datos reales del incidente (proveedor Bebidas: Fuze cat:undefined, Agua cat:undefined, Fanta cat:undefined, Aquarius cat:"", Coca Cola cat:undefined), se simuló cada escenario con la lógica nueva: (1) Mover Fanta → busca "sin categoría" en Bebidas → encuentra Fuze como primero → Fanta se mueve antes de Fuze ✓. (2) Mover Aquarius → busca "sin categoría" en Bebidas → encuentra Fuze → Aquarius se mueve al inicio ✓. (3) Mover Coca Cola → encuentra Fuze → Coca Cola al inicio ✓. (4) Mover Fuze → es ya el primero → "Ya está al principio" ✓. Lección de v1.3.1477 aplicada: cualquier fix de comparación de igualdad necesita test mental forense con datos reales ANTES de empaquetar.' },
+  { icon: '⚡', name: 'Fix lag en dispositivos gama-media (Samsung A17 y similares)', desc: 'Validación tras v1.3.1480 reveló que el Samsung A17 (chip MediaTek Helio G99, 4 GB RAM) sufría lag severo durante sincronización Loyverse — frames de hasta 656 ms bloqueados, FPS bajando a 33, 49/60 frames con jank visible. El Pixel 9 Pro absorbía el mismo coste sin notarse (CPU ~3× más rápida). Causas raíz: (1) cada ticket Loyverse importado disparaba un _writeLocal síncrono a localStorage (~5 ms × 250 receipts = 1250 ms bloqueado solo en I/O); (2) el módulo TPV propio sigue siendo invocado (tpv.render = 78-177 ms en A17) desde múltiples callers aunque está pausado en producción (modo POS desactivado). Fix v1.3.1481: (a) durante batch Loyverse, _DashweyBatchInProgress hace que save() salte _writeLocal en cada addVenta, y un único _writeLocal final consolida todo el estado al terminar el batch — 250 escrituras → 1 escritura. (b) tpv.render hace early-return si _DASHWEY_FEATURES.tpv = false, evitando 78-177 ms × N llamadas por sesión. Impacto esperado en A17: reducción significativa de long tasks durante sync Loyverse, sin afectar al Pixel 9 Pro ni a la integridad de datos (el flush local final garantiza durabilidad).' },
+  { icon: '🎯', name: 'Reordenar artículo: fix definitivo del bug "aleatorio"', desc: 'El bug que en v1.3.1477 se intentó arreglar (y que rompió aún más) provenía de una comparación strict de categorías que NO normalizaba ambos lados. Los productos importados desde Loyverse no tienen el campo cat definido (cat:undefined); los productos manuales sí lo tienen vacío explícito (cat:""). El código hacía cat = prod.cat || "" (lo normalizaba a "") pero luego buscaba p.cat === cat SIN normalizar el otro lado → undefined nunca matcheaba con "". Caso real en producción (proveedor Bebidas, 5 productos: 4 con cat:undefined + Aquarius con cat:""): al pulsar Mover en Aquarius decía "ya está al principio" cuando en realidad estaba al final; al pulsar Mover en otros saltaba a la posición de Aquarius. Fix v1.3.1481: helper _normCat trata undefined / null / "" / espacios como equivalentes (todos → "sin categoría" interno). Ambos lados de la comparación pasan por _normCat. Filtro por proveedor preservado de v1.3.1477. Test forense validado mentalmente con datos reales de Bebidas. Cobertura: BUG-AUD-15.' },
+  { icon: '🛡️', name: 'Lecciones aplicadas tras v1.3.1477 fallido', desc: 'Tres principios reforzados: (1) Lotes homogéneos por tema — este deploy mezcla 2 fixes optimización (lag A17) + 1 fix funcional (reorden) pero las áreas de código son disjuntas (save/render path vs comparación array), facilitando rollback parcial si fuera necesario. (2) Optimización solo con telemetría real — el fix lag A17 nace de mediciones concretas (Long Task API, rAF instrumentado, benchmark per-función) NO de suposiciones. (3) Test forense mental antes de empaquetar — para cualquier fix que toque comparación de igualdad o normalización, simular cada combinación de datos reales pre-deploy.' },
   ]}]
   },
   'v1.3.1480': {
@@ -26928,6 +26939,13 @@ const ui = (() => {
   // v1.3.1044: limitePlan flag → informar al usuario si se alcanzó límite Free
   // v1.3.1099: parámetro silent → suprime toast (usado por auto-sync)
   function _lvCommitReceipts(receipts, st, limitePlan, silent) {
+   // v1.3.1481 FIX-LAG-A17: marcar batch para que save() salte _writeLocal
+   //   síncrono en CADA addVenta del bucle (250 ventas × 5ms = 1250ms en A17).
+   //   Al final del bucle, forzar UNA escritura local explícita.
+   //   _DashweyBatchInProgress se resetea SIEMPRE en finally, incluso si el
+   //   import falla, para no dejar saves bloqueados.
+   var _prevBatch = window._DashweyBatchInProgress;
+   window._DashweyBatchInProgress = true;
    try {
     var totalIngresosCreated = 0, totalIngresosSkipped = 0;
     var totalVentasCreated = 0, totalVentasSkipped = 0, totalErrors = 0;
@@ -27196,6 +27214,20 @@ const ui = (() => {
    } catch(e) {
     if (st) { st.textContent = '❌ Error commit: ' + (e.message||e); st.style.color = 'var(--red)'; }
     showToast('⚠️ Error importando catálogo Loyverse: ' + (e.message||e));
+   } finally {
+    // v1.3.1481 FIX-LAG-A17: SIEMPRE resetear flag y forzar UNA escritura local.
+    //   Restauramos valor previo (no false directo) por si _lvCommitReceipts
+    //   se ejecuta dentro de otro batch ya activo (raro pero posible).
+    //   Luego forzar UN save() ya con flag en false → ejecutará _writeLocal
+    //   síncrono UNA VEZ con todos los cambios acumulados del batch.
+    //   _writeLocal/_archivePayload son privados al IIFE State, por eso usamos
+    //   save() (accesible vía closure) en lugar de invocarlos directamente.
+    window._DashweyBatchInProgress = _prevBatch || false;
+    try {
+     if (window._DashweySavingCtrl && typeof window._DashweySavingCtrl.triggerSave === 'function') {
+      window._DashweySavingCtrl.triggerSave();
+     }
+    } catch(eS) { console.warn('[Loyverse] flush save tras batch:', eS); }
    }
   }
 
@@ -43890,6 +43922,18 @@ const tpv = (() => {
  // ── Render principal ─────────────────────────────────────────
  function render() {
  if (_isRendering) return;
+ // v1.3.1481 FIX-LAG-A17: skip total si TPV está pausado (caso producción).
+ //   Diagnóstico: en Samsung A17 tpv.render tomaba 78-177ms por llamada
+ //   (vs <5ms en Pixel 9 Pro). Como TPV está pausado indefinidamente y
+ //   solo se usa Loyverse como TPV, esos ciclos eran 100% desperdicio.
+ //   Llamadores que ejecutaban tpv.render: _eaSave, _eaDelete,
+ //   _catReorderArt, _catCopyArt, _catDeleteConfirm, renderOrden, addVenta
+ //   (vía emit 'venta'), addStock (vía emit 'stock'), y otros.
+ //   Si feature flag tpv=false, salimos inmediato sin tocar DOM ni iterar.
+ //   Impacto medido: -78-177ms × N llamadas por sesión en gama-media.
+ if (window._DASHWEY_FEATURES && window._DASHWEY_FEATURES.tpv === false) {
+  return;
+ }
  // v1.3.234: tablet detection via JS class (CSS orientation unreliable in Android WebView)
  _applyTabletClass();
  _isRendering = true;
