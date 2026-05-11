@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1475";
+ var CURRENT_CACHE = "dashwey-v1-3-1476";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1475</title>
+<title>Dashwey v1.3.1476</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14322,6 +14322,28 @@ const State = (() => {
  ticketsAbiertos: () => _state.ticketsAbiertos || [],
  proveedores: () => _nd(_state.proveedores, 'proveedores'),
  productos: () => _nd(_state.productos, 'productos'),
+ // v1.3.1476 BUG-AUD-01 FIX: helper centralizado para buscar proveedor por nombre
+ //   normalizado (trim + lowercase). Devuelve el primer match VIVO encontrado, o
+ //   null si no existe. Esto es la defensa central contra duplicados por nombre.
+ //   Callers (_eaSave, _collectArticleFormData, saveProvEdit) DEBEN usarlo antes
+ //   de crear un proveedor nuevo. El setter addProv también lo usa como guard
+ //   última de seguridad. Si necesitas tombstones, pasa includeTombstones=true.
+ findProvByNameNorm: (name, opts) => {
+  const _norm = (s) => String(s || '').trim().toLowerCase();
+  const _target = _norm(name);
+  if (!_target) return null;
+  const _includeT = opts && opts.includeTombstones;
+  const _arr = _state.proveedores || [];
+  // Prioridad 1: vivos
+  const _live = _arr.find(p => p && !p.deleted && _norm(p.nombre) === _target);
+  if (_live) return _live;
+  // Prioridad 2: tombstones (solo si se pide explícitamente)
+  if (_includeT) {
+   const _tomb = _arr.find(p => p && p.deleted && _norm(p.nombre) === _target);
+   if (_tomb) return _tomb;
+  }
+  return null;
+ },
  historialPedidos: () => _nd(_state.historialPedidos, 'historialPedidos'),
  facturas: () => _nd(_state.facturas, 'facturas'),
  mermas: () => _nd(_state.mermas, 'mermas'),
@@ -15289,12 +15311,29 @@ const State = (() => {
   try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {}
  },
  // v1.3.1262 FIX P0: idéntico a addProd — sello updatedAt obligatorio + dedup
+ // v1.3.1476 BUG-AUD-01 FIX: dedup adicional por NOMBRE normalizado.
+ //   Defensa última: si algún caller olvida usar get.findProvByNameNorm antes
+ //   de llamar a addProv, este guard bloquea la creación silenciosamente.
+ //   Caso real: incidente Amazon (11 may 2026) — prov_bb_amazon vivo coexistía
+ //   con pv1778488111330 manual del mismo nombre porque ningún callsite hacía
+ //   dedup por nombre. Ahora cero tolerancia.
  addProv: (p) => {
   if (!p) return;
   if (!p.id) { console.warn('[Dashwey/State] addProv sin id — abortado'); return; }
   if (_state.proveedores.some(x => x && x.id === p.id)) {
    console.warn('[Dashwey/State] addProv: id duplicado', p.id, '— ignorado');
    return;
+  }
+  // v1.3.1476: dedup por nombre normalizado (defensa última)
+  const _norm = (s) => String(s || '').trim().toLowerCase();
+  const _newName = _norm(p.nombre);
+  if (_newName) {
+   const _dupLive = _state.proveedores.find(x => x && !x.deleted && _norm(x.nombre) === _newName);
+   if (_dupLive) {
+    console.warn('[Dashwey/State] addProv: nombre duplicado "' + p.nombre + '" — ya existe id=' + _dupLive.id + ' — ignorado');
+    try { window.showToast && window.showToast('⚠️ Ya existe un proveedor con este nombre', 'warning'); } catch(_) {}
+    return;
+   }
   }
   const _now = Date.now();
   if (!p.createdAt) p.createdAt = new Date(_now).toISOString();
@@ -19189,7 +19228,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1475';
+ const _APP_VERSION = 'v1.3.1476';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20546,6 +20585,16 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1476': {
+   id: 'wn-2026-05-11-v1476',
+  sections: [{
+  title: '🛡️ Identidad central de proveedor — fin de los duplicados por nombre',
+  items: [
+  { icon: '🔒', name: 'Imposible crear dos proveedores con el mismo nombre', desc: 'Hasta v1.3.1475 había 4 puntos del código que podían crear un proveedor: el setter directo, el form de nuevo artículo, el form de editar artículo, y el form "+ Añadir proveedor". Cada uno hacía su propia búsqueda case-sensitive sin trim → era posible terminar con dos proveedores "Amazon" (uno tombstoneado, otro vivo, o uno BB-adoptado y otro manual). Fix v1.3.1476: dedup central en el setter addProv que bloquea cualquier intento de crear un proveedor con un nombre normalizado (trim + minúsculas) que ya exista vivo. Defensa última: aunque algún callsite olvide comprobar, el setter para el daño. Cobertura: BUG-AUD-01 (raíz Amazon incident).' },
+  { icon: '🎯', name: 'Selección del dropdown preserva el ID exacto en edit artículo', desc: 'Cuando editas un artículo y seleccionas un proveedor del autocompletado, el sistema ahora guarda el ID exacto del proveedor seleccionado en un dataset HTML (no solo el nombre visible). Al guardar, el ID picked tiene prioridad absoluta sobre la búsqueda por nombre. Esto elimina cualquier ambigüedad si hay (o llegara a haber) proveedores con nombres similares. Si el usuario tipea texto que difiere del pick, el pick se invalida automáticamente y vuelve a búsqueda por nombre normalizado. Cobertura: BUG-AUD-07.' },
+  { icon: '🔁', name: 'Búsqueda case-insensitive + resurrect de tombstones', desc: 'Las 3 funciones que resuelven proveedor por nombre (_eaSave en editar artículo, _collectArticleFormData en nuevo artículo, saveProvEdit en crear proveedor) ahora todas usan el mismo helper centralizado State.get.findProvByNameNorm. Escribir "amazon" en minúsculas mientras existe "Amazon" → matchea, no crea duplicado. Si existe un proveedor del mismo nombre en tombstone (borrado anteriormente) → se resucita preservando ID estable (en lugar de crear uno nuevo paralelo). Si _intentas crear un proveedor que ya existe vivo desde el botón "+", la app te lleva al existente con toast informativo. Cobertura: BUG-AUD-04, BUG-AUD-05, BUG-AUD-06, BUG-AUD-08, BUG-AUD-16.' },
+  ]}]
+  },
   'v1.3.1475': {
    id: 'wn-2026-05-11-v1475',
   sections: [{
@@ -46436,47 +46485,64 @@ function _parseIva(iva) {
  //   Caso real: usuario edita artículo Loyverse, escribe "Mi Mayorista Local"
  //   en el campo proveedor, guarda → el artículo se queda en el proveedor LV.
  //
- //   Lógica nueva (3 ramas explícitas):
+ // v1.3.1476 BUG-AUD-01/04/06/07 FIX: lógica refactorizada en 5 ramas explícitas
+ //   para eliminar definitivamente la creación de duplicados por nombre:
  //   1) Texto vacío → mantener prod.prov actual
- //   2) Texto coincide con proveedor VIVO existente → usar ese id
- //   3) Texto coincide con proveedor TOMBSTONE → resucitar (clear deleted)
- //   4) Texto NO coincide → crear proveedor manual nuevo
- //
- // v1.3.1289 FIX P0 ALMACEN — añadida rama 3 (resurrect tombstone).
- //   Bug previo: si el usuario tipeaba el nombre exacto de un proveedor que
- //   había borrado antes, find(!pv.deleted...) no encontraba match → creaba
- //   proveedor NUEVO con id distinto. Resultado: dos proveedores con el
- //   mismo nombre (uno tombstone, otro vivo) en cuanto el tombstone se
- //   restaurara o se re-importara LV. Ahora: match por nombre incluye
- //   tombstones; si encuentra uno, lo resucita preservando el id estable.
- const eaProvTxt = document.getElementById('ea-prov-txt')?.value?.trim();
+ //   2) pickedProvId presente en dataset (usuario tapeó dropdown) → usar ID exacto
+ //   3) Búsqueda case-insensitive en vivos → usar match si existe
+ //   4) Búsqueda case-insensitive en tombstones → resucitar si existe
+ //   5) NO existe en ningún sitio → crear nuevo (último recurso)
+ //   Cobertura: case "amazon" vs "Amazon" (no se crea duplicado), case dropdown
+ //   pick (ID exacto preservado), case tombstone (resurrect).
+ const _eaInpProv = document.getElementById('ea-prov-txt');
+ const eaProvTxt = _eaInpProv?.value?.trim();
+ const _eaPickedId = _eaInpProv?.dataset?.pickedProvId || null;
  let eaProvId;
  if (!eaProvTxt) {
-  // Sin cambio en el campo → mantener proveedor actual
+  // Rama 1: sin cambio en el campo → mantener proveedor actual
   eaProvId = prod.prov;
- } else {
-  // Buscar primero entre vivos (preferencia)
-  const _allProvs = (State.raw && State.raw.proveedores) ? State.raw.proveedores() : (State.get.proveedores() || []);
-  const _liveMatch = _allProvs.find(pv => pv && !pv.deleted && pv.nombre === eaProvTxt);
-  if (_liveMatch) {
-   eaProvId = _liveMatch.id;
+ } else if (_eaPickedId) {
+  // Rama 2: usuario seleccionó explícitamente del dropdown → usar ID exacto
+  //   Verificar que sigue vivo (defensa contra picks obsoletos)
+  const _picked = State.get.prov(_eaPickedId);
+  if (_picked && !_picked.deleted) {
+   eaProvId = _eaPickedId;
   } else {
-   // No vivo → buscar tombstone con mismo nombre
-   const _tombMatch = _allProvs.find(pv => pv && pv.deleted && pv.nombre === eaProvTxt);
-   if (_tombMatch) {
-    // Resucitar — clear deleted, refresh updatedAt
-    eaProvId = _tombMatch.id;
-    State.set.updateProv(_tombMatch.id, { deleted: false, deletedAt: null });
-    showToast('♻️ Proveedor restaurado: ' + eaProvTxt);
-   } else {
-    // Proveedor NUEVO — crear como manual
-    eaProvId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
-    State.set.addProv({ id: eaProvId, nombre: eaProvTxt, icon: '\uD83C\uDFEA',
-     direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
-     agente: '', repartidor: '', telReparto: '',
-     origen: 'manual', createdAt: new Date().toISOString() });
-   }
+   // Pick obsoleto (borrado entre tanto) → fallback a búsqueda por nombre
+   eaProvId = _resolveProvByName(eaProvTxt);
   }
+ } else {
+  // Rama 3-5: búsqueda normalizada (vivo > tombstone > crear)
+  eaProvId = _resolveProvByName(eaProvTxt);
+ }
+ // Helper inline (cerrar sobre eaProvTxt) — evita duplicar lógica entre ramas
+ function _resolveProvByName(txt) {
+  // Buscar vivo (case-insensitive)
+  const _live = State.get.findProvByNameNorm(txt);
+  if (_live) return _live.id;
+  // Buscar tombstone — resucitar
+  const _tomb = State.get.findProvByNameNorm(txt, { includeTombstones: true });
+  if (_tomb && _tomb.deleted) {
+   State.set.updateProv(_tomb.id, { deleted: false, deletedAt: null });
+   try { showToast('♻️ Proveedor restaurado: ' + _tomb.nombre); } catch(_) {}
+   return _tomb.id;
+  }
+  // No existe — crear nuevo
+  const _newId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+  State.set.addProv({ id: _newId, nombre: txt, icon: '\uD83C\uDFEA',
+   direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
+   agente: '', repartidor: '', telReparto: '',
+   origen: 'manual', createdAt: new Date().toISOString() });
+  // Verificar que addProv NO bloqueó (guard nombre del setter). Si bloqueó,
+  // el proveedor no se creó — usar el existente que el setter detectó.
+  if (!State.get.prov(_newId)) {
+   const _existing = State.get.findProvByNameNorm(txt);
+   if (_existing) return _existing.id;
+   // Caso límite: addProv falló y findProv no encuentra → mantener prov actual
+   console.warn('[Dashwey/_eaSave] No se pudo crear ni encontrar proveedor "' + txt + '"');
+   return prod.prov;
+  }
+  return _newId;
  }
  const fotoOrig = State.get.prod(id)?.foto || null;
  // v1.3.422: leer ea-stock — campo editable que antes era ignorado
@@ -47626,22 +47692,68 @@ function _parseIva(iva) {
   const periodoBase = (p && p.periodicidad) || { tipo: 'semanal' };
 
   // v1.3.427: si es proveedor nuevo pendiente, crear en State ahora
+  // v1.3.1476 BUG-AUD-16 FIX: ANTES de crear, comprobar si ya existe un proveedor
+  //   con el mismo nombre normalizado (vivo o tombstone). Caso real: incidente
+  //   Amazon — el usuario pulsó "+" y escribió "Amazon" cuando ya había
+  //   prov_bb_amazon vivo. Ahora bloqueamos con feedback claro y seleccionamos
+  //   el existente para que el usuario vea sus productos sin confusión.
   if (_provNuevoPendiente && _provNuevoPendiente.id === id) {
-  // v1.3.1341: aceptar sourceName en proveedor nuevo (manual)
-  const newProv = Object.assign({}, _provNuevoPendiente, {
-  nombre: n, cif: cif||'', telefono: tel || '', direccion: dir || '',
-  email: email||'', web: web||'',
-  agente: ag || '', repartidor: rep || '', telReparto: trel || '',
-  periodicidad: periodoBase,
-  origen: 'manual',
-  createdAt: new Date().toISOString(),
-  });
-  if (sourceNameRaw) newProv.sourceName = sourceNameRaw;
-  State.set.addProv(newProv);
-  _provNuevoPendiente = null;
-  // Seleccionar y persistir en localStorage el proveedor recién creado
-  State.set.selectedProv(newProv.id);
-  _almSaveLastProv(newProv.id);
+   // Comprobar duplicado por nombre (vivo o tombstone)
+   const _live = State.get.findProvByNameNorm(n);
+   if (_live) {
+    // Ya existe vivo con ese nombre → seleccionarlo y avisar
+    showToast('ℹ️ Ya existe un proveedor "' + _live.nombre + '" — seleccionado el existente', 'info');
+    _provNuevoPendiente = null;
+    State.set.selectedProv(_live.id);
+    _almSaveLastProv(_live.id);
+    try { const f = document.getElementById('fs-content'); window._clearFormDirty(f, 'editar_prov_' + id); } catch(_) {}
+    ui.closeFs();
+    try { updateProvBar(); } catch(_) {}
+    try { _updateAlmEmptyState(); } catch(_) {}
+    try { renderCatInline(); } catch(_) {}
+    saveProvEdit._running = false;
+    return;
+   }
+   const _tomb = State.get.findProvByNameNorm(n, { includeTombstones: true });
+   if (_tomb && _tomb.deleted) {
+    // Tombstone con mismo nombre → resucitar con datos del formulario
+    const _resurrectPayload = {
+     deleted: false, deletedAt: null,
+     cif: cif||'', telefono: tel || '', direccion: dir || '',
+     email: email||'', web: web||'',
+     agente: ag || '', repartidor: rep || '', telReparto: trel || '',
+     periodicidad: periodoBase,
+    };
+    if (sourceNameRaw) _resurrectPayload.sourceName = sourceNameRaw;
+    State.set.updateProv(_tomb.id, _resurrectPayload);
+    showToast('♻️ Proveedor "' + _tomb.nombre + '" restaurado');
+    _provNuevoPendiente = null;
+    State.set.selectedProv(_tomb.id);
+    _almSaveLastProv(_tomb.id);
+    try { const f = document.getElementById('fs-content'); window._clearFormDirty(f, 'editar_prov_' + id); } catch(_) {}
+    ui.closeFs();
+    try { updateProvBar(); } catch(_) {}
+    try { _updateAlmEmptyState(); } catch(_) {}
+    try { renderCatInline(); } catch(_) {}
+    saveProvEdit._running = false;
+    return;
+   }
+   // Sin duplicado → crear normalmente
+   // v1.3.1341: aceptar sourceName en proveedor nuevo (manual)
+   const newProv = Object.assign({}, _provNuevoPendiente, {
+   nombre: n, cif: cif||'', telefono: tel || '', direccion: dir || '',
+   email: email||'', web: web||'',
+   agente: ag || '', repartidor: rep || '', telReparto: trel || '',
+   periodicidad: periodoBase,
+   origen: 'manual',
+   createdAt: new Date().toISOString(),
+   });
+   if (sourceNameRaw) newProv.sourceName = sourceNameRaw;
+   State.set.addProv(newProv);
+   _provNuevoPendiente = null;
+   // Seleccionar y persistir en localStorage el proveedor recién creado
+   State.set.selectedProv(newProv.id);
+   _almSaveLastProv(newProv.id);
   } else {
   // v1.3.1341: sourceName editable en CUALQUIER proveedor (manual o LV)
   // Para manuales con sourceName: queda listo para auto-match al re-importar LV
@@ -49898,10 +50010,18 @@ const nPending = (State.get.pendingOrders() || [])
 
  function _sacPickProv(id, nombre) {
  // v1.3.425: detectar formulario activo
+ // v1.3.1476 BUG-AUD-07 FIX: en modo EDIT, guardar el ID picked en dataset
+ //   para que _eaSave lo use sin ambigüedad por nombre. Antes solo se escribía
+ //   el nombre visible (eaInp.value) y _eaSave tenía que buscar por nombre
+ //   exact-match → si había duplicados (caso Amazon), elegía el primero que
+ //   encontrara, no el que el usuario seleccionó.
  var isEdit = !!document.getElementById('ea-prov-txt');
  if (isEdit) {
  var eaInp = document.getElementById('ea-prov-txt');
- if (eaInp) eaInp.value = nombre;
+ if (eaInp) {
+  eaInp.value = nombre;
+  eaInp.dataset.pickedProvId = id;
+ }
  } else {
  var inp = document.getElementById('sac-prov-inp');
  if (inp) inp.value = nombre;
@@ -49919,10 +50039,15 @@ const nPending = (State.get.pendingOrders() || [])
  // El proveedor se crea ÚNICAMENTE cuando saveArt / saveArtAndAddCart se ejecutan.
  function _sacAddProv(nombre) {
  // v1.3.425: detectar formulario activo
+ // v1.3.1476 BUG-AUD-07 FIX: limpiar pickedProvId — el usuario quiere CREAR
+ //   uno nuevo, no usar uno picked previo.
  var isEdit = !!document.getElementById('ea-prov-txt');
  if (isEdit) {
  var eaInp = document.getElementById('ea-prov-txt');
- if (eaInp) eaInp.value = nombre;
+ if (eaInp) {
+  eaInp.value = nombre;
+  delete eaInp.dataset.pickedProvId;
+ }
  } else {
  var inp = document.getElementById('sac-prov-inp');
  if (inp) inp.value = nombre;
@@ -49964,6 +50089,17 @@ const nPending = (State.get.pendingOrders() || [])
  var inputId = k === 'prov' ? 'ea-prov-txt' : 'ea-cat';
  var inp = document.getElementById(inputId);
  if (!inp) return;
+ // v1.3.1476 BUG-AUD-07 FIX: si el usuario está tipeando (oninput), invalida
+ //   el pickedProvId anterior — el texto puede haber cambiado respecto al pick.
+ //   La invalidación solo ocurre si el texto difiere del nombre del pick previo.
+ if (k === 'prov' && inp.dataset.pickedProvId) {
+  try {
+   const _picked = State.get.prov(inp.dataset.pickedProvId);
+   if (!_picked || (_picked.nombre || '').trim() !== (val || '').trim()) {
+    delete inp.dataset.pickedProvId;
+   }
+  } catch(_) { delete inp.dataset.pickedProvId; }
+ }
  var dd = _sacDd();
  if (!dd) return;
 
@@ -50176,22 +50312,55 @@ function calcIAAnalysis() {
  //   guard `!State.get.prov(provId)` siempre falso → NO creaba el nuevo.
  //   Resultado: artículo nuevo se asignaba al proveedor que estaba a la vista
  //   en Almacén, ignorando el texto del campo.
+ //
+ // v1.3.1476 BUG-AUD-04/05/08 FIX: 5 ramas explícitas, idéntico patrón a _eaSave.
+ //   El `fpv-id` (input oculto rellenado por _sacPickProv L49908-49909 y picker
+ //   L50780) AHORA SE USA como ID picked exacto. Antes se ignoraba.
+ //   Búsqueda case-insensitive (findProvByNameNorm) elimina duplicados por
+ //   variaciones tipográficas. Rama tombstone añadida (antes solo había en _eaSave).
  const provTxt = document.getElementById('fpv-txt')?.value?.trim();
+ const _fpvIdRaw = document.getElementById('fpv-id')?.value || '';
+ // El fpv-id puede contener 'new:<nombre>' (cuando _sacAddProv lo rellenó) — solo
+ //   considerar ID válido si NO empieza por 'new:'.
+ const _pickedProvId = (_fpvIdRaw && _fpvIdRaw.indexOf('new:') !== 0) ? _fpvIdRaw : null;
  let provId;
  if (!provTxt) {
-  // Sin texto → usar el seleccionado (comportamiento legacy esperado)
+  // Rama 1: sin texto → usar el seleccionado
   provId = State.get.selectedProv();
- } else {
-  const _existingMatch = State.get.proveedores().find(function(p){ return p && !p.deleted && p.nombre === provTxt; });
-  if (_existingMatch) {
-   provId = _existingMatch.id;
+ } else if (_pickedProvId) {
+  // Rama 2: usuario seleccionó del dropdown → usar ID exacto si sigue vivo
+  const _picked = State.get.prov(_pickedProvId);
+  if (_picked && !_picked.deleted) {
+   provId = _pickedProvId;
   } else {
-   // Proveedor NUEVO — crear como manual
-   provId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
-   State.set.addProv({ id: provId, nombre: provTxt, icon:'🏪', direccion:'',
-    telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'',
-    origen: 'manual', createdAt: new Date().toISOString() });
+   provId = _resolveNuevoProvByName(provTxt);
   }
+ } else {
+  // Rama 3-5: búsqueda normalizada (vivo > tombstone > crear)
+  provId = _resolveNuevoProvByName(provTxt);
+ }
+ // Helper inline — paralelo al _resolveProvByName de _eaSave (DRY: extraer
+ //   a módulo State en una futura versión)
+ function _resolveNuevoProvByName(txt) {
+  const _live = State.get.findProvByNameNorm(txt);
+  if (_live) return _live.id;
+  const _tomb = State.get.findProvByNameNorm(txt, { includeTombstones: true });
+  if (_tomb && _tomb.deleted) {
+   State.set.updateProv(_tomb.id, { deleted: false, deletedAt: null });
+   try { showToast('♻️ Proveedor restaurado: ' + _tomb.nombre); } catch(_) {}
+   return _tomb.id;
+  }
+  const _newId = 'prov_' + Date.now() + '_' + Math.floor(Math.random()*9999);
+  State.set.addProv({ id: _newId, nombre: txt, icon:'🏪', direccion:'',
+   telefono:'', diasPedido:[], diasEntrega:[], agente:'', repartidor:'', telReparto:'',
+   origen: 'manual', createdAt: new Date().toISOString() });
+  if (!State.get.prov(_newId)) {
+   const _existing = State.get.findProvByNameNorm(txt);
+   if (_existing) return _existing.id;
+   console.warn('[Dashwey/_collectArticleFormData] No se pudo crear ni encontrar proveedor "' + txt + '"');
+   return State.get.selectedProv();
+  }
+  return _newId;
  }
 
  // IVA
