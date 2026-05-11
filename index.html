@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1493";
+ var CURRENT_CACHE = "dashwey-v1-3-1492";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1493</title>
+<title>Dashwey v1.3.1492</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19376,7 +19376,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1493';
+ const _APP_VERSION = 'v1.3.1492';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41377,209 +41377,6 @@ function _confirmBorrarCuenta(id) {
   } catch(_) { return ''; }
  }
 
- // ══════════════════════════════════════════════════════════════════
- // v1.3.1493 — PENDIENTES DEL MES ACTUAL (colapsable)
- //   Muestra gastos + ingresos + transferencias internas pendientes
- //   con fecha en el mes en curso Y fecha >= hoy.
- //   - Vista global (cuentaId=null): transferencias se muestran UNA vez
- //     (dedupe por transferId), pero NO afectan al total neto.
- //   - Detalle cuenta (cuentaId='c...'): se ve la transferencia desde
- //     la perspectiva de ESA cuenta, sí afecta al total local.
- //   CORE SAFE: solo presenta datos; no toca cálculo de saldos.
- // ══════════════════════════════════════════════════════════════════
- function _buildPendientesMesHtml(cuentaId) {
-  try {
-   var MON_FULL = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-   var MON_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-
-   var _now = new Date();
-   var _yearActual = _now.getFullYear();
-   var _mesActual = _now.getMonth();
-   var _hoyIso = _now.toISOString().slice(0,10);
-   var _hoyMs = new Date(_hoyIso + 'T00:00:00').getTime();
-
-   var _fMs = function(f) { try { return new Date(f + 'T00:00:00').getTime(); } catch(_){ return 0; } };
-   var _esMesActual = function(iso) {
-    if (!iso) return false;
-    try {
-     var d = new Date(iso + 'T00:00:00');
-     return d.getFullYear() === _yearActual && d.getMonth() === _mesActual;
-    } catch(_){ return false; }
-   };
-   var _fechaCorta = function(iso) {
-    try {
-     var d = new Date(iso + 'T00:00:00');
-     return String(d.getDate()).padStart(2,'0') + ' ' + MON_SHORT[d.getMonth()];
-    } catch(_){ return ''; }
-   };
-
-   // Filtrado: pendiente + mes actual + fecha >= hoy (futuras)
-   var _gastos = (State.get.gastosOp() || []).filter(function(g){
-    if (!g || g.deleted) return false;
-    if (g.estado !== 'pendiente') return false;
-    var f = g.fechaPago || g.fecha;
-    if (!f || !_esMesActual(f) || _fMs(f) < _hoyMs) return false;
-    if (cuentaId && g.cuentaId !== cuentaId) return false;
-    return true;
-   });
-   var _ingresos = (State.get.ingresosFin() || []).filter(function(i){
-    if (!i || i.deleted) return false;
-    if (i.estado !== 'pendiente') return false;
-    if (!i.fecha || !_esMesActual(i.fecha) || _fMs(i.fecha) < _hoyMs) return false;
-    if (cuentaId && i.cuentaId !== cuentaId) return false;
-    return true;
-   });
-
-   if (!_gastos.length && !_ingresos.length) return '';
-
-   // Resolver nombres de cuentas para el subtítulo de transfer
-   var _cuentas = State.get.cuentas() || [];
-   var _cuentaNombre = function(id) {
-    var c = _cuentas.find(function(x){ return x.id === id; });
-    return c ? (c.nombre || 'cuenta') : 'cuenta';
-   };
-
-   // Construir filas unificadas
-   var _filas = [];
-   var _transferSeen = {}; // solo Vista global
-
-   _gastos.forEach(function(g){
-    var isTransfer = (g.metaTipo === 'transfer' || g.tipo === 'transferencia');
-    if (isTransfer && !cuentaId && g.transferId) {
-     if (_transferSeen[g.transferId]) return;
-     _transferSeen[g.transferId] = true;
-    }
-    var concepto = g.nombre || 'Gasto';
-    var subtitulo = '';
-    if (isTransfer && g.transferId) {
-     // Localizar la cuenta destino (lado ingreso del par)
-     var par = (State.get.ingresosFin() || []).find(function(i){
-      return i.transferId === g.transferId && !i.deleted;
-     });
-     if (!cuentaId) {
-      // Vista global: mostrar origen → destino
-      subtitulo = _cuentaNombre(g.cuentaId) + ' \u2192 ' + (par ? _cuentaNombre(par.cuentaId) : '?');
-     } else {
-      // Detalle cuenta: solo ver "a [destino]"
-      subtitulo = 'A ' + (par ? _cuentaNombre(par.cuentaId) : '?');
-     }
-     concepto = 'Transferencia interna';
-    }
-    _filas.push({
-     id: g.id, src: 'gasto', concepto: concepto, subtitulo: subtitulo,
-     importe: -(Math.abs(g.importe || 0)),
-     fecha: g.fechaPago || g.fecha,
-     isTransfer: isTransfer
-    });
-   });
-
-   _ingresos.forEach(function(i){
-    var isTransfer = (i.metaTipo === 'transfer' || i.tipo === 'transferencia');
-    if (isTransfer && i.transferId) {
-     if (!cuentaId) {
-      // Vista global: ya añadido por el lado gasto, ignorar
-      return;
-     }
-     // Detalle cuenta: si esta cuenta es la receptora, mostrarla como entrada
-     if (_transferSeen[i.transferId]) return;
-     _transferSeen[i.transferId] = true;
-    }
-    var concepto = i.concepto || 'Ingreso';
-    var subtitulo = '';
-    if (isTransfer && i.transferId) {
-     var parG = (State.get.gastosOp() || []).find(function(g){
-      return g.transferId === i.transferId && !g.deleted;
-     });
-     subtitulo = 'De ' + (parG ? _cuentaNombre(parG.cuentaId) : '?');
-     concepto = 'Transferencia interna';
-    }
-    _filas.push({
-     id: i.id, src: 'ingreso', concepto: concepto, subtitulo: subtitulo,
-     importe: +Math.abs(i.importe || 0),
-     fecha: i.fecha,
-     isTransfer: isTransfer
-    });
-   });
-
-   if (!_filas.length) return '';
-
-   // Orden cronológico
-   _filas.sort(function(a,b){ return _fMs(a.fecha) - _fMs(b.fecha); });
-
-   // Total neto: en Vista global las transferencias internas no cuentan
-   var _totalNeto = 0;
-   _filas.forEach(function(f){
-    if (f.isTransfer && !cuentaId) return;
-    _totalNeto += f.importe;
-   });
-
-   var _collapsedKey = cuentaId ? 'dwy_pendmes_collapsed_' + cuentaId : 'dwy_pendmes_collapsed_global';
-   var _isCollapsed = false;
-   try { _isCollapsed = localStorage.getItem(_collapsedKey) === '1'; } catch(_){}
-
-   var _esc = function(s){ try { return String(s||'').replace(/[&<>"\']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); } catch(_){ return s; } };
-   var _colImp = function(n){ return n > 0 ? 'var(--success)' : (n < 0 ? 'var(--red)' : 'var(--ink-soft)'); };
-   var _fmtImp = function(n){ return (n > 0 ? '+ ' : (n < 0 ? '\u2212 ' : '')) + _feur(Math.abs(n)); };
-
-   var _mesLbl = MON_FULL[_mesActual];
-   _mesLbl = _mesLbl.charAt(0).toUpperCase() + _mesLbl.slice(1);
-
-   var _html = ''
-    + '<div id="dwy-pendmes-section" style="flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--border)">'
-    +  '<div id="dwy-pendmes-toggle" style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2_5) 16px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation">'
-    +   '<div style="width:24px;height:24px;border-radius:50%;background:var(--orange);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0">'
-    +    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
-    +   '</div>'
-    +   '<div style="flex:1;min-width:0">'
-    +    '<div style="font-size:var(--fs-sm);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.2px">Pendientes de ' + _mesLbl + '</div>'
-    +    '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:1px">' + _filas.length + (_filas.length === 1 ? ' movimiento' : ' movimientos') + '</div>'
-    +   '</div>'
-    +   '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + _colImp(_totalNeto) + ';font-family:var(--font-data);flex-shrink:0">' + _fmtImp(_totalNeto) + '</div>'
-    +   '<svg id="dwy-pendmes-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform var(--dur-short);transform:rotate(' + (_isCollapsed ? '0deg' : '180deg') + ')"><polyline points="6 9 12 15 18 9"/></svg>'
-    +  '</div>'
-    +  '<div id="dwy-pendmes-content" style="display:' + (_isCollapsed ? 'none' : 'block') + ';padding:0 16px var(--sp-2_5)">';
-
-   _filas.forEach(function(f){
-    var dotColor = f.isTransfer ? '#8B5CF6' : (f.importe > 0 ? 'var(--success)' : 'var(--red)');
-    _html += ''
-     + '<div style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0;border-bottom:1px solid var(--ink-faint)">'
-     +  '<div style="width:42px;text-align:center;flex-shrink:0">'
-     +   '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:1.1">' + _fechaCorta(f.fecha) + '</div>'
-     +  '</div>'
-     +  '<div style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';flex-shrink:0"></div>'
-     +  '<div style="flex:1;min-width:0">'
-     +   '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(f.concepto) + '</div>'
-     +   (f.subtitulo ? '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(f.subtitulo) + '</div>' : '')
-     +  '</div>'
-     +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:' + _colImp(f.importe) + ';font-family:var(--font-data);flex-shrink:0">' + _fmtImp(f.importe) + '</div>'
-     + '</div>';
-   });
-
-   _html += '</div></div>';
-   return _html;
-  } catch(e) {
-   console.warn('[Dashwey] _buildPendientesMesHtml error:', e);
-   return '';
-  }
- }
-
- function _wirePendientesMesToggle(cuentaId) {
-  try {
-   var tog = document.getElementById('dwy-pendmes-toggle');
-   var cnt = document.getElementById('dwy-pendmes-content');
-   var chv = document.getElementById('dwy-pendmes-chevron');
-   if (!tog || !cnt) return;
-   var _key = cuentaId ? 'dwy_pendmes_collapsed_' + cuentaId : 'dwy_pendmes_collapsed_global';
-   tog.addEventListener('click', function(){
-    var isOpen = cnt.style.display !== 'none';
-    var nextOpen = !isOpen;
-    cnt.style.display = nextOpen ? 'block' : 'none';
-    if (chv) chv.style.transform = 'rotate(' + (nextOpen ? '180' : '0') + 'deg)';
-    try { localStorage.setItem(_key, nextOpen ? '0' : '1'); } catch(_){}
-   });
-  } catch(_){}
- }
-
  function _openDetalleCuentaGlobal() {
   // v1.3.1255 FIX: FinEngine es const en scope de módulo, NO window.FinEngine.
   //   Usar typeof FinEngine — patrón consistente con el resto del código.
@@ -41989,14 +41786,11 @@ function _confirmBorrarCuenta(id) {
     +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo total</div>'
     + '</div>'
     + '</div>'
-    // v1.3.1493: sección Pendientes del mes (helper compartido) — vista global
-    + _buildPendientesMesHtml(null)
     + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
     + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
     + '</div>';
 
    App.ui.setFs(html);
-   try { _wirePendientesMesToggle(null); } catch(_){}
 
    // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
    // RAF — la sheet ya inició su animación de entrada.
@@ -42604,15 +42398,12 @@ function _confirmBorrarCuenta(id) {
     + '</div>'
     + '</div>'
     // ── Etiqueta Movimientos (FIJA bajo el header) ──
-    // v1.3.1493: sección Pendientes del mes (helper compartido) — detalle cuenta
-    + _buildPendientesMesHtml(cuentaId)
     + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
     // ── Lista de movimientos (ÚNICO scrollable) ──
     + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
     + '</div>'; // /dc-layout
 
    App.ui.setFs(html);
-   try { _wirePendientesMesToggle(cuentaId); } catch(_){}
    App.ui.openFs('full');
 
    // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
