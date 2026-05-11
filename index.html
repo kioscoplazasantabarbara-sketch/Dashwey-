@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1492";
+ var CURRENT_CACHE = "dashwey-v1-3-1493";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1492</title>
+<title>Dashwey v1.3.1493</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19376,7 +19376,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1492';
+ const _APP_VERSION = 'v1.3.1493';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41388,6 +41388,250 @@ function _confirmBorrarCuenta(id) {
   } catch(_) { return ''; }
  }
 
+ // ══════════════════════════════════════════════════════════════════
+ // v1.3.1493 — PRÓXIMOS COMPROMISOS (helper compartido)
+ //   Patrón híbrido A+C inspirado en Monarch/Copilot/BudgetBakers.
+ //   Se renderiza en Vista global (cuentaId=null) y Detalle cuenta individual.
+ //   Estructura:
+ //     1. KPIs 30/90/365 días — total comprometido próximo
+ //     2. Pagos recurrentes activos (recurrente=true, agrupados)
+ //     3. Próximos puntuales (no recurrentes, ordenados por fecha)
+ //   Datos: gastosOp + ingresosFin con estado='pendiente' y fecha>=hoy.
+ //   NO toca cálculo de saldos (CORE SAFE). Solo presenta datos existentes.
+ // ══════════════════════════════════════════════════════════════════
+ function _buildProximosCompromisosHtml(cuentaId) {
+  try {
+   var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+   var _hoyIso = new Date().toISOString().slice(0,10);
+   var _hoyMs = new Date(_hoyIso + 'T00:00:00').getTime();
+   var _ms30  = _hoyMs + 30  * 86400000;
+   var _ms90  = _hoyMs + 90  * 86400000;
+   var _ms365 = _hoyMs + 365 * 86400000;
+
+   var _gastos = (State.get.gastosOp() || []).filter(function(g){
+    if (!g || g.deleted) return false;
+    if (cuentaId && g.cuentaId !== cuentaId) return false;
+    if (g.estado !== 'pendiente') return false;
+    var f = g.fechaPago || g.fecha;
+    if (!f) return false;
+    return new Date(f + 'T00:00:00').getTime() >= _hoyMs;
+   });
+   var _ingresos = (State.get.ingresosFin() || []).filter(function(i){
+    if (!i || i.deleted) return false;
+    if (cuentaId && i.cuentaId !== cuentaId) return false;
+    if (i.estado !== 'pendiente') return false;
+    if (!i.fecha) return false;
+    return new Date(i.fecha + 'T00:00:00').getTime() >= _hoyMs;
+   });
+
+   if (!_gastos.length && !_ingresos.length) return '';
+
+   var _fMs = function(f) { try { return new Date(f + 'T00:00:00').getTime(); } catch(_){ return 0; } };
+   var _fmtFechaCorta = function(iso){
+    try {
+     var d = new Date(iso + 'T00:00:00');
+     return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+    } catch(_){ return ''; }
+   };
+
+   // KPIs 30/90/365 días
+   var _sum30 = 0, _sum90 = 0, _sum365 = 0;
+   _gastos.forEach(function(g){
+    var fms = _fMs(g.fechaPago || g.fecha);
+    var amt = Math.abs(g.importe || 0);
+    if (fms <= _ms30)  _sum30  += amt;
+    if (fms <= _ms90)  _sum90  += amt;
+    if (fms <= _ms365) _sum365 += amt;
+   });
+   _ingresos.forEach(function(i){
+    var fms = _fMs(i.fecha);
+    var amt = Math.abs(i.importe || 0);
+    if (fms <= _ms30)  _sum30  -= amt;
+    if (fms <= _ms90)  _sum90  -= amt;
+    if (fms <= _ms365) _sum365 -= amt;
+   });
+
+   // Separar recurrentes vs puntuales (dedupe recurrentes por concepto+importe+frec)
+   var _recurrentes = [];
+   var _puntuales = [];
+   var _recurKey = {};
+
+   _gastos.forEach(function(g){
+    if (g.recurrente) {
+     var k = 'G|' + (g.nombre||'') + '|' + Math.round(Math.abs(g.importe||0)*100) + '|' + (g.frecuencia||'');
+     if (!_recurKey[k]) {
+      _recurKey[k] = { concepto: g.nombre || 'Pago', importe: Math.abs(g.importe||0), tipo: 'gasto', frecuencia: g.frecuencia || '', proximaFecha: g.fechaPago || g.fecha, count: 1 };
+      _recurrentes.push(_recurKey[k]);
+     } else {
+      _recurKey[k].count++;
+      var fmsN = _fMs(g.fechaPago || g.fecha);
+      var fmsA = _fMs(_recurKey[k].proximaFecha);
+      if (fmsN < fmsA) _recurKey[k].proximaFecha = g.fechaPago || g.fecha;
+     }
+    } else {
+     _puntuales.push({ src:'gasto', id:g.id, concepto:g.nombre||'Pago', importe:-(Math.abs(g.importe||0)), fecha:g.fechaPago||g.fecha });
+    }
+   });
+   _ingresos.forEach(function(i){
+    if (i.recurrente) {
+     var k = 'I|' + (i.concepto||'') + '|' + Math.round(Math.abs(i.importe||0)*100) + '|' + (i.frecuencia||'');
+     if (!_recurKey[k]) {
+      _recurKey[k] = { concepto: i.concepto || 'Ingreso', importe: Math.abs(i.importe||0), tipo: 'ingreso', frecuencia: i.frecuencia || '', proximaFecha: i.fecha, count: 1 };
+      _recurrentes.push(_recurKey[k]);
+     } else {
+      _recurKey[k].count++;
+      var fmsN = _fMs(i.fecha);
+      var fmsA = _fMs(_recurKey[k].proximaFecha);
+      if (fmsN < fmsA) _recurKey[k].proximaFecha = i.fecha;
+     }
+    } else {
+     _puntuales.push({ src:'ingreso', id:i.id, concepto:i.concepto||'Ingreso', importe:+Math.abs(i.importe||0), fecha:i.fecha });
+    }
+   });
+
+   _recurrentes.sort(function(a,b){ return _fMs(a.proximaFecha) - _fMs(b.proximaFecha); });
+   _puntuales.sort(function(a,b){ return _fMs(a.fecha) - _fMs(b.fecha); });
+
+   var _PUNT_MAX = 5;
+   var _puntVisible = _puntuales.slice(0, _PUNT_MAX);
+   var _puntExtra = _puntuales.length - _puntVisible.length;
+
+   // Mensualización aproximada de recurrentes
+   var _gastoMensualRec = 0, _ingresoMensualRec = 0;
+   _recurrentes.forEach(function(r){
+    var f = (r.frecuencia || 'month').toLowerCase();
+    var factor = 1;
+    if (f.indexOf('week') !== -1) factor = 4.33;
+    else if (f.indexOf('day') !== -1) factor = 30;
+    else if (f.indexOf('year') !== -1) factor = 1/12;
+    else factor = 1;
+    try {
+     var n = parseInt(f.split('_')[0], 10);
+     if (!isNaN(n) && n > 0) factor = factor / n;
+    } catch(_){}
+    var mensual = r.importe * factor;
+    if (r.tipo === 'gasto') _gastoMensualRec += mensual;
+    else _ingresoMensualRec += mensual;
+   });
+
+   var _collapsedKey = cuentaId ? 'dwy_compromisos_collapsed_' + cuentaId : 'dwy_compromisos_collapsed_global';
+   var _isCollapsed = false;
+   try { _isCollapsed = localStorage.getItem(_collapsedKey) === '1'; } catch(_){}
+
+   var _esc = function(s){ try { return String(s||'').replace(/[&<>"\']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); } catch(_){ return s; } };
+   var _signClass = function(n){ return n > 0 ? 'color:var(--success)' : (n < 0 ? 'color:var(--red)' : 'color:var(--ink-soft)'); };
+   var _signFmt = function(n){ return (n > 0 ? '+ ' : (n < 0 ? '\u2212 ' : '')) + _feur(Math.abs(n)); };
+
+   var _kpi = function(label, val) {
+    return ''
+     + '<div style="flex:1;background:var(--bg);border-radius:var(--r-md);padding:var(--sp-2) var(--sp-2_5);min-width:0">'
+     +  '<div style="font-size:var(--label-fs);font-weight:var(--label-fw);letter-spacing:var(--label-ls);color:var(--ink-soft);text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + label + '</div>'
+     +  '<div style="font-size:var(--fs-md);font-weight:var(--fw-xbold);' + _signClass(-val) + ';margin-top:2px;letter-spacing:-0.3px;font-family:var(--font-data)">' + _signFmt(-val) + '</div>'
+     + '</div>';
+   };
+
+   var _html = ''
+    + '<div id="dwy-compromisos-section" style="flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--border);padding:var(--sp-3) 16px var(--sp-2_5)">'
+    +  '<div id="dwy-compromisos-toggle" style="display:flex;align-items:center;gap:var(--sp-2);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;padding:2px 0;margin-bottom:' + (_isCollapsed ? '0' : 'var(--sp-2_5)') + ';transition:margin var(--dur-short)">'
+    +   '<div style="width:24px;height:24px;border-radius:50%;background:var(--orange);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0">'
+    +    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+    +   '</div>'
+    +   '<div style="flex:1;min-width:0">'
+    +    '<div style="font-size:var(--fs-md);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.2px">Próximos compromisos</div>'
+    +    '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:1px">' + (_recurrentes.length + _puntuales.length) + (_recurrentes.length + _puntuales.length === 1 ? ' movimiento futuro' : ' movimientos futuros') + '</div>'
+    +   '</div>'
+    +   '<svg id="dwy-compromisos-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform var(--dur-short);transform:rotate(' + (_isCollapsed ? '0deg' : '180deg') + ')"><polyline points="6 9 12 15 18 9"/></svg>'
+    +  '</div>'
+    +  '<div id="dwy-compromisos-content" style="display:' + (_isCollapsed ? 'none' : 'block') + '">'
+    +   '<div style="display:flex;gap:var(--sp-1_5)">'
+    +    _kpi('Pr\u00f3x. 30 d\u00edas', _sum30)
+    +    _kpi('Pr\u00f3x. 90 d\u00edas', _sum90)
+    +    _kpi('Pr\u00f3x. a\u00f1o', _sum365)
+    +   '</div>';
+
+   if (_recurrentes.length) {
+    var _netoMensual = _ingresoMensualRec - _gastoMensualRec;
+    _html += ''
+     + '<div style="margin-top:var(--sp-3);padding-top:var(--sp-2_5);border-top:1px solid var(--border)">'
+     +  '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:var(--sp-1_5)">'
+     +   '<div style="font-size:var(--label-fs);font-weight:var(--label-fw);letter-spacing:var(--label-ls);color:var(--ink-soft);text-transform:uppercase">Pagos recurrentes</div>'
+     +   '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-semi)">~' + (_netoMensual < 0 ? '\u2212' : '+') + _feur(Math.abs(_netoMensual)) + '/mes</div>'
+     +  '</div>';
+    _recurrentes.forEach(function(r){
+     var icon = r.tipo === 'gasto' ? '\ud83d\udd01' : '\ud83d\udcb0';
+     var amt = r.tipo === 'gasto' ? -r.importe : r.importe;
+     var frecLbl = (function(){
+      var f = (r.frecuencia || '').toLowerCase();
+      if (f.indexOf('week') !== -1) return 'semanal';
+      if (f.indexOf('day')  !== -1) return 'diario';
+      if (f.indexOf('year') !== -1) return 'anual';
+      try {
+       var n = parseInt(f.split('_')[0], 10);
+       if (!isNaN(n) && n > 1) return 'cada ' + n + ' meses';
+      } catch(_){}
+      return 'mensual';
+     })();
+     _html += ''
+      + '<div class="dwy-compromiso-row" style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0;border-bottom:1px solid var(--ink-faint)">'
+      +  '<div style="width:24px;text-align:center;font-size:14px;flex-shrink:0">' + icon + '</div>'
+      +  '<div style="flex:1;min-width:0">'
+      +   '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(r.concepto) + '</div>'
+      +   '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:1px">' + frecLbl + ' \u00b7 pr\u00f3x. ' + _fmtFechaCorta(r.proximaFecha) + '</div>'
+      +  '</div>'
+      +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);' + _signClass(amt) + ';font-family:var(--font-data);flex-shrink:0">' + _signFmt(amt) + '</div>'
+      + '</div>';
+    });
+    _html += '</div>';
+   }
+
+   if (_puntuales.length) {
+    _html += ''
+     + '<div style="margin-top:var(--sp-3);padding-top:var(--sp-2_5);border-top:1px solid var(--border)">'
+     +  '<div style="font-size:var(--label-fs);font-weight:var(--label-fw);letter-spacing:var(--label-ls);color:var(--ink-soft);text-transform:uppercase;margin-bottom:var(--sp-1_5)">Pr\u00f3ximos puntuales</div>';
+    _puntVisible.forEach(function(p){
+     _html += ''
+      + '<div class="dwy-compromiso-row" style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0;border-bottom:1px solid var(--ink-faint)">'
+      +  '<div style="width:42px;text-align:center;flex-shrink:0">'
+      +   '<div style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);line-height:1.1">' + _fmtFechaCorta(p.fecha) + '</div>'
+      +  '</div>'
+      +  '<div style="flex:1;min-width:0">'
+      +   '<div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(p.concepto) + '</div>'
+      +  '</div>'
+      +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);' + _signClass(p.importe) + ';font-family:var(--font-data);flex-shrink:0">' + _signFmt(p.importe) + '</div>'
+      + '</div>';
+    });
+    if (_puntExtra > 0) {
+     _html += '<div style="text-align:center;padding:var(--sp-2) 0 0;font-size:var(--fs-2xs);color:var(--ink-soft)">+ ' + _puntExtra + ' m\u00e1s en el listado abajo</div>';
+    }
+    _html += '</div>';
+   }
+
+   _html += '  </div></div>';
+   return _html;
+  } catch(e) {
+   console.warn('[Dashwey] _buildProximosCompromisosHtml error:', e);
+   return '';
+  }
+ }
+
+ function _wireCompromisosToggle(cuentaId) {
+  try {
+   var tog = document.getElementById('dwy-compromisos-toggle');
+   var cnt = document.getElementById('dwy-compromisos-content');
+   var chv = document.getElementById('dwy-compromisos-chevron');
+   if (!tog || !cnt) return;
+   var _key = cuentaId ? 'dwy_compromisos_collapsed_' + cuentaId : 'dwy_compromisos_collapsed_global';
+   tog.addEventListener('click', function(){
+    var isOpen = cnt.style.display !== 'none';
+    var nextOpen = !isOpen;
+    cnt.style.display = nextOpen ? 'block' : 'none';
+    if (chv) chv.style.transform = 'rotate(' + (nextOpen ? '180' : '0') + 'deg)';
+    tog.style.marginBottom = nextOpen ? 'var(--sp-2_5)' : '0';
+    try { localStorage.setItem(_key, nextOpen ? '0' : '1'); } catch(_){}
+   });
+  } catch(_){}
+ }
+
  function _openDetalleCuentaGlobal() {
   // v1.3.1255 FIX: FinEngine es const en scope de módulo, NO window.FinEngine.
   //   Usar typeof FinEngine — patrón consistente con el resto del código.
@@ -41797,11 +42041,15 @@ function _confirmBorrarCuenta(id) {
     +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">saldo total</div>'
     + '</div>'
     + '</div>'
+    // v1.3.1493: sección Próximos compromisos (helper compartido) — vista global
+    + _buildProximosCompromisosHtml(null)
     + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
     + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
     + '</div>';
 
    App.ui.setFs(html);
+   // v1.3.1493: wire toggle compromisos (vista global)
+   try { _wireCompromisosToggle(null); } catch(_){}
 
    // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
    // RAF — la sheet ya inició su animación de entrada.
@@ -42409,12 +42657,16 @@ function _confirmBorrarCuenta(id) {
     + '</div>'
     + '</div>'
     // ── Etiqueta Movimientos (FIJA bajo el header) ──
+    // v1.3.1493: sección Próximos compromisos (helper compartido) — detalle cuenta
+    + _buildProximosCompromisosHtml(cuentaId)
     + '<div class="dc-movs-label" style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);padding:var(--sp-2_5) 16px 4px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">Movimientos (' + movs.length + ')</div>'
     // ── Lista de movimientos (ÚNICO scrollable) ──
     + '<div id="dc-movs" class="dc-scroll" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">' + movsHtml + '</div>'
     + '</div>'; // /dc-layout
 
    App.ui.setFs(html);
+   // v1.3.1493: wire toggle compromisos (detalle cuenta)
+   try { _wireCompromisosToggle(cuentaId); } catch(_){}
    App.ui.openFs('full');
 
    // v1.3.1347: si activamos render diferido, construir las filas en el siguiente
