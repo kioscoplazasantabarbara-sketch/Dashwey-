@@ -202,7 +202,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1484";
+ var CURRENT_CACHE = "dashwey-v1-3-1485";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -221,7 +221,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1484</title>
+<title>Dashwey v1.3.1485</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19249,7 +19249,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1484';
+ const _APP_VERSION = 'v1.3.1485';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20606,6 +20606,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1485': {
+   id: 'wn-2026-05-11-v1485',
+  sections: [{
+  title: '🎬 Fix doble animación splash en deploys',
+  items: [
+  { icon: '🐛', name: 'Animación splash ya no aparece dos veces tras un deploy', desc: 'Cuando había una versión nueva disponible (caso típico tras un deploy reciente), al abrir Dashwey ocurría esto: la animación del splash empezaba normal, pero a los ~500ms el Service Worker detectaba la nueva versión, forzaba un location.reload() y la animación se cortaba a la mitad. Tras el reload, la animación empezaba OTRA VEZ desde el principio. Resultado: el usuario veía DOS animaciones de splash seguidas, dando sensación de bug o de app inestable. Fix: cuando el SW detecta nueva versión durante el boot inicial (splash visible o _DashweyInitialSyncDone aún false), el reload se POSPONE hasta que la app termine de inicializar. Comprueba cada 1s si la app está lista, máximo 15 intentos (15s). Tras eso, reload forzado como safety. Resultado: el usuario ve UNA SOLA animación, sea la de la versión vieja o la nueva tras reload. Bug visual menor pero molesto que afectaba SOLO a los primeros 30-60s tras un deploy. Cobertura: BUG-DOBLE-SPLASH.' },
+  { icon: '🔍', name: 'Log informativo en consola', desc: 'El handler emite ahora "[SW_UPDATED] postponiendo reload — app booteando" cuando entra en modo espera, y "[SW_UPDATED] app lista tras Xs — reload programado" cuando finalmente lanza el reload. Útil para diagnosticar en futuras sesiones si algún usuario reporta "se me reinicia la app sola".' },
+  ]}]
+  },
   'v1.3.1484': {
    id: 'wn-2026-05-11-v1484',
   sections: [{
@@ -57223,7 +57232,45 @@ window._DashweyDeviceId = (() => {
  case 'SW_UPDATED': {
  if (!_swReloadPending && document.visibilityState !== 'hidden') {
  _swReloadPending = true;
- setTimeout(() => window.location.reload(true), 500);
+ // v1.3.1485 BUG-DOBLE-SPLASH FIX: si el SW detecta nueva versión durante
+ //   el boot inicial (splash aún visible o _DashweyInitialSyncDone false),
+ //   el reload tras 500ms cortaba la animación a la mitad y el usuario veía
+ //   la animación de splash DOS VECES: la primera incompleta del boot
+ //   original, la segunda completa tras el reload.
+ //   Fix: si la app sigue booteando, posponer el reload. Reintentar cada 1s
+ //   hasta que (splash oculto) Y (InitialSyncDone=true). Máximo 15 intentos
+ //   (15s) — si tras 15s la app sigue booteando, reload forzado para no
+ //   dejar versión desactualizada indefinidamente.
+ //   Resultado: usuario SIEMPRE ve UNA SOLA animación de splash, sea la
+ //   versión vieja o la nueva.
+ var _doReload = function() { window.location.reload(true); };
+ var _isAppReady = function() {
+  var sp = document.getElementById('app-splash');
+  var spOculto = !sp || sp.classList.contains('hidden') || sp.classList.contains('fade-out');
+  return spOculto && window._DashweyInitialSyncDone === true;
+ };
+ if (_isAppReady()) {
+  // App ya inicializada: reload normal tras 500ms
+  setTimeout(_doReload, 500);
+ } else {
+  // App booteando: esperar a que esté lista antes de reload
+  console.info('[SW_UPDATED] postponiendo reload — app booteando');
+  var _swAttempts = 0;
+  var _swCheck = function() {
+   _swAttempts++;
+   if (_isAppReady()) {
+    console.info('[SW_UPDATED] app lista tras ' + _swAttempts + 's — reload programado');
+    setTimeout(_doReload, 500);
+   } else if (_swAttempts < 15) {
+    setTimeout(_swCheck, 1000);
+   } else {
+    // Safety: tras 15s reload igualmente para no dejar versión desactualizada
+    console.warn('[SW_UPDATED] timeout 15s, reload forzado');
+    setTimeout(_doReload, 500);
+   }
+  };
+  setTimeout(_swCheck, 1000);
+ }
  }
  break;
  }
