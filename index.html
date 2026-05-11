@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1474";
+ var CURRENT_CACHE = "dashwey-v1-3-1475";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1474</title>
+<title>Dashwey v1.3.1475</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19189,7 +19189,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1474';
+ const _APP_VERSION = 'v1.3.1475';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20546,6 +20546,15 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1475': {
+   id: 'wn-2026-05-11-v1475',
+  sections: [{
+  title: '🐛 Bug crítico — Proveedores BB adoptados invisibles en el picker',
+  items: [
+  { icon: '👁️', name: 'Amazon (y otros proveedores BB) reaparecen en la lista', desc: 'Si tenías un proveedor proveniente de BudgetBakers (ej. Amazon) y le habías asignado productos manualmente, ese proveedor desaparecía silenciosamente de la lista de selección al pulsar "Cambiar proveedor". Tus productos seguían existiendo, pero como no veías el proveedor en la lista, no podías navegar a él. Causa: un filtro v1.3.1287 ocultaba TODOS los proveedores prov_bb_* (placeholders sintéticos del import BB) sin distinguir cuáles habían sido adoptados como proveedores reales con productos asignados. Fix v1.3.1475: el filtro ahora solo oculta placeholders BB SIN productos. Si tiene al menos 1 producto vivo asignado → aparece en la lista como cualquier proveedor manual o Loyverse. Coherente con el patrón de preservación que ya existía en _lvCommitCatalog (v1.3.1286) para gastos asignados a proveedores BB.' },
+  { icon: '🛡️', name: 'Helper centralizado _isProvBBPlaceholder', desc: 'Se introduce una función única para detectar si un prov_bb_* es placeholder genuino (sin uso) o ha sido adoptado (con productos). Reemplaza el filtro duplicado en 3 sitios distintos (picker, empty state, init Almacén). Beneficio adicional: futuras lógicas que necesiten esta distinción ya tienen el helper listo, evitando que vuelva a aparecer una asimetría como la que causó este bug.' },
+  ]}]
+  },
   'v1.3.1474': {
    id: 'wn-2026-05-10-v1474',
   sections: [{
@@ -46698,6 +46707,31 @@ function _parseIva(iva) {
  });
  }
 
+ // v1.3.1475 BUG-PROVBB-VISIBILITY FIX: helper centralizado para detectar
+ //   si un proveedor prov_bb_* es un "placeholder vacío" (sin productos
+ //   asignados — sintético del import BB) vs un "proveedor adoptado"
+ //   (con productos manualmente asignados → es un proveedor real).
+ //
+ //   El filtro anterior v1.3.1287 ocultaba TODOS los prov_bb_* del picker
+ //   asumiendo que eran solo etiquetas BB sin valor. Caso real reportado:
+ //   Hung asignó 4 productos manualmente a prov_bb_amazon → Amazon dejó de
+ //   aparecer en la lista de proveedores → intentó crear "Amazon" de nuevo
+ //   → terminaron con 2 proveedores Amazon (uno BB-adoptado oculto, uno
+ //   manual nuevo visible) → ambigüedad al editar artículos.
+ //
+ //   Regla: si tiene al menos 1 producto vivo asignado, NO es placeholder.
+ //   Coherente con patrón v1.3.1286 en _lvCommitCatalog (línea 21885+).
+ function _isProvBBPlaceholder(p) {
+  if (!p || !p.id) return false;
+  if (p.id.indexOf('prov_bb_') !== 0) return false;
+  var prods = (typeof State !== 'undefined' && State.get && State.get.productos)
+   ? (State.get.productos() || []) : [];
+  var tieneProductos = prods.some(function(prod){
+   return prod && prod.prov === p.id && !prod.deleted;
+  });
+  return !tieneProductos;
+ }
+
  // v1.3.1158: openProvPicker migrado a bottom sheet (patrón period picker).
  //            El panel slide antiguo (_almSlideToList) queda disponible
  //            internamente para navegación inicial y casos legacy, pero la UI
@@ -46786,9 +46820,11 @@ function _parseIva(iva) {
   var scroll = document.getElementById('prov-picker-scroll');
   if (!scroll) return;
   var sel = State.get.selectedProv();
-  // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers, NO son proveedores reales)
+  // v1.3.1475 BUG-PROVBB-VISIBILITY FIX: usar helper que detecta placeholders REALES
+  //   (sin productos asignados). Antes filtraba TODOS los prov_bb_* incluso los
+  //   adoptados como proveedores reales. Ver _isProvBBPlaceholder arriba.
   var provs = (State.get.proveedores() || []).filter(function(p){
-   return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+   return !_isProvBBPlaceholder(p);
   });
   provs.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
 
@@ -47063,10 +47099,10 @@ function _parseIva(iva) {
   var emptyNoArts = document.getElementById('alm-empty');
   var catInline   = document.getElementById('alm-cat-inline');
   var sugerencia  = document.getElementById('alm-sugerencia');
-  // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers, no proveedores reales)
+  // v1.3.1475 BUG-PROVBB-VISIBILITY FIX: usar helper (detecta adoptados con productos)
   var provs = (typeof State !== 'undefined' && State.get && State.get.proveedores)
    ? (State.get.proveedores() || []).filter(function(p){
-      return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+      return !_isProvBBPlaceholder(p);
      })
    : [];
   var sel = State.get.selectedProv();
@@ -47118,9 +47154,9 @@ function _parseIva(iva) {
  //   1. Si no hay proveedores → mostrar empty state CTA "Añadir proveedor"
  //   2. Si hay proveedores y hay savedId válido → seleccionar ese
  //   3. Si hay proveedores pero no hay savedId → seleccionar el primero auto
- // v1.3.1287: filtrar prov_bb_* (categorías BudgetBakers)
+ // v1.3.1475 BUG-PROVBB-VISIBILITY FIX: usar helper (detecta adoptados con productos)
  var provs = (State.get.proveedores() || []).filter(function(p){
-  return !(p && p.id && p.id.indexOf('prov_bb_') === 0);
+  return !_isProvBBPlaceholder(p);
  });
  if (!provs.length) {
   // ESTADO 1
