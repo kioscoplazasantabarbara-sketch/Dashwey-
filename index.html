@@ -192,7 +192,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1482";
+ var CURRENT_CACHE = "dashwey-v1-3-1483";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -211,7 +211,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1482</title>
+<title>Dashwey v1.3.1483</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19239,7 +19239,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1482';
+ const _APP_VERSION = 'v1.3.1483';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -20596,6 +20596,17 @@ const ui = (() => {
 
  // ── What's New Sheet ─────────────────────────────────────────
  const _WN_CHANGELOG = {
+  'v1.3.1483': {
+   id: 'wn-2026-05-11-v1483',
+  sections: [{
+  title: '🧹 Cierre Almacén — cascadas + unificación borrados',
+  items: [
+  { icon: '🔗', name: 'Cascada extendida al borrar proveedor (facturas + visitas)', desc: 'Cuando se borra un proveedor, hasta hoy se hacía soft-delete del proveedor y de sus pedidos programados, pero las facturas y visitas comerciales asociadas quedaban huérfanas referenciando un proveedor con tombstone. En algunos casos la UI mostraba el provId crudo en lugar del nombre, y en sync multi-device las facturas/visitas huérfanas podían comportarse de forma inconsistente. Ahora el cascade en borrarProv extiende soft-delete a facturas y visitasComerciales asociadas al proveedor borrado, con sellos LWW completos (updatedAt + _updatedAt numéricos). Idempotente: si ya estaban deleted no se tocan. Cobertura: BUG-AUD-10.' },
+  { icon: '⚖️', name: 'Borrado de artículo unificado entre las dos rutas', desc: 'Existían 2 paths para borrar un artículo: el botón "Eliminar" del modal de edición (_eaDelete) y el long-press del catálogo (_catDeleteConfirm). Eran ASIMÉTRICOS: _eaDelete solo borraba del array de productos, mientras que _catDeleteConfirm además limpiaba carrito, lastVal y hot grid del TPV. Resultado: si Hung borraba un producto desde el modal de edición Y ese producto estaba en el carrito o en hot grid TPV, quedaba huérfano hasta el siguiente refresh. Ahora ambos paths llaman al mismo helper unificado _softDeleteProductFull que hace TODAS las limpiezas siempre. Imposible olvidar limpieza en futuras modificaciones. Cobertura: BUG-AUD-12.' },
+  { icon: '🧼', name: 'Reset robusto de proveedor pendiente al crear nuevo', desc: 'La variable _provNuevoPendiente guarda el borrador de un proveedor nuevo mientras el usuario rellena el formulario (antes de pulsar Guardar). Si el usuario abandonaba el form sin guardar (back button, gesto cerrar), la variable quedaba residual en memoria. La próxima vez que pulsaba "+", el ID se sobreescribía sin avisar y los datos no guardados se perdían silenciosamente. Ahora al pulsar "+ Añadir proveedor", si hay un _provNuevoPendiente residual se descarta explícitamente con log informativo, garantizando estado limpio. Cobertura: BUG-AUD-22.' },
+  { icon: '🎉', name: 'Cierre del backlog Almacén (auditoría profunda v23)', desc: 'v1.3.1483 cierra el último lote del backlog identificado en la auditoría profunda de Almacén (25 bugs detectados). Cobertura total de la sesión 11 may 2026: BUG-PROVBB-VISIBILITY, BUG-AUD-01/04/05/06/07/08/09/10/11/12/13/15/16/18/20/21/22/23, BUG-MEM-01 (memory leak SW), LAG-A17 (optimización render gama-media). Quedan fuera de scope Almacén: BUG-AUD-02/03 (setters dirty per-item) que entran en el roadmap N1/N2/N3 del 9-26 may, BUG-333 (filtro _isAggregable cierres), C11.1 (cascada _borrarCuenta paymentMap). El Almacén está ahora en estado consistente, fluido y con identidad central robusta.' },
+  ]}]
+  },
   'v1.3.1482': {
    id: 'wn-2026-05-11-v1482',
   sections: [{
@@ -46738,23 +46749,54 @@ function _parseIva(iva) {
  onConfirm: function() { App.alm._eaDelete(id); }
  });
  }
- function _eaDelete(id) {
- // v1.3.584: confirmación ya realizada por _eaConfirmDelete — ejecutar directamente
- // v1.3.1074: soft delete — marca deleted:true + deletedAt
- // v1.3.1479 BUG-AUD-11 FIX: añadir updatedAt + _updatedAt al borrar (consistencia
- //   con borrarProv). Sin estos sellos, _mergeById puede priorizar un remoto stale
- //   con timestamps más recientes y "resucitar" el producto borrado.
- var _arr = State.get.productos().slice();
- var _p = _arr.find(function(p) { return p.id === id; });
- if (_p) {
+ // v1.3.1483 BUG-AUD-12 FIX: helper unificado para soft-delete completo de
+ //   producto. Antes había asimetría entre _eaDelete (solo borraba del array)
+ //   y _catDeleteConfirm (borraba + limpiaba carrito + lastVal + hot grid).
+ //   Resultado: si Hung borraba un producto desde el modal de edición,
+ //   quedaba huérfano en carrito (si estaba ahí) o en hot grid del TPV.
+ //   Ahora ambos paths llaman este helper común que hace TODOS los cleanups.
+ //   La animación de salida del elemento solo aplica al path catálogo
+ //   (donde el elemento está visible), no al modal de edición.
+ function _softDeleteProductFull(id) {
+  // 1. Soft delete en el array con sellos LWW completos
+  var _arr = State.get.productos().slice();
+  var _p = _arr.find(function(p) { return p.id === id; });
+  var _nombre = _p ? _p.nombre : 'Artículo';
+  if (_p) {
    var _now = Date.now();
    _p.deleted = true;
    _p.deletedAt = _now;
    _p.updatedAt = _now;
    _p._updatedAt = _now;
+  }
+  State.set.productos(_arr);
+  // 2. Limpiar del carrito activo si estaba
+  if (typeof _ordenCarrito !== 'undefined' && _ordenCarrito[id]) {
+   delete _ordenCarrito[id];
+   try { _saveCarritoLocal(); } catch(_) {}
+  }
+  // 3. Limpiar lastVal del formulario de edición (evita rehidratación
+  //    con datos del producto borrado si se reabre el form)
+  try { State.set.lastVal('editar_art_' + id, null); } catch(_) {}
+  // 4. Limpiar del hot grid TPV (si feature TPV activa)
+  try {
+   if (typeof tpv !== 'undefined') {
+    if (tpv.hgRemoveProd) tpv.hgRemoveProd(id);
+    if (tpv._invalidateCatsHash) tpv._invalidateCatsHash();
+   }
+  } catch(_) {}
+  return _nombre;
  }
- State.set.productos(_arr);
- // v1.3.648: ordenItems legacy — no requiere limpieza (siempre [])
+
+ function _eaDelete(id) {
+ // v1.3.584: confirmación ya realizada por _eaConfirmDelete — ejecutar directamente
+ // v1.3.1074: soft delete — marca deleted:true + deletedAt
+ // v1.3.1479 BUG-AUD-11 FIX: updatedAt + _updatedAt al borrar (consistencia
+ //   con borrarProv y _catDeleteConfirm).
+ // v1.3.1483 BUG-AUD-12 FIX: usa helper unificado _softDeleteProductFull
+ //   que también limpia carrito + lastVal + hot grid TPV. Antes solo
+ //   borraba del array → producto huérfano en carrito si estaba ahí.
+ _softDeleteProductFull(id);
  _editPhoto = null;
  ui.closeModal(); ui.closeFs();
  requestAnimationFrame(function() { renderOrden(); updateBadge(); if (window._DASHWEY_FEATURES?.tpv) { try { tpv.render(); } catch(_) {} } renderCatInline(); try { dash.render(); } catch(_) {} });
@@ -47637,6 +47679,14 @@ function _parseIva(iva) {
  function addNuevoProv() {
  // v1.3.427: NO crear en State hasta que el usuario pulse Guardar
  // openEditProv con id null abre el formulario en modo creacion
+ // v1.3.1483 BUG-AUD-22 FIX: si hay un _provNuevoPendiente residual de un
+ //   intento anterior abandonado (usuario abrió el form, no guardó, cerró
+ //   con el back button), lo descartamos antes de crear el nuevo. Garantiza
+ //   estado limpio al abrir el modal.
+ if (_provNuevoPendiente) {
+  console.info('[addNuevoProv] descartando _provNuevoPendiente residual:', _provNuevoPendiente.id);
+  _provNuevoPendiente = null;
+ }
  var newId = 'pv' + Date.now();
  _provNuevoPendiente = { id: newId, nombre: '', icon: '🏪',
  direccion: '', telefono: '', diasPedido: [], diasEntrega: [],
@@ -48082,6 +48132,44 @@ function _parseIva(iva) {
  (State.get.pendingOrders() || []).filter(function(o) { return o.provId === id; })
  .forEach(function(o) { try { State.set.removePendingOrder(o.id); } catch(_) {} });
  } catch(_) {}
+ // 2c. v1.3.1483 BUG-AUD-10 FIX: cascada extendida — soft-delete facturas
+ //   y visitas comerciales asociadas al proveedor borrado. Antes: facturas
+ //   y visitas quedaban huérfanas referenciando un proveedor con tombstone
+ //   (la UI fallaba al resolver provNombre en algunos casos, mostrando
+ //   "Proveedor borrado" o el provId crudo). Ahora soft-delete con sello
+ //   numérico LWW. Idempotente: si ya están deleted, no se tocan.
+ try {
+  var _facturas = (State.raw && State.raw.facturas) ? State.raw.facturas() : (State.get.facturas() || []);
+  var _facturasArr = _facturas.slice();
+  var _facturasModified = false;
+  var _nowCascade = Date.now();
+  _facturasArr.forEach(function(f) {
+   if (f && f.provId === id && !f.deleted) {
+    f.deleted = true;
+    f.deletedAt = _nowCascade;
+    f.updatedAt = _nowCascade;
+    f._updatedAt = _nowCascade;
+    _facturasModified = true;
+   }
+  });
+  if (_facturasModified) State.set.facturas(_facturasArr);
+ } catch(eC) { console.warn('[borrarProv] cascada facturas:', eC); }
+ try {
+  var _visitas = (State.raw && State.raw.visitasComerciales) ? State.raw.visitasComerciales() : (State.get.visitasComerciales() || []);
+  var _visitasArr = _visitas.slice();
+  var _visitasModified = false;
+  var _nowVis = Date.now();
+  _visitasArr.forEach(function(v) {
+   if (v && v.provId === id && !v.deleted) {
+    v.deleted = true;
+    v.deletedAt = _nowVis;
+    v.updatedAt = _nowVis;
+    v._updatedAt = _nowVis;
+    _visitasModified = true;
+   }
+  });
+  if (_visitasModified) State.set.visitasComerciales(_visitasArr);
+ } catch(eV) { console.warn('[borrarProv] cascada visitas:', eV); }
  // 3. v1.3.1289 FIX P0 ALMACEN — productos del proveedor borrado:
  //    NO setear prov:null (eso los marcaba huérfanos al siguiente reinicio
  //    → _migrateDemoData los HARD-eliminaba sin tombstone ni propagación).
@@ -52601,40 +52689,13 @@ _eaRecalc();
  }
 
  const _doDelete = () => {
- // 1. Eliminar del catálogo (soft delete v1.3.1074)
- // v1.3.1479 BUG-AUD-11 FIX: añadir updatedAt + _updatedAt al borrar
- //   (consistencia con borrarProv y _eaDelete).
- var _arrPr = State.get.productos().slice();
- var _pr = _arrPr.find(pr => pr.id === id);
- if (_pr) {
-   var _nowD = Date.now();
-   _pr.deleted = true;
-   _pr.deletedAt = _nowD;
-   _pr.updatedAt = _nowD;
-   _pr._updatedAt = _nowD;
- }
- State.set.productos(_arrPr);
- // ordenItems eliminado del flujo en v8.8.x — filtro era código muerto
+ // v1.3.1483 BUG-AUD-12 FIX: usar helper unificado _softDeleteProductFull.
+ //   Esto garantiza simetría exacta con _eaDelete (modal edición) y evita
+ //   olvidar limpieza en uno u otro path en futuras modificaciones.
+ //   El helper hace: soft-delete array + carrito + lastVal + hot grid TPV.
+ _softDeleteProductFull(id);
 
- // 2. Limpiar del carrito activo si estaba
- if (_ordenCarrito[id]) {
- delete _ordenCarrito[id];
- _saveCarritoLocal();
- }
-
- // 3. Limpiar lastVal del formulario de edición
- try { State.set.lastVal('editar_art_' + id, null); } catch(_) {}
-
- // 4. Limpiar del hot grid en memoria y localStorage inmediatamente
- // v1.3.421: no esperar al próximo _saveHotPins — limpiar ahora
- try {
- if (typeof tpv !== 'undefined') {
- tpv.hgRemoveProd && tpv.hgRemoveProd(id);
- tpv._invalidateCatsHash && tpv._invalidateCatsHash();
- }
- } catch(_) {}
-
- // 5. Actualizar UI
+ // 5. Actualizar UI (renders específicos del path catálogo)
  renderCatInline();
  try { tpv.render(); } catch(_) {}
  updateBadge();
