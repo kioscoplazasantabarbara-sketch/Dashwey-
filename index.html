@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1519";
+ var CURRENT_CACHE = "dashwey-v1-3-1520";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1519</title>
+<title>Dashwey v1.3.1520</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19709,7 +19709,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1519';
+ const _APP_VERSION = 'v1.3.1520';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -49449,6 +49449,28 @@ function _parseIva(iva) {
  <div>
  <div class="pe-section-title">Proveedor</div>
  <div class="prov-edit-card">
+ <!-- v1.3.1520: Foto del proveedor (avatar circular). Patrón idéntico al de artículos. -->
+ <div style="display:flex;align-items:center;gap:var(--sp-3_5)">
+  <div style="flex-shrink:0">
+   <div id="pe-foto-prev"
+    onclick="document.getElementById('pe-foto-inp').click()"
+    style="width:64px;height:64px;border-radius:50%;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--bg2);border:1px solid var(--border);-webkit-tap-highlight-color:transparent">
+    ${p.foto
+     ? `<img src="${p.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block">`
+     : `<div style="font-size:34px;line-height:1">${esc(p.icon || '🏪')}</div>`
+    }
+   </div>
+   <input type="file" id="pe-foto-inp" accept="image/*" style="display:none"
+    onchange="App.alm._loadProvFoto('${p.id}', this)">
+  </div>
+  <div style="flex:1;min-width:0">
+   <div class="fl" style="margin-bottom:var(--sp-1)">Foto del proveedor</div>
+   <div style="font-size:var(--fs-2xs);color:var(--ink-soft);line-height:1.4">Toca el círculo para subir una foto cuadrada (logo o etiqueta). Opcional — si no hay foto se muestra el emoji.</div>
+   <button id="pe-foto-clear" type="button"
+    onclick="App.alm._clearProvFoto('${p.id}')"
+    style="margin-top:var(--sp-1_5);font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--red);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font);display:${p.foto ? '' : 'none'}">Eliminar foto</button>
+  </div>
+ </div>
  <div><div class="fl">Nombre</div><input class="fi" id="pe-n" value="${esc(p.nombre||'')}" placeholder="Nombre del proveedor"></div>
  <!-- v1.3.1341: campo "Nombre TPV (Loyverse)" SIEMPRE editable.
       Para proveedores manuales: si lo dejas escrito, al re-importar Loyverse,
@@ -49902,6 +49924,89 @@ function _parseIva(iva) {
  }
  showToast('🗑️ Banner eliminado');
  }
+
+ // ── v1.3.1520: AVATAR PROVEEDOR ─────────────────────────────────────
+ // Patrón: prov.foto = dataURL 120x120 jpeg (mismo formato que p.foto en art).
+ // Fallback: si no hay foto, renderiza prov.icon (emoji) o '🏪' por defecto.
+ // Helper único reutilizable en TODOS los renders que muestran el proveedor.
+ //
+ // _provAvatarHtml(prov, size = 32, opts = {})
+ //   size: diámetro en px del círculo
+ //   opts.bg: color de fondo (default var(--bg2))
+ //   opts.fontSize: tamaño del emoji fallback (default size * 0.55)
+ //   opts.shadow: añadir sombra suave (default false)
+ // Devuelve string HTML lista para insertar en innerHTML/template.
+ function _provAvatarHtml(prov, size, opts) {
+ if (!prov) prov = {};
+ size = size || 32;
+ opts = opts || {};
+ var bg = opts.bg || 'var(--bg2)';
+ var fs = opts.fontSize || Math.round(size * 0.55);
+ var shadow = opts.shadow ? 'box-shadow:0 1px 3px rgba(0,0,0,0.08);' : '';
+ var baseStyle = 'width:' + size + 'px;height:' + size + 'px;border-radius:50%;flex-shrink:0;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;' + shadow;
+ if (prov.foto) {
+  return '<div class="prov-avatar" style="' + baseStyle + 'background:' + bg + '">' +
+   '<img loading="lazy" src="' + prov.foto + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block">' +
+   '</div>';
+ }
+ var emoji = prov.icon || '🏪';
+ return '<div class="prov-avatar" style="' + baseStyle + 'background:' + bg + ';font-size:' + fs + 'px;line-height:1">' +
+  esc(emoji) +
+  '</div>';
+ }
+
+ // _loadProvFoto: idéntico patrón a loadProdPhoto (canvas 120x120 jpeg .6).
+ // Comprime SIEMPRE — evita dataURLs gigantes en Firestore.
+ function _loadProvFoto(provId, input) {
+ const file = input.files && input.files[0];
+ if (!file) return;
+ if (file.size > 5 * 1024 * 1024) {
+  showToast('⚠️ Imagen demasiado grande (max 5MB)', 'warning');
+  return;
+ }
+ const reader = new FileReader();
+ reader.onload = function(ev) {
+  const img = new Image();
+  img.onload = function() {
+   const canvas = document.createElement('canvas');
+   canvas.width = 120; canvas.height = 120;
+   const ctx = canvas.getContext('2d');
+   const side = Math.min(img.width, img.height);
+   const ox = (img.width - side) / 2;
+   const oy = (img.height - side) / 2;
+   ctx.drawImage(img, ox, oy, side, side, 0, 0, 120, 120);
+   const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+   State.set.updateProv(provId, { foto: dataUrl });
+   // Refrescar preview en el editor (si está abierto)
+   const prev = document.getElementById('pe-foto-prev');
+   if (prev) {
+    prev.innerHTML = '<img src="' + dataUrl + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block">';
+   }
+   // Refrescar botón "Eliminar foto" (aparece sólo cuando hay foto)
+   const clrBtn = document.getElementById('pe-foto-clear');
+   if (clrBtn) clrBtn.style.display = '';
+   showToast('✅ Foto actualizada', 'success');
+  };
+  img.onerror = function() { showToast('⚠️ No se pudo leer la imagen', 'warning'); };
+  img.src = ev.target.result;
+ };
+ reader.readAsDataURL(file);
+ }
+
+ function _clearProvFoto(provId) {
+ State.set.updateProv(provId, { foto: null });
+ const prev = document.getElementById('pe-foto-prev');
+ if (prev) {
+  // Restaurar vista emoji
+  const p = State.get.prov(provId);
+  const emoji = (p && p.icon) || '🏪';
+  prev.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:34px;background:var(--bg2);border-radius:50%">' + esc(emoji) + '</div>';
+ }
+ const clrBtn = document.getElementById('pe-foto-clear');
+ if (clrBtn) clrBtn.style.display = 'none';
+ showToast('🗑️ Foto eliminada');
+ }
+ // ── /v1.3.1520 ─────────────────────────────────────────────────────
 
  function confirmarBorrarProv(id) {
  const p = State.get.prov(id); if (!p) return;
@@ -53617,6 +53722,8 @@ _eaRecalc();
  openHistorialPedidos, _reabrirPedidoHistorial, _imprimirPedido,
  _invalidateCatHash: function(){ _catInlineHash = ''; },
  _loadProvBanner, _clearProvBanner,
+ // v1.3.1520: avatar proveedor
+ _provAvatarHtml, _loadProvFoto, _clearProvFoto,
  _abrirPedidoProgramadoById, _eliminarPedidoProgramado, _eliminarPedidosProveedor, _listarPedidosProveedor,
 
  _editProvFromPicker, _toggleDayOrder, _toggleDayDeliv,
