@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1507";
+ var CURRENT_CACHE = "dashwey-v1-3-1508";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1507</title>
+<title>Dashwey v1.3.1508</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3099,6 +3099,17 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
  box-shadow: 0 0 0 3px var(--surface);
  z-index: 2;
  pointer-events: none;
+}
+
+/* v1.3.1508: grupo Vencido — texto rojo, dot rojo intenso */
+.snap-tl-v.snap-tl-v-actividad .snap-tl-v-day.vencido {
+ color: var(--red);
+ text-decoration: none;
+ opacity: 1;
+}
+.snap-tl-v.snap-tl-v-actividad .snap-tl-v-group-vencido .snap-tl-v-day-dot {
+ background: var(--red);
+ box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px rgba(220,38,38,0.18);
 }
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-day.past + .snap-tl-v-day-dot,
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-day-dot.past {
@@ -19683,7 +19694,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1507';
+ const _APP_VERSION = 'v1.3.1508';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37105,31 +37116,61 @@ function _confirmBorrarCuenta(id) {
    // v1.3.1504: si el pedido es PREDICHO (_src='predicho'), NO mostrar hora —
    //   la hora 00:00 del ISO no es real. Solo mostrar fecha (Hoy/Mañana/etc).
    //   Para pedidos REALES (pending/hist) sí mostrar hora.
+   // v1.3.1508: para pendings reales, calcular próximo diasPedido del editor
+   //   del proveedor DESDE HOY (no v.fecha). Si no hay diasPedido, mantener v.fecha.
    allVisitas.forEach(function(v) {
     if (!v || !v.fecha) return;
-    var fp = new Date(v.fecha);
+    var fp;
+    var provV = State.get.prov ? State.get.prov(v.provId) : null;
+    var _dpProv = (provV && provV.diasPedido) || [];
+    if (v._src === 'pending' && _dpProv.length) {
+     fp = null;
+     for (var _i = 0; _i <= 14; _i++) {
+      var _d = new Date(_hoy00Hero); _d.setDate(_hoy00Hero.getDate() + _i);
+      var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
+      if (_dpProv.indexOf(_dow) >= 0) { fp = _d; break; }
+     }
+     if (!fp) fp = new Date(v.fecha);
+    } else {
+     fp = new Date(v.fecha);
+    }
     if (isNaN(fp.getTime()) || fp < _hoy00Hero) return;
-    var prov = State.get.prov ? State.get.prov(v.provId) : null;
-    var nom = (prov && prov.nombre) || v.provId || 'Proveedor';
+    var nom = (provV && provV.nombre) || v.provId || 'Proveedor';
     _candidatos.push({
      ts: fp.getTime(),
      icon: '🧑‍💼',
      title: 'Realizar pedido · ' + nom,
      date: fp,
      suffix: '',
-     _noHora: v._src === 'predicho'
+     _noHora: v._src === 'predicho' || v._src === 'pending'
     });
    });
    // Entregas próximas (allPedidos: calcular fecha entrega)
    // v1.3.1448: texto accionable "Recibir entrega · X" en lugar de "Entrega · X"
    // v1.3.1452: SOLO entregas reales (con pedido pendiente), NO predichas.
    //   Una entrega solo existe tras un pedido real en almacén.
+   // v1.3.1508: para pendings reales, calcular próximo diasEntrega del editor
+   //   del proveedor DESDE HOY (no desde p.date). Si el editor no tiene
+   //   diasEntrega definidos, fallback al cálculo original.
    allPedidos.forEach(function(p) {
     if (!p || !p.date) return;
     if (p._src === 'predicho') return; // entregas predichas excluidas del hero
-    var fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
-    if (!fe || isNaN(fe.getTime()) || fe < _hoy00Hero) return;
+    var fe;
     var prov = State.get.prov ? State.get.prov(p.provId) : null;
+    var _deProv = (prov && prov.diasEntrega) || [];
+    if (p._src === 'pending' && _deProv.length) {
+     // Calcular próximo diasEntrega desde HOY
+     fe = null;
+     for (var _i = 0; _i <= 14; _i++) {
+      var _d = new Date(_hoy00Hero); _d.setDate(_hoy00Hero.getDate() + _i);
+      var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
+      if (_deProv.indexOf(_dow) >= 0) { fe = _d; break; }
+     }
+     if (!fe) fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
+    } else {
+     fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
+    }
+    if (!fe || isNaN(fe.getTime()) || fe < _hoy00Hero) return;
     var nom = (prov && prov.nombre) || p.provId || 'Proveedor';
     var nArts = (p.items && p.items.length) || 0;
     _candidatos.push({
@@ -37137,7 +37178,8 @@ function _confirmBorrarCuenta(id) {
      icon: '🚚',
      title: 'Recibir entrega · ' + nom,
      date: fe,
-     suffix: nArts > 0 ? (' · ' + nArts + ' arts.') : ''
+     suffix: nArts > 0 ? (' · ' + nArts + ' arts.') : '',
+     _noHora: p._src === 'pending' // pending hora ya no es relevante, fecha del editor sin hora real
     });
    });
    // Recordatorios próximos
@@ -37883,6 +37925,18 @@ function _confirmBorrarCuenta(id) {
  //   
  //   Marca visual: si fecha entrega < hoy, flag _atrasado=true para render.
  //   Shape compatible con tipo 'entrega' para reutilizar el bloque de render.
+ // v1.3.1508: helper para leer atributos del proveedor (diasPedido, diasEntrega)
+ //   por id de proveedor. Cachea el lookup para no buscar 2 veces por evento.
+ var _provCache = {};
+ var prov_get = function(provId, key) {
+  if (!provId) return null;
+  if (_provCache[provId] === undefined) {
+   _provCache[provId] = State.get.prov ? State.get.prov(provId) : null;
+  }
+  var p = _provCache[provId];
+  return p ? p[key] : null;
+ };
+
  var _pending = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
  _pending.forEach(function(p) {
   // status='pending' (no marcado) o sin status (legacy) = sigue pendiente.
@@ -37891,46 +37945,72 @@ function _confirmBorrarCuenta(id) {
   if (!p || !p.date) return;
   var fp = new Date(p.date);
   if (isNaN(fp.getTime())) return;
+
+  // v1.3.1508 — CAMBIO SEMÁNTICA: fecha del feed = editor del proveedor (fuente
+  // de la verdad), NO la fecha real del pedido (p.date).
+  //   - Si el editor define diasEntrega → calcular próximo diasEntrega desde HOY
+  //   - El pedido original (p.date) sigue siendo el de la timeline horizontal
+  //     (PEDIDO MA 12 MAY), pero el AGRUPAMIENTO del feed usa la fecha calculada
+  //     según el editor.
+  //   - Si la fecha entrega calculada desde p.date YA pasó (entrega original
+  //     vencida sin recibir) → marcar atrasado con esos N días.
+  //   - Caso sameDay (un solo evento) — análogo: usar próximo diasPedido del prov.
+
+  // Calcular días de atraso reales (basado en fecha entrega original desde p.date)
+  var feOriginal = calcEntA(p.date, p.provId);
+  var diasAtrasoCalc = 0;
+  if (!isNaN(feOriginal.getTime())) {
+   var feOrigMid = new Date(feOriginal); feOrigMid.setHours(0,0,0,0);
+   if (feOrigMid < hoy0) diasAtrasoCalc = Math.floor((hoy0 - feOrigMid) / 86400000);
+  }
+
   // v1.3.1451: sameDay per-evento (esta fecha específica es pedido Y entrega)
   if (_eventoSameDay(p.provId, fp)) {
-   if (!inRange(fp)) return;
-   // Atraso = si la fecha del pedido (=entrega) ya pasó y no se recibió
-   var diasAtrasoSD = 0;
-   var fpMid = new Date(fp); fpMid.setHours(0,0,0,0);
-   if (fpMid < hoy0) {
-    diasAtrasoSD = Math.floor((hoy0 - fpMid) / 86400000);
-   }
+   // Buscar próximo diasPedido del proveedor desde HOY (que también es diasEntrega
+   // porque es sameDay). Si no hay diasPedido → fallback a fp original.
+   var _fechaFeedSD = _nextOrderDate(prov_get(p.provId, 'diasPedido'), hoy0);
+   if (!_fechaFeedSD) _fechaFeedSD = fp;
+   if (!inRange(_fechaFeedSD)) return;
    eventos.push({
     tipo: 'pedido_entrega',
-    fecha: fp,
-    sortKey: fp.getTime(),
+    fecha: _fechaFeedSD,
+    sortKey: _fechaFeedSD.getTime(),
     pedido: { id: p.id, provId: p.provId, fecha: p.date, items: p.items || [] },
     _pending: true,
-    _atrasado: diasAtrasoSD > 0,
-    _diasAtraso: diasAtrasoSD
+    _atrasado: diasAtrasoCalc > 0,
+    _diasAtraso: diasAtrasoCalc,
+    _fechaOriginalPedido: fp
    });
    return;
   }
-  // Caso normal: días distintos, evento de entrega separado
-  var fe = calcEntA(p.date, p.provId);
-  if (isNaN(fe.getTime())) return;
-  // Filtrar por rango de la fecha de entrega
-  if (!inRange(fe)) return;
-  // Calcular días atrasados (si negativo, está en el futuro)
-  var diasAtraso = 0;
-  var feMid = new Date(fe); feMid.setHours(0,0,0,0);
-  if (feMid < hoy0) {
-   diasAtraso = Math.floor((hoy0 - feMid) / 86400000);
+  // Caso normal: días distintos. Calcular próximo diasEntrega desde HOY (no desde p.date).
+  // Si no hay diasEntrega configurado → fallback al cálculo original calcEntA(p.date).
+  var _fechaFeedE;
+  var _de = prov_get(p.provId, 'diasEntrega');
+  if (_de && _de.length) {
+   // Buscar próximo día de entrega desde HOY
+   _fechaFeedE = null;
+   for (var _i = 0; _i <= 14; _i++) {
+    var _d = new Date(hoy0); _d.setDate(hoy0.getDate() + _i);
+    var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
+    if (_de.indexOf(_dow) >= 0) { _fechaFeedE = _d; break; }
+   }
+   if (!_fechaFeedE) _fechaFeedE = feOriginal; // fallback
+  } else {
+   _fechaFeedE = feOriginal;
   }
+  if (isNaN(_fechaFeedE.getTime())) return;
+  if (!inRange(_fechaFeedE)) return;
   eventos.push({
    tipo: 'entrega',
-   fecha: fe,
-   sortKey: fe.getTime(),
+   fecha: _fechaFeedE,
+   sortKey: _fechaFeedE.getTime(),
    pedido: { id: p.id, provId: p.provId, fecha: p.date, items: p.items || [] },
    fechaPedido: fp,
    _pending: true,
-   _atrasado: diasAtraso > 0,
-   _diasAtraso: diasAtraso
+   _atrasado: diasAtrasoCalc > 0,
+   _diasAtraso: diasAtrasoCalc,
+   _fechaOriginalEntrega: feOriginal
   });
  });
 
@@ -37985,7 +38065,12 @@ function _confirmBorrarCuenta(id) {
    }
    var _esAtrasadoPred = false;
    var _diasAtrasoPred = 0;
-   if (fpPred < hoy0) {
+   var _esHoyPred = false;
+   var _fpPredMid = new Date(fpPred); _fpPredMid.setHours(0,0,0,0);
+   if (_fpPredMid.getTime() === hoy0.getTime()) {
+    // v1.3.1508: día de pedido del proveedor coincide con HOY → estado "REALIZAR PEDIDO"
+    _esHoyPred = true;
+   } else if (fpPred < hoy0) {
     // Día pedido pasó pero entrega aún no → marcar atrasado
     _esAtrasadoPred = true;
     _diasAtrasoPred = Math.floor((hoy0.getTime() - fpPred.getTime()) / 86400000);
@@ -38001,7 +38086,8 @@ function _confirmBorrarCuenta(id) {
      pedido: { id: '_predicho_' + prov.id + '_p' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
      _predicho: true,
      _atrasado: _esAtrasadoPred,
-     _diasAtraso: _diasAtrasoPred
+     _diasAtraso: _diasAtrasoPred,
+     _esHoy: _esHoyPred
     });
    }
    // v1.3.1452: NO push 'entrega' ni 'pedido_entrega' predicho.
@@ -38099,19 +38185,36 @@ function _confirmBorrarCuenta(id) {
  eventos.sort(function(a, b) { return a.sortKey - b.sortKey; });
 
  // ── Agrupar por día ──────────────────────────────────────────
+ // v1.3.1508: eventos atrasados (con _atrasado:true) van a un grupo especial
+ //   "VENCIDO" que se renderiza PRIMERO (arriba de HOY).
  var DNAMES_FULL = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
  var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
  var groups = {};
  var groupOrder = [];
+ var VENCIDO_KEY = '__vencido__';
  eventos.forEach(function(ev) {
-  var d = ev.fecha;
-  var key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-  if (!groups[key]) {
-   groups[key] = { date: new Date(d.getFullYear(), d.getMonth(), d.getDate()), items: [] };
-   groupOrder.push(key);
+  var key;
+  if (ev._atrasado && ev._diasAtraso > 0) {
+   key = VENCIDO_KEY;
+   if (!groups[key]) {
+    groups[key] = { date: new Date(0), items: [], _esVencido: true };
+    groupOrder.unshift(key); // siempre primero
+   }
+  } else {
+   var d = ev.fecha;
+   key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+   if (!groups[key]) {
+    groups[key] = { date: new Date(d.getFullYear(), d.getMonth(), d.getDate()), items: [] };
+    groupOrder.push(key);
+   }
   }
   groups[key].items.push(ev);
  });
+ // Asegurar VENCIDO siempre primero (si existe), aunque otros eventos lo hayan empujado abajo
+ if (groups[VENCIDO_KEY]) {
+  groupOrder = groupOrder.filter(function(k){ return k !== VENCIDO_KEY; });
+  groupOrder.unshift(VENCIDO_KEY);
+ }
 
  var manana0 = new Date(hoy0); manana0.setDate(hoy0.getDate()+1);
  var semanaLimit = new Date(hoy0); semanaLimit.setDate(hoy0.getDate()+7);
@@ -38132,16 +38235,20 @@ function _confirmBorrarCuenta(id) {
   var g = groups[key];
   var isPast = g.date < hoy0;
   var lbl;
-  if (g.date.getTime() === hoy0.getTime()) lbl = 'Hoy';
+  if (g._esVencido) {
+   // v1.3.1508: grupo especial VENCIDO arriba de HOY
+   lbl = 'Vencido';
+   isPast = true; // estilo past (rojo apagado)
+  } else if (g.date.getTime() === hoy0.getTime()) lbl = 'Hoy';
   else if (g.date.getTime() === manana0.getTime()) lbl = 'Mañana';
   else if (g.date < semanaLimit && g.date >= hoy0) lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate();
   else lbl = DNAMES_FULL[g.date.getDay()===0?6:g.date.getDay()-1] + ' ' + g.date.getDate() + ' ' + MON[g.date.getMonth()];
 
   var group = document.createElement('div');
-  group.className = 'snap-tl-v-group';
+  group.className = 'snap-tl-v-group' + (g._esVencido ? ' snap-tl-v-group-vencido' : '');
 
   var dayEl = document.createElement('div');
-  dayEl.className = 'snap-tl-v-day' + (isPast ? ' past' : '');
+  dayEl.className = 'snap-tl-v-day' + (isPast ? ' past' : '') + (g._esVencido ? ' vencido' : '');
   dayEl.textContent = lbl;
   group.appendChild(dayEl);
 
@@ -38291,6 +38398,10 @@ function _confirmBorrarCuenta(id) {
     if (ev._atrasado && ev._diasAtraso > 0) {
      _stateLblH = 'Atrasado · ' + ev._diasAtraso + 'd';
      _stateClsH = 'atrasado';
+    } else if (ev._esHoy && ev._predicho) {
+     // v1.3.1508: hoy es día de pedido del proveedor → estado accionable
+     _stateLblH = 'Realizar pedido';
+     _stateClsH = 'realizar';
     } else if (ev._predicho) {
      _stateLblH = 'Programado';
      _stateClsH = 'programado';
@@ -38313,13 +38424,17 @@ function _confirmBorrarCuenta(id) {
     var _escH1 = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
     });};
+    // v1.3.1508: color del estado — añadido 'realizar' (rojo vivo accionable)
     var _stateColorH = (_stateClsH === 'atrasado') ? 'color:var(--red)'
+     : (_stateClsH === 'realizar') ? 'color:var(--red);font-weight:var(--fw-xbold)'
      : (_stateClsH === 'programado') ? 'color:#3859b4'
      : (_stateClsH === 'pending') ? 'color:#a07520'
      : 'color:var(--ink-soft)';
+    // v1.3.1508: ocultar "N arts." cuando el pedido es predicho (no tiene items reales)
+    var _showNArts = !ev._predicho && nArts > 0;
     titulo.innerHTML = '<span>' + _escH1(provName) + '</span>'
      + '<span style="' + _stateColorH + ';font-weight:var(--fw-bold);font-size:var(--fs-2xs);letter-spacing:0.3px;text-transform:uppercase">· ' + _stateLblH + '</span>'
-     + '<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs)">· ' + nArts + ' art' + (nArts !== 1 ? 's.' : '.') + '</span>';
+     + (_showNArts ? ('<span style="color:var(--ink-soft);font-weight:var(--fw-reg);font-size:var(--fs-xs)">· ' + nArts + ' art' + (nArts !== 1 ? 's.' : '.') + '</span>') : '');
     contentEl.appendChild(titulo);
 
     // v1.3.1498: barra horizontal = ciclo PEDIDO→ENTREGA de este pedido concreto.
