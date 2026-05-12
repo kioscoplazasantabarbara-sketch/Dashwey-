@@ -223,7 +223,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1502";
+ var CURRENT_CACHE = "dashwey-v1-3-1503";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -242,7 +242,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1502</title>
+<title>Dashwey v1.3.1503</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3022,90 +3022,134 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
 
 /* v1.3.1495 — Layout timeline Agenda premium */
 /* Aplica SOLO al timeline Actividad (.snap-tl-v-actividad). Recordatorios legacy intacto. */
+/*
+   v1.3.1503 — REDISEÑO DEFINITIVO ALINEACIÓN
+   ─────────────────────────────────────────────
+   PROBLEMA HISTÓRICO (v1499→v1502): el spine vertical, el dot del día y el
+   checkbox se posicionaban con `left:Xpx` pero CADA UNO desde un ancestro
+   DIFERENTE:
+   - Spine: desde .snap-tl-v-group (position:relative)
+   - Dot día: desde .snap-tl-v-day (position:relative, max-width:36px)
+   - Checkbox: desde .snap-tl-v-item-act (position:relative)
+   Si los 3 valores no coincidían exactamente o si los ancestros tenían
+   anchos/paddings sutilmente distintos, el alineamiento drift-eaba.
+   El texto "MAÑANA" se cortaba porque el spine pasaba por encima sin que
+   max-width:36px lo evitara realmente en WebView Android (sub-pixel issues).
+   ─────────────────────────────────────────────
+   SOLUCIÓN v1503:
+   1. Variable CSS --axis-x:58px que TODOS los elementos usan.
+   2. Día con padding-right:24px reservado → texto físicamente NO puede pasar
+      de x=46px en grupos donde max-width sea problemático (lo dejamos sin
+      max-width y confiamos en padding-right + overflow-hidden).
+   3. Dot del día se renderiza como elemento INDEPENDIENTE absolute dentro
+      del grupo (no como ::before del día). Coordenada única: left:var(--axis-x).
+   4. Checkbox: absolute en left:var(--axis-x). Mismo origen.
+   5. Spine: absolute en left:var(--axis-x). Mismo origen.
+   Como las 3 referencias usan la MISMA variable y el MISMO ancestro
+   relativo (grupo) → alineamiento pixel-perfect garantizado.
+*/
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-group {
+ --axis-x: 58px;
  padding-left: 0;
  padding-right: 0;
- position: relative; /* v1.3.1501: para que dot del día y spine usen este ref */
+ position: relative;
 }
-/* Eje vertical: posicionado en x=44 (centro col 2 = 36+8).
-   v1.3.1501: layout final [36 hora][16 eje+check][12 gap][1fr cajón].
-   El eje y checkbox quedan en su propio carril vertical de 16px, separados
-   claramente del cajón gris (gap 12px). Antes el checkbox parecía pegado al
-   cajón porque no había gap visual entre col 2 y col 3. */
+/* Spine vertical: usa --axis-x. Width 2px → -1px de translate para centro real. */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-group::before {
- left: 44px;
+ left: var(--axis-x);
  top: 18px;
+ transform: translateX(-50%);
 }
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-group:last-child::before { bottom: 12px; }
 
-/* Día: texto a la IZQUIERDA del grupo (alineado con primer KPI).
-   v1.3.1501: max-width: 36px (corta antes del dot @ 44px con respiro). */
+/* Día: contiene SOLO texto. Sin dot (el dot es elemento aparte, hijo del grupo).
+   padding-right físico reservando espacio para el eje a 58px (text-area
+   termina a 50px máx, 8px de respiro al spine).
+   SIN max-width — confiamos en padding-right + overflow:hidden. */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-day {
  padding: var(--sp-1) 0 var(--sp-2);
- position: relative;
+ padding-right: 16px; /* reserva espacio antes del eje a x=58 */
+ position: static; /* NO relative — el dot del día se rinde aparte */
  width: auto;
- max-width: 36px;
+ max-width: calc(var(--axis-x) - 8px); /* hasta x=50, deja 8px antes del eje */
  text-align: left;
- padding-right: 0;
  padding-left: 0;
  overflow: hidden;
  text-overflow: clip;
  white-space: nowrap;
 }
-.snap-tl-v.snap-tl-v-actividad .snap-tl-v-day::before {
- /* dot centrado sobre el eje vertical (x=44 desde el grupo) */
+/* Dot del día: NO usamos ::before del día. En su lugar, un elemento explícito
+   <div class="snap-tl-v-day-dot"> hermano del día dentro del grupo.
+   Posición absolute desde el grupo. */
+.snap-tl-v.snap-tl-v-actividad .snap-tl-v-day-dot {
  position: absolute;
- left: 44px;
- top: 50%;
+ left: var(--axis-x);
+ top: 18px; /* alineado con la fila del día (aproxima al texto upper) */
  transform: translate(-50%, -50%);
  width: 10px;
  height: 10px;
  border-radius: 50%;
  background: var(--red);
  box-shadow: 0 0 0 3px var(--surface);
+ z-index: 2;
+ pointer-events: none;
+}
+.snap-tl-v.snap-tl-v-actividad .snap-tl-v-day.past + .snap-tl-v-day-dot,
+.snap-tl-v.snap-tl-v-actividad .snap-tl-v-day-dot.past {
+ background: rgba(0,0,0,0.25);
 }
 
-/* Item: grid [36 hora][16 eje+check][12 gap][1fr cajón]
-   v1.3.1501: gap EXPLÍCITO de 12px entre col 2 y col 3 para separación visual
-   clara entre el carril del eje/checkbox y el cajón gris. */
+/* Item: grid [38 hora][1fr cajón] simplificado.
+   v1.3.1503: SIMPLIFICADO — grid 2 columnas. El checkbox y el cajón están
+   en columna 2 visualmente porque el cajón tiene margin-left que esquiva
+   el carril del eje. El checkbox es absolute desde el ITEM (relative) y
+   usa --axis-x HEREDADO del grupo. Esto garantiza que --axis-x es el mismo
+   valor que el spine y el dot del día. Y el `top: 50%` centra el checkbox
+   verticalmente con respecto al ITEM (no al grupo). */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-item.snap-tl-v-item-act {
  display: grid;
- grid-template-columns: 36px 16px 12px 1fr;
+ grid-template-columns: 38px 1fr;
  align-items: center;
  padding: var(--sp-1_5) 0;
- position: relative;
+ position: relative; /* checkbox absolute usa este ref para top:50% */
 }
-/* Hora en columna 1, alineada derecha */
+/* Hora en columna 1, alineada derecha pegada al eje */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-item.snap-tl-v-item-act .snap-tl-v-item-hora {
  grid-column: 1;
  width: auto;
  text-align: right;
  padding-right: 4px;
+ font-variant-numeric: tabular-nums;
 }
-/* Checkbox: position:absolute en x=44 (mismo punto que dot día + spine).
-   v1.3.1501: con la columna 3 vacía (gap 12px) entre eje (col 2 a 36..52px)
-   y cajón (col 4 desde 64px), el checkbox queda CLARAMENTE fuera del cajón. */
+/* Checkbox: absolute desde el ITEM (relative). left:var(--axis-x) HEREDADO
+   del grupo padre → el mismo valor que spine y dot del día.
+   top:50% centra respecto al item. */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-item.snap-tl-v-item-act .snap-tl-v-check {
- grid-column: 2;
+ grid-column: unset;
  position: absolute;
- left: 44px;
+ left: var(--axis-x);
  top: 50%;
  transform: translate(-50%, -50%);
  box-shadow: 0 0 0 3px var(--surface);
- z-index: 2;
+ z-index: 3;
 }
-/* Card en columna 4 (col 3 es el gap vacío) */
+/* Cajón en columna 2 con margin-left para apartarse del eje.
+   Eje en x=58, hora termina en x=38. Margen para separar el cajón del eje:
+   el cajón visualmente empieza en x≈74 (58+8 fin checkbox + 8 gap visual). */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-item.snap-tl-v-item-act .snap-tl-v-item-content {
- grid-column: 4;
+ grid-column: 2;
  padding-left: 0;
+ margin-left: 36px; /* (58−38)+16 = 36px aparta cajón del eje con buen gap */
 }
 
-/* Sección Completado: hereda el mismo layout (v1.3.1501: grid 36/16/12/1fr) */
+/* Sección Completado: layout simétrico simplificado */
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-done-content .snap-tl-v-item {
+ --axis-x: 58px;
  display: grid;
- grid-template-columns: 36px 16px 12px 1fr;
+ grid-template-columns: 38px 1fr;
  align-items: center;
  padding: var(--sp-1_5) 0;
+ position: relative;
 }
 .snap-tl-v.snap-tl-v-actividad .snap-tl-v-done-content .snap-tl-v-item .snap-tl-v-item-hora {
  grid-column: 1;
@@ -19613,7 +19657,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1502';
+ const _APP_VERSION = 'v1.3.1503';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38093,6 +38137,16 @@ function _confirmBorrarCuenta(id) {
   dayEl.className = 'snap-tl-v-day' + (isPast ? ' past' : '');
   dayEl.textContent = lbl;
   group.appendChild(dayEl);
+
+  // v1.3.1503: dot del día como elemento explícito (hermano del día).
+  //   Antes era ::before del día, pero el día tiene max-width y el ::before
+  //   se posiciona absolute respecto al día (con max-width 36px) → drift
+  //   de alineamiento vs el spine vertical y el checkbox.
+  //   Ahora el dot es absolute desde el GRUPO usando --axis-x → alineamiento
+  //   pixel-perfect con spine y checkbox.
+  var dayDot = document.createElement('div');
+  dayDot.className = 'snap-tl-v-day-dot' + (isPast ? ' past' : '');
+  group.appendChild(dayDot);
 
   g.items.forEach(function(ev) {
    // v1.3.1493: filtrar completados (se mostrarán en sección Completado)
