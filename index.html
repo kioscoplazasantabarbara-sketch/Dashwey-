@@ -627,7 +627,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1563";
+ var CURRENT_CACHE = "dashwey-v1-3-1564";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -646,7 +646,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1563</title>
+<title>Dashwey v1.3.1564</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3947,7 +3947,30 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
 
 /* ── Snap pie segment animation ─────────────────────────────────────────── */
 
-/* snap chart bars: no @keyframes (WebView flicker) — bars render at full height */
+/* v1.3.1564 LOTE D · animación crecimiento barras + donuts.
+   ANTES (3950): "no @keyframes (WebView flicker) — bars render at full height".
+   La restricción es contra @keyframes que producen flicker en WebView Android.
+   AHORA: transform: scaleY/scale + transition (GPU compositor, sin @keyframes).
+   transform-box: fill-box obliga al elemento SVG a usar su propio bounding box
+   como referencia para transform-origin — sin esto, transform-origin: bottom
+   en <rect> SVG es relativo al viewport SVG, no a la barra. */
+.snap-bar {
+ transform-box: fill-box;
+ transform-origin: center bottom;
+ transform: scaleY(0);
+ transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.snap-bar.snap-bar-grown {
+ transform: scaleY(1);
+}
+/* Donut: cada segmento es un <circle> con stroke-dasharray. Animamos
+   stroke-dashoffset de "todo oculto" (= circ) a "visible" (= 0).
+   transform-box no aplica a stroke; usamos solo transition. */
+.snap-donut-seg {
+ transition: stroke-dashoffset 700ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* snap chart bars: ver bloque LOTE D arriba. */
 
 /* ── Narrative typography ──────────────────────────────────────────────── */
 /* Slide-reveal desde bottom navbar — v1.3.39 */
@@ -20798,7 +20821,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1563';
+ const _APP_VERSION = 'v1.3.1564';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38174,35 +38197,22 @@ function _confirmBorrarCuenta(id) {
 
  function _snapCounterUp(el, target, format, duration) {
  if (!el) return;
- duration = duration || 700;
- // v1.3.283: DASH-06 — cancelar rAF anterior para evitar loops concurrentes
+ // v1.3.1564 LOTE D · KPIs sin animación (decisión producto Hung 13may).
+ //   ANTES: animación rAF 400-700ms con easing cubic, opcionalmente clase
+ //   'snap-pop' (escala+desplazamiento) al terminar. Pesado en hot path render,
+ //   distrae del dato. Hung pidió quitar animaciones de KPIs en todas las cards.
+ //   AHORA: render inmediato del valor final. Mismo formato (eur/pct/int).
+ //   Se mantiene la firma de la función para no romper los 11 callsites.
+ //   Si en algún callsite quieren animación, se revisa caso por caso post-26may.
  if (el._snapRafId) { cancelAnimationFrame(el._snapRafId); el._snapRafId = null; }
- var start = 0;
- var startTime = null;
  var isEur = format === 'eur';
  var isPct = format === 'pct';
- el.classList.add('snap-counting');
-
- function step(ts) {
- // v1.3.605: guard DOM detached
- if (!el.isConnected) { el._snapRafId = null; return; }
- if (!startTime) startTime = ts;
- var progress = Math.min((ts - startTime) / duration, 1);
- var ease = 1 - Math.pow(1 - progress, 3);
- var current = start + (target - start) * ease;
- if (isEur) el.textContent = _snapFeur(current);
- else if (isPct) el.textContent = _snapFmt(current, 1) + '%';
- else el.textContent = _snapFmt(Math.round(current));
- if (progress < 1) {
-  el._snapRafId = requestAnimationFrame(step);
- } else {
-  el._snapRafId = null;
-  el.classList.remove('snap-counting');
-  el.classList.add('snap-pop');
-  setTimeout(function() { if (el.isConnected) el.classList.remove('snap-pop'); }, 400);
- }
- }
- el._snapRafId = requestAnimationFrame(step);
+ if (isEur) el.textContent = _snapFeur(target);
+ else if (isPct) el.textContent = _snapFmt(target, 1) + '%';
+ else el.textContent = _snapFmt(Math.round(target));
+ // Quitar clase 'snap-counting' si quedó pegada de animación previa
+ el.classList.remove('snap-counting');
+ el.classList.remove('snap-pop');
  }
 
  // ── Typewriter con cifras resaltadas en rojo (tipo E) ────────────────────
@@ -42071,6 +42081,22 @@ function _confirmBorrarCuenta(id) {
  svg.style.height = H + 'px';
  svg.innerHTML = parts.join('');
 
+ // v1.3.1564 LOTE D · animación crecimiento barras.
+ //   Cada .snap-bar nace con scaleY(0) por CSS. Tras pintar el SVG, doble rAF
+ //   garantiza que el browser registre el estado inicial antes de aplicar la
+ //   clase que dispara la transition. Sin doble rAF la transition no se ve.
+ //   Stagger 18ms por barra para efecto cascada (sin saturar GPU).
+ try {
+  requestAnimationFrame(function(){
+   requestAnimationFrame(function(){
+    svg.querySelectorAll('.snap-bar').forEach(function(bar, idx){
+     bar.style.transitionDelay = (idx * 18) + 'ms';
+     bar.classList.add('snap-bar-grown');
+    });
+   });
+  });
+ } catch(_) {}
+
  // ── 6. TOOLTIP ────────────────────────────────────────────────────────
  if (tip) {
   svg.querySelectorAll('.snap-bar').forEach(function(bar) {
@@ -42245,9 +42271,14 @@ function _confirmBorrarCuenta(id) {
    var dash = pct * circ;
    var gap  = circ - dash;
    var rot  = startAngle * 180 / Math.PI - 90;
-   return '<circle cx="' + cx + '" cy="' + cy + '" r="' + mid + '"'
+   // v1.3.1564 LOTE D · clase snap-donut-seg + stroke-dashoffset inicial=dash
+   //   (segmento oculto). Tras render, JS resetea dashoffset a 0 → transition
+   //   CSS dibuja el arco. data-dash guarda la longitud para el reset.
+   return '<circle class="snap-donut-seg" cx="' + cx + '" cy="' + cy + '" r="' + mid + '"'
     + ' fill="none" stroke="' + color + '" stroke-width="' + (R-r) + '"'
     + ' stroke-dasharray="' + dash.toFixed(2) + ' ' + gap.toFixed(2) + '"'
+    + ' stroke-dashoffset="' + dash.toFixed(2) + '"'
+    + ' data-dash="' + dash.toFixed(2) + '"'
     + ' transform="rotate(' + rot.toFixed(2) + ' ' + cx + ' ' + cy + ')"'
     + ' stroke-linecap="butt"/>';
   };
@@ -42303,6 +42334,22 @@ function _confirmBorrarCuenta(id) {
   + _buildDonut()
   + '</div>'
   + '</div>';
+
+ // v1.3.1564 LOTE D · animación crecimiento donut.
+ //   Cada segmento nace con stroke-dashoffset=dash (oculto). Tras pintar el
+ //   SVG, doble rAF + reset dashoffset a 0 dispara la transition CSS.
+ //   Stagger 60ms por segmento — el donut tiene pocos elementos, retraso más
+ //   notorio que en barras.
+ try {
+  requestAnimationFrame(function(){
+   requestAnimationFrame(function(){
+    cuentasEl.querySelectorAll('.snap-donut-seg').forEach(function(seg, idx){
+     seg.style.transitionDelay = (idx * 60) + 'ms';
+     seg.setAttribute('stroke-dashoffset', '0');
+    });
+   });
+  });
+ } catch(_) {}
 
  // ── Lista de movimientos de flujo de caja ─────────────────────────
  // v1.3.1159 REGLA CRÍTICA: Flujo de caja = eventos financieros agregados.
