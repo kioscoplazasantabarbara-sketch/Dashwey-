@@ -15,7 +15,7 @@
    - skipWaiting: inmediato siempre (manual y automático).
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-1538';
+const CACHE_NAME  = 'dashwey-v1-3-1539';
 const HTML_URL    = 'index.html';
 
 /* v1.3.1436 BUG-OFFLINE FIX — Lote D
