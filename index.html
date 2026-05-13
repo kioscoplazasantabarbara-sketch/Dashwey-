@@ -160,6 +160,65 @@
    }
   } catch(_) {}
  };
+ /* ── Dashwey.utils.lvToastNuevasCoalesce v1.3.1549 ─────────────────────
+    Coalesce toasts de "venta nueva Loyverse" en una ventana de 1.2s para
+    evitar lag por toasts encadenados cuando llegan múltiples ventas al
+    sincronizar tras volver de background o usar pull-to-refresh.
+
+    En vez de mostrar 5 toasts seguidos ("✅ 1 venta", "✅ 1 venta", ...),
+    se acumulan y se muestra UN toast con el total ("✅ 5 ventas nuevas").
+
+    Cero impacto en datos. Solo afecta capa visual.
+
+    Uso:
+      Dashwey.utils.lvToastNuevasCoalesce(nuevas);            // sin contexto
+      Dashwey.utils.lvToastNuevasCoalesce(nuevas, '14 May');  // con día */
+ Dashwey.utils._lvToastBucket = { count: 0, contexts: new Set(), timer: null };
+ Dashwey.utils.lvToastNuevasCoalesce = function(nuevas, contexto) {
+  try {
+   if (!nuevas || nuevas < 1) return;
+   var b = Dashwey.utils._lvToastBucket;
+   b.count += nuevas;
+   if (contexto) b.contexts.add(String(contexto));
+   if (b.timer) { try { clearTimeout(b.timer); } catch(_) {} }
+   b.timer = setTimeout(function(){
+    try {
+     var n = b.count;
+     var ctxs = Array.from(b.contexts);
+     var msg = '✅ ' + n + ' venta' + (n === 1 ? '' : 's') + ' nueva' + (n === 1 ? '' : 's');
+     if (ctxs.length === 1) msg += ' de ' + ctxs[0];
+     else if (ctxs.length > 1) msg += ' (' + ctxs.length + ' días)';
+     else msg += ' de Loyverse';
+     if (typeof window.showToast === 'function') window.showToast(msg);
+    } catch(_) {}
+    b.count = 0;
+    b.contexts = new Set();
+    b.timer = null;
+   }, 1200);
+  } catch(_) {}
+ };
+ /* ── Dashwey.utils.lvDeferRender v1.3.1549 ────────────────────────────
+    Coalesce re-renders Dashboard tras commits Loyverse. Si llegan 5
+    commits en 300ms, solo se renderiza UNA vez al final (no 5 veces).
+    Sustituye los 3 setTimeout(App.dash.render, 50) hardcoded en el
+    código Loyverse que no estaban migrados a Utils.RENDER_DEFER (Lote K
+    v1545). Cero impacto en datos. */
+ Dashwey.utils._lvRenderTimer = null;
+ Dashwey.utils.lvDeferRender = function() {
+  try {
+   if (Dashwey.utils._lvRenderTimer) { try { clearTimeout(Dashwey.utils._lvRenderTimer); } catch(_) {} }
+   var defer = (window.Utils && typeof window.Utils.RENDER_DEFER === 'number') ? window.Utils.RENDER_DEFER : 300;
+   Dashwey.utils._lvRenderTimer = setTimeout(function(){
+    try {
+     // Invalidar cache chart si existe
+     var _barsEl = document.getElementById('ev-chart-bars');
+     if (_barsEl) _barsEl._evHash = null;
+     if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+    } catch(_) {}
+    Dashwey.utils._lvRenderTimer = null;
+   }, defer);
+  } catch(_) {}
+ };
  /* ── Dashwey.utils.createModal v1.3.1541 ──────────────────────────────
     API unificada para crear modales runtime. Sustituye los 23 modales
     inline detectados en audit 13 may. NO migra los existentes — uso
@@ -568,7 +627,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1548";
+ var CURRENT_CACHE = "dashwey-v1-3-1549";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -587,7 +646,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1548</title>
+<title>Dashwey v1.3.1549</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20657,7 +20716,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1548';
+ const _APP_VERSION = 'v1.3.1549';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24936,14 +24995,12 @@ const ui = (() => {
     _lvMarcarDiaFetched(diaKey);
     console.info('[Dashwey/LVHist] ✓', diaKey, '| nuevas:', nuevas, '| recibidos:', receipts.length);
     if (nuevas > 0) {
-     try {
-      var _barsEl = document.getElementById('ev-chart-bars');
-      if (_barsEl) _barsEl._evHash = null;
-      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
-     } catch(_) {}
+     // v1.3.1549 Lote G: render coalesced (sustituye setTimeout(render, 50))
+     try { Dashwey.utils.lvDeferRender(); } catch(_) {}
      // Toast solo para clicks del usuario (priority >= 1), no para prefetches silenciosos
+     // v1.3.1549 Lote G: toast coalesced (acumula múltiples días en uno)
      if (req.priority >= 1) {
-      try { showToast('✅ ' + nuevas + ' venta' + (nuevas===1?'':'s') + ' de ' + diaKey); } catch(_) {}
+      try { Dashwey.utils.lvToastNuevasCoalesce(nuevas, diaKey); } catch(_) {}
      }
     }
     if (req.onDone) req.onDone(nuevas);
@@ -25134,12 +25191,8 @@ const ui = (() => {
     _lvSaveLastReceiptTs(maxTs);
     if (nNuevas > 0) {
      console.info('[Dashwey/LVRealtime] ✓ ' + nNuevas + ' venta' + (nNuevas===1?'':'s') + ' nueva' + (nNuevas===1?'':'s'));
-     // Render incremental: solo KPIs, sin repintar todo
-     try {
-      var _barsEl = document.getElementById('ev-chart-bars');
-      if (_barsEl) _barsEl._evHash = null;
-      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
-     } catch(_) {}
+     // v1.3.1549 Lote G: render coalesced (sustituye setTimeout(render, 50))
+     try { Dashwey.utils.lvDeferRender(); } catch(_) {}
     }
    })
    .catch(function(e){
@@ -27378,20 +27431,14 @@ const ui = (() => {
     var ventasDespues = (State.get.ventas ? State.get.ventas().length : 0);
     var nuevas = Math.max(0, ventasDespues - ventasAntes);
     // v1.3.1100: solo toast si es refresh manual (force=true); navegación silenciosa total
+    // v1.3.1549 Lote G: toast coalesced (evita spam si llegan múltiples ventas)
     if (opts.force && nuevas > 0) {
-     try { showToast('✅ ' + nuevas + ' venta' + (nuevas===1?'':'s') + ' nueva' + (nuevas===1?'':'s') + ' de Loyverse'); } catch(_) {}
+     try { Dashwey.utils.lvToastNuevasCoalesce(nuevas); } catch(_) {}
     }
     // v1.3.1116: forzar re-render dashboard si llegaron ventas nuevas
-    // (el hash del chart snap previene re-render si datos no cambiaron, pero
-    // tras nuevas ventas SÍ queremos repintar)
+    // v1.3.1549 Lote G: render coalesced 300ms (Utils.RENDER_DEFER) en vez de 50ms
     if (nuevas > 0) {
-     try {
-      // invalidar cache del chart para forzar redibujado
-      var _barsEl = document.getElementById('ev-chart-bars');
-      if (_barsEl) _barsEl._evHash = null;
-      // re-render tras 50ms (tras aplicar state)
-      setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 50);
-     } catch(_) {}
+     try { Dashwey.utils.lvDeferRender(); } catch(_) {}
     }
     if (opts.onDone) opts.onDone(nuevas);
    } catch(e) {
