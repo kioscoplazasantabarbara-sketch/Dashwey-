@@ -588,12 +588,50 @@
     var keys = Object.keys(marks).sort(function(a,b){ return marks[a] - marks[b]; });
     console.log('%c[Dashwey/Boot] timeline (ms desde script init)', 'color:#22C55E;font-weight:bold');
     var prev = 0;
+    var maxDelta = 0, maxLabel = '';
     keys.forEach(function(k) {
      var t = marks[k];
      var delta = Math.round((t - prev) * 10) / 10;
-     console.log('  ' + (t + 'ms').padEnd(10) + ' (+' + delta + 'ms) ' + k);
+     // v1.3.1567 LOTE TELEMETRY · marcar visualmente cuellos (>100ms gap)
+     var icon = '  ';
+     var color = '';
+     if (delta > 500) { icon = '🔴'; color = 'color:#dc2626;font-weight:bold'; }
+     else if (delta > 200) { icon = '🟠'; color = 'color:#f59e0b'; }
+     else if (delta > 100) { icon = '🟡'; color = 'color:#eab308'; }
+     console.log('%c' + icon + ' ' + (t + 'ms').padEnd(10) + ' (+' + delta + 'ms) ' + k, color);
+     if (delta > maxDelta) { maxDelta = delta; maxLabel = k; }
      prev = t;
     });
+    // Análisis automático de fases boot
+    console.log('%c[Dashwey/Boot] análisis fases', 'color:#3b82f6;font-weight:bold');
+    var phase = function(from, to) {
+     if (marks[from] === undefined || marks[to] === undefined) return null;
+     return Math.round((marks[to] - marks[from]) * 10) / 10;
+    };
+    var phases = [
+     ['Parsing HTML→DOMReady', 'script_init', 'dom_content_loaded'],
+     ['Firebase module load', 'dom_content_loaded', 'firebase_module_loaded'],
+     ['Auth resolution', 'firebase_module_loaded', 'auth_resolved'],
+     ['Initial sync', 'do_initial_sync_start', 'do_initial_sync_done'],
+     ['Boot → first render', 'script_init', 'render_all_start'],
+     ['Render execution', 'render_all_start', 'render_all_done'],
+     ['Render → painted', 'render_all_done', 'first_render_painted'],
+     ['Splash visible duration', 'first_render_painted', 'splash_hidden'],
+     ['Total to interactive', 'script_init', 'splash_hidden'],
+     ['Time to first interaction', 'script_init', 'first_user_interaction'],
+    ];
+    phases.forEach(function(p) {
+     var dur = phase(p[1], p[2]);
+     if (dur === null) {
+      console.log('  ' + p[0].padEnd(28) + ' — no medida (faltan marks)');
+     } else {
+      var col = dur > 500 ? 'color:#dc2626;font-weight:bold' : dur > 200 ? 'color:#f59e0b' : 'color:#22c55e';
+      console.log('%c  ' + p[0].padEnd(28) + ' ' + dur + 'ms', col);
+     }
+    });
+    if (maxLabel) {
+     console.log('%c[Dashwey/Boot] mayor gap: ' + maxDelta + 'ms antes de "' + maxLabel + '"', 'color:#dc2626;font-weight:bold');
+    }
     return marks;
    } catch(_e) { console.warn('[Boot] error:', _e); return null; }
   };
@@ -627,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1566";
+ var CURRENT_CACHE = "dashwey-v1-3-1567";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -646,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1566</title>
+<title>Dashwey v1.3.1567</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11918,6 +11956,8 @@ const ACTIVE_CONTEXT = 'business'; // Siempre business por defecto
 let _fbApp = null, _db = null, _auth = null, _uid = null;
 
 if (FIREBASE_ENABLED) {
+ // v1.3.1567 LOTE TELEMETRY · primer mark del módulo Firebase
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('firebase_module_loaded'); } catch(_) {}
  _fbApp = initializeApp(firebaseConfig);
  _db = getFirestore(_fbApp);
  _auth = getAuth(_fbApp);
@@ -11937,6 +11977,8 @@ if (FIREBASE_ENABLED) {
  // firebase-ready: primera vez que hay usuario real autenticado
  if (!_fbReadyFired && user && !user.isAnonymous) {
  _fbReadyFired = true;
+ // v1.3.1567 LOTE TELEMETRY · primera resolución auth con user real
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('auth_resolved'); } catch(_) {}
  window.dispatchEvent(new CustomEvent('dashwey:firebase-ready', { detail: { uid: _uid } }));
  }
 
@@ -15401,8 +15443,14 @@ const State = (() => {
  function load() {
  try {
  const raw = localStorage.getItem(STORAGE_KEY);
- if (!raw) return JSON.parse(JSON.stringify(DEFAULTS));
+ if (!raw) {
+  // v1.3.1567 LOTE TELEMETRY · sin datos local (primera vez)
+  try { if (window._DashweyPerfMark) window._DashweyPerfMark('state_hydrated_local_empty'); } catch(_) {}
+  return JSON.parse(JSON.stringify(DEFAULTS));
+ }
  const loaded = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), JSON.parse(raw));
+ // v1.3.1567 LOTE TELEMETRY · state hidratado desde localStorage
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('state_hydrated_local'); } catch(_) {}
  // v1.3.979: dedup one-shot al hidratar — repara duplicados pre-existentes
  ['ventas','historialPedidos','mermas','facturas','cierresCaja','gastosOp','ingresosFin','recordatorios'].forEach(function(k){
   if (!Array.isArray(loaded[k])) return;
@@ -20588,6 +20636,8 @@ function _hideSplash() {
  if (!splash) return;
  // Guard estricto: ya hidden o ya en proceso de fade-out → no-op
  if (splash.classList.contains('hidden') || splash.classList.contains('fade-out')) return;
+ // v1.3.1567 LOTE TELEMETRY · _hideSplash invocado (puede tardar MIN_VISIBLE más)
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hide_called'); } catch(_) {}
  // v1.3.1566 LOTE I · MIN_VISIBLE reducido de 1000ms a 350ms.
  //   Sin animación de movimiento (fade-in 200ms), mantener 1s visible se
  //   sentía artificialmente largo. 350ms = 200ms fade-in + 150ms respiro
@@ -20601,7 +20651,11 @@ function _hideSplash() {
   // Activar fade-in del app SIMULTÁNEO al fade-out del splash → crossfade
   document.body.setAttribute('data-app-ready', 'true');
   splash.classList.add('fade-out');
-  setTimeout(() => { if (splash) splash.classList.add('hidden'); }, 420);
+  setTimeout(() => {
+   if (splash) splash.classList.add('hidden');
+   // v1.3.1567 LOTE TELEMETRY · splash totalmente oculto (UI lista visualmente)
+   try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden'); } catch(_) {}
+  }, 420);
  }, delay);
 }
 // Registrar tiempo de inicio del splash
@@ -20816,7 +20870,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1566';
+ const _APP_VERSION = 'v1.3.1567';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -58684,9 +58738,24 @@ _eaRecalc();
 
  // Renders iniciales via _renderAll (unica fuente de verdad)
  try { dash._applyHidden?.(); } catch(e) {}
+ // v1.3.1567 LOTE TELEMETRY · render inicial boot
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('render_all_start'); } catch(_) {}
  try { _renderAll(); } catch(e) { console.warn('[Dashwey] init render:', e); }
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('render_all_done'); } catch(_) {}
+
+ // v1.3.1567 LOTE TELEMETRY · primer touch real del usuario.
+ //   Indica "tiempo hasta que el usuario interactúa" — métrica clave UX boot.
+ //   once:true + passive:true: cero coste continuo, se auto-elimina al primer touch.
+ try {
+  document.addEventListener('touchstart', function _firstTouchMark() {
+   try { if (window._DashweyPerfMark) window._DashweyPerfMark('first_user_interaction'); } catch(_) {}
+  }, { once: true, passive: true, capture: true });
+ } catch(_) {}
+
  // Ocultar splash tras el primer render — app lista
  requestAnimationFrame(() => requestAnimationFrame(() => {
+ // v1.3.1567 LOTE TELEMETRY · primer frame realmente pintado por browser
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('first_render_painted'); } catch(_) {}
  setTimeout(_hideSplash, 120); // pequeño delay para que el primer frame se pinte
  }));
 
@@ -59137,6 +59206,8 @@ _eaRecalc();
  async function _doInitialSync() {
  if (_syncRunning) { return; } // guard: ya en curso
  _syncRunning = true;
+ // v1.3.1567 LOTE TELEMETRY · entrada flow initial sync
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_start'); } catch(_) {}
  try {
  const fb = window._DashweyFirebase;
  if (!fb?.enabled) { _syncRunning = false; return; }
@@ -59152,6 +59223,8 @@ _eaRecalc();
   console.warn('[Sync] cold start OFFLINE — modo local-only activado');
   window._DashweyInitialSyncDone = true; // permitir save() local → queue
   window._DashweyOfflineBoot = true; // marca para reintento al reconectar
+  // v1.3.1567 LOTE TELEMETRY · fin offline-only initial sync
+  try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_done_offline'); } catch(_) {}
   State.set.syncStatus({ mode: 'local', pendingWrites: (typeof _pendingQueue !== 'undefined' ? _pendingQueue.length : 0) });
   if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('offline');
   // v1.3.1438: notificar UI reactiva (sd-status)
@@ -59172,6 +59245,8 @@ _eaRecalc();
  if (typeof Utils !== 'undefined' && Utils.updateSyncBadge) Utils.updateSyncBadge('synced');
  }
  window._DashweyInitialSyncDone = true;
+ // v1.3.1567 LOTE TELEMETRY · fin first-time-cloud initial sync
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_done_firstcloud'); } catch(_) {}
  // v1.3.1438: notificar UI reactiva (sd-status)
  try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true, firstTimeCloud: true } })); } catch(_) {}
  return;
@@ -59183,7 +59258,11 @@ _eaRecalc();
  try {
   if (remote._schemaVersion === 2 && !window._DashweyUseSubcollections) {
    const _enableR = await window._DashweyEnableSubcollections({ skipMigrationCheck: true });
-   if (_enableR?.ok) console.info('[Dashwey/SubB] auto-activado al arrancar (schemaVersion=2)');
+   if (_enableR?.ok) {
+    console.info('[Dashwey/SubB] auto-activado al arrancar (schemaVersion=2)');
+    // v1.3.1567 LOTE TELEMETRY · subcolecciones suscritas (auto)
+    try { if (window._DashweyPerfMark) window._DashweyPerfMark('subcollections_subscribed'); } catch(_) {}
+   }
   }
  } catch(e) {
   console.warn('[Dashwey/SubB] auto-enable sync falló:', e?.message);
@@ -59427,6 +59506,8 @@ _eaRecalc();
    if (!_hasSubs && typeof window._DashweyEnableSubcollections === 'function') {
     await window._DashweyEnableSubcollections({ skipMigrationCheck: true });
     console.info('[Dashwey/SubB] subcolecciones suscritas tras merge inicial');
+    // v1.3.1567 LOTE TELEMETRY · subcolecciones suscritas (post-merge)
+    try { if (window._DashweyPerfMark && !window._DashweyPerfMarks?.subcollections_subscribed) window._DashweyPerfMark('subcollections_subscribed'); } catch(_) {}
    }
   }
  } catch(e) {
@@ -59892,6 +59973,8 @@ _eaRecalc();
  window._DashweyOnLocalWrite = () => {};
  // Marcar sync inicial completado (permite writes a Firebase)
  window._DashweyInitialSyncDone = true;
+ // v1.3.1567 LOTE TELEMETRY · fin flow normal initial sync
+ try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_done'); } catch(_) {}
  // v1.3.1438: notificar a UI reactiva (sd-status badge en Ajustes)
  try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true } })); } catch(_) {}
  // v1.3.1135 FIX#1: si había dirty pending durante InitialSync, agendar save ahora
