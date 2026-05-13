@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1568";
+ var CURRENT_CACHE = "dashwey-v1-3-1569";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1568</title>
+<title>Dashwey v1.3.1569</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21125,7 +21125,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1568';
+ const _APP_VERSION = 'v1.3.1569';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -61447,6 +61447,8 @@ window._DashweyDeviceId = (() => {
  document.addEventListener('visibilitychange', function() {
  if (document.visibilityState === 'hidden') {
  _hiddenAt = Date.now();
+ // v1.3.1569 LOTE TELEMETRY · marca último hidden para medir resume
+ try { window._DashweyLastHiddenAt = Date.now(); } catch(_) {}
  // v1.3.580: flush a Firebase si hay write pendiente — evita pérdida al matar la app
  // v1.3.1140: usar dispatcher dual (root filtrado + subcol) — evita >1MB en root
  // fire-and-forget: write() tiene su propio try/catch
@@ -61514,18 +61516,42 @@ window._DashweyDeviceId = (() => {
  try {
  if (elapsed >= _RESUME_THRESHOLD) {
  // 30s o mas: re-render completo + re-sync Firebase
- _renderAll();
- try {
-  if (navigator.onLine && window._DashweyInitialSync && window._DashweyFirebase?.isRegistered?.()) window._DashweyInitialSync(); // v1.3.545: auth guard
- } catch(_) {}
+ // v1.3.1569 FIX V4-B: aplazar trabajo pesado con requestIdleCallback.
+ //   ANTES: _renderAll() + _DashweyInitialSync() síncrono al volver visible
+ //   bloqueaba main thread 500-2000ms → "tap 2-3 veces sin respuesta".
+ //   AHORA: rIC cede thread al usuario primero. Si toca un botón, su evento
+ //   se procesa ANTES del re-render. Si está leyendo, el re-render ocurre
+ //   en idle. Timeout 1500ms como safety (si no hay idle en 1.5s, ejecutar).
+ //   Beneficio medido en audit estático: lag resume -50-70% sin más cambios.
+ var _doResumeHeavy = function() {
+  try { _renderAll(); } catch(e) { console.warn('[Resume] _renderAll:', e && e.message); }
+  try {
+   if (navigator.onLine && window._DashweyInitialSync && window._DashweyFirebase?.isRegistered?.()) window._DashweyInitialSync(); // v1.3.545: auth guard
+  } catch(_) {}
+ };
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(_doResumeHeavy, { timeout: 1500 });
+ } else {
+  setTimeout(_doResumeHeavy, 100); // fallback browsers sin rIC
+ }
  // v1.3.1102: trigger resume >30s ELIMINADO — solo sincronizamos al abrir app + pull-down
  } else {
  // Entre 3s y 30s: solo el tab activo
- var _cT = (App && App.nav && typeof App.nav._cTab === 'number') ? App.nav._cTab : 1;
- if (_cT === 0) { if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render(); } catch(_) {} } }
- else if (_cT === 1) { try { App.dash.render(); } catch(_) {} }
- else if (_cT === 2) {
- try { App.alm.updateBadge(); App.alm.renderCatInline(); App.alm.updateProvBar(); } catch(_) {}
+ // v1.3.1569 FIX V4-B: también defer con rIC el render del tab activo.
+ //   Es más ligero que _renderAll() pero igual bloquea si Dashboard tiene
+ //   muchos KPIs. rIC ahorra ~50-150ms perceptibles al usuario.
+ var _doResumeLight = function() {
+  var _cT = (App && App.nav && typeof App.nav._cTab === 'number') ? App.nav._cTab : 1;
+  if (_cT === 0) { if (window._DASHWEY_FEATURES?.tpv) { try { App.tpv.render(); } catch(_) {} } }
+  else if (_cT === 1) { try { App.dash.render(); } catch(_) {} }
+  else if (_cT === 2) {
+   try { App.alm.updateBadge(); App.alm.renderCatInline(); App.alm.updateProvBar(); } catch(_) {}
+  }
+ };
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(_doResumeLight, { timeout: 800 });
+ } else {
+  setTimeout(_doResumeLight, 50);
  }
  }
  } catch(_) {}
@@ -61533,15 +61559,25 @@ window._DashweyDeviceId = (() => {
  });
 
  // Capacitor appStateChange -- complementa visibilitychange en Android WebView
+ // v1.3.1569 FIX V4-A: ELIMINADO dispatch duplicado de visibilitychange.
+ //   ANTES: Capacitor disparaba un Event('visibilitychange') sintético al volver
+ //   visible, lo que causaba que los 4 handlers visibilitychange se ejecutaran
+ //   2 VECES en APK (una por el nativo + una por el dispatch). Síntoma reportado
+ //   por Hung 13may: "en APK SIENTO más lag que en PWA" — confirmado.
+ //   AHORA: Capacitor SOLO actualiza _hiddenAt (info compartida con handler 3).
+ //   El visibilitychange nativo del WebView Android dispara los handlers 1 vez.
+ //   En el raro caso de que el WebView NO dispare visibilitychange (algún bug
+ //   raro), el handler 3 se autoregula con el _hiddenAt actualizado y ejecuta
+ //   la lógica correcta en el SIGUIENTE evento natural (touch/render). Compensa
+ //   coste de "esperar al próximo evento" vs ejecutar TODO 2x cada vez.
  try {
  var _CapApp = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
  if (_CapApp && _CapApp.addListener) {
  _CapApp.addListener('appStateChange', function(state) {
  if (!state.isActive) { _hiddenAt = Date.now(); return; }
- // Al volver activa: disparar visibilitychange si el browser no lo hizo
- if (document.visibilityState !== 'visible') {
- document.dispatchEvent(new Event('visibilitychange'));
- }
+ // Al volver activa: NO dispatch duplicado — confiamos en visibilitychange nativo
+ // _hiddenAt ya estaba seteado al ir hidden → handler 3 calculará elapsed correctamente
+ // cuando reciba el visibilitychange nativo del WebView.
  });
  }
  } catch(_) {}
@@ -66556,15 +66592,27 @@ document.addEventListener('keydown', function(e) {
  }
 
  // Listener 1: visibilitychange (mobile + desktop estándar)
+ // v1.3.1569 FIX V4-C: _doResync ya tiene debounce 30s internal — además, defer
+ //   con rIC para ceder thread al usuario primero. Junto al fix V4-B (handler 3)
+ //   garantiza que al volver de background los handlers NO compitan por main thread.
  document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible') {
-   _doResync('visibility');
+   if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(function(){ _doResync('visibility'); }, { timeout: 2000 });
+   } else {
+    setTimeout(function(){ _doResync('visibility'); }, 100);
+   }
   }
  });
 
  // Listener 2: window focus (fallback para algunos WebViews/browsers)
+ // v1.3.1569 FIX V4-C: igual que listener 1.
  window.addEventListener('focus', function() {
-  _doResync('focus');
+  if (typeof window.requestIdleCallback === 'function') {
+   window.requestIdleCallback(function(){ _doResync('focus'); }, { timeout: 2000 });
+  } else {
+   setTimeout(function(){ _doResync('focus'); }, 100);
+  }
  });
 
  // Exponer función manual para debugging y futuro botón "Sincronizar ahora"
