@@ -627,7 +627,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1557";
+ var CURRENT_CACHE = "dashwey-v1-3-1558";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -646,7 +646,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1557</title>
+<title>Dashwey v1.3.1558</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1574,6 +1574,23 @@ body[data-energy-saver="1"] .ss-panel {
  .ia-dot,
  .card-shimmer,
  .tl-track-fill, .tl-track-icon { transition: none !important; }
+}
+
+/* v1.3.1558 LOTE Q · Pausar animaciones en elementos ocultos.
+   Objetivo: gama media (Galaxy A17). 12 @keyframes infinitas activas
+   pueden seguir consumiendo GPU continuo aunque el elemento esté oculto
+   (display:none NO siempre detiene animaciones según browser/engine).
+   Beneficio esperado: -5-15% GPU idle, menos drain batería en idle.
+   Seguro: sólo afecta elementos NO visibles. Cero impacto visual. */
+[hidden] *,
+[hidden],
+[style*="display:none"] *,
+[style*="display: none"] *,
+.is-hidden *,
+.is-hidden,
+.hidden *,
+.hidden {
+ animation-play-state: paused !important;
 }
 
 
@@ -14417,17 +14434,7 @@ const State = (() => {
  return Object.assign({}, state, { ventas: ventas, mermas: mermas, historialPedidos: historialPedidos, chatMessages: chatMessages, facturas: facturas }); // v1.3.543
  }
 
- // v1.3.1557 FIX PERF: _writeLocal con debounce 150ms.
- // Antes: cada save() llamaba _writeLocal síncrono → JSON.stringify(payload) + 
- // localStorage.setItem bloqueaba thread 200-250ms (medido DevTools 13 may).
- // Si goTab dispara 3-5 saves seguidos → 1000ms+ thread bloqueado → "lag botones".
- // Ahora: múltiples _writeLocal en 150ms se coalescen en UNO. El último gana
- // (último estado es el válido). Flush forzado en visibilitychange y antes de
- // operaciones críticas (auth changes). 150ms es imperceptible para el usuario
- // pero crítico para no apilar 5 stringifies seguidos.
- var _writeLocalTimer = null;
- var _writeLocalPending = null;
- function _writeLocalRaw(data) {
+ function _writeLocal(data) {
  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
  catch(e) {
  // v1.3.597: retry con datos recortados agresivamente si localStorage está lleno
@@ -14452,31 +14459,6 @@ const State = (() => {
  }
  }
  }
- function _writeLocal(data) {
-  _writeLocalPending = data;
-  if (_writeLocalTimer) return;
-  _writeLocalTimer = setTimeout(function(){
-   var d = _writeLocalPending;
-   _writeLocalPending = null;
-   _writeLocalTimer = null;
-   if (d) _writeLocalRaw(d);
-  }, 150);
- }
- // Flush síncrono — usar antes de operaciones críticas (visibilitychange hidden,
- // antes de cerrar app, logout, etc). Garantiza que el último state se persista.
- function _writeLocalFlush() {
-  if (_writeLocalTimer) {
-   clearTimeout(_writeLocalTimer);
-   _writeLocalTimer = null;
-  }
-  if (_writeLocalPending) {
-   var d = _writeLocalPending;
-   _writeLocalPending = null;
-   _writeLocalRaw(d);
-  }
- }
- // Exponer flush a nivel window para que el listener visibilitychange L60928 lo use
- window._DashweyWriteLocalFlush = _writeLocalFlush;
 
  // ── 2. Firebase en segundo plano (async, silencioso) ───────────
  async function _writeFirebase(data) {
@@ -15448,9 +15430,6 @@ const State = (() => {
  //   stale. Invalidación masiva más simple que tracking granular y mismo
  //   beneficio (la cache solo se popula entre saves).
  try { _ndInvalidate(); } catch(_) {}
- // v1.3.1557 FIX PERF: invalidar cache revenue. Mismo patrón que _nd. Si save()
- // se dispara, algo cambió → revenue puede haber cambiado → vaciar cache.
- try { if (window._DashweyBumpRevCache) window._DashweyBumpRevCache(); } catch(_) {}
  // v1.3.1276 FIX BUG-RENAME-CRITICAL: REGLA 1 corregida.
  // Antes: durante _DashweyApplyingRemote, save() retornaba INMEDIATAMENTE sin marcar
  // dirty ni escribir local. Si el usuario editaba justo durante un apply (onSnapshot
@@ -18729,68 +18708,16 @@ const FinEngine = (() => {
  return mesActualRange();
  }
 
- // v1.3.1557 FIX PERF: capa de cache para revenue/revenueMesActual/revenue30d.
- // DevTools 13 may detectó: revenue() 684ms total / 12s trace = ~57ms × 12 calls.
- // FinEngine se llama 109 veces en la app desde renderers (KPIs Dashboard, snap
- // cards, modales financieros). Tras cada tap entre tabs → todos los KPIs recalculan
- // → mismo range, mismo resultado, pero pagamos 57ms cada vez.
- // SOLUCIÓN: cache LRU por hash(range). Invalidado al cambiar state vía bumpVer().
- // HARD RULE FINANCIAL RESPETADA: NO tocamos la función revenue interna. La
- // función original se llama solo en miss de cache. Si cache falla (lookup, hash),
- // pasamos directo a la función real → cero riesgo de valores incorrectos.
- var _revCache = new Map();
- var _revCacheVer = 0;
- var _REV_CACHE_MAX = 32; // LRU cap
- function _bumpRevCache() {
-  _revCacheVer++;
-  if (_revCache.size > 0) _revCache.clear();
- }
- // Exponer para invalidación externa desde save(), setters, Loyverse commits
- window._DashweyBumpRevCache = _bumpRevCache;
- function _revHash(range) {
-  // Hash determinista compacto. range puede ser {start,end} o periodo string.
-  if (!range) return '_empty_';
-  if (typeof range === 'string') return 'str:' + range;
-  if (typeof range === 'object') {
-   return 'rng:' + (range.start || 0) + ':' + (range.end || 0);
-  }
-  return 'unk:' + String(range);
- }
- function _memoize(fn, name) {
-  return function(range) {
-   try {
-    var key = name + ':' + _revHash(range);
-    if (_revCache.has(key)) return _revCache.get(key);
-    var val = fn(range);
-    // LRU: si cache lleno, borrar primer item (más antiguo)
-    if (_revCache.size >= _REV_CACHE_MAX) {
-     var firstKey = _revCache.keys().next().value;
-     _revCache.delete(firstKey);
-    }
-    _revCache.set(key, val);
-    return val;
-   } catch(_) {
-    // Si algo falla en el cache, fallback a función real (HARD RULE: no romper)
-    return fn(range);
-   }
-  };
- }
- // Wrappers cacheados. Las funciones originales (revenue, revenueMesActual,
- // revenue30d) NO se han tocado — solo se envuelven en el return de FinEngine.
- var revenue_cached = _memoize(revenue, 'rev');
- var revenueMesActual_cached = _memoize(revenueMesActual, 'revMA');
- var revenue30d_cached = _memoize(revenue30d, 'rev30d');
-
  // ── Expose ────────────────────────────────────────────────────────
  return {
  // Utils
  money, ventaIngresos, ventaCoste, pedidoCoste,
  gastoMensualEq, mesActualRange, rollingRange,
 
- // Revenue (v1.3.1557: wrappers cacheados, originales sin tocar)
- revenue: revenue_cached,
- revenueMesActual: revenueMesActual_cached,
- revenue30d: revenue30d_cached,
+ // Revenue
+ revenue,
+ revenueMesActual,
+ revenue30d,
 
  // Costs
  costeVentas, costeVentasMesActual,
@@ -20846,7 +20773,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1557';
+ const _APP_VERSION = 'v1.3.1558';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -61020,10 +60947,6 @@ window._DashweyDeviceId = (() => {
  document.addEventListener('visibilitychange', function() {
  if (document.visibilityState === 'hidden') {
  _hiddenAt = Date.now();
- // v1.3.1557: flush forzado del _writeLocal pendiente. Sin esto, si el usuario
- // pasa la app al fondo dentro de 150ms tras una edición, el debounce puede
- // perder la última escritura. Flush síncrono garantiza persistencia.
- try { if (window._DashweyWriteLocalFlush) window._DashweyWriteLocalFlush(); } catch(_) {}
  // v1.3.580: flush a Firebase si hay write pendiente — evita pérdida al matar la app
  // v1.3.1140: usar dispatcher dual (root filtrado + subcol) — evita >1MB en root
  // fire-and-forget: write() tiene su propio try/catch
