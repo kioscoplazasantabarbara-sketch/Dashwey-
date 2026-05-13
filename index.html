@@ -160,6 +160,267 @@
    }
   } catch(_) {}
  };
+ /* ── Dashwey.utils.createModal v1.3.1541 ──────────────────────────────
+    API unificada para crear modales runtime. Sustituye los 23 modales
+    inline detectados en audit 13 may. NO migra los existentes — uso
+    OPORTUNÍSTICO al crear modales nuevos.
+
+    Integra automáticamente:
+      - Lock/unlock body scroll (helper v1539)
+      - Keyframes canónicos enter/exit (v1540)
+      - Border-radius semántico (--r-modal, --r-sheet, --r-side)
+      - Tap-outside-to-close (en center y bottom)
+      - Escape key handler
+      - Haptic feedback (selection al cerrar)
+      - Botón close opcional con .dw-btn-close
+      - z-index semántico según contexto
+
+    Uso básico:
+      var modal = Dashwey.utils.createModal({
+        type: 'center',                    // 'center' | 'bottom' | 'side'
+        title: 'Detalle ticket',           // opcional
+        content: '<div>...</div>',         // HTML string o Element
+        onClose: function() { ... }        // opcional, tras cierre
+      });
+      // modal.close() para cerrar programáticamente
+      // modal.element para acceder al DOM
+
+    Opciones avanzadas:
+      maxWidth: 420       (solo type:'center', default 420)
+      closeOnBackdrop: true  (default true para center+bottom)
+      showCloseButton: true  (default true)
+      ariaLabel: 'Cerrar'
+      onOpen: function()     (callback tras animación entrada)
+      hapticOpen: 'medium'   (haptic al abrir, default 'selection')
+      hapticClose: 'selection'
+
+    NOTA: esta API NO se registra automáticamente en _LAYERS porque
+    cada modal tiene ID único impredecible. La instancia devuelta
+    expone .close() que el back de Android puede invocar si se hace
+    bridge externo. Para los 4 modales runtime PRE-EXISTENTES, el
+    registro está en _LAYERS v1539.
+
+    Limitación conocida: NO soporta apilar modales del mismo tipo
+    simultáneamente. Si abres modal A y luego modal B mismo tipo,
+    ambos se ven pero solo el último responde a backdrop click.
+*/
+ Dashwey.utils._modalCounter = 0;
+ Dashwey.utils.createModal = function(opts) {
+  opts = opts || {};
+  var type = opts.type || 'center';
+  var validTypes = { center: 1, bottom: 1, side: 1 };
+  if (!validTypes[type]) {
+   console.warn('[createModal] type inválido:', type, '— usando center');
+   type = 'center';
+  }
+  Dashwey.utils._modalCounter++;
+  var instanceId = '_dwModal_' + Dashwey.utils._modalCounter;
+
+  // ─── Construcción overlay
+  var overlay = document.createElement('div');
+  overlay.id = instanceId;
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  if (opts.title) {
+   overlay.setAttribute('aria-label', opts.title);
+  }
+
+  // Estilos por tipo
+  if (type === 'center') {
+   overlay.style.cssText = 'position:fixed;inset:0;z-index:var(--z-modal-over,10200);' +
+    'background:var(--sheet-overlay);' +
+    'display:flex;align-items:center;justify-content:center;' +
+    'padding:24px;opacity:0;' +
+    'transition:opacity var(--dur-modal-exit,200ms) ease-out';
+  } else if (type === 'bottom') {
+   overlay.style.cssText = 'position:fixed;inset:0;z-index:var(--z-sheet,10100);' +
+    'background:var(--sheet-overlay);' +
+    'display:flex;align-items:flex-end;justify-content:center;' +
+    'opacity:0;' +
+    'transition:opacity var(--dur-modal-exit,200ms) ease-out';
+  } else { // side
+   overlay.style.cssText = 'position:fixed;inset:0;z-index:var(--z-sheet,10100);' +
+    'background:var(--sheet-overlay);' +
+    'display:flex;align-items:stretch;justify-content:flex-end;' +
+    'opacity:0;' +
+    'transition:opacity var(--dur-modal-exit,200ms) ease-out';
+  }
+
+  // ─── Panel interior
+  var panel = document.createElement('div');
+  panel.id = instanceId + '_panel';
+  var maxWidth = (typeof opts.maxWidth === 'number') ? opts.maxWidth : 420;
+
+  if (type === 'center') {
+   panel.style.cssText = 'width:100%;max-width:' + maxWidth + 'px;' +
+    'max-height:calc(100vh - 80px);' +
+    'background:var(--surface);' +
+    'border-radius:var(--r-modal,20px);' +
+    'display:flex;flex-direction:column;overflow:hidden;' +
+    'box-shadow:0 18px 40px rgba(0,0,0,0.28);' +
+    'transform:scale(0.94);' +
+    'transition:transform var(--dur-modal-handoff,280ms) cubic-bezier(0.34,1.56,0.64,1)';
+  } else if (type === 'bottom') {
+   panel.style.cssText = 'width:100%;max-width:480px;' +
+    'max-height:82vh;' +
+    'background:var(--surface);' +
+    'border-radius:var(--r-sheet,28px) var(--r-sheet,28px) 0 0;' +
+    'display:flex;flex-direction:column;overflow:hidden;' +
+    'padding-bottom:env(safe-area-inset-bottom,0px);' +
+    'transform:translateY(100%);' +
+    'transition:transform var(--dur-modal-handoff,280ms) cubic-bezier(0.05,0.7,0.1,1.0)';
+  } else { // side
+   panel.style.cssText = 'width:100%;max-width:380px;height:100vh;' +
+    'background:var(--surface);' +
+    'border-radius:var(--r-side,22px) 0 0 var(--r-side,22px);' +
+    'display:flex;flex-direction:column;overflow:hidden;' +
+    'transform:translateX(100%);' +
+    'transition:transform var(--dur-modal-handoff,280ms) cubic-bezier(0.05,0.7,0.1,1.0)';
+  }
+
+  // ─── Header opcional con título + botón close
+  var showCloseButton = (opts.showCloseButton !== false);
+  if (opts.title || showCloseButton) {
+   var header = document.createElement('div');
+   header.style.cssText = 'position:relative;padding:var(--sp-4) var(--sp-4) var(--sp-3);' +
+    'border-bottom:1px solid var(--border);flex-shrink:0;' +
+    'display:flex;align-items:center;gap:var(--sp-3)';
+
+   if (opts.title) {
+    var titleEl = document.createElement('h2');
+    titleEl.className = 'mhd-title';
+    titleEl.style.cssText = 'flex:1;min-width:0;margin:0;' +
+     'font-size:var(--fs-xl);font-weight:var(--fw-xbold);' +
+     'color:var(--ink);letter-spacing:-0.3px;line-height:1.2;' +
+     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    titleEl.textContent = opts.title;
+    header.appendChild(titleEl);
+   }
+
+   if (showCloseButton) {
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'dw-btn-close';
+    closeBtn.setAttribute('aria-label', opts.ariaLabel || 'Cerrar');
+    closeBtn.innerHTML = '×';
+    header.appendChild(closeBtn);
+   }
+   panel.appendChild(header);
+  }
+
+  // ─── Contenido
+  var contentWrap = document.createElement('div');
+  contentWrap.style.cssText = 'flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;' +
+   'overscroll-behavior:contain';
+  if (typeof opts.content === 'string') {
+   contentWrap.innerHTML = opts.content;
+  } else if (opts.content instanceof Element) {
+   contentWrap.appendChild(opts.content);
+  }
+  panel.appendChild(contentWrap);
+  overlay.appendChild(panel);
+
+  // ─── Estado de cierre
+  var _closed = false;
+  var _escHandler = null;
+
+  function _close() {
+   if (_closed) return;
+   _closed = true;
+   var hapticClose = opts.hapticClose || 'selection';
+   try { window.Utils && Utils.triggerHaptic && Utils.triggerHaptic(hapticClose); } catch(_) {}
+
+   // Animación de salida
+   overlay.style.opacity = '0';
+   if (type === 'center') {
+    panel.style.transform = 'scale(0.96)';
+   } else if (type === 'bottom') {
+    panel.style.transform = 'translateY(100%)';
+   } else {
+    panel.style.transform = 'translateX(100%)';
+   }
+
+   // Limpiar listener Escape
+   if (_escHandler) {
+    document.removeEventListener('keydown', _escHandler);
+    _escHandler = null;
+   }
+
+   var exitMs = 280; // alineado con var(--dur-modal-exit) + margen
+   setTimeout(function() {
+    try { overlay.remove(); } catch(_) {}
+    try { Dashwey.utils.unlockBodyScroll(); } catch(_) {}
+    if (typeof opts.onClose === 'function') {
+     try { opts.onClose(); } catch(e) { console.warn('[createModal] onClose err', e); }
+    }
+   }, exitMs);
+  }
+
+  // ─── Wire listeners
+  // Backdrop click (solo center y bottom — side no porque ocupa solo lateral)
+  var closeOnBackdrop = (opts.closeOnBackdrop !== false);
+  if (closeOnBackdrop && (type === 'center' || type === 'bottom')) {
+   overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) _close();
+   });
+  }
+
+  // Botón close
+  if (showCloseButton) {
+   var btn = panel.querySelector('.dw-btn-close');
+   if (btn) {
+    btn.addEventListener('click', function(e) {
+     e.stopPropagation();
+     _close();
+    });
+   }
+  }
+
+  // Escape key
+  _escHandler = function(e) {
+   if (e.key === 'Escape' && !_closed) {
+    _close();
+   }
+  };
+  document.addEventListener('keydown', _escHandler);
+
+  // ─── Mount + animación entrada
+  document.body.appendChild(overlay);
+  try { Dashwey.utils.lockBodyScroll(); } catch(_) {}
+
+  // Haptic apertura
+  var hapticOpen = opts.hapticOpen || 'selection';
+  try { window.Utils && Utils.triggerHaptic && Utils.triggerHaptic(hapticOpen); } catch(_) {}
+
+  // Doble rAF para animar (mismo patrón que openFs canónico)
+  requestAnimationFrame(function() {
+   requestAnimationFrame(function() {
+    overlay.style.opacity = '1';
+    if (type === 'center') {
+     panel.style.transform = 'scale(1)';
+    } else if (type === 'bottom') {
+     panel.style.transform = 'translateY(0)';
+    } else {
+     panel.style.transform = 'translateX(0)';
+    }
+    if (typeof opts.onOpen === 'function') {
+     setTimeout(function() {
+      try { opts.onOpen(); } catch(e) { console.warn('[createModal] onOpen err', e); }
+     }, 300);
+    }
+   });
+  });
+
+  // ─── Instancia devuelta
+  return {
+   id: instanceId,
+   element: overlay,
+   panel: panel,
+   content: contentWrap,
+   close: _close,
+   isClosed: function() { return _closed; }
+  };
+ };
  /* ── HEAD BOOTSTRAP v9.5.107 ────────────────────────────────────────
  Sin splash activo en HEAD. La función real _hideSplash() se define
  más adelante en el body y SOBRESCRIBE este stub automáticamente.
@@ -307,7 +568,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1540";
+ var CURRENT_CACHE = "dashwey-v1-3-1541";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -326,7 +587,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1540</title>
+<title>Dashwey v1.3.1541</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20319,7 +20580,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1540';
+ const _APP_VERSION = 'v1.3.1541';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
