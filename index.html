@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1573";
+ var CURRENT_CACHE = "dashwey-v1-3-1574";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1573</title>
+<title>Dashwey v1.3.1574</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21159,7 +21159,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1573';
+ const _APP_VERSION = 'v1.3.1574';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29951,8 +29951,8 @@ const nav = (() => {
  if (_cTab === i) {
  _syncNavActive(i);
     // Restaurar posición visual — puede estar desplazado por gesto incompleto
-    // v1.3.1573 FIX V9-F: 280ms → 340ms (consistencia con animación principal)
-    track.style.transition = 'transform .34s var(--spring-nd)';
+    // v1.3.1574 FIX V9-H1: revertir a 380ms original (consistencia con animación principal)
+    track.style.transition = 'transform .38s var(--spring-nd)';
     track.style.transform = 'translateX(' + (-_logicalToPhysical(i) * _getTabWidth()) + 'px)';
  return;
  }
@@ -30035,14 +30035,15 @@ const nav = (() => {
  // v1.3.97: lock de animación con doble seguro — setTimeout + transitionend
  if (_animTimeout) clearTimeout(_animTimeout);
  _animating = true;
- // v1.3.1573 FIX V9-F: ajuste fino animación tab. Hung 13may: 280ms percibido como
- //   "rápida y no fluida". Subir a 340ms restaura fluidez sin volver a 380ms original.
- //   340ms es el compromiso premium: iOS típico 300-350ms, Material 250ms para móvil.
- //   Lock 340ms + 40ms margen = 380ms.
- _animTimeout = setTimeout(_releaseAnimLock, 380);
+ // v1.3.1574 FIX V9-H1: REVERTIR a 380ms original. Hung 13may probó 280ms (rápida)
+ //   y 340ms (rápida). 380ms es la duración correcta — lo que parecía "lento" en
+ //   v1568-1570 era el render PESADO bloqueando, no la animación. Tras V9-A/B/C/D
+ //   diferir el render, 380ms se siente exactamente bien.
+ //   Conservar el momentum spring (cubic-bezier(0.32,0.72,0,1) sin bounce).
+ _animTimeout = setTimeout(_releaseAnimLock, 420); // 380ms transición + 40ms margen
  // v1.3.1209: navbar visual = [Almacén | Dashboard | Ajustes], track DOM = [TPV | Almacén | Dashboard]
  // _logicalToPhysical(i) mapea índice lógico → posición física en el track.
- track.style.transition = 'transform .34s var(--spring-nd)';
+ track.style.transition = 'transform .38s var(--spring-nd)';
  track.style.transform = `translateX(${-_logicalToPhysical(i) * _getTabWidth()}px)`;
  // v1.3.389: tab-fade-in eliminado — la animación opacity causaba flash en WebView
  // La transición translateX del track es suficiente para una navegación fluida
@@ -30058,19 +30059,11 @@ const nav = (() => {
  const sl = document.getElementById('snav-label');
  if (sl) sl.textContent = State.get.period().label;
  // v1.3.1571 FIX V9-A · Lag navbar al cambiar tab Dashboard.
- //   ANTES: rAF inmediato → App.dash.refresh() durante animación 380ms del track.
- //   refresh() ejecutaba: fb.read('state') async + _mergeById x15 colecciones +
- //   _shimmerAllCards + _lvSyncHoy. Total 100-500ms bloqueando main thread DURANTE
- //   la animación del track → jank perceptible "navbar lento al cambiar tab".
- //   AHORA:
- //   1) NO llamar refresh() (carga remota innecesaria al cambiar tab — onSnapshot
- //      ya mantiene state sincronizado). Llamar dash.render() — solo render local.
- //   2) Defer con requestIdleCallback hasta que animación termine. El usuario ve
- //      la transición fluida primero, los datos se renderizan en idle.
- //   3) Timeout 500ms safety: si no hay idle (no debería ocurrir tras animación)
- //      ejecutar igualmente.
- //   Si el usuario explícitamente quiere refrescar datos remotos, tiene el PTR
- //   (pull-to-refresh) que sigue llamando refresh() normalmente.
+ //   1) NO llamar refresh() (carga remota innecesaria — onSnapshot sincroniza)
+ //   2) Llamar dash.render() — solo render local de lo que ya hay en memoria
+ // v1.3.1574 FIX V9-H3 · setTimeout(420) en lugar de rIC. Mismo razonamiento que
+ //   V9-H2: el rIC ejecutaba demasiado pronto causando "parón al final de animación".
+ //   420ms = 380ms animación + 40ms respiro frame.
  var _doDashRender = function() {
   try {
    if (typeof App !== 'undefined' && App.dash && typeof App.dash.render === 'function') {
@@ -30081,25 +30074,20 @@ const nav = (() => {
    }
   } catch(_) {}
  };
- if (typeof window.requestIdleCallback === 'function') {
-  window.requestIdleCallback(_doDashRender, { timeout: 500 });
- } else {
-  setTimeout(_doDashRender, 50);
- }
+ setTimeout(_doDashRender, 420);
  } else if(i === 2) {
  // v1.3.1571 FIX V9-B · Lag navbar al cambiar tab Almacén.
- //   ANTES: rAF inmediato → 5 funciones pesadas EN SERIE durante animación 380ms:
- //     renderOrden + updateBadge + updateProvBar + _almLoadInitialState + renderCatInline
- //   Total típico 150-400ms bloqueando main thread durante la animación del track.
- //   AHORA: defer con requestIdleCallback (timeout 500ms safety). El track se anima
- //   fluido primero; el contenido Almacén se rellena al final.
- //   Mantengo el cleanup de overlays SÍNCRONO (no costoso, evita visual bug).
- // v1.3.1573 FIX V9-G · Eliminar DUPLICACIÓN. renderOrden() internamente ya llama
- //   updateProvBar() Y renderCatInline() (línea ~52813+52817). Llamarlas otra vez
- //   por fuera = renderOrden ejecuta updateProvBar 2x + renderCatInline 2x = +40-80ms
- //   extra perceptibles ESPECÍFICAMENTE en Almacén (no en Dashboard). Hung 13may:
- //   "animación más rápida pero no fluida, sobre todo al ir a almacén" — confirmado.
- //   Bloque mínimo: solo renderOrden + updateBadge + _almLoadInitialState + _updateAcceptBtn.
+ //   ANTES: rAF inmediato → 5 funciones pesadas EN SERIE durante animación 380ms.
+ //   AHORA: defer hasta DESPUÉS de la animación.
+ // v1.3.1573 FIX V9-G · Eliminada duplicación: renderOrden() ya llama internamente
+ //   updateProvBar() Y renderCatInline(). Llamarlas otra vez = 2x trabajo extra.
+ // v1.3.1574 FIX V9-H2 · NO usar requestIdleCallback (ejecutaba demasiado pronto y
+ //   se notaba "parón al final de la animación"). Usar setTimeout(420ms) = exactamente
+ //   40ms DESPUÉS de que la animación 380ms termina. Eso da respiro al frame final
+ //   de la animación. Hung 13may: "tiene un ligero parón al final de la animación".
+ //   Trade-off: el contenido tarda ~420ms en aparecer tras tap, pero la animación es
+ //   100% fluida sin jank al final. Mejor UX premium.
+ //   Mantengo cleanup overlays SÍNCRONO (ligero, evita visual bug).
  try {
   var ssOvl = document.getElementById('ss-overlay');
   if (ssOvl) { ssOvl.classList.remove('ss-active'); ssOvl.style.display = 'none'; }
@@ -30116,11 +30104,8 @@ const nav = (() => {
    }
   } catch(e) { console.warn('[goTab] alm render diferido:', e && e.message); }
  };
- if (typeof window.requestIdleCallback === 'function') {
-  window.requestIdleCallback(_doAlmRender, { timeout: 500 });
- } else {
-  setTimeout(_doAlmRender, 50);
- }
+ // 420ms = 380ms animación + 40ms respiro frame final → render limpio post-animación
+ setTimeout(_doAlmRender, 420);
  }
  } catch(e) { console.error('[Dashwey] goTab error (tab=' + i + '):', e); } }
 
