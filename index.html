@@ -627,7 +627,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1552";
+ var CURRENT_CACHE = "dashwey-v1-3-1553";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -646,7 +646,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1552</title>
+<title>Dashwey v1.3.1553</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20737,7 +20737,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1552';
+ const _APP_VERSION = 'v1.3.1553';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -50756,7 +50756,13 @@ function _parseIva(iva) {
    _almSlideToList(false);
    return;
   }
-  _renderProvPickerSheet();
+  // v1.3.1553 Lote A #3: orden invertido para eliminar lag percibido.
+  // Antes: _renderProvPickerSheet() síncrono ANTES de añadir .open → bloqueaba
+  // el hilo entre el tap y la animación de apertura. Si la lista es grande
+  // (20+ proveedores con avatars), el delay era visible como "lag".
+  // Ahora: añadimos .open primero (anima el sheet entrando con su contenido
+  // anterior o vacío) y diferimos el render al siguiente frame. La animación
+  // arranca instantánea y el contenido se pinta durante/después de ella.
   // v1.3.1171: BACKDROP CLOSE robusto contra overscroll.
   //   - touchstart en backdrop guarda flag
   //   - touchmove >5px cancela flag (overscroll del scroll interno)
@@ -50793,9 +50799,16 @@ function _parseIva(iva) {
     }
    });
   }
+  // 1. Abrir el sheet INMEDIATAMENTE (anima entrada sin esperar al render)
   requestAnimationFrame(function(){
    sheet.classList.add('open');
    document.body.style.overflow = 'hidden';
+  });
+  // 2. Render diferido al siguiente frame — no bloquea la animación de apertura
+  requestAnimationFrame(function(){
+   requestAnimationFrame(function(){
+    try { _renderProvPickerSheet(); } catch(_) {}
+   });
   });
  }
 
@@ -62220,37 +62233,102 @@ window._almCarritoOptions = function() {
 /* ═══ SWIPE-TO-CLOSE — Settings Drawer v7.9 ════════════════════
  Swipe derecha desde drawer → cierra
  Swipe derecha desde subpanel → vuelve atrás
+ v1.3.1553 Lote A #2: swipe PROGRESIVO — antes solo detectaba start/end,
+ ahora el drawer sigue el dedo en touchmove. Al soltar: cierra con anim
+ suave si supera umbral, vuelve a su sitio si no. Elimina el "salto"
+ repentino que reportaba Hung.
  ═══════════════════════════════════════════════════════════ */
 (function() {
  const THRESHOLD = 68, VELOCITY = 0.35;
- let _x0 = 0, _t0 = 0, _active = false, _target = null;
+ let _x0 = 0, _y0 = 0, _t0 = 0, _active = false, _target = null;
+ let _drawerEl = null, _trackingMove = false;
+
+ function _getActiveEl() {
+  // Si el subpanel está activo, se mueve el sd-track. Si no, el drawer entero.
+  if (_target === 'sub') {
+   return document.getElementById('sd-track');
+  }
+  return document.getElementById('settings-drawer');
+ }
+
+ function _setTransform(el, dx) {
+  if (!el) return;
+  // Durante drag, sin transition (sigue al dedo). Solo movimiento positivo (hacia derecha).
+  el.style.transition = 'none';
+  if (_target === 'sub') {
+   // sd-track normalmente está en translateX(-50%) (sub abierto). Sumar dx.
+   el.style.transform = 'translateX(calc(-50% + ' + Math.max(0, dx) + 'px))';
+  } else {
+   el.style.transform = 'translateX(' + Math.max(0, dx) + 'px)';
+  }
+ }
+
+ function _resetTransform(el) {
+  if (!el) return;
+  // Re-habilitar transition CSS y limpiar inline transform → vuelve a su clase
+  el.style.transition = '';
+  el.style.transform = '';
+ }
 
  function onStart(e) {
- const drawer = document.getElementById('settings-drawer');
- if (!drawer?.classList.contains('open')) return;
- const t = e.touches?.[0] || e;
- _x0 = t.clientX; _t0 = Date.now(); _active = true;
- // v1.3.260: detect via sd-track instead of sd-sub-panel
- const track = document.getElementById('sd-track');
- _target = track?.classList.contains('sd-in-section') ? 'sub' : 'drawer';
+  const drawer = document.getElementById('settings-drawer');
+  if (!drawer?.classList.contains('open')) return;
+  const t = e.touches?.[0] || e;
+  _x0 = t.clientX; _y0 = t.clientY; _t0 = Date.now(); _active = true;
+  _trackingMove = false;
+  // v1.3.260: detect via sd-track instead of sd-sub-panel
+  const track = document.getElementById('sd-track');
+  _target = track?.classList.contains('sd-in-section') ? 'sub' : 'drawer';
+  _drawerEl = _getActiveEl();
  }
+
+ function onMove(e) {
+  if (!_active || !_drawerEl) return;
+  const t = e.touches?.[0] || e;
+  const dx = t.clientX - _x0;
+  const dy = t.clientY - _y0;
+  // Solo movimiento horizontal hacia derecha. Si es claramente vertical, abortar.
+  if (!_trackingMove) {
+   if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) {
+    // Gesto vertical (scroll interno) → no interceptar
+    _active = false;
+    return;
+   }
+   if (dx > 5) _trackingMove = true;
+  }
+  if (_trackingMove && dx > 0) {
+   _setTransform(_drawerEl, dx);
+  }
+ }
+
  function onEnd(e) {
- if (!_active) return; _active = false;
- const t = e.changedTouches?.[0] || e;
- const dx = t.clientX - _x0, dt = Date.now() - _t0;
- if (dx > THRESHOLD || dx / dt > VELOCITY) {
- _target === 'sub' ? App?.ui?.sdSubClose?.() : App?.ui?.closeSettings?.();
+  if (!_active) { _drawerEl = null; return; }
+  _active = false;
+  const t = e.changedTouches?.[0] || e;
+  const dx = t.clientX - _x0, dt = Date.now() - _t0;
+  const passed = dx > THRESHOLD || dx / dt > VELOCITY;
+  // Re-habilitar transition para la animación final
+  if (_drawerEl) _resetTransform(_drawerEl);
+  if (passed) {
+   _target === 'sub' ? App?.ui?.sdSubClose?.() : App?.ui?.closeSettings?.();
+  }
+  _drawerEl = null;
+  _trackingMove = false;
  }
- }
+
  const d = document.getElementById('settings-drawer');
  const s = document.getElementById('sd-sub-panel');
  if (d) {
  d.addEventListener('touchstart', onStart, { passive: true });
- d.addEventListener('touchend', onEnd, { passive: true });
+ d.addEventListener('touchmove',  onMove,  { passive: true });
+ d.addEventListener('touchend',   onEnd,   { passive: true });
+ d.addEventListener('touchcancel',onEnd,   { passive: true });
  }
  if (s) {
  s.addEventListener('touchstart', onStart, { passive: true });
- s.addEventListener('touchend', onEnd, { passive: true });
+ s.addEventListener('touchmove',  onMove,  { passive: true });
+ s.addEventListener('touchend',   onEnd,   { passive: true });
+ s.addEventListener('touchcancel',onEnd,   { passive: true });
  }
 })();
 </script>
