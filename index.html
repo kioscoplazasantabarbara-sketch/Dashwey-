@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1567";
+ var CURRENT_CACHE = "dashwey-v1-3-1568";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1567</title>
+<title>Dashwey v1.3.1568</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10710,12 +10710,267 @@ body[data-app-ready="true"] #app {
  backface-visibility: hidden;
 }
 /* will-change cleanup tras animación (sin will-change inicial → no necesario reset) */
+
+/* v1.3.1568 LOTE TELEMETRY · botón debug flotante temporal.
+   Sirve para capturar _dashweyBoot() + estado state sin DevTools.
+   ELIMINAR tras capturar baseline. */
+#dbg-fab {
+ position: fixed;
+ bottom: 90px;
+ right: 12px;
+ width: 44px;
+ height: 44px;
+ border-radius: 50%;
+ background: #1a1a1a;
+ color: #fff;
+ border: 2px solid #fff;
+ box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+ font-family: monospace;
+ font-size: 18px;
+ font-weight: bold;
+ z-index: 99999;
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ cursor: pointer;
+ -webkit-tap-highlight-color: transparent;
+}
+#dbg-fab:active { transform: scale(0.92); }
+#dbg-panel {
+ position: fixed;
+ top: 0; left: 0; right: 0; bottom: 0;
+ background: #111;
+ color: #d4d4d4;
+ z-index: 99998;
+ padding: 16px;
+ padding-top: env(safe-area-inset-top, 16px);
+ padding-bottom: env(safe-area-inset-bottom, 16px);
+ font-family: 'SF Mono', Menlo, Consolas, monospace;
+ font-size: 11px;
+ line-height: 1.45;
+ overflow-y: auto;
+ -webkit-overflow-scrolling: touch;
+ white-space: pre-wrap;
+ word-break: break-word;
+ display: none;
+}
+#dbg-panel.open { display: block; }
+#dbg-panel .dbg-section { color: #22c55e; font-weight: bold; margin-top: 14px; margin-bottom: 6px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+#dbg-panel .dbg-red { color: #f87171; font-weight: bold; }
+#dbg-panel .dbg-orange { color: #fb923c; }
+#dbg-panel .dbg-yellow { color: #facc15; }
+#dbg-panel .dbg-green { color: #4ade80; }
+#dbg-panel .dbg-blue { color: #60a5fa; }
+#dbg-panel-actions {
+ position: sticky;
+ top: 0;
+ display: flex;
+ gap: 8px;
+ padding: 8px 0;
+ background: #111;
+ z-index: 10;
+ border-bottom: 1px solid #333;
+ margin-bottom: 10px;
+}
+#dbg-panel-actions button {
+ flex: 1;
+ padding: 10px 8px;
+ background: #2563eb;
+ color: #fff;
+ border: none;
+ border-radius: 6px;
+ font-family: inherit;
+ font-size: 12px;
+ font-weight: bold;
+ cursor: pointer;
+}
+#dbg-panel-actions button.close { background: #dc2626; }
+#dbg-panel-actions button.copy { background: #16a34a; }
 </style>
 
 
 <!-- iOS PWA SPLASH v9.5.43 — assets/apple/ -->
 </head>
 <body data-tab="1" style="background:#F7F2F2">
+<!-- v1.3.1568 LOTE TELEMETRY · botón debug temporal (eliminar tras baseline) -->
+<button id="dbg-fab" aria-label="Debug panel" onclick="window._dbgOpen && window._dbgOpen()">⚙</button>
+<div id="dbg-panel">
+ <div id="dbg-panel-actions">
+  <button class="copy" onclick="window._dbgCopy && window._dbgCopy()">📋 Copiar</button>
+  <button onclick="window._dbgRefresh && window._dbgRefresh()">🔄 Refresh</button>
+  <button class="close" onclick="window._dbgClose && window._dbgClose()">✕ Cerrar</button>
+ </div>
+ <div id="dbg-panel-body"></div>
+</div>
+<script>
+(function() {
+ var panel = null, body = null;
+ function _fmt(v) {
+  try { return JSON.stringify(v, null, 2); } catch(_) { return String(v); }
+ }
+ function _classFor(deltaMs) {
+  if (deltaMs > 500) return 'dbg-red';
+  if (deltaMs > 200) return 'dbg-orange';
+  if (deltaMs > 100) return 'dbg-yellow';
+  return 'dbg-green';
+ }
+ function _renderTimeline() {
+  var marks = window._DashweyPerfMarks || {};
+  var keys = Object.keys(marks).sort(function(a,b){ return marks[a] - marks[b]; });
+  if (!keys.length) return '<span class="dbg-red">(sin marcas — _DashweyPerfMarks vacío)</span>';
+  var out = [];
+  var prev = 0;
+  var maxDelta = 0, maxLabel = '';
+  keys.forEach(function(k) {
+   var t = marks[k];
+   var delta = Math.round((t - prev) * 10) / 10;
+   var icon = '⚪';
+   if (delta > 500) icon = '🔴';
+   else if (delta > 200) icon = '🟠';
+   else if (delta > 100) icon = '🟡';
+   else icon = '🟢';
+   out.push('<span class="' + _classFor(delta) + '">' + icon + ' ' + String(t + 'ms').padEnd(10, ' ') + ' (+' + delta + 'ms) ' + k + '</span>');
+   if (delta > maxDelta) { maxDelta = delta; maxLabel = k; }
+   prev = t;
+  });
+  if (maxLabel) {
+   out.push('');
+   out.push('<span class="dbg-red">► mayor gap: ' + maxDelta + 'ms antes de "' + maxLabel + '"</span>');
+  }
+  return out.join('\n');
+ }
+ function _renderPhases() {
+  var marks = window._DashweyPerfMarks || {};
+  var phase = function(from, to) {
+   if (marks[from] === undefined || marks[to] === undefined) return null;
+   return Math.round((marks[to] - marks[from]) * 10) / 10;
+  };
+  var phases = [
+   ['Parsing → DOMReady', 'script_init', 'dom_content_loaded'],
+   ['Firebase load', 'dom_content_loaded', 'firebase_module_loaded'],
+   ['Auth resolution', 'firebase_module_loaded', 'auth_resolved'],
+   ['Initial sync', 'do_initial_sync_start', 'do_initial_sync_done'],
+   ['Initial sync (offline)', 'do_initial_sync_start', 'do_initial_sync_done_offline'],
+   ['Initial sync (firstcloud)', 'do_initial_sync_start', 'do_initial_sync_done_firstcloud'],
+   ['Boot → render start', 'script_init', 'render_all_start'],
+   ['Render execution', 'render_all_start', 'render_all_done'],
+   ['Render → painted', 'render_all_done', 'first_render_painted'],
+   ['Splash visible duration', 'first_render_painted', 'splash_hidden'],
+   ['Total to interactive', 'script_init', 'splash_hidden'],
+   ['Time to first interaction', 'script_init', 'first_user_interaction'],
+  ];
+  var out = [];
+  phases.forEach(function(p) {
+   var dur = phase(p[1], p[2]);
+   if (dur === null) {
+    out.push('<span class="dbg-blue">  ' + p[0].padEnd(28, ' ') + ' — no medida</span>');
+   } else {
+    out.push('<span class="' + _classFor(dur) + '">  ' + p[0].padEnd(28, ' ') + ' ' + dur + 'ms</span>');
+   }
+  });
+  return out.join('\n');
+ }
+ function _renderStateInfo() {
+  try {
+   var raw = localStorage.getItem('dashwey_state');
+   if (!raw) return '<span class="dbg-orange">localStorage empty (cold start primera vez)</span>';
+   var kb = (raw.length / 1024).toFixed(1);
+   var s = JSON.parse(raw);
+   var counts = {
+    ventas: (s.ventas||[]).length,
+    historialPedidos: (s.historialPedidos||[]).length,
+    productos: (s.productos||[]).length,
+    proveedores: (s.proveedores||[]).length,
+    gastosOp: (s.gastosOp||[]).length,
+    ingresosFin: (s.ingresosFin||[]).length,
+    cierresCaja: (s.cierresCaja||[]).length,
+    mermas: (s.mermas||[]).length,
+    cuentas: (s.cuentas||[]).length,
+    recordatorios: (s.recordatorios||[]).length,
+    visitasComerciales: (s.visitasComerciales||[]).length,
+   };
+   var total = 0; Object.keys(counts).forEach(function(k){ total += counts[k]; });
+   var lines = ['Size: ' + kb + ' KB · Total items: ' + total];
+   Object.keys(counts).forEach(function(k){
+    lines.push('  ' + k.padEnd(20, ' ') + ' ' + counts[k]);
+   });
+   return lines.join('\n');
+  } catch(e) {
+   return '<span class="dbg-red">error: ' + e.message + '</span>';
+  }
+ }
+ function _renderFlags() {
+  var flags = {
+   InitialSyncDone: !!window._DashweyInitialSyncDone,
+   ApplyingRemote: !!window._DashweyApplyingRemote,
+   UseSubcollections: !!window._DashweyUseSubcollections,
+   OfflineBoot: !!window._DashweyOfflineBoot,
+   Mode: window._DASHWEY_MODE,
+   AppVersion: '(see header)',
+   FirebaseEnabled: !!(window._DashweyFirebase && window._DashweyFirebase.enabled),
+   FirebaseReady: !!(window._DashweyFirebase && window._DashweyFirebase.ready),
+   Online: navigator.onLine,
+   PerfMarksCount: Object.keys(window._DashweyPerfMarks || {}).length,
+   IsSaving: !!(window._DashweySavingCtrl && window._DashweySavingCtrl.isSaving),
+   UA_short: (navigator.userAgent.match(/Chrome\/[\d.]+/) || ['?'])[0],
+  };
+  try {
+   if (window.App && window.App.ui && window.App.ui._getAppVersion) {
+    flags.AppVersion = window.App.ui._getAppVersion();
+   }
+  } catch(_) {}
+  return _fmt(flags);
+ }
+ function _renderAll() {
+  var html = '';
+  html += '<div class="dbg-section">═══ BOOT TIMELINE ═══</div>';
+  html += _renderTimeline();
+  html += '\n<div class="dbg-section">═══ ANÁLISIS DE FASES ═══</div>';
+  html += _renderPhases();
+  html += '\n<div class="dbg-section">═══ STATE LOCAL ═══</div>';
+  html += _renderStateInfo();
+  html += '\n<div class="dbg-section">═══ FLAGS ═══</div>';
+  html += _renderFlags();
+  if (body) body.innerHTML = html;
+ }
+ window._dbgOpen = function() {
+  panel = panel || document.getElementById('dbg-panel');
+  body = body || document.getElementById('dbg-panel-body');
+  _renderAll();
+  if (panel) panel.classList.add('open');
+ };
+ window._dbgClose = function() {
+  if (panel) panel.classList.remove('open');
+ };
+ window._dbgRefresh = function() {
+  _renderAll();
+ };
+ window._dbgCopy = function() {
+  if (!body) return;
+  // Texto plano sin tags HTML para copiar
+  var text = body.innerText || body.textContent || '';
+  try {
+   if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){
+     alert('Copiado al portapapeles ✓');
+    }, function(err){
+     alert('Error copiar: ' + err.message + '\n\nUsa selección manual.');
+    });
+   } else {
+    // Fallback execCommand
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); alert('Copiado ✓'); }
+    catch(_) { alert('No se pudo copiar — selecciona manualmente'); }
+    document.body.removeChild(ta);
+   }
+  } catch(e) { alert('Error: ' + e.message); }
+ };
+})();
+</script>
 <!-- ── APP SPLASH v1.0.1 ──────────────────────────────────────────
  Primer elemento del body — pintado en el primer frame por el browser
  JS lo oculta con fade cuando la app está lista (_hideSplash)
@@ -20870,7 +21125,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1567';
+ const _APP_VERSION = 'v1.3.1568';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
