@@ -627,7 +627,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1564";
+ var CURRENT_CACHE = "dashwey-v1-3-1565";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -646,7 +646,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1564</title>
+<title>Dashwey v1.3.1565</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20821,7 +20821,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1564';
+ const _APP_VERSION = 'v1.3.1565';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38197,22 +38197,53 @@ function _confirmBorrarCuenta(id) {
 
  function _snapCounterUp(el, target, format, duration) {
  if (!el) return;
- // v1.3.1564 LOTE D · KPIs sin animación (decisión producto Hung 13may).
- //   ANTES: animación rAF 400-700ms con easing cubic, opcionalmente clase
- //   'snap-pop' (escala+desplazamiento) al terminar. Pesado en hot path render,
- //   distrae del dato. Hung pidió quitar animaciones de KPIs en todas las cards.
- //   AHORA: render inmediato del valor final. Mismo formato (eur/pct/int).
- //   Se mantiene la firma de la función para no romper los 11 callsites.
- //   Si en algún callsite quieren animación, se revisa caso por caso post-26may.
+ // v1.3.1565 LOTE D · KPIs: animación SOLO en hero grandes (Hung 13may).
+ //   Distinción: callsites del HERO grande (snap-val-rendimiento, snap-val-
+ //   flujo-caja, snap-val-compras) llaman sin parámetro `duration` →
+ //   duration === undefined → animan con default 700ms.
+ //   Callsites de KPIs pequeños (ticket medio, margen, hora pico, ingresos
+ //   pequeño, gastos pequeño, recepciones, etc) pasan duration explícita
+ //   (350/400/450) → atajo: si duration está definido → salto directo.
+ //   Cero cambios en los 11 callsites; lógica decide por presencia del param.
  if (el._snapRafId) { cancelAnimationFrame(el._snapRafId); el._snapRafId = null; }
  var isEur = format === 'eur';
  var isPct = format === 'pct';
- if (isEur) el.textContent = _snapFeur(target);
- else if (isPct) el.textContent = _snapFmt(target, 1) + '%';
- else el.textContent = _snapFmt(Math.round(target));
- // Quitar clase 'snap-counting' si quedó pegada de animación previa
- el.classList.remove('snap-counting');
- el.classList.remove('snap-pop');
+
+ // Atajo: KPI pequeño (duration explícita) → salto directo, sin animación
+ if (typeof duration === 'number') {
+  if (isEur) el.textContent = _snapFeur(target);
+  else if (isPct) el.textContent = _snapFmt(target, 1) + '%';
+  else el.textContent = _snapFmt(Math.round(target));
+  el.classList.remove('snap-counting');
+  el.classList.remove('snap-pop');
+  return;
+ }
+
+ // Hero grande (sin duration) → animación rAF clásica
+ duration = 700;
+ var start = 0;
+ var startTime = null;
+ el.classList.add('snap-counting');
+
+ function step(ts) {
+ if (!el.isConnected) { el._snapRafId = null; return; }
+ if (!startTime) startTime = ts;
+ var progress = Math.min((ts - startTime) / duration, 1);
+ var ease = 1 - Math.pow(1 - progress, 3);
+ var current = start + (target - start) * ease;
+ if (isEur) el.textContent = _snapFeur(current);
+ else if (isPct) el.textContent = _snapFmt(current, 1) + '%';
+ else el.textContent = _snapFmt(Math.round(current));
+ if (progress < 1) {
+  el._snapRafId = requestAnimationFrame(step);
+ } else {
+  el._snapRafId = null;
+  el.classList.remove('snap-counting');
+  el.classList.add('snap-pop');
+  setTimeout(function() { if (el.isConnected) el.classList.remove('snap-pop'); }, 400);
+ }
+ }
+ el._snapRafId = requestAnimationFrame(step);
  }
 
  // ── Typewriter con cifras resaltadas en rojo (tipo E) ────────────────────
