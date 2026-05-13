@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1571";
+ var CURRENT_CACHE = "dashwey-v1-3-1572";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1571</title>
+<title>Dashwey v1.3.1572</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21159,7 +21159,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1571';
+ const _APP_VERSION = 'v1.3.1572';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29951,7 +29951,8 @@ const nav = (() => {
  if (_cTab === i) {
  _syncNavActive(i);
     // Restaurar posición visual — puede estar desplazado por gesto incompleto
-    track.style.transition = 'transform .38s var(--spring-nd)';
+    // v1.3.1571 FIX V9-E: 380ms → 280ms (consistencia con animación principal)
+    track.style.transition = 'transform .28s var(--spring-nd)';
     track.style.transform = 'translateX(' + (-_logicalToPhysical(i) * _getTabWidth()) + 'px)';
  return;
  }
@@ -30034,10 +30035,15 @@ const nav = (() => {
  // v1.3.97: lock de animación con doble seguro — setTimeout + transitionend
  if (_animTimeout) clearTimeout(_animTimeout);
  _animating = true;
- _animTimeout = setTimeout(_releaseAnimLock, 420); // 380ms transición + 40ms margen
+ // v1.3.1571 FIX V9-E: animación tab reducida de 380ms a 280ms (-26%).
+ //   380ms era percibido como lento por Hung. 280ms mantiene sensación spring premium
+ //   (cubic-bezier(0.32,0.72,0,1) sin bounce) pero responde más rápido. Material Design
+ //   recomienda 200-250ms para transiciones móvil. iOS suele usar 300ms. 280ms es el
+ //   compromiso. Lock animation reducido proporcionalmente: 280ms + 40ms margen = 320ms.
+ _animTimeout = setTimeout(_releaseAnimLock, 320);
  // v1.3.1209: navbar visual = [Almacén | Dashboard | Ajustes], track DOM = [TPV | Almacén | Dashboard]
  // _logicalToPhysical(i) mapea índice lógico → posición física en el track.
- track.style.transition = 'transform .38s var(--spring-nd)';
+ track.style.transition = 'transform .28s var(--spring-nd)';
  track.style.transform = `translateX(${-_logicalToPhysical(i) * _getTabWidth()}px)`;
  // v1.3.389: tab-fade-in eliminado — la animación opacity causaba flash en WebView
  // La transición translateX del track es suficiente para una navegación fluida
@@ -62086,7 +62092,16 @@ window._DashweyDeviceId = (() => {
                    (typeof nav !== 'undefined' ? nav._cTab : -1);
      if (_newTab === 2 && _hidden) { NAV.classList.remove('nav-hidden'); _hidden = false; }
     } catch(_) {}
- attachListeners();
+ // v1.3.1571 FIX V9-C: attachListeners ahora defer con rIC. Ejecuta
+ //   querySelectorAll + removeEventListener + addEventListener para .tab-page + .alm-scroll
+ //   en cada cambio de tab → bloqueaba ~5-15ms durante animación 380ms.
+ //   Defer = listeners reattach tras animación. No afecta navbar autohide (el scroll que
+ //   importa es post-tap, no durante la animación).
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(attachListeners, { timeout: 500 });
+ } else {
+  setTimeout(attachListeners, 50);
+ }
  });
 
  // ── 2. Hide when any overlay/sheet opens ──
@@ -62196,10 +62211,24 @@ window._DashweyDeviceId = (() => {
  };
 
  // Escuchar cambio de tab
+ // v1.3.1571 FIX V9-D: defer trabajo pesado con rIC. _getCardFromDOM ejecuta
+ //   querySelectorAll('.card[data-card-id]') + getBoundingClientRect() en bucle
+ //   sobre cada card → fuerza reflow síncrono por cada card durante animación tab.
+ //   En Dashboard con 6-8 cards = 6-8 reflows forzados durante los 380ms de
+ //   animación del track → jank perceptible "navbar lento al cambiar tab".
+ //   Defer = FAB dinámico se actualiza tras animación. No afecta tap del FAB
+ //   (es post-tap, no durante). Visualmente: el FAB cambia ~100ms después.
  window.addEventListener('dashwey:tab-changed', function(e) {
   _curTab = e.detail ? e.detail.tab : -1;
-  if (_curTab !== 1) { _curCard = null; _update(); }
-  else { _curCard = _getCardFromDOM(); _update(); if (!_curCard) _fabDoRetry(); }
+  var _doFabUpdate = function() {
+   if (_curTab !== 1) { _curCard = null; _update(); }
+   else { _curCard = _getCardFromDOM(); _update(); if (!_curCard) _fabDoRetry(); }
+  };
+  if (typeof window.requestIdleCallback === 'function') {
+   window.requestIdleCallback(_doFabUpdate, { timeout: 500 });
+  } else {
+   setTimeout(_doFabUpdate, 50);
+  }
  });
 
  // MutationObserver en body[data-tab] — fallback WebView
