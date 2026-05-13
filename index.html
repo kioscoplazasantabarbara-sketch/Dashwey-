@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1570";
+ var CURRENT_CACHE = "dashwey-v1-3-1571";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1570</title>
+<title>Dashwey v1.3.1571</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21159,7 +21159,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1570';
+ const _APP_VERSION = 'v1.3.1571';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30052,38 +30052,66 @@ const nav = (() => {
  if(i === 1) {
  const sl = document.getElementById('snav-label');
  if (sl) sl.textContent = State.get.period().label;
- // v1.3.1079: forzar re-render de snap cards al entrar al Dashboard
- // Si el usuario estaba en otra tab cuando llegaron datos sync, las cards no se refrescaron
- requestAnimationFrame(function(){
+ // v1.3.1571 FIX V9-A · Lag navbar al cambiar tab Dashboard.
+ //   ANTES: rAF inmediato → App.dash.refresh() durante animación 380ms del track.
+ //   refresh() ejecutaba: fb.read('state') async + _mergeById x15 colecciones +
+ //   _shimmerAllCards + _lvSyncHoy. Total 100-500ms bloqueando main thread DURANTE
+ //   la animación del track → jank perceptible "navbar lento al cambiar tab".
+ //   AHORA:
+ //   1) NO llamar refresh() (carga remota innecesaria al cambiar tab — onSnapshot
+ //      ya mantiene state sincronizado). Llamar dash.render() — solo render local.
+ //   2) Defer con requestIdleCallback hasta que animación termine. El usuario ve
+ //      la transición fluida primero, los datos se renderizan en idle.
+ //   3) Timeout 500ms safety: si no hay idle (no debería ocurrir tras animación)
+ //      ejecutar igualmente.
+ //   Si el usuario explícitamente quiere refrescar datos remotos, tiene el PTR
+ //   (pull-to-refresh) que sigue llamando refresh() normalmente.
+ var _doDashRender = function() {
   try {
-   if (typeof App !== 'undefined' && App.dash && typeof App.dash.refresh === 'function') {
-    App.dash.refresh();
+   if (typeof App !== 'undefined' && App.dash && typeof App.dash.render === 'function') {
+    App.dash.render();
    } else if (typeof _snapDoRenderAll === 'function') {
     _snapLastRenderedCardId = null;
     _snapDoRenderAll();
    }
   } catch(_) {}
- });
+ };
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(_doDashRender, { timeout: 500 });
+ } else {
+  setTimeout(_doDashRender, 50);
+ }
  } else if(i === 2) {
- // sin ser bloqueada por el trabajo síncrono del render del almacén
- requestAnimationFrame(() => {
- // v1.3.212: force cleanup any lingering overlays before alm render
+ // v1.3.1571 FIX V9-B · Lag navbar al cambiar tab Almacén.
+ //   ANTES: rAF inmediato → 5 funciones pesadas EN SERIE durante animación 380ms:
+ //     renderOrden + updateBadge + updateProvBar + _almLoadInitialState + renderCatInline
+ //   Total típico 150-400ms bloqueando main thread durante la animación del track.
+ //   AHORA: defer con requestIdleCallback (timeout 500ms safety). El track se anima
+ //   fluido primero; el contenido Almacén se rellena al final.
+ //   Mantengo el cleanup de overlays SÍNCRONO (no costoso, evita visual bug).
  try {
- var ssOvl = document.getElementById('ss-overlay');
- if (ssOvl) { ssOvl.classList.remove('ss-active'); ssOvl.style.display = 'none'; }
- var almViewTrack = document.getElementById('alm-view-track');
- if (almViewTrack) almViewTrack.classList.remove('alm-transitioning');
+  var ssOvl = document.getElementById('ss-overlay');
+  if (ssOvl) { ssOvl.classList.remove('ss-active'); ssOvl.style.display = 'none'; }
+  var almViewTrack = document.getElementById('alm-view-track');
+  if (almViewTrack) almViewTrack.classList.remove('alm-transitioning');
  } catch(e) {}
- App.alm.renderOrden();
- App.alm.updateBadge();
- App.alm.updateProvBar();
- App.alm._almLoadInitialState();
- App.alm.renderCatInline();
- // Posicionar botón Aceptar sobre navbar
- requestAnimationFrame(() => {
- if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn();
- });
- });
+ var _doAlmRender = function() {
+  try {
+   App.alm.renderOrden();
+   App.alm.updateBadge();
+   App.alm.updateProvBar();
+   App.alm._almLoadInitialState();
+   App.alm.renderCatInline();
+   if (App.alm._updateAcceptBtn) {
+    requestAnimationFrame(function(){ if (App.alm._updateAcceptBtn) App.alm._updateAcceptBtn(); });
+   }
+  } catch(e) { console.warn('[goTab] alm render diferido:', e && e.message); }
+ };
+ if (typeof window.requestIdleCallback === 'function') {
+  window.requestIdleCallback(_doAlmRender, { timeout: 500 });
+ } else {
+  setTimeout(_doAlmRender, 50);
+ }
  }
  } catch(e) { console.error('[Dashwey] goTab error (tab=' + i + '):', e); } }
 
