@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1584";
+ var CURRENT_CACHE = "dashwey-v1-3-1585";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1584</title>
+<title>Dashwey v1.3.1585</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1889,6 +1889,92 @@ body[data-initial-sync="done"] .snap-kpi-delta {
 .cb-detail-table tr.cb-mismatch td:first-child {
  color: #E16060;
  font-weight: var(--fw-med);
+}
+
+/* ── v1.3.1585 BUG-N2 GUARD · Toast amarillo bloqueante writes peligrosos
+   Aparece SOLO cuando un write a Firestore vaciaría >90% de un array
+   crítico (ventas, gastos, ingresos, productos, proveedores, pedidos,
+   facturas, mermas, cierres). El write queda en espera 60s máximo.
+   Botón "Continuar" confirma. Sin acción = write cancelado, datos locales
+   intactos. Preventivo: incidente 7 may con 1815 items recovery 6h. */
+#wn2-toast {
+ position: fixed;
+ left: 50%;
+ transform: translateX(-50%) translateY(20px);
+ bottom: calc(var(--sab, 0px) + 216px);
+ z-index: 9002;
+ display: flex;
+ flex-direction: column;
+ align-items: stretch;
+ gap: var(--sp-2);
+ padding: 12px 16px 14px;
+ max-width: min(92vw, 420px);
+ width: max-content;
+ background: rgba(245, 158, 11, 0.98);
+ color: #1A1A1E;
+ font-size: var(--fs-sm);
+ font-weight: var(--fw-med);
+ border-radius: var(--r-md, 12px);
+ box-shadow: 0 8px 32px rgba(245, 158, 11, 0.32), 0 1px 0 rgba(255,255,255,0.18) inset;
+ backdrop-filter: blur(12px);
+ -webkit-backdrop-filter: blur(12px);
+ opacity: 0;
+ pointer-events: none;
+ transition: opacity 0.32s var(--ease-standard), transform 0.32s var(--ease-standard);
+ letter-spacing: 0.1px;
+}
+#wn2-toast.is-visible {
+ opacity: 1;
+ transform: translateX(-50%) translateY(0);
+ pointer-events: auto;
+}
+#wn2-toast .wn2-title {
+ font-weight: var(--fw-bold, 700);
+ font-size: var(--fs-base, 14px);
+ line-height: 1.3;
+}
+#wn2-toast .wn2-detail {
+ font-weight: var(--fw-med);
+ font-size: var(--fs-xs, 12px);
+ line-height: 1.4;
+ opacity: 0.85;
+}
+#wn2-toast .wn2-actions {
+ display: flex;
+ gap: var(--sp-2);
+ margin-top: 4px;
+}
+#wn2-toast .wn2-btn {
+ flex: 1;
+ padding: 8px 12px;
+ border: 0;
+ border-radius: var(--r-pill, 999px);
+ font-size: var(--fs-sm, 13px);
+ font-weight: var(--fw-med);
+ cursor: pointer;
+ -webkit-tap-highlight-color: transparent;
+ transition: transform 0.12s var(--ease-standard), background-color 0.16s var(--ease-standard);
+}
+#wn2-toast .wn2-btn-primary {
+ background: #1A1A1E;
+ color: #FFF;
+}
+#wn2-toast .wn2-btn-primary:active {
+ transform: scale(var(--press-scale-sm, 0.96));
+}
+#wn2-toast .wn2-btn-ghost {
+ background: rgba(26,26,30,0.10);
+ color: #1A1A1E;
+}
+#wn2-toast .wn2-btn-ghost:active {
+ transform: scale(var(--press-scale-sm, 0.96));
+}
+#wn2-toast .wn2-countdown {
+ font-weight: var(--fw-med);
+ font-size: var(--fs-xs, 12px);
+ opacity: 0.72;
+ text-align: center;
+ margin-top: 2px;
 }
 
 /* ── WHAT'S NEW SHEET ─────────────────────────────────────── */
@@ -21092,7 +21178,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1584';
+ const _APP_VERSION = 'v1.3.1585';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -66723,6 +66809,345 @@ document.addEventListener('keydown', function(e) {
  };
 
  console.info('[Dashwey/v1513] Visibility resync activado — debounce 30s');
+})();
+
+/* ─────────────────────────────────────────────────────────────────────────
+   v1.3.1585 BUG-N2 GUARD — Bloqueo writes con borrado masivo >90%
+   ─────────────────────────────────────────────────────────────────────────
+   Objetivo: prevenir incidentes como 7 may (1815 items recovery 6h). Si un
+   write a Firestore va a vaciar >90% de un array crítico, mostramos toast
+   amarillo bloqueante 60s. Sin "Continuar" → write cancelado, datos locales
+   intactos.
+
+   Wrappea (decora) dos funciones existentes:
+   1. window._DashweyWriteSubcollectionBatch — writes subcol (ventas, gastos,
+      ingresos, pedidos, facturas, mermas).
+   2. window._DashweyFirebase.write — writes doc raíz (productos, proveedores,
+      cuentas, cierresCaja, etc).
+
+   Cero contacto con flujo de datos. Solo intercepta, compara longitudes y
+   decide bloquear o pasar. Pasa = invoca función original tal cual.
+
+   Bypass emergencia (consola):  window._DashweyForceWriteEmpty = true
+   ───────────────────────────────────────────────────────────────────────── */
+(function _DashweyBugN2GuardIIFE() {
+ 'use strict';
+
+ // Colecciones críticas con su origen (subcol vs root)
+ // stateKey = clave en window.State.get/_state. Tipo SUB → subcol.
+ var CRITICAL_SUB = {
+  ventas: true, gastosOp: true, ingresosFin: true,
+  historialPedidos: true, mermas: true, facturas: true
+ };
+ var CRITICAL_ROOT = {
+  productos: true, proveedores: true, cuentas: true,
+  cierresCaja: true
+  // historialPedidos también va a doc raíz via _writeFirebase; cubierto
+  // por CRITICAL_SUB en el batch path y como precaución secundaria aquí.
+ };
+
+ var GUARD = {
+  THRESHOLD: 0.10,      // si next < prev * 0.10 → guard (>90% delta)
+  MIN_PREV: 10,         // sólo guardamos si prev >= 10 items
+  TIMEOUT_MS: 60000,    // 60s espera decisión usuario
+  _toast: null,
+  _activePrompts: 0,
+  _activeStateKeys: new Set()
+ };
+
+ // Estado del último snap confirmado en Firestore (por stateKey).
+ // Reutilizamos window._DashweyLastSyncedSnap cuando existe (subcol).
+ // Para root: comparamos contra el array previo en _state (no hay snap formal).
+ function _prevLengthForKey(stateKey) {
+  try {
+   // Subcol: usar snap canónico ({id: stringifiedItem})
+   var snap = window._DashweyLastSyncedSnap && window._DashweyLastSyncedSnap[stateKey];
+   if (snap && typeof snap === 'object') {
+    return Object.keys(snap).length;
+   }
+   // Root fallback: usar State.get filtrado (refleja realidad inmediata pre-write).
+   // OJO: si el guard se ejecuta tras mutación local, State.get YA puede
+   // reflejar el borrado masivo. Por eso preferimos snap. Si no hay snap
+   // todavía (primer write tras boot) devolvemos -1 → guard pasa sin bloquear.
+   return -1;
+  } catch(_) {
+   return -1;
+  }
+ }
+
+ // Calcular longitud "viva" (sin deleted) del stateKey
+ function _liveLengthFromState(stateKey) {
+  try {
+   var S = window.State || (window.App && window.App.State);
+   if (!S || !S.get || typeof S.get[stateKey] !== 'function') return -1;
+   var arr = S.get[stateKey]() || [];
+   // State.get YA filtra deleted vía _nd, pero por seguridad re-filtramos
+   var live = 0;
+   for (var i = 0; i < arr.length; i++) {
+    if (arr[i] && arr[i].deleted !== true) live++;
+   }
+   return live;
+  } catch(_) {
+   return -1;
+  }
+ }
+
+ // Calcular longitud viva desde un array dado (para root payload pre-write).
+ function _liveLengthFromArr(arr) {
+  if (!Array.isArray(arr)) return -1;
+  var live = 0;
+  for (var i = 0; i < arr.length; i++) {
+   if (arr[i] && arr[i].deleted !== true) live++;
+  }
+  return live;
+ }
+
+ // Mostrar toast bloqueante. Devuelve promesa con true (continuar) o false (cancelar/timeout).
+ function _promptUser(stateKey, prevLen, nextLen) {
+  return new Promise(function(resolve) {
+   try {
+    // Construir toast (un solo nodo, reutilizable)
+    var existing = document.getElementById('wn2-toast');
+    if (existing) existing.parentNode && existing.parentNode.removeChild(existing);
+
+    var toast = document.createElement('div');
+    toast.id = 'wn2-toast';
+    toast.setAttribute('role', 'alertdialog');
+    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-atomic', 'true');
+
+    var pctLoss = Math.round((1 - (nextLen / Math.max(prevLen, 1))) * 100);
+    var detailText = stateKey + ': ' + prevLen + ' → ' + nextLen + ' items (−' + pctLoss + '%)';
+
+    toast.innerHTML = ''
+     + '<div class="wn2-title">⚠️ Cambio masivo detectado — sync pausada</div>'
+     + '<div class="wn2-detail">' + detailText + '</div>'
+     + '<div class="wn2-actions">'
+     +   '<button class="wn2-btn wn2-btn-ghost" data-act="cancel">Cancelar</button>'
+     +   '<button class="wn2-btn wn2-btn-primary" data-act="continue">Continuar</button>'
+     + '</div>'
+     + '<div class="wn2-countdown" aria-hidden="true">Auto-cancela en <span data-cd>60</span>s</div>';
+
+    document.body.appendChild(toast);
+    GUARD._toast = toast;
+
+    // Forzar reflow + clase visible
+    void toast.offsetWidth;
+    toast.classList.add('is-visible');
+
+    var resolved = false;
+    var done = function(verdict) {
+     if (resolved) return;
+     resolved = true;
+     try {
+      toast.classList.remove('is-visible');
+      setTimeout(function() {
+       try { toast.parentNode && toast.parentNode.removeChild(toast); } catch(_) {}
+       if (GUARD._toast === toast) GUARD._toast = null;
+      }, 360);
+     } catch(_) {}
+     resolve(verdict);
+    };
+
+    // Botones
+    var btnContinue = toast.querySelector('[data-act="continue"]');
+    var btnCancel = toast.querySelector('[data-act="cancel"]');
+    if (btnContinue) btnContinue.addEventListener('click', function() {
+     try { if (window.navigator && navigator.vibrate) navigator.vibrate(18); } catch(_) {}
+     done(true);
+    });
+    if (btnCancel) btnCancel.addEventListener('click', function() {
+     try { if (window.navigator && navigator.vibrate) navigator.vibrate([18, 30]); } catch(_) {}
+     done(false);
+    });
+
+    // Countdown visual
+    var cdEl = toast.querySelector('[data-cd]');
+    var remain = Math.round(GUARD.TIMEOUT_MS / 1000);
+    var cdInterval = setInterval(function() {
+     remain--;
+     if (cdEl) try { cdEl.textContent = String(Math.max(0, remain)); } catch(_) {}
+     if (remain <= 0) {
+      clearInterval(cdInterval);
+     }
+    }, 1000);
+
+    // Timeout absoluto
+    setTimeout(function() {
+     try { clearInterval(cdInterval); } catch(_) {}
+     if (!resolved) {
+      console.warn('[BUG-N2] timeout 60s sin decisión — write CANCELADO (stateKey=' + stateKey + ')');
+      done(false);
+     }
+    }, GUARD.TIMEOUT_MS);
+   } catch(e) {
+    console.warn('[BUG-N2] _promptUser error:', e && e.message);
+    resolve(false);
+   }
+  });
+ }
+
+ // Comprobar si un write merece guard. Devuelve {block: bool, reason?}.
+ async function _checkOne(stateKey, prevLen, nextLen) {
+  // Bypass emergencia
+  if (window._DashweyForceWriteEmpty === true) {
+   console.warn('[BUG-N2] bypass _DashweyForceWriteEmpty=true — write permitido sin guard (stateKey=' + stateKey + ')');
+   return { block: false };
+  }
+  // Filtros: si no podemos calcular prev (devuelve -1), pasar sin bloquear.
+  if (prevLen < 0) return { block: false };
+  // Si prev tiene menos del mínimo, dejar pasar (borrados pequeños legítimos)
+  if (prevLen < GUARD.MIN_PREV) return { block: false };
+  // Si next no se pudo calcular, no bloquear (incertidumbre vs incidente)
+  if (nextLen < 0) return { block: false };
+  // Si next >= threshold * prev → no es borrado masivo
+  if (nextLen >= prevLen * GUARD.THRESHOLD) return { block: false };
+  // Anti-prompt-doble: si ya hay un prompt activo para este stateKey, no pedir otro
+  if (GUARD._activeStateKeys.has(stateKey)) {
+   console.warn('[BUG-N2] ya hay prompt activo para ' + stateKey + ' — write secundario cancelado por seguridad');
+   return { block: true };
+  }
+  GUARD._activeStateKeys.add(stateKey);
+  GUARD._activePrompts++;
+  console.warn('[BUG-N2] GUARD TRIGGER stateKey=' + stateKey + ' prev=' + prevLen + ' next=' + nextLen);
+  var userOk = false;
+  try {
+   userOk = await _promptUser(stateKey, prevLen, nextLen);
+  } finally {
+   GUARD._activeStateKeys.delete(stateKey);
+   GUARD._activePrompts = Math.max(0, GUARD._activePrompts - 1);
+  }
+  if (userOk) {
+   console.info('[BUG-N2] usuario confirmó CONTINUAR write masivo (stateKey=' + stateKey + ')');
+   return { block: false };
+  }
+  console.warn('[BUG-N2] write CANCELADO por usuario o timeout (stateKey=' + stateKey + ')');
+  return { block: true };
+ }
+
+ // ── WRAPPERS ─────────────────────────────────────────────────────
+ // Wrappear se hace tras DOMContentLoaded + un pequeño delay para garantizar
+ // que las funciones originales ya están registradas en window por los IIFEs
+ // anteriores. Mientras tanto, el guard es no-op y los writes pasan normal.
+ function _installWrappers() {
+  // 1. Wrapper sobre _DashweyWriteSubcollectionBatch
+  try {
+   var origSub = window._DashweyWriteSubcollectionBatch;
+   if (typeof origSub !== 'function') {
+    console.warn('[BUG-N2] _DashweyWriteSubcollectionBatch no disponible — wrapper subcol NO instalado');
+   } else if (origSub._n2Wrapped) {
+    // Ya wrappeado (hot reload?)
+   } else {
+    var wrappedSub = async function(stateKey, items) {
+     // Solo guardamos colecciones críticas
+     if (CRITICAL_SUB[stateKey]) {
+      // prevLen = items confirmados Firestore (snap). nextLen = items vivos tras este write.
+      var prevLen = _prevLengthForKey(stateKey);
+      // next: contamos lo que QUEDARÁ vivo tras este write.
+      // En modo bulk items = todos. En incremental items = solo cambios.
+      // Lo más fiable: leer State.get tras la mutación (ya está aplicada antes de llamar a writer).
+      var nextLen = _liveLengthFromState(stateKey);
+      var verdict = await _checkOne(stateKey, prevLen, nextLen);
+      if (verdict.block) return false;
+     }
+     return origSub.apply(this, arguments);
+    };
+    wrappedSub._n2Wrapped = true;
+    window._DashweyWriteSubcollectionBatch = wrappedSub;
+    console.info('[BUG-N2] wrapper subcol instalado');
+   }
+  } catch(e) { console.warn('[BUG-N2] error instalando wrapper subcol:', e && e.message); }
+
+  // 2. Wrapper sobre window._DashweyFirebase.write (doc raíz)
+  try {
+   var fb = window._DashweyFirebase;
+   if (!fb || typeof fb.write !== 'function') {
+    console.warn('[BUG-N2] _DashweyFirebase.write no disponible — wrapper root NO instalado');
+   } else if (fb.write._n2Wrapped) {
+    // Ya wrappeado
+   } else {
+    var origWrite = fb.write.bind(fb);
+    var wrappedWrite = async function(coleccion, data) {
+     try {
+      // Solo nos interesa coleccion === 'state' con data en formato snapshot
+      if (coleccion === 'state' && data && typeof data === 'object') {
+       // Recorrer claves críticas root. Para cada array presente en data,
+       // comparar contra snap si existe.
+       var keys = Object.keys(CRITICAL_ROOT);
+       for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (!Array.isArray(data[k])) continue;
+        var prevLen = _prevLengthForKey(k);
+        // Para root, si no hay snap usar State.get previo no funciona (data ya
+        // es lo que se va a escribir). Cualculamos nextLen desde data[k].
+        var nextLen = _liveLengthFromArr(data[k]);
+        // Si prevLen es -1 (sin snap), fallback: comparar contra State.get
+        // que aún no fue mutado por este write pendiente (data es payload).
+        if (prevLen < 0) {
+         prevLen = _liveLengthFromState(k);
+         // Solo aplicar si State.get devuelve > nextLen (sospecha de purga)
+         if (prevLen <= nextLen) prevLen = -1;
+        }
+        var verdict = await _checkOne(k, prevLen, nextLen);
+        if (verdict.block) return false;
+       }
+      }
+     } catch(e) {
+      console.warn('[BUG-N2] error en wrapper root (pasando original):', e && e.message);
+     }
+     return origWrite(coleccion, data);
+    };
+    wrappedWrite._n2Wrapped = true;
+    fb.write = wrappedWrite;
+    console.info('[BUG-N2] wrapper root instalado');
+   }
+  } catch(e) { console.warn('[BUG-N2] error instalando wrapper root:', e && e.message); }
+ }
+
+ // Init: esperar a que las funciones target existan
+ function _init() {
+  var attempts = 0;
+  var MAX_ATTEMPTS = 30; // 30 × 200ms = 6s margen
+  var poll = setInterval(function() {
+   attempts++;
+   var subReady = typeof window._DashweyWriteSubcollectionBatch === 'function';
+   var rootReady = !!(window._DashweyFirebase && typeof window._DashweyFirebase.write === 'function');
+   if (subReady && rootReady) {
+    clearInterval(poll);
+    _installWrappers();
+    console.info('[Dashwey/BugN2Guard v1585] activo · threshold=' + (GUARD.THRESHOLD * 100) + '% · timeout=' + (GUARD.TIMEOUT_MS / 1000) + 's · minPrev=' + GUARD.MIN_PREV);
+   } else if (attempts >= MAX_ATTEMPTS) {
+    clearInterval(poll);
+    console.warn('[BUG-N2] timeout esperando funciones target (subReady=' + subReady + ' rootReady=' + rootReady + ') — guard NO instalado');
+   }
+  }, 200);
+ }
+
+ // API debug
+ window._DashweyBugN2State = function() {
+  return {
+   activePrompts: GUARD._activePrompts,
+   activeStateKeys: Array.from(GUARD._activeStateKeys),
+   threshold: GUARD.THRESHOLD,
+   minPrev: GUARD.MIN_PREV,
+   timeoutMs: GUARD.TIMEOUT_MS,
+   bypassActive: window._DashweyForceWriteEmpty === true,
+   wrappersInstalled: {
+    sub: !!(window._DashweyWriteSubcollectionBatch && window._DashweyWriteSubcollectionBatch._n2Wrapped),
+    root: !!(window._DashweyFirebase && window._DashweyFirebase.write && window._DashweyFirebase.write._n2Wrapped)
+   }
+  };
+ };
+ window._DashweyBugN2ForcePrompt = function(stateKey) {
+  // Testing UI sin disparar write real
+  return _promptUser(stateKey || 'ventas', 5123, 12);
+ };
+
+ if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _init);
+ } else {
+  _init();
+ }
 })();
 
 /* ─────────────────────────────────────────────────────────────────────────
