@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1582";
+ var CURRENT_CACHE = "dashwey-v1-3-1583";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1582</title>
+<title>Dashwey v1.3.1583</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1818,6 +1818,77 @@ body[data-initial-sync="done"] .snap-kpi-delta {
   background: var(--bg-mid);
  }
  #trust-pill .trust-dot { animation: none; }
+}
+
+/* ── v1.3.1583 CONVERGENCE DETECTOR · Badge rojo divergencia confirmada
+   Aparece SOLO tras 3 fallos consecutivos. Tap → modal detalle 6 valores.
+   Posición: junto a trust-pill pero no apilados. Self-stop tras 3 fallos.
+   Cero impacto visual mientras todo va bien. */
+#convergence-badge {
+ position: fixed;
+ left: 50%;
+ transform: translateX(-50%) translateY(20px);
+ bottom: calc(var(--sab, 0px) + 168px);
+ z-index: 9001;
+ display: flex;
+ align-items: center;
+ gap: var(--sp-2);
+ padding: 8px 14px;
+ background: rgba(225, 96, 96, 0.96);
+ color: #FFF;
+ font-size: var(--fs-xs);
+ font-weight: var(--fw-med);
+ border-radius: var(--r-pill);
+ box-shadow: 0 6px 24px rgba(225, 96, 96, 0.30), 0 1px 0 rgba(255,255,255,0.06) inset;
+ backdrop-filter: blur(12px);
+ -webkit-backdrop-filter: blur(12px);
+ opacity: 0;
+ pointer-events: none;
+ transition: opacity 0.32s var(--ease-standard), transform 0.32s var(--ease-standard);
+ letter-spacing: 0.2px;
+ cursor: pointer;
+ -webkit-tap-highlight-color: transparent;
+}
+#convergence-badge.is-visible {
+ opacity: 1;
+ transform: translateX(-50%) translateY(0);
+ pointer-events: auto;
+}
+#convergence-badge:active {
+ transform: translateX(-50%) translateY(0) scale(var(--press-scale-sm, 0.96));
+}
+#convergence-badge .cb-dot {
+ width: 6px; height: 6px; border-radius: 50%;
+ flex-shrink: 0;
+ background: #FFF;
+}
+
+/* Modal detalle convergence: tabla 6 valores. */
+.cb-detail-table {
+ width: 100%;
+ border-collapse: collapse;
+ font-size: var(--fs-sm);
+ margin: var(--sp-3) 0;
+}
+.cb-detail-table th,
+.cb-detail-table td {
+ padding: 8px 10px;
+ text-align: left;
+ border-bottom: 1px solid var(--border-soft, rgba(0,0,0,0.06));
+}
+.cb-detail-table th {
+ font-weight: var(--fw-med);
+ color: var(--text-muted);
+ font-size: var(--fs-xs);
+ text-transform: uppercase;
+ letter-spacing: 0.5px;
+}
+.cb-detail-table tr.cb-mismatch td {
+ background: rgba(225, 96, 96, 0.06);
+}
+.cb-detail-table tr.cb-mismatch td:first-child {
+ color: #E16060;
+ font-weight: var(--fw-med);
 }
 
 /* ── WHAT'S NEW SHEET ─────────────────────────────────────── */
@@ -21021,7 +21092,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1582';
+ const _APP_VERSION = 'v1.3.1583';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -66652,6 +66723,428 @@ document.addEventListener('keydown', function(e) {
  };
 
  console.info('[Dashwey/v1513] Visibility resync activado — debounce 30s');
+})();
+
+/* ─────────────────────────────────────────────────────────────────────────
+   v1.3.1583 CONVERGENCE DETECTOR FULL — Detección divergencia multi-device
+   ─────────────────────────────────────────────────────────────────────────
+   Objetivo: que Hung confíe en los números sin abrir Loyverse/BB a verificar.
+
+   Cómo funciona:
+   1. En 3 momentos por sesión (boot, post-sync, +5s) escribimos una
+      huella (footprint) de 6 valores a state/{uid}/devices/{deviceId}/.
+   2. Tras escribir, leemos los footprints de OTROS devices (<24h, mismo
+      scope:'negocio') y los comparamos con los nuestros.
+   3. Divergencia → silent resync (sin toast, sin molestar).
+   4. 3 fallos consecutivos → badge rojo, auto-stop, tap=modal detalle.
+
+   Cero contacto con FinEngine control flow (HARD RULE financial).
+   Solo LEE valores ya canónicos: FinEngine.saldoCuentas() + counts State.
+   ───────────────────────────────────────────────────────────────────────── */
+(function _DashweyConvergenceDetectorIIFE() {
+ 'use strict';
+
+ var CONV = {
+  STORAGE_KEY: 'dashwey_convergence_state',
+  MAX_FAILS: 3,
+  FOOTPRINT_TTL_MS: 24 * 60 * 60 * 1000,  // 24h
+  T0_DELAY_MS: 2000,    // boot
+  T2_DELAY_MS: 5000,    // post-sync +5s
+  FIRED_TIMES: 0,
+  MAX_FIRES_PER_SESSION: 3,
+  _t1Triggered: false,
+  _stopped: false,
+  _lastFingerprint: null,
+  _badge: null,
+  _ratesLimit: 1500       // mín 1.5s entre disparos para evitar dobles eventos
+ };
+
+ var _lastFireTs = 0;
+
+ function _loadState() {
+  try {
+   var raw = localStorage.getItem(CONV.STORAGE_KEY);
+   if (!raw) return { fails: 0, silenced: false };
+   var parsed = JSON.parse(raw);
+   return {
+    fails: Math.max(0, parseInt(parsed.fails, 10) || 0),
+    silenced: parsed.silenced === true,
+    lastFailAt: parseInt(parsed.lastFailAt, 10) || 0
+   };
+  } catch(_) {
+   return { fails: 0, silenced: false };
+  }
+ }
+
+ function _saveState(s) {
+  try { localStorage.setItem(CONV.STORAGE_KEY, JSON.stringify(s || {})); } catch(_) {}
+ }
+
+ function _computeFingerprint() {
+  try {
+   var FE = (typeof FinEngine !== 'undefined') ? FinEngine : null;
+   if (!FE || typeof FE.saldoCuentas !== 'function') return null;
+   if (typeof State === 'undefined' || !State.get) return null;
+
+   // Solo cuenta items scope 'negocio' (default si falta scope) y no eliminados.
+   var inScope = function(it) {
+    if (!it || it.deleted === true) return false;
+    var sc = it.scope || 'negocio';
+    return sc === 'negocio';
+   };
+
+   var ventas = (State.get.ventas() || []).filter(inScope);
+   var gastos = (State.get.gastosOp() || []).filter(inScope);
+   var ingresos = (State.get.ingresosFin() || []).filter(inScope);
+   var productos = (State.get.productos() || []).filter(function(p) {
+    return p && p.deleted !== true;
+   });
+   var proveedores = (State.get.proveedores() || []).filter(function(p) {
+    return p && p.deleted !== true;
+   });
+
+   var saldoTotal = +(FE.saldoCuentas() || 0);
+   // Redondear a céntimos para evitar mismatches por floats puros
+   saldoTotal = Math.round(saldoTotal * 100) / 100;
+
+   return {
+    saldoTotal: saldoTotal,
+    nVentas: ventas.length,
+    nGastos: gastos.length,
+    nIngresos: ingresos.length,
+    nProductos: productos.length,
+    nProveedores: proveedores.length
+   };
+  } catch(e) {
+   console.warn('[Convergence] computeFingerprint error:', e && e.message);
+   return null;
+  }
+ }
+
+ function _fingerprintEquals(a, b) {
+  if (!a || !b) return false;
+  // Saldo: tolerancia 0.01€ (rounding en ronda independiente)
+  if (Math.abs((a.saldoTotal || 0) - (b.saldoTotal || 0)) > 0.01) return false;
+  return a.nVentas === b.nVentas
+      && a.nGastos === b.nGastos
+      && a.nIngresos === b.nIngresos
+      && a.nProductos === b.nProductos
+      && a.nProveedores === b.nProveedores;
+ }
+
+ function _diffFields(local, remote) {
+  if (!local || !remote) return [];
+  var fields = ['saldoTotal','nVentas','nGastos','nIngresos','nProductos','nProveedores'];
+  return fields.filter(function(f) {
+   if (f === 'saldoTotal') return Math.abs((local[f]||0)-(remote[f]||0)) > 0.01;
+   return local[f] !== remote[f];
+  });
+ }
+
+ async function _writeFootprint(fb, fp) {
+  try {
+   var _uid = fb && fb.uid;
+   if (!_uid) return false;
+   var deviceId = window._DashweyDeviceId || 'unknown';
+   var fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+   var app = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+   var apps = app.getApps();
+   if (!apps.length) return false;
+   var _db = fs.getFirestore(apps[0]);
+   await fs.setDoc(
+    fs.doc(_db, 'state', _uid, 'devices', deviceId),
+    {
+     deviceId: deviceId,
+     scope: 'negocio',
+     footprint: fp,
+     platform: navigator.userAgent.slice(0, 100),
+     appVersion: (typeof _APP_VERSION === 'string') ? _APP_VERSION : 'unknown',
+     updatedAt: fs.serverTimestamp(),
+     updatedAtMs: Date.now()
+    },
+    { merge: true }
+   );
+   return true;
+  } catch(e) {
+   console.warn('[Convergence] write error:', e && e.message);
+   return false;
+  }
+ }
+
+ async function _readPeerFootprints(fb) {
+  try {
+   var _uid = fb && fb.uid;
+   if (!_uid) return [];
+   var ownDeviceId = window._DashweyDeviceId || 'unknown';
+   var fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+   var app = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+   var apps = app.getApps();
+   if (!apps.length) return [];
+   var _db = fs.getFirestore(apps[0]);
+   var snap = await fs.getDocs(fs.collection(_db, 'state', _uid, 'devices'));
+   var peers = [];
+   var nowMs = Date.now();
+   snap.forEach(function(d) {
+    var data = d.data() || {};
+    if (!data.footprint) return;
+    if (data.deviceId === ownDeviceId) return;
+    if (data.scope && data.scope !== 'negocio') return;
+    var ageMs = nowMs - (data.updatedAtMs || 0);
+    if (ageMs > CONV.FOOTPRINT_TTL_MS) return;
+    peers.push({
+     deviceId: data.deviceId || d.id,
+     platform: data.platform || '',
+     ageMs: ageMs,
+     fp: data.footprint
+    });
+   });
+   return peers;
+  } catch(e) {
+   console.warn('[Convergence] read peers error:', e && e.message);
+   return [];
+  }
+ }
+
+ function _renderBadge(visible) {
+  if (!CONV._badge) {
+   CONV._badge = document.getElementById('convergence-badge');
+   if (!CONV._badge) {
+    var el = document.createElement('div');
+    el.id = 'convergence-badge';
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', 'Datos divergen entre dispositivos. Tocar para ver detalle.');
+    el.setAttribute('tabindex', '0');
+    el.innerHTML = '<span class="cb-dot"></span><span class="cb-label">Datos divergen — toca para ver</span>';
+    el.addEventListener('click', _openDetailModal);
+    document.body.appendChild(el);
+    CONV._badge = el;
+   }
+  }
+  if (visible) {
+   CONV._badge.classList.add('is-visible');
+  } else {
+   CONV._badge.classList.remove('is-visible');
+  }
+ }
+
+ function _openDetailModal() {
+  try {
+   var localFp = _lastFingerprintLocal || CONV._lastFingerprint || _computeFingerprint();
+   var peerFp = _lastPeerForModal;
+   if (!localFp) return;
+
+   var fields = [
+    { k: 'saldoTotal', label: 'Saldo total', fmt: function(v) { return (typeof _feur === 'function' ? _feur(v) : (v + ' €')); } },
+    { k: 'nVentas', label: 'Ventas' },
+    { k: 'nGastos', label: 'Gastos' },
+    { k: 'nIngresos', label: 'Ingresos' },
+    { k: 'nProductos', label: 'Productos' },
+    { k: 'nProveedores', label: 'Proveedores' }
+   ];
+
+   var rows = fields.map(function(f) {
+    var lv = (localFp[f.k] !== undefined) ? localFp[f.k] : '—';
+    var rv = (peerFp && peerFp[f.k] !== undefined) ? peerFp[f.k] : '—';
+    var fmt = f.fmt || function(v) { return v; };
+    var mismatch = peerFp && (f.k === 'saldoTotal'
+     ? Math.abs((lv || 0) - (rv || 0)) > 0.01
+     : lv !== rv);
+    return '<tr' + (mismatch ? ' class="cb-mismatch"' : '') + '>'
+         + '<td>' + f.label + '</td>'
+         + '<td>' + (lv === '—' ? '—' : fmt(lv)) + '</td>'
+         + '<td>' + (rv === '—' ? '—' : fmt(rv)) + '</td>'
+         + '</tr>';
+   }).join('');
+
+   var html = ''
+    + '<p style="margin:0 0 8px 0;font-size:var(--fs-sm);color:var(--text-muted);">Los datos de este dispositivo no coinciden con otro dispositivo registrado en las últimas 24h.</p>'
+    + '<table class="cb-detail-table">'
+    + '<thead><tr><th>Campo</th><th>Este device</th><th>Otro device</th></tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table>'
+    + '<div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-3);">'
+    + '<button id="cb-btn-resync" class="dw-btn-primary" style="flex:1;">Resincronizar</button>'
+    + '<button id="cb-btn-ignore" class="dw-btn-ghost" style="flex:1;">Continuar</button>'
+    + '</div>';
+
+   var modal = Dashwey.utils.createModal({
+    type: 'center',
+    title: 'Datos divergen',
+    content: html
+   });
+
+   setTimeout(function() {
+    var btnResync = document.getElementById('cb-btn-resync');
+    var btnIgnore = document.getElementById('cb-btn-ignore');
+    if (btnResync) btnResync.addEventListener('click', function() {
+     modal.close();
+     _runResyncFromButton();
+    });
+    if (btnIgnore) btnIgnore.addEventListener('click', function() {
+     modal.close();
+    });
+   }, 0);
+  } catch(e) {
+   console.warn('[Convergence] modal error:', e && e.message);
+  }
+ }
+
+ async function _runResyncFromButton() {
+  try {
+   if (typeof window._DashweySyncAhora === 'function') {
+    await window._DashweySyncAhora();
+   } else if (typeof window._dashweyForceResync === 'function') {
+    await window._dashweyForceResync();
+   }
+   // Reset estado: usuario tomó acción explícita
+   _saveState({ fails: 0, silenced: false, lastFailAt: 0 });
+   _renderBadge(false);
+   CONV._stopped = false;
+  } catch(e) {
+   console.warn('[Convergence] resync error:', e && e.message);
+  }
+ }
+
+ async function _silentResync() {
+  try {
+   if (typeof window._DashweySyncAhora === 'function') {
+    await window._DashweySyncAhora();
+   }
+  } catch(_) { /* silent */ }
+ }
+
+ // Cache para el modal (sin recomputar)
+ var _lastFingerprintLocal = null;
+ var _lastPeerForModal = null;
+
+ async function _runCheck(reason) {
+  if (CONV._stopped) return;
+  var now = Date.now();
+  if (now - _lastFireTs < CONV._ratesLimit) return;
+  _lastFireTs = now;
+  if (CONV.FIRED_TIMES >= CONV.MAX_FIRES_PER_SESSION) return;
+  CONV.FIRED_TIMES++;
+
+  try {
+   var fb = window._DashweyFirebase;
+   if (!fb || !fb.ready) return;
+   if (window._DashweyInitialSyncDone !== true) return;
+
+   var localFp = _computeFingerprint();
+   if (!localFp) return;
+   _lastFingerprintLocal = localFp;
+   CONV._lastFingerprint = localFp;
+
+   var wrote = await _writeFootprint(fb, localFp);
+   if (!wrote) return;
+
+   var peers = await _readPeerFootprints(fb);
+   if (!peers.length) {
+    // Sin peers comparables → reset fallos (no asumir divergencia)
+    var st = _loadState();
+    if (st.fails > 0) { st.fails = 0; _saveState(st); }
+    return;
+   }
+
+   // ¿Algún peer coincide exactamente con nuestro fingerprint?
+   var anyMatch = peers.some(function(p) { return _fingerprintEquals(localFp, p.fp); });
+
+   var st = _loadState();
+   if (anyMatch) {
+    if (st.fails > 0) { st.fails = 0; _saveState(st); }
+    _renderBadge(false);
+    return;
+   }
+
+   // Divergencia. Guardar peer más reciente para mostrar en modal si llegamos al cap.
+   peers.sort(function(a, b) { return a.ageMs - b.ageMs; });
+   _lastPeerForModal = peers[0].fp;
+
+   st.fails = (st.fails || 0) + 1;
+   st.lastFailAt = now;
+   _saveState(st);
+
+   console.warn('[Convergence] divergencia detectada (' + reason + ') — fallo ' + st.fails + '/' + CONV.MAX_FAILS
+    + ' | local=' + JSON.stringify(localFp) + ' peer=' + JSON.stringify(_lastPeerForModal));
+
+   if (st.fails < CONV.MAX_FAILS) {
+    // Silent resync — sin toast
+    _silentResync();
+    return;
+   }
+
+   // 3 fallos → badge + auto-stop
+   CONV._stopped = true;
+   _renderBadge(true);
+   console.warn('[Convergence] MAX_FAILS alcanzado — auto-stop, mostrando badge');
+  } catch(e) {
+   console.warn('[Convergence] runCheck error:', e && e.message);
+  }
+ }
+
+ // ── Disparos ────────────────────────────────────────────────
+ // T0 = boot: tras DOMContentLoaded + 2s (solo si InitialSync ya OK)
+ function _scheduleT0() {
+  setTimeout(function() {
+   _runCheck('boot');
+  }, CONV.T0_DELAY_MS);
+ }
+
+ // T1 = post-sync: cuando dispara 'dashwey:sync-state-changed' con initialDone:true
+ // T2 = T1 + 5s
+ function _onSyncStateChanged(e) {
+  if (CONV._t1Triggered) return;
+  if (!e || !e.detail || e.detail.initialDone !== true) return;
+  CONV._t1Triggered = true;
+  // T1
+  setTimeout(function() { _runCheck('post-sync'); }, 100);
+  // T2
+  setTimeout(function() { _runCheck('post-sync+5s'); }, CONV.T2_DELAY_MS + 100);
+ }
+
+ // Init
+ function _init() {
+  // Si InitialSync ya estaba listo cuando este IIFE corre, marcar T1 inmediato.
+  if (window._DashweyInitialSyncDone === true) {
+   CONV._t1Triggered = true;
+   setTimeout(function() { _runCheck('post-sync(late)'); }, 500);
+   setTimeout(function() { _runCheck('post-sync+5s(late)'); }, CONV.T2_DELAY_MS + 500);
+  } else {
+   window.addEventListener('dashwey:sync-state-changed', _onSyncStateChanged);
+  }
+  _scheduleT0();
+
+  // Restaurar badge si la sesión anterior cerró con divergencia confirmada
+  // (pero NO bloquear futuros checks — solo mostrar visualmente hasta que el
+  // usuario actúe o se resuelva en chequeo posterior). Conservador: si ya
+  // estaba silenciado, no mostrar; el usuario podrá manualmente disparar via
+  // _DashweyConvergenceRun().
+  var st = _loadState();
+  if (st.fails >= CONV.MAX_FAILS && !st.silenced) {
+   _renderBadge(true);
+  }
+
+  console.info('[Dashwey/Convergence v1583] detector inicializado · deviceId=' + (window._DashweyDeviceId || 'unknown'));
+ }
+
+ // API debug expuesta
+ window._DashweyConvergenceRun = function(reason) { return _runCheck(reason || 'manual'); };
+ window._DashweyConvergenceReset = function() {
+  _saveState({ fails: 0, silenced: false, lastFailAt: 0 });
+  CONV._stopped = false;
+  CONV.FIRED_TIMES = 0;
+  _renderBadge(false);
+  console.info('[Convergence] estado reseteado');
+ };
+ window._DashweyConvergenceState = function() { return _loadState(); };
+ window._DashweyConvergenceFingerprint = function() { return _computeFingerprint(); };
+ window._DashweyConvergenceShowBadge = function() { _renderBadge(true); };
+
+ if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _init);
+ } else {
+  _init();
+ }
 })();
 </script>
 </body>
