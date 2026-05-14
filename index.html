@@ -665,7 +665,7 @@
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1576";
+ var CURRENT_CACHE = "dashwey-v1-3-1577";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -684,7 +684,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1576</title>
+<title>Dashwey v1.3.1577</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10634,13 +10634,24 @@ html { will-change: auto; }
 
 /* v1.3.1170 CROSSFADE: el #app está oculto hasta que body[data-app-ready="true"].
    El splash hace fade-out 500ms en paralelo al fade-in del #app → crossfade real,
-   sin "salto" del dashboard apareciendo detrás. */
+   sin "salto" del dashboard apareciendo detrás.
+   v1.3.1577 FIX C2: añadido visibility:hidden por defecto. CLAVE para evitar
+   el bug V10 reportado Hung 13may ("TPV visible al inicio"). Sin esto, si
+   splash se hace transparente por cualquier razón, el TPV se ve debajo. Con
+   visibility:hidden, el #app es completamente invisible (no solo transparente)
+   hasta data-app-ready=true. La transition libera visibility a 0s linear con
+   delay 0.40s (al final del fade-in opacity) — durante el fade el #app está
+   transparente pero técnicamente visible para el render del crossfade. Tras
+   data-app-ready=true, transition libera visibility a 0s inmediato. */
 #app {
  opacity: 0;
- transition: opacity 0.50s var(--ease);
+ visibility: hidden;
+ transition: opacity 0.40s var(--ease), visibility 0s linear 0.40s;
 }
 body[data-app-ready="true"] #app {
  opacity: 1;
+ visibility: visible;
+ transition: opacity 0.40s var(--ease), visibility 0s linear 0s;
 }
 
 /* v1.3.1566 LOTE I · Splash sin animación de movimiento (Hung 13may).
@@ -10666,9 +10677,13 @@ body[data-app-ready="true"] #app {
  display: flex;
  align-items: center;
  justify-content: center;
- box-shadow: 0 8px 40px rgba(139,26,47,0.32), 0 2px 10px rgba(139,26,47,0.20);
+ /* v1.3.1577 FIX C1 · box-shadow + animation ELIMINADOS.
+    box-shadow 40px blur causaba repaint costoso WebView Android (bug Chromium
+    documentado: blur grande es ~8x más caro). WebView re-pintaba splash
+    múltiples veces mientras parseaba el resto del HTML pesado (3MB) → flicker.
+    Animation también eliminada — disparaba re-layout cada vez. Logo aparece
+    instantáneo ya pintado en el primer frame. */
  margin-bottom: 28px;
- animation: splashFadeIn 0.20s ease both;
  -webkit-backface-visibility: hidden;
  backface-visibility: hidden;
 }
@@ -10684,7 +10699,9 @@ body[data-app-ready="true"] #app {
  color: #1A1A1A;
  text-transform: uppercase;
  margin-bottom:var(--sp-2_5);
- animation: splashFadeIn 0.20s ease both;
+ /* v1.3.1577 FIX C1 · animation ELIMINADA. Cada elemento del splash con su
+    propia animation disparaba un re-layout independiente. Todo el splash
+    aparece junto en el primer frame, sin re-layouts secuenciales. */
  -webkit-backface-visibility: hidden;
  backface-visibility: hidden;
 }
@@ -10694,7 +10711,7 @@ body[data-app-ready="true"] #app {
  background: var(--red);
  border-radius: 2px;
  margin-bottom: 40px;
- animation: splashFadeIn 0.20s ease both;
+ /* v1.3.1577 FIX C1 · animation ELIMINADA — todo splash aparece junto */
  -webkit-backface-visibility: hidden;
  backface-visibility: hidden;
 }
@@ -10705,7 +10722,7 @@ body[data-app-ready="true"] #app {
  letter-spacing: 3px;
  color: rgba(26,26,26,0.38);
  text-transform: uppercase;
- animation: splashFadeIn 0.20s ease both;
+ /* v1.3.1577 FIX C1 · animation ELIMINADA — todo splash aparece junto */
  -webkit-backface-visibility: hidden;
  backface-visibility: hidden;
 }
@@ -20927,12 +20944,18 @@ function _hideSplash() {
  if (splash.classList.contains('hidden') || splash.classList.contains('fade-out')) return;
  // v1.3.1567 LOTE TELEMETRY · _hideSplash invocado (puede tardar MIN_VISIBLE más)
  try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hide_called'); } catch(_) {}
- // v1.3.1566 LOTE I · MIN_VISIBLE reducido de 1000ms a 350ms.
- //   Sin animación de movimiento (fade-in 200ms), mantener 1s visible se
- //   sentía artificialmente largo. 350ms = 200ms fade-in + 150ms respiro
- //   antes de empezar fade-out. Total splash visible: ~350ms + 420ms fade =
- //   ~770ms — premium feel sin frenar al usuario.
- const MIN_VISIBLE = 350;
+ // v1.3.1577 FIX C3 · Simplificación.
+ //   ANTES: MIN_VISIBLE 350ms forzaba splash visible al menos 350ms incluso si
+ //   la app estaba lista en 100ms. Innecesario y aumentaba tiempo percibido.
+ //   AHORA: la app se muestra LO MÁS RÁPIDO POSIBLE una vez lista. Si tarda
+ //   200ms, splash se ve 200ms. El splash tiene el mismo fondo #F7F2F2 que la
+ //   app (cuando se complete Fix A+B en sesión APK), por lo que aunque se vea
+ //   poco tiempo no hay "salto visual".
+ //   COORDINACIÓN CAPACITOR: si está disponible Capacitor.Plugins.SplashScreen,
+ //   llamar a hide() programáticamente para coordinar capa 1 (nativa Android)
+ //   con capa 3 (HTML). Las 3 capas terminan al unísono (requiere Fix B con
+ //   launchAutoHide:false en capacitor.config.json — pendiente sesión APK).
+ const MIN_VISIBLE = 200; // antes 350ms — reducido al mínimo para evitar bloqueo perceptible
  const elapsed = Date.now() - (window._splashStartTime || Date.now());
  const delay = Math.max(0, MIN_VISIBLE - elapsed);
  setTimeout(() => {
@@ -20940,6 +20963,16 @@ function _hideSplash() {
   // Activar fade-in del app SIMULTÁNEO al fade-out del splash → crossfade
   document.body.setAttribute('data-app-ready', 'true');
   splash.classList.add('fade-out');
+  // v1.3.1577 FIX C3 · coordinar con splash nativo Capacitor.
+  //   Si launchAutoHide:false está configurado (Fix B sesión APK), el splash
+  //   nativo Android espera a esta llamada para hacer fade-out. Si Capacitor
+  //   no está disponible (PWA) o el plugin no existe, falla silencioso.
+  //   fadeOutDuration 400ms = mismo timing que CSS #app-splash transition.
+  try {
+   if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
+    window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 400 });
+   }
+  } catch(_) {}
   setTimeout(() => {
    if (splash) splash.classList.add('hidden');
    // v1.3.1567 LOTE TELEMETRY · splash totalmente oculto (UI lista visualmente)
@@ -20951,6 +20984,25 @@ function _hideSplash() {
 window._splashStartTime = Date.now();
 // Sobrescribir stub del HEAD con la función real
 window._hideSplash = _hideSplash;
+
+// v1.3.1577 FIX C4 · Safety timeout 5000ms.
+//   Si por cualquier razón _hideSplash() nunca se llama (error crítico boot,
+//   crash JS, race condition extrema), el splash quedaría visible para siempre.
+//   Especialmente crítico con Fix B (launchAutoHide:false en Capacitor):
+//   el splash nativo Android también se quedaría sin ocultarse.
+//   Este timeout fuerza el hide a los 5s pase lo que pase. 5s es generoso:
+//   en boot normal son ~860ms, en cold start lento ~2-3s. Si pasan 5s sin
+//   _hideSplash es señal de problema serio y mejor mostrar la app (aunque
+//   esté incompleta) que dejar al usuario mirando un splash.
+setTimeout(function _splashSafetyHide() {
+ try {
+  var sp = document.getElementById('app-splash');
+  if (sp && !sp.classList.contains('hidden')) {
+   console.warn('[Dashwey/Splash] Safety timeout 5s alcanzado — forzando hide');
+   if (typeof _hideSplash === 'function') _hideSplash();
+  }
+ } catch(_) {}
+}, 5000);
 
 function feur(n) { return Utils.feur(n); }
 function showToast(msg, type) { return Utils.showToast(msg, type); }
@@ -21159,7 +21211,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1576';
+ const _APP_VERSION = 'v1.3.1577';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
