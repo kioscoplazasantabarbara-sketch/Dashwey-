@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1585";
+ var CURRENT_CACHE = "dashwey-v1-3-1586";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1585</title>
+<title>Dashwey v1.3.1586</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13694,7 +13694,13 @@ window._DashweySyncAhora = async function() {
     const setter = App.State.set[setterName];
     if (typeof setter === 'function') {
      setter(merged);
-     console.info('[Dashwey/SyncAhora] ✓', k, '| firestore:', items.length, '| local antes:', localArr.length, '| tras set:', (typeof getter === 'function' ? getter().length : '?'));
+     // v1.3.1586 FIX ISSUE-D1: log explícito vivos+tombstones para evitar
+     //   confusión. Antes mostraba "local antes: 1458 | tras set: 1262" sin
+     //   aclarar que la diferencia era tombstones (no pérdida real de datos).
+     var _trasVivos = (typeof getter === 'function' ? getter().length : -1);
+     var _trasTotal = (typeof _rawAcc === 'function' ? _rawAcc().length : _trasVivos);
+     var _trasTombs = (_trasTotal >= 0 && _trasVivos >= 0) ? (_trasTotal - _trasVivos) : 0;
+     console.info('[Dashwey/SyncAhora] ✓', k, '| firestore:', items.length, '| local antes:', localArr.length, '| tras set:', _trasVivos, 'vivos +', _trasTombs, 'tombstones =', _trasTotal, 'total');
     }
    }
   } finally {
@@ -21178,7 +21184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1585';
+ const _APP_VERSION = 'v1.3.1586';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -66936,9 +66942,14 @@ document.addEventListener('keydown', function(e) {
     toast.classList.add('is-visible');
 
     var resolved = false;
+    // v1.3.1586 FIX ISSUE-B7: declarar cdInterval antes de done() para que
+    //   el closure pueda limpiarlo. Si Hung pulsa botón a los 5s, antes el
+    //   setInterval seguía corriendo hasta 60s (leak menor).
+    var cdInterval = null;
     var done = function(verdict) {
      if (resolved) return;
      resolved = true;
+     try { if (cdInterval) { clearInterval(cdInterval); cdInterval = null; } } catch(_) {}
      try {
       toast.classList.remove('is-visible');
       setTimeout(function() {
@@ -66964,11 +66975,12 @@ document.addEventListener('keydown', function(e) {
     // Countdown visual
     var cdEl = toast.querySelector('[data-cd]');
     var remain = Math.round(GUARD.TIMEOUT_MS / 1000);
-    var cdInterval = setInterval(function() {
+    cdInterval = setInterval(function() {
      remain--;
      if (cdEl) try { cdEl.textContent = String(Math.max(0, remain)); } catch(_) {}
      if (remain <= 0) {
-      clearInterval(cdInterval);
+      try { clearInterval(cdInterval); } catch(_) {}
+      cdInterval = null;
      }
     }, 1000);
 
@@ -66989,9 +67001,23 @@ document.addEventListener('keydown', function(e) {
 
  // Comprobar si un write merece guard. Devuelve {block: bool, reason?}.
  async function _checkOne(stateKey, prevLen, nextLen) {
-  // Bypass emergencia
+  // Bypass emergencia (con auto-reset tras 60s)
+  // v1.3.1586 FIX ISSUE-B6: el flag se quedaba pegado para siempre. Si Hung
+  //   lo activaba para emergency bypass y se olvidaba, todos los writes
+  //   peligrosos futuros pasaban sin guard. Ahora: al primer uso, arma timer
+  //   60s para auto-resetear. Mensaje consola explícito al activar y resetear.
   if (window._DashweyForceWriteEmpty === true) {
    console.warn('[BUG-N2] bypass _DashweyForceWriteEmpty=true — write permitido sin guard (stateKey=' + stateKey + ')');
+   if (!GUARD._bypassResetTimer) {
+    console.warn('[BUG-N2] ⚠ bypass activo. Auto-reset en 60s. Para desactivar manual: window._DashweyForceWriteEmpty = false');
+    GUARD._bypassResetTimer = setTimeout(function() {
+     try {
+      window._DashweyForceWriteEmpty = false;
+      console.info('[BUG-N2] ✓ bypass auto-reset tras 60s — guard re-activo');
+     } catch(_) {}
+     GUARD._bypassResetTimer = null;
+    }, 60000);
+   }
    return { block: false };
   }
   // Filtros: si no podemos calcular prev (devuelve -1), pasar sin bloquear.
