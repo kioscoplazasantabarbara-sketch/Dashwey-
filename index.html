@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1587";
+ var CURRENT_CACHE = "dashwey-v1-3-1588";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1587</title>
+<title>Dashwey v1.3.1588</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3775,17 +3775,6 @@ body[data-dash-snap="1"] .snap-agenda-timeline,
  transition: background var(--dur-short), border-color var(--dur-short), transform var(--dur-micro);
  padding: 0; margin: 0;
  align-self: center;
- /* v1.3.1587 FIX hit area: extender zona tap a 40×40 sin agrandar visual.
-    Antes 18×18 era demasiado pequeño en mobile — taps caían fuera del
-    checkbox y disparaban el click del item (abre detalle pedido), nunca
-    el handler del check. Pseudo-elemento invisible. */
- position: relative;
-}
-.snap-tl-v-check::before {
- content: '';
- position: absolute;
- inset: -11px;
- /* opcional debug visual: background: rgba(255,0,0,0.1); */
 }
 .snap-tl-v-check:active { transform: scale(0.88); }
 .snap-tl-v-check.done {
@@ -4254,15 +4243,13 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
 /* ── Narrative typography ──────────────────────────────────────────────── */
 /* Slide-reveal desde bottom navbar — v1.3.39 */
 @keyframes snapInsightSlideUp {
- /* v1.3.1587: era translateY (vertical). Cambiado a translateX L→R según
-    petición Hung. Mantengo nombre keyframe para no romper otras refs. */
  from {
  opacity: 0;
- transform: translateX(-32px);
+ transform: translateY(32px);
  }
  to {
  opacity: 1;
- transform: translateX(0);
+ transform: translateY(0);
  }
 }
 .snap-narrative-zone.insight-reveal {
@@ -21197,7 +21184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1587';
+ const _APP_VERSION = 'v1.3.1588';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30564,8 +30551,11 @@ const dash = (() => {
   }
  } catch(e) { /* silencioso — datos locales siguen disponibles */ }
  render(); // _applyDashMode llamado al final de render()
- // v1.3.565: re-renderizar TODAS las snap cards con animación de contadores
- try { _snapLastRenderedCardId = null; _snapDoRenderAll(); } catch(_) {}
+ // v1.3.1588 FIX A1: eliminada llamada redundante a _snapDoRenderAll. render()
+ //   ya lo invoca internamente (línea ~30449) cuando dataset.tab==='1'. Antes:
+ //   render() → snap animaciones × 1; ESTA línea → animaciones × 2. Resultado
+ //   visual: hero KPI, gráficas e Insights se reproducían 2 veces en pull-down.
+ //   Confirmado callsite único; flujo intacto, render() cubre todos los casos.
  // Micro-feedback en label de periodo (animación decorativa, 600ms total)
  const lbl = document.getElementById('dash-title-period-lbl');
  if (lbl) {
@@ -38586,6 +38576,11 @@ function _confirmBorrarCuenta(id) {
  // A mitad del giro (720°) cambia el texto — invisible en ese frame.
  function _snapFlipText(el, newText) {
  if (!el) return;
+ // v1.3.1588 FIX C3: si el texto no cambia, NO animar. Evita re-animación
+ //   injustificada cuando llega venta Loyverse (la cascada re-renderiza Agenda
+ //   pero el próximo evento puede no haber cambiado). Hung definió: KPI no
+ //   animan a menos que el valor realmente cambie. Coste: 1 comparación string.
+ if (el.textContent === newText) return;
  // v1.3.1449: si el elemento está intencionalmente oculto (display:none inline),
  //   NO ejecutar la animación (que reactivaría display y haría visible un elemento
  //   que el resto de UI ocultó deliberadamente). Defense-in-depth para evitar que
@@ -38655,6 +38650,18 @@ function _confirmBorrarCuenta(id) {
  }
 
  // Hero grande (sin duration) → animación rAF clásica
+ // v1.3.1588 FIX C3: si el valor target ya está mostrado, NO animar.
+ //   Evita re-animación cuando llega evento que toca State pero no cambia el
+ //   valor (ej: venta Loyverse en card NO-rendimiento). Comparación por texto
+ //   formateado para cubrir EUR/PCT/INT y evitar floating-point edge cases.
+ var _targetText = isEur ? _snapFeur(target)
+                  : isPct ? (_snapFmt(target, 1) + '%')
+                  : _snapFmt(Math.round(target));
+ if (el.textContent === _targetText) {
+  el.classList.remove('snap-counting');
+  el.classList.remove('snap-pop');
+  return;
+ }
  duration = 700;
  var start = 0;
  var startTime = null;
@@ -38988,13 +38995,7 @@ function _confirmBorrarCuenta(id) {
  _snapTypewriter(textEl, phrases[current]);
  _updateInsightDots(cardId, current, total); // v1.3.657: dots iniciales
 
- // v1.3.1587 FIX BUG Insight loop: ANTES setInterval cada 8s rotaba insight
- //   automáticamente → loop infinito molesto en pantalla. Hung quería:
- //   1 sola animación al abrir snap card o pull-down refresh, después
- //   estática. Eliminado setInterval. Rotación manual queda disponible
- //   vía _showInsightAt(cardId, idx) si Hung tappea un dot.
- // Para reactivar rotación automática: descomentar el bloque abajo.
- /* DESACTIVADO v1.3.1587:
+ // v1.3.416: flag de cancelación para evitar race condition con setTimeout interno
  _carouselTimers[cardId] = setInterval(function() {
  if (_carouselTimers[cardId + '_cancelled']) return;
  var el = document.getElementById('snap-text-' + cardId);
@@ -39005,12 +39006,13 @@ function _confirmBorrarCuenta(id) {
  }
  current = (current + 1) % total;
  _insightIdx[cardId] = current;
- _updateInsightDots(cardId, current, total);
+ _updateInsightDots(cardId, current, total); // v1.3.657
  el.style.transition = 'transform 0.28s var(--ease-accelerate), opacity 0.28s ease';
  el.style.transform = 'translateX(-32px)';
  el.style.opacity = '0';
  var _snapId = cardId;
  setTimeout(function() {
+ // Abortar si el carousel fue cancelado durante el timeout
  if (_carouselTimers[_snapId + '_cancelled']) return;
  if (el._snapTypewriterCancel) { el._snapTypewriterCancel(); el._snapTypewriterCancel = null; }
  el.innerHTML = '';
@@ -39028,7 +39030,6 @@ function _confirmBorrarCuenta(id) {
  });
  }, 300);
  }, 8000);
- */
  }
 
  function _stopInsightCarousel(cardId) {
@@ -40477,8 +40478,9 @@ function _confirmBorrarCuenta(id) {
  card.appendChild(hdr);
 
  // Timeline horizontal
- // v1.3.1448: mid label coherente con tipo
- var _midLabel = (_esPredicho || _esPending) ? 'Programado' : 'En tránsito';
+ // v1.3.1588 MOD C1: mid label simplificado a flecha ➡️ (antes "En tránsito"/"Programado").
+ //   Decisión Hung: más simple y directo. El estado ya se ve en el header del card.
+ var _midLabel = '➡️';
  var tl = _snapHTimeline(
  fmtD(fechaPed), // Pedido
  _midLabel,
@@ -40617,9 +40619,8 @@ function _confirmBorrarCuenta(id) {
    .sort(function(a,b){ return new Date(b.fecha) - new Date(a.fecha); })[0];
   _startLabel = _ultimaVisita ? fmtD(new Date(_ultimaVisita.fecha)) : 'Sin datos';
  }
- // v1.3.1448: mid label adaptado al tipo de evento
- //   predicho/pending → "Programado"; real → "Preparar"
- var _midLabel = (_esPredicho || _esPending) ? 'Programado' : 'Preparar';
+ // v1.3.1588 MOD C1: mid label simplificado a flecha ➡️ (antes "Programado"/"Preparar")
+ var _midLabel = '➡️';
  var tl = _snapHTimeline(
  _startLabel,
  _midLabel,
@@ -41412,14 +41413,11 @@ function _confirmBorrarCuenta(id) {
      var _elapsedMs = ahora.getTime() - fechaPed.getTime();
      var _pctPE = _spanMs > 0 ? Math.min(1, Math.max(0, _elapsedMs / _spanMs)) : 0;
      var _stateLbl;
+     // v1.3.1588 MOD C1: solo conservar "Atrasado · Xd" (info útil). Resto → flecha ➡️
      if (ev._atrasado && ev._diasAtraso > 0) {
       _stateLbl = 'Atrasado · ' + ev._diasAtraso + 'd';
-     } else if (_pctPE >= 1) {
-      _stateLbl = 'Entregado';
-     } else if (_pctPE > 0) {
-      _stateLbl = 'En tránsito';
      } else {
-      _stateLbl = 'Programado';
+      _stateLbl = '➡️';
      }
      // Mini-helper inline para escapar HTML (evita dependencia de _esc en scope)
      var _escH = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
@@ -41498,7 +41496,8 @@ function _confirmBorrarCuenta(id) {
     var fechaEntPE = fechaPE; // pedido_entrega = mismo día por definición
     if (!ev._predicho && !isNaN(fechaPE.getTime())) {
      var _pctPEE = (fechaPE <= ahora) ? 1 : 0;
-     var _stateLblPE = (_pctPEE >= 1) ? 'Entregado' : 'Programado';
+     // v1.3.1588 MOD C1: mid flecha simple (antes "Entregado"/"Programado")
+     var _stateLblPE = '➡️';
      var _escHPE = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
      });};
@@ -41580,14 +41579,11 @@ function _confirmBorrarCuenta(id) {
      var _pctE = _spanE > 0 ? Math.min(1, Math.max(0, _elapE / _spanE)) : 0;
      // Estado: si el pedido está atrasado, usar 'Atrasado'
      var _stateLblE;
+     // v1.3.1588 MOD C1: solo conservar "Atrasado · Xd" (info útil). Resto → flecha ➡️
      if (ev._atrasado && ev._diasAtraso > 0) {
       _stateLblE = 'Atrasado · ' + ev._diasAtraso + 'd';
-     } else if (_pctE >= 1) {
-      _stateLblE = 'Entregado';
-     } else if (_pctE > 0) {
-      _stateLblE = 'En tránsito';
      } else {
-      _stateLblE = 'Programado';
+      _stateLblE = '➡️';
      }
      var _escHE = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
