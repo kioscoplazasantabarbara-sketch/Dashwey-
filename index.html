@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1583";
+ var CURRENT_CACHE = "dashwey-v1-3-1584";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1583</title>
+<title>Dashwey v1.3.1584</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21092,7 +21092,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1583';
+ const _APP_VERSION = 'v1.3.1584';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -66727,6 +66727,11 @@ document.addEventListener('keydown', function(e) {
 
 /* ─────────────────────────────────────────────────────────────────────────
    v1.3.1583 CONVERGENCE DETECTOR FULL — Detección divergencia multi-device
+   v1.3.1584 FIX: _computeFingerprint usaba FinEngine/State como closures
+              privados (inaccesibles desde este IIFE final). Reemplazado por
+              window.State + suma manual de cuentas scope:negocio (réplica
+              exacta de FinEngine.saldoCuentas L18349). _feur también era
+              closure-local → fallback con Intl.toLocaleString.
    ─────────────────────────────────────────────────────────────────────────
    Objetivo: que Hung confíe en los números sin abrir Loyverse/BB a verificar.
 
@@ -66782,9 +66787,13 @@ document.addEventListener('keydown', function(e) {
 
  function _computeFingerprint() {
   try {
-   var FE = (typeof FinEngine !== 'undefined') ? FinEngine : null;
-   if (!FE || typeof FE.saldoCuentas !== 'function') return null;
-   if (typeof State === 'undefined' || !State.get) return null;
+   // window.State expuesto en L62369. window.FinEngine NO existe (closure privado).
+   // Calculamos saldoTotal nosotros mismos con misma lógica que FinEngine.saldoCuentas (L18349).
+   var S = window.State || (window.App && window.App.State);
+   if (!S || !S.get) {
+    console.warn('[Convergence] State no disponible — aún no inicializado');
+    return null;
+   }
 
    // Solo cuenta items scope 'negocio' (default si falta scope) y no eliminados.
    var inScope = function(it) {
@@ -66793,17 +66802,26 @@ document.addEventListener('keydown', function(e) {
     return sc === 'negocio';
    };
 
-   var ventas = (State.get.ventas() || []).filter(inScope);
-   var gastos = (State.get.gastosOp() || []).filter(inScope);
-   var ingresos = (State.get.ingresosFin() || []).filter(inScope);
-   var productos = (State.get.productos() || []).filter(function(p) {
+   var ventas = (S.get.ventas ? S.get.ventas() || [] : []).filter(inScope);
+   var gastos = (S.get.gastosOp ? S.get.gastosOp() || [] : []).filter(inScope);
+   var ingresos = (S.get.ingresosFin ? S.get.ingresosFin() || [] : []).filter(inScope);
+   var productos = (S.get.productos ? S.get.productos() || [] : []).filter(function(p) {
     return p && p.deleted !== true;
    });
-   var proveedores = (State.get.proveedores() || []).filter(function(p) {
+   var proveedores = (S.get.proveedores ? S.get.proveedores() || [] : []).filter(function(p) {
     return p && p.deleted !== true;
    });
 
-   var saldoTotal = +(FE.saldoCuentas() || 0);
+   // Saldo total: réplica de FinEngine.saldoCuentas (L18349): suma cuentas scope negocio no deleted.
+   var cuentas = (S.get.cuentas ? S.get.cuentas() || [] : []);
+   var saldoTotal = 0;
+   for (var i = 0; i < cuentas.length; i++) {
+    var c = cuentas[i];
+    if (!c || c.deleted === true) continue;
+    var sc = c.scope || 'negocio';
+    if (sc !== 'negocio') continue;
+    saldoTotal += (typeof c.saldo === 'number' ? c.saldo : 0);
+   }
    // Redondear a céntimos para evitar mismatches por floats puros
    saldoTotal = Math.round(saldoTotal * 100) / 100;
 
@@ -66933,8 +66951,18 @@ document.addEventListener('keydown', function(e) {
    var peerFp = _lastPeerForModal;
    if (!localFp) return;
 
+   // Helper formato saldo: _feur es scope-local, no accesible desde aquí.
+   // Fallback con Intl que da mismo resultado visual.
+   var _fmtEur = function(v) {
+    try {
+     return (v || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+    } catch(_) {
+     return (Math.round((v || 0) * 100) / 100) + ' €';
+    }
+   };
+
    var fields = [
-    { k: 'saldoTotal', label: 'Saldo total', fmt: function(v) { return (typeof _feur === 'function' ? _feur(v) : (v + ' €')); } },
+    { k: 'saldoTotal', label: 'Saldo total', fmt: _fmtEur },
     { k: 'nVentas', label: 'Ventas' },
     { k: 'nGastos', label: 'Gastos' },
     { k: 'nIngresos', label: 'Ingresos' },
@@ -67124,7 +67152,7 @@ document.addEventListener('keydown', function(e) {
    _renderBadge(true);
   }
 
-  console.info('[Dashwey/Convergence v1583] detector inicializado · deviceId=' + (window._DashweyDeviceId || 'unknown'));
+  console.info('[Dashwey/Convergence v1584] detector inicializado · deviceId=' + (window._DashweyDeviceId || 'unknown'));
  }
 
  // API debug expuesta
