@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1592";
+ var CURRENT_CACHE = "dashwey-v1-3-1593";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1592</title>
+<title>Dashwey v1.3.1593</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21184,7 +21184,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1592';
+ const _APP_VERSION = 'v1.3.1593';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33753,7 +33753,12 @@ function _openMovimientoFullscreenLegacy() {
 // Rollback: si esta función rompe, renombrar _openMovimientoFullscreenLegacy
 // → _openMovimientoFullscreen y eliminar esta sección.
 // ════════════════════════════════════════════════════════════════════
-function _openMovimientoFullscreen() {
+function _openMovimientoFullscreen(opts) {
+ // v1.3.1593 SPEC L6.1: aceptar opcional {cuentaId} para pre-seleccionar cuenta.
+ //   Caso de uso: tap FAB con Detalle Cuenta abierto -> sheet abre con la
+ //   cuenta correspondiente ya seleccionada. UX mas fluida.
+ //   Retrocompatible: callsites sin args -> opts undefined -> fallback a _movUltimaCuenta.
+ opts = opts || {};
  _movTipo = 'gasto';
  var cuentas = State.get.cuentas() || [];
  var hoy = new Date().toISOString().slice(0,10);
@@ -33763,7 +33768,8 @@ function _openMovimientoFullscreen() {
    return '<option value="' + c.id + '"' + (c.id===defId?' selected':'') + '>' + esc(c.nombre) + ' \u00b7 ' + _feur(c.saldo||0) + '</option>';
   }).join('');
  };
- var def = _movUltimaCuenta || (cuentas[0]?cuentas[0].id:'');
+ // v1.3.1593: priorizar cuenta pasada como argumento (FAB contextual con detalle cuenta abierto).
+ var def = opts.cuentaId || _movUltimaCuenta || (cuentas[0]?cuentas[0].id:'');
  _calcReset();
 
  // Init globals (mismas que legacy)
@@ -44236,74 +44242,135 @@ function _confirmBorrarCuenta(id) {
  // ─────────────────────────────────────────────────────────────────────
  window._navCenterTap = function() {
  try {
- var _curTab = -1;
- try {
-  var tAttr = document.body.getAttribute('data-tab');
-  if (tAttr !== null) _curTab = parseInt(tAttr);
-  if (typeof nav !== 'undefined' && typeof nav._cTab === 'number') _curTab = nav._cTab;
- } catch(_) {}
+  // ───────────────────────────────────────────────────────────
+  // v1.3.1593 SPEC L6.1: FAB contextual SIN dial.
+  //   Reemplaza _navDialOpen por una sola accion directa segun contexto.
+  //   Detección por capas en orden de prioridad:
+  //   1. Detalle Cuenta abierto (fs-content[data-cuenta-id]) -> +Movimiento pre-seleccion
+  //   2. Tab activa + card activa Dashboard / Almacen
+  //   3. Fallback -> +Movimiento
+  //
+  //   Nota implementacion: en codigo real NO existe sheet aparte de "detalle proveedor"
+  //   (Almacen tab2 ya muestra siempre el selectedProv activo). Tampoco existe
+  //   _openProvSelectorForPedido -> card "compras" hace fallback a tab Almacen.
+  //   _navDialOpen / _NAV_DIAL_CONFIG quedan obsoletos pero NO se eliminan
+  //   en este deploy (rollback facil + cleanup oportunista post-7d).
+  // ───────────────────────────────────────────────────────────
 
- // Almacén (tab 2) → dial 'almacen'
- if (_curTab === 2) {
-  _navDialOpen('almacen');
-  return;
- }
- // Dashboard (tab 1) → dial de la card snap activa
- if (_curTab === 1) {
-  var _curCard = null;
-
-  // 1) Cálculo matemático scroll snap (preciso, igual que _snapDoRenderAll)
+  // ── Capa 1 · Detalle Cuenta abierto (maxima prioridad) ───────
   try {
-   var cont = document.getElementById('dash-cards-container');
-   if (cont) {
-    var cards = Array.from(cont.querySelectorAll('.card[data-card-id]'));
-    if (cards.length > 0) {
-     var snapH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')) || cont.clientHeight;
-     if (snapH > 0) {
-      var maxIdx = Math.max(0, cards.length - 1);
-      var rawIdx = cont.scrollTop / snapH;
-      var activeIdx = Math.min(maxIdx, Math.max(0, Math.round(rawIdx)));
-      var activeCard = cards[activeIdx];
-      if (activeCard) _curCard = activeCard.getAttribute('data-card-id');
-     }
-    }
+   var _fsCnt = document.getElementById('fs-content');
+   if (_fsCnt && _fsCnt.classList.contains('has-dc-layout')) {
+    var _cuentaId = _fsCnt.getAttribute('data-cuenta-id') || null;
+    _openMovimientoFullscreen(_cuentaId ? { cuentaId: _cuentaId } : {});
+    return;
    }
   } catch(_) {}
 
-  // 2) Fallback: leer del módulo dash (puede estar stale pero suele estar OK)
-  if (!_curCard) {
+  // ── Capa 2 · Tab activa + subcontexto ───────────────────
+  var _curTab = -1;
+  try {
+   var tAttr = document.body.getAttribute('data-tab');
+   if (tAttr !== null) _curTab = parseInt(tAttr);
+   if (typeof nav !== 'undefined' && typeof nav._cTab === 'number') _curTab = nav._cTab;
+  } catch(_) {}
+
+  // Almacen (tab 2) → +Articulo (cart-mode se sustituye por alm-fab-pill, no llega aqui)
+  if (_curTab === 2) {
+   // Defensivo: si por alguna razon cart-mode esta activo y este handler dispara,
+   // ceder a la pill cesta (no abrir nuevo articulo encima del flujo carrito).
    try {
-    if (App && App.dash && App.dash._getActiveCardId) {
-     _curCard = App.dash._getActiveCardId();
-    }
+    if (document.body.classList.contains('cart-mode')) return;
    } catch(_) {}
+   try {
+    if (App.alm && App.alm.openNuevoArtFs) App.alm.openNuevoArtFs();
+   } catch(_) {}
+   return;
   }
 
-  // 3) Fallback bounding rect (último recurso)
-  if (!_curCard) {
+  // Dashboard (tab 1) → contextual segun card activa
+  if (_curTab === 1) {
+   var _curCard = null;
+
+   // 1) Calculo matematico scroll snap (preciso, igual que _snapDoRenderAll)
    try {
-    var cont2 = document.getElementById('dash-cards-container');
-    if (cont2) {
-     var cards2 = cont2.querySelectorAll('.card[data-card-id]');
-     var contR = cont2.getBoundingClientRect();
-     var centerY = contR.top + contR.height / 2;
-     var best = null, bestDist = Infinity;
-     cards2.forEach(function(card) {
-      var r = card.getBoundingClientRect();
-      var dist = Math.abs((r.top + r.height / 2) - centerY);
-      if (dist < bestDist) { bestDist = dist; best = card; }
-     });
-     if (best) _curCard = best.getAttribute('data-card-id');
+    var cont = document.getElementById('dash-cards-container');
+    if (cont) {
+     var cards = Array.from(cont.querySelectorAll('.card[data-card-id]'));
+     if (cards.length > 0) {
+      var snapH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--snap-area-h')) || cont.clientHeight;
+      if (snapH > 0) {
+       var maxIdx = Math.max(0, cards.length - 1);
+       var rawIdx = cont.scrollTop / snapH;
+       var activeIdx = Math.min(maxIdx, Math.max(0, Math.round(rawIdx)));
+       var activeCard = cards[activeIdx];
+       if (activeCard) _curCard = activeCard.getAttribute('data-card-id');
+      }
+     }
     }
    } catch(_) {}
+
+   // 2) Fallback modulo dash
+   if (!_curCard) {
+    try {
+     if (App && App.dash && App.dash._getActiveCardId) _curCard = App.dash._getActiveCardId();
+    } catch(_) {}
+   }
+
+   // 3) Fallback bounding rect (ultimo recurso)
+   if (!_curCard) {
+    try {
+     var cont2 = document.getElementById('dash-cards-container');
+     if (cont2) {
+      var cards2 = cont2.querySelectorAll('.card[data-card-id]');
+      var contR = cont2.getBoundingClientRect();
+      var centerY = contR.top + contR.height / 2;
+      var best = null, bestDist = Infinity;
+      cards2.forEach(function(card) {
+       var r = card.getBoundingClientRect();
+       var dist = Math.abs((r.top + r.height / 2) - centerY);
+       if (dist < bestDist) { bestDist = dist; best = card; }
+      });
+      if (best) _curCard = best.getAttribute('data-card-id');
+     }
+    } catch(_) {}
+   }
+
+   // Routing por card activa
+   try {
+    switch (_curCard) {
+     case 'rendimiento':
+      _openMovimientoFullscreen();
+      break;
+     case 'compras':
+      // No existe selector dedicado de proveedor para nuevo pedido ->
+      //   navegar al tab Almacen donde el usuario inicia carrito desde su proveedor activo.
+      try { if (App.nav && App.nav.goTab) App.nav.goTab(2); } catch(_) {}
+      break;
+     case 'flujo-caja':
+      _openMovimientoFullscreen();
+      break;
+     case 'agenda':
+      try {
+       if (App.dash && App.dash._openRecordatorioSheet) App.dash._openRecordatorioSheet(null);
+       else _openMovimientoFullscreen();
+      } catch(_) { _openMovimientoFullscreen(); }
+      break;
+     default:
+      _openMovimientoFullscreen(); // fallback Dashboard sin card detectada
+    }
+   } catch(_) {
+    _openMovimientoFullscreen();
+   }
+   return;
   }
 
-  if (_curCard && _NAV_DIAL_CONFIG[_curCard]) {
-   _navDialOpen(_curCard);
-  }
-  return;
+  // ── Capa 3 · Fallback universal ───────────────────────────
+  _openMovimientoFullscreen();
+
+ } catch(e) {
+  try { console.warn('[Dashwey/FAB] _navCenterTap error:', e && e.message); } catch(_) {}
  }
- } catch(e) {}
  };
  // Exponer para debug / cierre programático externo
  window._navDialOpen = _navDialOpen;
@@ -46542,7 +46609,12 @@ function _confirmBorrarCuenta(id) {
    //   La clase se limpia al cerrar el sheet (cleanup en _dcCleanupLayout).
    try {
     var _fsCnt = document.getElementById('fs-content');
-    if (_fsCnt) _fsCnt.classList.add('has-dc-layout');
+    if (_fsCnt) {
+     _fsCnt.classList.add('has-dc-layout');
+     // v1.3.1593 SPEC L6.1: stamp cuentaId para que el FAB contextual sepa que
+     //   detalle cuenta esta abierto y con que cuenta. Limpieza en _dcCleanupLayout.
+     _fsCnt.setAttribute('data-cuenta-id', cuentaId);
+    }
    } catch(_) {}
 
    requestAnimationFrame(function() {
@@ -46551,7 +46623,11 @@ function _confirmBorrarCuenta(id) {
     var _dcCleanupLayout = function() {
      try {
       var _fs = document.getElementById('fs-content');
-      if (_fs) _fs.classList.remove('has-dc-layout');
+      if (_fs) {
+       _fs.classList.remove('has-dc-layout');
+       // v1.3.1593 SPEC L6.1: limpiar stamp cuentaId al cerrar detalle.
+       _fs.removeAttribute('data-cuenta-id');
+      }
      } catch(_) {}
     };
     if (closeEl) closeEl.addEventListener('click', function() {
