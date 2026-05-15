@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1611";
+ var CURRENT_CACHE = "dashwey-v1-3-1612";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1611</title>
+<title>Dashwey v1.3.1612</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21333,7 +21333,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1611';
+ const _APP_VERSION = 'v1.3.1612';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41288,26 +41288,33 @@ function _confirmBorrarCuenta(id) {
   } catch(_) { return false; }
  }
  function _dwyEvMarkDone(ev, done) {
+  // v1.3.1611 hardening: doble persistencia (state + localStorage SIEMPRE),
+  //   ev.recordatorio mutación in-place defensiva, logs diagnóstico.
   try {
-   var k = _dwyEvKey(ev); if (!k) return;
+   var k = _dwyEvKey(ev); if (!k) { console.warn('[Agenda/MarkDone] key vacía', ev); return; }
+   var ts = done ? Date.now() : 0;
+   // 1) Recordatorios: mutar objeto in-place + persistir en state
    if (ev.tipo === 'recordatorio' && ev.recordatorio && ev.recordatorio.id) {
+    try { ev.recordatorio.done = !!done; ev.recordatorio._updatedAt = Date.now(); } catch(_){}
     try {
      if (State.set && State.set.updateRecordatorio) {
       State.set.updateRecordatorio(ev.recordatorio.id, { done: !!done, _updatedAt: Date.now() });
      }
-    } catch(_){}
+    } catch(e1){ console.warn('[Agenda/MarkDone] updateRecordatorio fail', e1); }
    }
-   var ts = done ? Date.now() : 0;
+   // 2) Mapa eventosCompletados: state SETTER (preferido)
    try {
     if (State.set && State.set.setEventoCompletado) {
      State.set.setEventoCompletado(k, done ? ts : null);
-    } else {
-     var ls = {}; try { ls = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_){}
-     if (done) ls[k] = ts; else delete ls[k];
-     localStorage.setItem('_dwyEvDone', JSON.stringify(ls));
     }
-   } catch(_){}
-  } catch(_){}
+   } catch(e2){ console.warn('[Agenda/MarkDone] setEventoCompletado fail', e2); }
+   // 3) FALLBACK SIEMPRE: localStorage _dwyEvDone (defensivo, antes solo era else)
+   try {
+    var ls = {}; try { ls = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_){}
+    if (done) ls[k] = ts; else delete ls[k];
+    localStorage.setItem('_dwyEvDone', JSON.stringify(ls));
+   } catch(e3){ console.warn('[Agenda/MarkDone] localStorage fail', e3); }
+  } catch(e){ console.warn('[Agenda/MarkDone] error global', e); }
  }
 
  function _snapRenderRecordatoriosPanel(wrap, hoy, fmtD) {
