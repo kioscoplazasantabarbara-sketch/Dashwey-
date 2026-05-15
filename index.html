@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1596";
+ var CURRENT_CACHE = "dashwey-v1-3-1597";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1596</title>
+<title>Dashwey v1.3.1597</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21203,7 +21203,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1596';
+ const _APP_VERSION = 'v1.3.1597';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38844,9 +38844,30 @@ function _confirmBorrarCuenta(id) {
   ? Math.round((saldoPrincipal / saldoActual) * 100) : null;
 
  // AUX-5 · Proximos pedidos a 7 dias (capital comprometido inminente)
+ //   v1.3.1597 FIX: pendingOrders usan campo 'date' (no fecha) y '_fechaEntrega' opcional
+ //   (no fechaEntrega). Si no existe _fechaEntrega -> calcular con diasEntrega del prov
+ //   (patrón usado en linea ~40024 calcEnt). Sin estos fixes, todos quedaban filtrados.
+ var _calcEntregaIns = function(dateISO, provId) {
+  try {
+   var prov = State.get.prov ? State.get.prov(provId) : null;
+   var de = (prov && prov.diasEntrega) || [];
+   var base = new Date(dateISO);
+   if (!de.length) { base.setDate(base.getDate()+2); return base; }
+   for (var i=1; i<=14; i++) {
+    var d2 = new Date(base); d2.setDate(base.getDate()+i);
+    var dow = d2.getDay()===0 ? 6 : d2.getDay()-1;
+    if (de.indexOf(dow) >= 0) return d2;
+   }
+   base.setDate(base.getDate()+3); return base;
+  } catch(_) { return null; }
+ };
  var _ms7d = Date.now() + 7 * 86400000;
  var _pedidos7d = pendOrd.filter(function(o){
-  var fEnt = o.fechaEntrega ? new Date(o.fechaEntrega).getTime() : 0;
+  if (!o) return false;
+  var feIso = o._fechaEntrega;
+  var feDate = feIso ? new Date(feIso) : (o.date ? _calcEntregaIns(o.date, o.provId) : null);
+  if (!feDate) return false;
+  var fEnt = feDate.getTime();
   return fEnt > 0 && fEnt <= _ms7d;
  });
  var capital7d = _pedidos7d.reduce(function(s, o) {
@@ -39008,8 +39029,10 @@ function _confirmBorrarCuenta(id) {
   var hoyAA = new Date(); hoyAA.setHours(0,0,0,0); var hoyMs = hoyAA.getTime();
   var fin7d = hoyMs + 7*86400000;
   pendOrd.forEach(function(o){
-   var fechaP = o.fecha ? new Date(o.fecha).getTime() : 0;
-   var fechaE = o.fechaEntrega ? new Date(o.fechaEntrega).getTime() : 0;
+   // v1.3.1597 FIX: usar 'date' y '_fechaEntrega'/_calcEntregaIns igual que AUX-5
+   var fechaP = o.date ? new Date(o.date).getTime() : 0;
+   var feD = o._fechaEntrega ? new Date(o._fechaEntrega) : (o.date ? _calcEntregaIns(o.date, o.provId) : null);
+   var fechaE = feD ? feD.getTime() : 0;
    [fechaP, fechaE].forEach(function(f){
     if (f >= hoyMs && f <= fin7d) {
      var key = new Date(f).toISOString().slice(0,10);
@@ -39352,6 +39375,12 @@ function _confirmBorrarCuenta(id) {
  _carouselTimers[cardId + '_cancelled'] = false;
  _snapTypewriter(textEl, phrases[current]);
  _updateInsightDots(cardId, current, total); // v1.3.657: dots iniciales
+
+ // v1.3.1597 FIX: si solo 1 frase, NO arrancar setInterval (evita re-typewriter
+ //   con slide cada 8s sobre el mismo texto -> sensación de "estático con tics").
+ //   Si entran mas frases despues (recall _startInsightRotation con phrases.length>1)
+ //   se arrancará el carousel normal.
+ if (total <= 1) return;
 
  // v1.3.416: flag de cancelación para evitar race condition con setTimeout interno
  _carouselTimers[cardId] = setInterval(function() {
