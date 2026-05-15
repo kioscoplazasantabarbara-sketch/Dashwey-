@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1612";
+ var CURRENT_CACHE = "dashwey-v1-3-1613";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1612</title>
+<title>Dashwey v1.3.1613</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21333,7 +21333,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1612';
+ const _APP_VERSION = 'v1.3.1613';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -28063,11 +28063,32 @@ const ui = (() => {
    if (opts.onDone) opts.onDone(0); return;
   }
   // Guard sync Firebase: no competir con save en curso
+  // v1.3.1613 FIX E: si es PTR explícito (force:true), reintentar tras 200ms hasta 5 veces
+  //   en lugar de abortar silenciosamente. Antes: PTR concurrente con save abortaba
+  //   y nunca traía ventas Loyverse → "el PTR a veces no funciona".
   if (window._DashweySavingCtrl && window._DashweySavingCtrl.isSaving) {
+   if (opts.force) {
+    var _retry = (opts._retry || 0) + 1;
+    if (_retry <= 5) {
+     setTimeout(function(){ _lvSyncHoy(Object.assign({}, opts, { _retry: _retry })); }, 200);
+     return;
+    }
+    // 5 reintentos sin éxito → ceder
+   }
    if (opts.onDone) opts.onDone(0); return;
   }
   // Guard sync inicial: si aún no terminó, no sincronizar
-  if (!window._DashweyInitialSyncDone) { if (opts.onDone) opts.onDone(0); return; }
+  // v1.3.1613 FIX E: mismo patrón retry para initial sync incompleto
+  if (!window._DashweyInitialSyncDone) {
+   if (opts.force) {
+    var _retry2 = (opts._retry || 0) + 1;
+    if (_retry2 <= 5) {
+     setTimeout(function(){ _lvSyncHoy(Object.assign({}, opts, { _retry: _retry2 })); }, 200);
+     return;
+    }
+   }
+   if (opts.onDone) opts.onDone(0); return;
+  }
 
   _lvSyncInFlight = true;
   _lvLastSyncTs = Date.now();
@@ -28091,8 +28112,15 @@ const ui = (() => {
     }
     // v1.3.1116: forzar re-render dashboard si llegaron ventas nuevas
     // v1.3.1549 Lote G: render coalesced 300ms (Utils.RENDER_DEFER) en vez de 50ms
+    // v1.3.1613 FIX F: en PTR explícito (force:true) render inmediato 50ms en
+    //   vez de coalesce 300ms. PTR percibido como instantáneo. Background
+    //   syncs siguen con coalesce.
     if (nuevas > 0) {
-     try { Dashwey.utils.lvDeferRender(); } catch(_) {}
+     if (opts.force) {
+      try { setTimeout(function(){ if (App.dash && App.dash.render) App.dash.render(); }, 50); } catch(_) {}
+     } else {
+      try { Dashwey.utils.lvDeferRender(); } catch(_) {}
+     }
     }
     if (opts.onDone) opts.onDone(nuevas);
    } catch(e) {
@@ -30626,12 +30654,42 @@ const dash = (() => {
  // Simetría con almRefresh: fb.read() + aplicar remoto + render
  async function refresh() {
  // v1.3.1152 SMOOTH UI: shimmer reducido a var(--dur-micro) (antes 280ms).
- //                      La ventana breve evita el salto a 0 y mantiene percepción
- //                      de datos continuos hasta que el render actualiza los valores.
- //                      Count animation full-featured pendiente v1.3.1153+.
+ // v1.3.1613 FIX G: shimmer extendido coordinado con pendingSyncs (Firestore + Loyverse).
+ //   El shimmer se queda activo hasta que ambos syncs terminan + 200ms tras último done.
+ //   Antes: shimmer 120ms hardcoded → percibido "ya terminó" antes de que llegaran datos.
  _shimmerAllCards(120);
+ var _ptrShimmerCleanup = null;
+ var _ptrPendingSyncs = 0;
+ var _ptrShimmerCapTimer = null;
+ var _ptrClearShimmer = function(){
+  try {
+   var _cont = document.getElementById('dash-cards-container');
+   if (_cont) _cont.querySelectorAll('.card.is-shimmering').forEach(function(c){ c.classList.remove('is-shimmering'); });
+  } catch(_){}
+ };
+ // v1.3.1613 FIX G: hard cap 3s — si el sync tarda demasiado, no dejamos el shimmer pegado
+ _ptrShimmerCapTimer = setTimeout(function(){
+  if (_ptrShimmerCleanup) { try { clearTimeout(_ptrShimmerCleanup); } catch(_){} }
+  _ptrClearShimmer();
+  _ptrPendingSyncs = 0;
+ }, 3000);
+ var _ptrFinalizeShimmer = function(){
+  _ptrPendingSyncs = Math.max(0, _ptrPendingSyncs - 1);
+  if (_ptrPendingSyncs === 0) {
+   if (_ptrShimmerCleanup) { try { clearTimeout(_ptrShimmerCleanup); } catch(_){} }
+   if (_ptrShimmerCapTimer) { try { clearTimeout(_ptrShimmerCapTimer); } catch(_){} _ptrShimmerCapTimer = null; }
+   _ptrShimmerCleanup = setTimeout(_ptrClearShimmer, 200);
+  }
+ };
  // v1.3.1100: disparar sync Loyverse en paralelo (fire-and-forget, no bloquea render)
- try { if (App.ui && App.ui._lvSyncHoy) App.ui._lvSyncHoy({ force: true }); } catch(_) {}
+ // v1.3.1613 FIX G: contabilizar para shimmer coordinado
+ _ptrPendingSyncs++;
+ try {
+  if (App.ui && App.ui._lvSyncHoy) {
+   App.ui._lvSyncHoy({ force: true, onDone: function(){ _ptrFinalizeShimmer(); } });
+  } else { _ptrFinalizeShimmer(); }
+ } catch(_) { _ptrFinalizeShimmer(); }
+ _ptrPendingSyncs++; // Firestore sync abajo
  try {
   const fb = window._DashweyFirebase;
   if (fb?.enabled && fb.ready) {
@@ -30699,6 +30757,8 @@ const dash = (() => {
    }
   }
  } catch(e) { /* silencioso — datos locales siguen disponibles */ }
+ // v1.3.1613 FIX G: cerrar contador shimmer del sync Firestore (Loyverse cierra via onDone)
+ try { _ptrFinalizeShimmer(); } catch(_){}
  render(); // _applyDashMode llamado al final de render()
  // v1.3.1592 FIX A1: eliminada llamada redundante a _snapDoRenderAll. render()
  //   ya lo invoca internamente (línea ~30449) cuando dataset.tab==='1'. Antes:
