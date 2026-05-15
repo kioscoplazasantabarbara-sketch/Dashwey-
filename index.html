@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1606";
+ var CURRENT_CACHE = "dashwey-v1-3-1607";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1606</title>
+<title>Dashwey v1.3.1607</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21471,7 +21471,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1606';
+ const _APP_VERSION = 'v1.3.1607';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -63278,12 +63278,34 @@ if (typeof State !== 'undefined') window.State = State;
 else if (window.App?.State) window.State = window.App.State;
 if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
 else if (window.App?.DashweyBus) window.DashweyBus = window.App.DashweyBus;
-// v1.3.1606 FIX KpiSheet: exponer KPI y FinEngine globalmente. Necesario para que
-//   helpers en scripts separados (como _DashweyKpiSheet) puedan acceder a las APIs.
-//   Antes del fix: el helper veía KPI/FinEngine como undefined -> try/catch silencioso
-//   -> valores mostrados como 0 y listas vacías.
-if (typeof KPI !== 'undefined') window.KPI = KPI;
-if (typeof FinEngine !== 'undefined') window.FinEngine = FinEngine;
+// v1.3.1607 FIX KpiSheet: namespace window._DashweyData expone funciones de datos
+//   resueltas desde el scope del script principal (donde KPI, FinEngine, State
+//   son accesibles). Los helpers en scripts separados consumen este namespace.
+//   v1606 expuso window.KPI/FinEngine directamente pero no funcionaba en todos
+//   los scopes — un namespace centralizado es más robusto.
+window._DashweyData = {
+ getPeriod: function() {
+  try { return (typeof State !== 'undefined' && State.get && State.get.period) ? State.get.period() : { type:'month', offset:0 }; }
+  catch(_) { return { type:'month', offset:0 }; }
+ },
+ getSnapshot: function(period) {
+  try { return (typeof FinEngine !== 'undefined' && FinEngine.snapshot) ? FinEngine.snapshot(period) : null; }
+  catch(e) { console.warn('[DashweyData] snapshot error:', e && e.message); return null; }
+ },
+ getVentasEnPeriodo: function(period) {
+  try { return (typeof KPI !== 'undefined' && KPI.ventasEnPeriodo) ? (KPI.ventasEnPeriodo(period) || []) : []; }
+  catch(e) { console.warn('[DashweyData] ventasEnPeriodo error:', e && e.message); return []; }
+ },
+ getBeneficioNeto: function(period) {
+  try { return (typeof KPI !== 'undefined' && KPI.getBeneficioNeto) ? (KPI.getBeneficioNeto(period) || {}) : {}; }
+  catch(e) { console.warn('[DashweyData] getBeneficioNeto error:', e && e.message); return {}; }
+ },
+ getProductos: function() {
+  try { return (typeof State !== 'undefined' && State.get && State.get.productos) ? (State.get.productos() || []) : []; }
+  catch(_) { return []; }
+ }
+};
+console.info('[Dashwey/Data] _DashweyData namespace expuesto (KPI/FinEngine/State accessors)');
 // ──────────────────────────────────────────────────────────────────────
 
 /* Splash controller moved to inline script before App script */
@@ -68448,10 +68470,10 @@ document.addEventListener('keydown', function(e) {
  }
 })();
 
-/* ─── v1.3.1606 SPEC L6 KPI Sheet · Menú flotante con header + lista scroll ──
-   Helper window._DashweyKpiSheet.open(kpiKey). v1606: FIX critico — acceder a
-   APIs via window.KPI, window.FinEngine, window.State porque KPI/FinEngine son
-   const dentro del script principal y NO accesibles desde este script separado.
+/* ─── v1.3.1607 SPEC L6 KPI Sheet · Menú flotante header + lista scroll ──
+   Helper window._DashweyKpiSheet.open(kpiKey). v1607 FIX: usar namespace
+   window._DashweyData (resuelto en scope del script principal) para acceder a
+   KPI/FinEngine/State APIs. Patrón más robusto que window.KPI directo.
    Idempotente vía _DashweyKpiSheetInstalled.
 */
 (function() {
@@ -68477,37 +68499,29 @@ document.addEventListener('keydown', function(e) {
   } catch(_) { return ''; }
  }
 
- // Resolver APIs defensivamente
- function _getPeriod() {
-  try { return window.State && window.State.get && window.State.get.period ? window.State.get.period() : { type:'month', offset:0 }; }
-  catch(_) { return { type:'month', offset:0 }; }
- }
- function _getSnap(period) {
-  try { return window.FinEngine && window.FinEngine.snapshot ? window.FinEngine.snapshot(period) : null; }
-  catch(e) { console.warn('[KpiSheet] FinEngine.snapshot error:', e && e.message); return null; }
- }
- function _getVentas(period) {
-  try { return window.KPI && window.KPI.ventasEnPeriodo ? (window.KPI.ventasEnPeriodo(period) || []) : []; }
-  catch(e) { console.warn('[KpiSheet] KPI.ventasEnPeriodo error:', e && e.message); return []; }
- }
- function _getBeneficio(period) {
-  try { return window.KPI && window.KPI.getBeneficioNeto ? (window.KPI.getBeneficioNeto(period) || {}) : {}; }
-  catch(e) { console.warn('[KpiSheet] KPI.getBeneficioNeto error:', e && e.message); return {}; }
- }
- function _getProductos() {
-  try { return window.State && window.State.get && window.State.get.productos ? (window.State.get.productos() || []) : []; }
-  catch(_) { return []; }
+ // Resolver APIs vía namespace _DashweyData con fallbacks defensivos
+ function _data() {
+  return window._DashweyData || {
+   getPeriod: function(){ return { type:'month', offset:0 }; },
+   getSnapshot: function(){ return null; },
+   getVentasEnPeriodo: function(){ return []; },
+   getBeneficioNeto: function(){ return {}; },
+   getProductos: function(){ return []; }
+  };
  }
 
  var _CONFIG = {
   'ticket-medio': function() {
-   var period = _getPeriod();
-   var snap = _getSnap(period);
-   var ventas = _getVentas(period).slice().sort(function(a,b){
+   var D = _data();
+   var period = D.getPeriod();
+   var snap = D.getSnapshot(period);
+   var ventas = D.getVentasEnPeriodo(period).slice().sort(function(a,b){
     return new Date(b.fecha || 0) - new Date(a.fecha || 0);
    });
    var ticket = (snap && snap.ticketMedio) || 0;
    var n = ventas.length;
+
+   console.log('[KpiSheet/debug] ticket-medio:', { period: period, snapExists: !!snap, ticket: ticket, nVentas: n });
 
    var listHtml = '';
    if (n === 0) {
@@ -68539,13 +68553,16 @@ document.addEventListener('keydown', function(e) {
   },
 
   'margen-ventas': function() {
-   var period = _getPeriod();
-   var snap = _getSnap(period);
-   var ventas = _getVentas(period);
+   var D = _data();
+   var period = D.getPeriod();
+   var snap = D.getSnapshot(period);
+   var ventas = D.getVentasEnPeriodo(period);
    var margen = (snap && snap.margenBruto) || 0;
    var color = margen < 0 ? 'down' : (margen >= 20 ? 'up' : '');
 
-   var prods = _getProductos();
+   console.log('[KpiSheet/debug] margen-ventas:', { period: period, snapExists: !!snap, margen: margen, nVentas: ventas.length });
+
+   var prods = D.getProductos();
    var prodById = {};
    prods.forEach(function(p){ if (p && p.id) prodById[p.id] = p; });
 
@@ -68601,10 +68618,13 @@ document.addEventListener('keydown', function(e) {
   },
 
   'beneficio-neto': function() {
-   var period = _getPeriod();
-   var snap = _getSnap(period);
-   var ben = _getBeneficio(period);
+   var D = _data();
+   var period = D.getPeriod();
+   var snap = D.getSnapshot(period);
+   var ben = D.getBeneficioNeto(period);
    var color = (ben.beneficio || 0) < 0 ? 'down' : ((ben.beneficio || 0) > 0 ? 'up' : '');
+
+   console.log('[KpiSheet/debug] beneficio-neto:', { period: period, ben: ben, snapExists: !!snap });
 
    var gastos = (snap && snap.gastos) || 0;
    var costeMerc = ben.inv || 0;
@@ -68657,10 +68677,17 @@ document.addEventListener('keydown', function(e) {
  };
 
  function open(kpiKey) {
+  // Verificar disponibilidad namespace
+  if (!window._DashweyData) {
+   console.warn('[KpiSheet] _DashweyData no disponible aún. Reintentando en 200ms...');
+   setTimeout(function() { open(kpiKey); }, 200);
+   return;
+  }
+
   var builder = _CONFIG[kpiKey];
   if (!builder) { console.warn('[KpiSheet] kpi desconocido:', kpiKey); return; }
   var data;
-  try { data = builder(); } catch(e) { console.warn('[KpiSheet] builder error:', e && e.message); return; }
+  try { data = builder(); } catch(e) { console.warn('[KpiSheet] builder error:', e && e.message, e); return; }
   if (!data) return;
 
   var prev = document.getElementById('kpi-sheet-active');
@@ -68706,7 +68733,7 @@ document.addEventListener('keydown', function(e) {
  }
 
  window._DashweyKpiSheet = { open: open };
- console.info('[Dashwey/KpiSheet] Helper v1.3.1606 instalado (window.KPI/FinEngine/State)');
+ console.info('[Dashwey/KpiSheet] Helper v1.3.1607 instalado (vía _DashweyData namespace)');
 })();
 
 /* ─── v1.3.1594 SPEC L6.3 · Flujo Caja taps Cuentas + Vista Global ─────────────
