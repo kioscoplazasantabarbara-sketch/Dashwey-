@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1615";
+ var CURRENT_CACHE = "dashwey-v1-3-1616";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1615</title>
+<title>Dashwey v1.3.1616</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11789,8 +11789,12 @@ function _authTabSafe(tab) {
  <div class="snap-kpi-mini-lbl">Margen</div>
  <div class="snap-kpi-mini-val" id="snap-margen-compras">—</div>
  </div>
- <div class="snap-kpi-mini">
- <div class="snap-kpi-mini-lbl">Variación costes</div>
+ <!-- v1.3.1616 Lote 6.4 fase B: KPI rename "Variación costes" → "Subidas de coste".
+      Antes mostraba % compras periodo vs anterior (redundante con sub-hero).
+      Ahora muestra Nº productos con precio pagado >5% sobre precioCompra registrado.
+      Tap → modal detalle con producto, coste registrado, precio pagado, %, proveedor. -->
+ <div class="snap-kpi-mini snap-kpi-mini-tap" data-kpi-tap="subidas-coste" tabindex="0" role="button" aria-label="Ver subidas de coste">
+ <div class="snap-kpi-mini-lbl">Subidas coste</div>
  <div class="snap-kpi-mini-val" id="snap-variacion-compras">—</div>
  </div>
  </div>
@@ -11845,16 +11849,17 @@ function _authTabSafe(tab) {
  <div class="snap-kpi-value" id="snap-val-flujo-caja">—</div>
  <div class="snap-kpi-delta neutral" id="snap-delta-flujo-caja">—</div>
  </div>
+ <!-- v1.3.1616 Lote 6.5 fase B: 3 KPIs tappables (Ingresos / Gastos / Runway). -->
  <div class="snap-kpi-row">
- <div class="snap-kpi-mini">
+ <div class="snap-kpi-mini snap-kpi-mini-tap" data-kpi-tap="ingresos-fc" tabindex="0" role="button" aria-label="Ver Ingresos detalle">
  <div class="snap-kpi-mini-lbl" id="snap-lbl-ing-flujo-caja">Ingresos</div>
  <div class="snap-kpi-mini-val" id="snap-ing-flujo-caja">—</div>
  </div>
- <div class="snap-kpi-mini">
+ <div class="snap-kpi-mini snap-kpi-mini-tap" data-kpi-tap="gastos-fc" tabindex="0" role="button" aria-label="Ver Gastos detalle">
  <div class="snap-kpi-mini-lbl" id="snap-lbl-gst-flujo-caja">Gastos</div>
  <div class="snap-kpi-mini-val" id="snap-gst-flujo-caja">—</div>
  </div>
- <div class="snap-kpi-mini">
+ <div class="snap-kpi-mini snap-kpi-mini-tap" data-kpi-tap="runway-fc" tabindex="0" role="button" aria-label="Ver Runway detalle">
  <div class="snap-kpi-mini-lbl">Runway</div>
  <div class="snap-kpi-mini-val" id="snap-rw-flujo-caja">—</div>
  </div>
@@ -11869,9 +11874,9 @@ function _authTabSafe(tab) {
  </div>
  <!-- Separador -->
  <div class="snap-fc-mid-sep"></div>
- <!-- Cajón Últimos movimientos -->
+ <!-- v1.3.1616 Lote 6.5 fase B: tap label "Últimos movimientos" → modal detalle paginado. -->
  <div class="snap-fc-block">
-  <div class="snap-fc-section-lbl">Últimos movimientos</div>
+  <div class="snap-fc-section-lbl snap-sti-lbl-tap" data-sti-tap="ultimos-movimientos" tabindex="0" role="button" aria-label="Ver Últimos movimientos">Últimos movimientos</div>
   <div id="snap-fc-movs" class="snap-fc-scroll"></div>
  </div>
  </div>
@@ -21390,7 +21395,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1615';
+ const _APP_VERSION = 'v1.3.1616';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35997,6 +36002,511 @@ function _openEditMovimientoSheet(id, src) {
  window._openMargenAnalysisSheet = _openMargenAnalysisSheet;
 
  // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1616 Lote 6.4 fase B · SUBIDAS DE COSTE — modal detalle
+ //   Accesible desde tap "Subidas coste" en Inversión Mercancía.
+ //   Lista productos donde el precio pagado en algún pedido del periodo
+ //   superó >5% el precioCompra registrado. Detalle por línea: producto,
+ //   coste registrado, precio pagado, %, proveedor, fecha del pedido.
+ // ══════════════════════════════════════════════════════════════════════
+ function _openSubidasCosteSheet() {
+  var period = State.get.period();
+  var periodLabel = (period && period.label) || 'Periodo actual';
+  var range = null;
+  try { range = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+  var historial = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+  var prods = State.get.productos ? (State.get.productos() || []) : [];
+  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  var prodMap = {};
+  prods.forEach(function(p){ if (p && p.id) prodMap[p.id] = p; });
+  var provMap = {};
+  provs.forEach(function(p){ if (p && p.id) provMap[p.id] = p; });
+
+  // Pedidos del periodo
+  var pedsPeriodo = range
+   ? historial.filter(function(p){ var d=new Date(p.fecha); return d>=range.start && d<range.end; })
+   : historial;
+
+  // Detectar líneas con subida
+  var subidas = [];
+  pedsPeriodo.forEach(function(ped){
+   (ped.items || []).forEach(function(it){
+    var prod = prodMap[it.prodId];
+    if (!prod || !prod.precioCompra) return;
+    var pc = prod.precioCompra;
+    if (it.precio > pc * 1.05) {
+     var pct = (it.precio - pc) / pc * 100;
+     subidas.push({
+      prodNombre: prod.nombre || '—',
+      pcRegistrado: pc,
+      pcPagado: it.precio,
+      pct: pct,
+      provNombre: (provMap[ped.provId] && provMap[ped.provId].nombre) || '—',
+      fecha: ped.fecha,
+     });
+    }
+   });
+  });
+  // Ordenar mayor subida primero
+  subidas.sort(function(a,b){ return b.pct - a.pct; });
+
+  var _esc = function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var _feur = function(v){ return (+(v||0)).toFixed(2).replace('.',',') + ' €'; };
+  var _fpct = function(v){ var s = v >= 0 ? '+' : ''; return s + v.toFixed(1).replace('.',',') + '%'; };
+  var _fdate = function(iso){
+   try {
+    var d = new Date(iso);
+    var MON = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+   } catch(_) { return '—'; }
+  };
+
+  var html =
+   '<div class="fin-modal-header">'
+    + '<div class="mhd-titles">'
+     + '<h2 class="mhd-title">Subidas de coste</h2>'
+     + '<div class="mhd-sub">' + _esc(periodLabel) + ' · ' + subidas.length + ' detectada' + (subidas.length !== 1 ? 's' : '') + '</div>'
+    + '</div>'
+    + '<button class="mhd-close" onclick="App.ui.closeFs()" aria-label="Cerrar">×</button>'
+   + '</div>'
+   + '<div style="padding:var(--sp-3) var(--sp-3) var(--sp-2);text-align:center">'
+    + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);line-height:1.5">Productos donde el precio pagado superó <strong>+5%</strong> el coste registrado en su ficha.</div>'
+   + '</div>';
+
+  if (!subidas.length) {
+   html += '<div style="padding:var(--sp-6) var(--sp-3);text-align:center">'
+    + '<div style="font-size:48px;margin-bottom:var(--sp-3)">✓</div>'
+    + '<div style="font-size:var(--fs-lg);color:var(--success);font-weight:var(--fw-semi);margin-bottom:var(--sp-2)">Sin subidas detectadas</div>'
+    + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);line-height:1.5">Todos los pedidos del periodo se hicieron a precio igual o menor al coste registrado.</div>'
+    + '</div>';
+  } else {
+   html += '<div class="fin-modal-section"><div style="background:var(--surface);border-radius:var(--rad-md);overflow:hidden">';
+   subidas.forEach(function(s, idx){
+    var pctColor = s.pct > 20 ? 'var(--red)' : (s.pct > 10 ? 'var(--warning)' : 'var(--ink)');
+    html += '<div style="padding:var(--sp-3);border-bottom:1px solid var(--border-faint);' + (idx === subidas.length-1 ? 'border-bottom:none;' : '') + '">'
+     + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--sp-2)">'
+      + '<div style="flex:1;min-width:0">'
+       + '<div style="font-size:var(--fs-base);color:var(--ink);font-weight:var(--fw-semi);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(s.prodNombre) + '</div>'
+       + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:var(--sp-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _esc(s.provNombre) + ' · ' + _fdate(s.fecha) + '</div>'
+      + '</div>'
+      + '<div style="text-align:right;flex-shrink:0">'
+       + '<div style="font-size:var(--fs-lg);font-weight:var(--fw-bold);color:' + pctColor + ';line-height:1;font-variant-numeric:tabular-nums">' + _fpct(s.pct) + '</div>'
+      + '</div>'
+     + '</div>'
+     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--sp-2);padding-top:var(--sp-2);border-top:1px dashed var(--border-faint);font-size:var(--fs-sm)">'
+      + '<span style="color:var(--ink-soft)">Registrado <span style="color:var(--ink);font-variant-numeric:tabular-nums">' + _feur(s.pcRegistrado) + '</span></span>'
+      + '<span style="color:var(--ink-soft)">Pagado <span style="color:' + pctColor + ';font-weight:var(--fw-semi);font-variant-numeric:tabular-nums">' + _feur(s.pcPagado) + '</span></span>'
+     + '</div>'
+    + '</div>';
+   });
+   html += '</div></div>';
+  }
+  html += '<div style="height:32px"></div>';
+
+  App.ui.setFs(html);
+  App.ui.openFs('full');
+ }
+ window._openSubidasCosteSheet = _openSubidasCosteSheet;
+
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1616 Lote 6.5 fase B · Helpers compartidos modales Flujo Caja
+ // ══════════════════════════════════════════════════════════════════════
+ function _fcModalEsc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+ function _fcModalFeur(v){ return (+(v||0)).toFixed(2).replace('.',',') + ' €'; }
+ function _fcModalFpct(v){ var s = v >= 0 ? '+' : ''; return s + v.toFixed(1).replace('.',',') + '%'; }
+ function _fcModalFdate(iso){
+  try {
+   var d = new Date(iso);
+   var MON = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+   return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()];
+  } catch(_) { return '—'; }
+ }
+ // Calcula totales ingresos/gastos sobre un range, con breakdown por categoría
+ function _fcAggregateMovements(type, range) {
+  // type: 'ingresos' | 'gastos'
+  var arr = type === 'ingresos'
+   ? (State.get.ingresosFin ? (State.get.ingresosFin() || []) : [])
+   : (State.get.gastosOp ? (State.get.gastosOp() || []) : []);
+  var inPeriod = arr.filter(function(m){
+   if (!m || m.deleted) return false;
+   // v1.3.1616 fase B: scope negocio + excluir transfer/pendiente (coherente con _isAggregable)
+   try { if (typeof _matchesScope === 'function' && !_matchesScope(m)) return false; } catch(_){}
+   if (m.tipo === 'transfer' || m.tipo === 'ajuste') return false;
+   if (m.estado === 'pendiente') return false;
+   var d = new Date(m.fecha);
+   return range && d >= range.start && d < range.end;
+  });
+  var total = inPeriod.reduce(function(s, m){ return s + (m.importe || 0); }, 0);
+  // Breakdown: por categoría (ingresos) o por proveedor (gastos)
+  var groups = {};
+  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  var provMap = {};
+  provs.forEach(function(p){ if (p && p.id) provMap[p.id] = p.nombre || '—'; });
+  inPeriod.forEach(function(m){
+   var key;
+   if (type === 'ingresos') {
+    key = m.categoria || m.tipo || 'Otros';
+   } else {
+    if (m.provId && provMap[m.provId]) key = provMap[m.provId];
+    else if (m.categoria) key = m.categoria;
+    else if (m.proveedor) key = m.proveedor;
+    else key = 'Otros';
+   }
+   groups[key] = (groups[key] || 0) + (m.importe || 0);
+  });
+  var groupArr = Object.keys(groups).map(function(k){ return { name: k, total: groups[k] }; });
+  groupArr.sort(function(a,b){ return b.total - a.total; });
+  // Top 5 + "Resto"
+  var top5 = groupArr.slice(0, 5);
+  var rest = groupArr.slice(5);
+  if (rest.length) {
+   var restTotal = rest.reduce(function(s,g){ return s + g.total; }, 0);
+   top5.push({ name: 'Resto (' + rest.length + ')', total: restTotal, isRest: true });
+  }
+  // Lista últimos 10 movimientos (ordenados newest→oldest)
+  var lastMovs = inPeriod.slice().sort(function(a,b){
+   return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+  }).slice(0, 10);
+  return { total: total, groups: top5, count: inPeriod.length, lastMovs: lastMovs };
+ }
+ // Calcula delta vs periodo anterior
+ function _fcDeltaPeriodo(type, range) {
+  if (!range) return null;
+  var durMs = range.end - range.start;
+  var prevRange = {
+   start: new Date(range.start.getTime() - durMs),
+   end: new Date(range.start)
+  };
+  var actual = _fcAggregateMovements(type, range).total;
+  var anterior = _fcAggregateMovements(type, prevRange).total;
+  if (anterior === 0) return null;
+  return (actual - anterior) / anterior * 100;
+ }
+
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1616 Lote 6.5 fase B · INGRESOS FC — modal detalle
+ // ══════════════════════════════════════════════════════════════════════
+ function _openIngresosFcSheet() {
+  _openFcDetalleSheet('ingresos');
+ }
+ window._openIngresosFcSheet = _openIngresosFcSheet;
+
+ function _openGastosFcSheet() {
+  _openFcDetalleSheet('gastos');
+ }
+ window._openGastosFcSheet = _openGastosFcSheet;
+
+ // Render compartido Ingresos / Gastos (estructura idéntica, mismos datos rotados)
+ function _openFcDetalleSheet(type) {
+  var period = State.get.period();
+  var periodLabel = (period && period.label) || 'Periodo actual';
+  var range = null;
+  try { range = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+  var data = _fcAggregateMovements(type, range);
+  var delta = _fcDeltaPeriodo(type, range);
+
+  var titulo = type === 'ingresos' ? 'Ingresos' : 'Gastos';
+  var heroColor;
+  if (type === 'ingresos') {
+   heroColor = 'var(--success)';
+  } else {
+   heroColor = 'var(--ink)';
+  }
+  // Delta color: para ingresos subida=verde bajada=rojo; para gastos al revés
+  var deltaColor = 'var(--ink-soft)';
+  var deltaStr = '— sin datos previos';
+  if (delta !== null && !isNaN(delta)) {
+   deltaStr = _fcModalFpct(delta) + ' vs periodo anterior';
+   if (type === 'ingresos') {
+    deltaColor = delta >= 0 ? 'var(--success)' : 'var(--red)';
+   } else {
+    deltaColor = delta <= 0 ? 'var(--success)' : 'var(--red)';
+   }
+  }
+
+  // Render breakdown bars
+  var maxGroup = data.groups.length ? data.groups[0].total : 0;
+  function _renderGroups() {
+   if (!data.groups.length) return '<div style="padding:var(--sp-3) 0;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos en el periodo</div>';
+   return data.groups.map(function(g){
+    var pct = maxGroup > 0 ? (g.total / maxGroup * 100) : 0;
+    var groupColor = g.isRest ? 'var(--ink-soft)' : (type === 'ingresos' ? 'var(--success)' : 'var(--warning)');
+    return '<div style="padding:var(--sp-2) 0">'
+     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-1)">'
+      + '<div style="font-size:var(--fs-sm);color:var(--ink);font-weight:var(--fw-semi);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;padding-right:var(--sp-2)">' + _fcModalEsc(g.name) + '</div>'
+      + '<div style="font-size:var(--fs-base);color:var(--ink);font-weight:var(--fw-bold);font-variant-numeric:tabular-nums">' + _fcModalFeur(g.total) + '</div>'
+     + '</div>'
+     + '<div style="height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden">'
+      + '<div style="height:100%;width:' + pct.toFixed(1) + '%;background:' + groupColor + ';border-radius:3px;transition:width 250ms ease"></div>'
+     + '</div>'
+    + '</div>';
+   }).join('');
+  }
+
+  // Render últimos movimientos
+  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  var provMap = {};
+  provs.forEach(function(p){ if (p && p.id) provMap[p.id] = p.nombre || '—'; });
+  function _renderLastMovs() {
+   if (!data.lastMovs.length) return '<div style="padding:var(--sp-3) 0;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">Sin movimientos</div>';
+   return data.lastMovs.map(function(m){
+    var label;
+    if (type === 'ingresos') {
+     label = m.descripcion || m.categoria || m.tipo || '—';
+    } else {
+     label = (m.provId && provMap[m.provId]) || m.descripcion || m.categoria || '—';
+    }
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2) 0;border-bottom:1px solid var(--border-faint)">'
+     + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:var(--fs-base);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _fcModalEsc(label) + '</div>'
+      + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">' + _fcModalFdate(m.fecha) + '</div>'
+     + '</div>'
+     + '<div style="font-size:var(--fs-base);color:var(--ink);font-weight:var(--fw-semi);margin-left:var(--sp-2);font-variant-numeric:tabular-nums">' + _fcModalFeur(m.importe || 0) + '</div>'
+    + '</div>';
+   }).join('');
+  }
+
+  var html =
+   '<div class="fin-modal-header">'
+    + '<div class="mhd-titles">'
+     + '<h2 class="mhd-title">' + titulo + '</h2>'
+     + '<div class="mhd-sub">' + _fcModalEsc(periodLabel) + '</div>'
+    + '</div>'
+    + '<button class="mhd-close" onclick="App.ui.closeFs()" aria-label="Cerrar">×</button>'
+   + '</div>'
+   // HERO
+   + '<div style="padding:var(--sp-5) var(--sp-3) var(--sp-3);text-align:center">'
+    + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);margin-bottom:var(--sp-1_5)">Total del periodo</div>'
+    + '<div style="font-size:48px;font-weight:var(--fw-bold);color:' + heroColor + ';line-height:1;font-variant-numeric:tabular-nums">' + _fcModalFeur(data.total) + '</div>'
+    + '<div style="font-size:var(--fs-base);color:' + deltaColor + ';margin-top:var(--sp-1_5);font-weight:var(--fw-semi)">' + deltaStr + '</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:var(--sp-1)">' + data.count + ' movimiento' + (data.count !== 1 ? 's' : '') + '</div>'
+   + '</div>'
+   // BREAKDOWN
+   + '<div class="fin-modal-section">'
+    + '<div class="fin-modal-section-title">' + (type === 'ingresos' ? 'Por categoría' : 'Por proveedor') + '</div>'
+    + '<div style="background:var(--surface);border-radius:var(--rad-md);padding:var(--sp-3)">'
+     + _renderGroups()
+    + '</div>'
+   + '</div>'
+   // LIST
+   + '<div class="fin-modal-section">'
+    + '<div class="fin-modal-section-title">Últimos movimientos</div>'
+    + _renderLastMovs()
+   + '</div>'
+   + '<div style="height:32px"></div>';
+
+  App.ui.setFs(html);
+  App.ui.openFs('full');
+ }
+
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1616 Lote 6.5 fase B · RUNWAY FC — modal detalle
+ // ══════════════════════════════════════════════════════════════════════
+ function _openRunwayFcSheet() {
+  var period = State.get.period();
+  var periodLabel = (period && period.label) || 'Periodo actual';
+  // Runway calcula sobre mes actual (no respeta periodo, es métrica forward-looking)
+  var rw = null;
+  var saldo = 0;
+  var gastoMes = 0;
+  try {
+   var snap = FinEngine.snapshot ? FinEngine.snapshot(period) : null;
+   if (snap) {
+    rw = snap.runway;
+    saldo = snap.saldo || 0;
+    gastoMes = snap.gastoMensual || 0;
+   }
+  } catch(_) {}
+
+  // Color hero según runway
+  var heroColor, heroLabel, heroExplain;
+  if (rw === null || rw === undefined) {
+   heroColor = 'var(--ink-soft)';
+   heroLabel = 'Sin datos';
+   heroExplain = 'Necesitas saldo positivo y gastos registrados para calcular el runway.';
+  } else if (rw >= 6) {
+   heroColor = 'var(--success)';
+   heroLabel = rw.toFixed(1).replace('.',',') + 'm';
+   heroExplain = 'Tu saldo cubre más de 6 meses al ritmo actual de gasto.';
+  } else if (rw >= 3) {
+   heroColor = 'var(--ink)';
+   heroLabel = rw.toFixed(1).replace('.',',') + 'm';
+   heroExplain = 'Saldo holgado: cubre entre 3 y 6 meses al ritmo actual.';
+  } else if (rw >= 1) {
+   heroColor = 'var(--warning)';
+   heroLabel = rw.toFixed(1).replace('.',',') + 'm';
+   heroExplain = 'Atención: el saldo cubre menos de 3 meses. Revisa ingresos y gastos.';
+  } else {
+   heroColor = 'var(--red)';
+   heroLabel = rw.toFixed(1).replace('.',',') + 'm';
+   heroExplain = 'Crítico: el saldo se agotará en menos de 1 mes. Acción urgente.';
+  }
+
+  var html =
+   '<div class="fin-modal-header">'
+    + '<div class="mhd-titles">'
+     + '<h2 class="mhd-title">Runway</h2>'
+     + '<div class="mhd-sub">' + _fcModalEsc(periodLabel) + '</div>'
+    + '</div>'
+    + '<button class="mhd-close" onclick="App.ui.closeFs()" aria-label="Cerrar">×</button>'
+   + '</div>'
+   // HERO
+   + '<div style="padding:var(--sp-5) var(--sp-3) var(--sp-3);text-align:center">'
+    + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);margin-bottom:var(--sp-1_5)">Meses cubiertos</div>'
+    + '<div style="font-size:64px;font-weight:var(--fw-bold);color:' + heroColor + ';line-height:1;font-variant-numeric:tabular-nums">' + heroLabel + '</div>'
+   + '</div>'
+   // EXPLAIN
+   + '<div style="padding:0 var(--sp-3) var(--sp-3);text-align:center">'
+    + '<div style="font-size:var(--fs-base);color:var(--ink-mid);line-height:1.5">' + heroExplain + '</div>'
+   + '</div>'
+   // BREAKDOWN
+   + '<div class="fin-modal-section">'
+    + '<div class="fin-modal-section-title">Cálculo</div>'
+    + '<div style="background:var(--surface-2);border-radius:var(--rad-md);padding:var(--sp-3);font-family:var(--font)">'
+     + '<div style="display:flex;justify-content:space-between;padding:var(--sp-1) 0;font-size:var(--fs-base)">'
+      + '<span style="color:var(--ink-mid)">Saldo actual</span>'
+      + '<span style="color:var(--ink);font-weight:var(--fw-semi);font-variant-numeric:tabular-nums">' + _fcModalFeur(saldo) + '</span>'
+     + '</div>'
+     + '<div style="display:flex;justify-content:space-between;padding:var(--sp-1) 0;font-size:var(--fs-base)">'
+      + '<span style="color:var(--ink-mid)">Gasto mensual promedio</span>'
+      + '<span style="color:var(--ink);font-weight:var(--fw-semi);font-variant-numeric:tabular-nums">÷ ' + _fcModalFeur(gastoMes) + '</span>'
+     + '</div>'
+     + '<div style="height:1px;background:var(--border);margin:var(--sp-2) 0"></div>'
+     + '<div style="display:flex;justify-content:space-between;padding:var(--sp-1) 0;font-size:var(--fs-lg)">'
+      + '<span style="color:var(--ink);font-weight:var(--fw-semi)">Runway</span>'
+      + '<span style="color:' + heroColor + ';font-weight:var(--fw-bold);font-variant-numeric:tabular-nums">' + (rw !== null ? rw.toFixed(1).replace('.',',') + ' meses' : '—') + '</span>'
+     + '</div>'
+    + '</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:var(--sp-2);text-align:center;line-height:1.4">Runway = Saldo total ÷ Gasto mensual promedio</div>'
+   + '</div>'
+   + '<div style="height:32px"></div>';
+
+  App.ui.setFs(html);
+  App.ui.openFs('full');
+ }
+ window._openRunwayFcSheet = _openRunwayFcSheet;
+
+ // ══════════════════════════════════════════════════════════════════════
+ // v1.3.1616 Lote 6.5 fase B · ÚLTIMOS MOVIMIENTOS — modal lista paginada
+ //   Tap label "Últimos movimientos" en Flujo Caja.
+ //   Lista paginada (20 por página) con todos los ingresos+gastos del periodo,
+ //   ordenados newest→oldest. Botón "Cargar más" abajo si hay más.
+ // ══════════════════════════════════════════════════════════════════════
+ function _openUltimosMovsSheet() {
+  var period = State.get.period();
+  var periodLabel = (period && period.label) || 'Periodo actual';
+  var range = null;
+  try { range = KPI.getRange ? KPI.getRange(period) : null; } catch(_) {}
+
+  // Recoger ingresos + gastos del periodo
+  var ingresos = (State.get.ingresosFin ? (State.get.ingresosFin() || []) : []).filter(function(m){
+   if (!m || m.deleted) return false;
+   try { if (typeof _matchesScope === 'function' && !_matchesScope(m)) return false; } catch(_){}
+   if (m.tipo === 'transfer' || m.tipo === 'ajuste') return false;
+   if (m.estado === 'pendiente') return false;
+   var d = new Date(m.fecha);
+   return range && d >= range.start && d < range.end;
+  }).map(function(m){ return Object.assign({}, m, { _kind: 'ingreso' }); });
+
+  var gastos = (State.get.gastosOp ? (State.get.gastosOp() || []) : []).filter(function(m){
+   if (!m || m.deleted) return false;
+   try { if (typeof _matchesScope === 'function' && !_matchesScope(m)) return false; } catch(_){}
+   if (m.tipo === 'transfer' || m.tipo === 'ajuste') return false;
+   if (m.estado === 'pendiente') return false;
+   var d = new Date(m.fecha);
+   return range && d >= range.start && d < range.end;
+  }).map(function(m){ return Object.assign({}, m, { _kind: 'gasto' }); });
+
+  var todos = ingresos.concat(gastos).sort(function(a,b){
+   return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+  });
+
+  var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  var provMap = {};
+  provs.forEach(function(p){ if (p && p.id) provMap[p.id] = p.nombre || '—'; });
+
+  var PAGE_SIZE = 20;
+  var currentPage = 1;
+
+  function _renderMovRow(m) {
+   var isIng = m._kind === 'ingreso';
+   var label;
+   if (isIng) {
+    label = m.descripcion || m.categoria || m.tipo || '—';
+   } else {
+    label = (m.provId && provMap[m.provId]) || m.descripcion || m.categoria || '—';
+   }
+   var color = isIng ? 'var(--success)' : 'var(--red)';
+   var sign = isIng ? '+ ' : '− ';
+   var icon = isIng ? '↑' : '↓';
+   return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-faint)">'
+    + '<div style="display:flex;align-items:center;gap:var(--sp-2);flex:1;min-width:0">'
+     + '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';opacity:0.15;display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+      + '<span style="color:' + color + ';font-size:14px;font-weight:var(--fw-bold);opacity:1">' + icon + '</span>'
+     + '</div>'
+     + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:var(--fs-base);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _fcModalEsc(label) + '</div>'
+      + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">' + _fcModalFdate(m.fecha) + '</div>'
+     + '</div>'
+    + '</div>'
+    + '<div style="font-size:var(--fs-base);color:' + color + ';font-weight:var(--fw-semi);margin-left:var(--sp-2);font-variant-numeric:tabular-nums;flex-shrink:0">' + sign + _fcModalFeur(m.importe || 0) + '</div>'
+   + '</div>';
+  }
+
+  function _render() {
+   var slice = todos.slice(0, currentPage * PAGE_SIZE);
+   var hasMore = todos.length > slice.length;
+
+   var html =
+    '<div class="fin-modal-header">'
+     + '<div class="mhd-titles">'
+      + '<h2 class="mhd-title">Últimos movimientos</h2>'
+      + '<div class="mhd-sub">' + _fcModalEsc(periodLabel) + ' · ' + todos.length + ' movimiento' + (todos.length !== 1 ? 's' : '') + '</div>'
+     + '</div>'
+     + '<button class="mhd-close" onclick="App.ui.closeFs()" aria-label="Cerrar">×</button>'
+    + '</div>';
+
+   if (!todos.length) {
+    html += '<div style="padding:var(--sp-6) var(--sp-3);text-align:center">'
+     + '<div style="font-size:48px;margin-bottom:var(--sp-3);opacity:0.5">📭</div>'
+     + '<div style="font-size:var(--fs-lg);color:var(--ink-mid);font-weight:var(--fw-semi)">Sin movimientos</div>'
+     + '<div style="font-size:var(--fs-sm);color:var(--ink-soft);margin-top:var(--sp-1)">No hay ingresos ni gastos registrados en este periodo.</div>'
+     + '</div>';
+   } else {
+    html += '<div style="background:var(--surface);margin:var(--sp-2) 0">';
+    slice.forEach(function(m){ html += _renderMovRow(m); });
+    html += '</div>';
+    if (hasMore) {
+     html += '<div style="padding:var(--sp-3);text-align:center">'
+      + '<button id="_um-loadmore" style="background:var(--surface-2);color:var(--ink);border:none;border-radius:50px;padding:12px 24px;font-size:var(--fs-base);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;touch-action:manipulation">Cargar más (' + (todos.length - slice.length) + ' restantes)</button>'
+      + '</div>';
+    } else {
+     html += '<div style="padding:var(--sp-3);text-align:center;color:var(--ink-soft);font-size:var(--fs-xs)">Fin de la lista</div>';
+    }
+   }
+   html += '<div style="height:32px"></div>';
+
+   App.ui.setFs(html);
+   App.ui.openFs('full');
+
+   // Wire load more
+   requestAnimationFrame(function(){
+    var btn = document.getElementById('_um-loadmore');
+    if (btn) {
+     btn.addEventListener('click', function(){
+      try { Utils.triggerHaptic('selection'); } catch(_){}
+      currentPage++;
+      _render();
+     });
+    }
+   });
+  }
+  _render();
+ }
+ window._openUltimosMovsSheet = _openUltimosMovsSheet;
+
+
+
+ // ══════════════════════════════════════════════════════════════════════
  // v1.3.1349: TICKETS DEL PERIODO — vista de ventas individuales
  //   Accesible desde dial card "Resumen de Ventas" → Tickets.
  //   Lista cada ticket (Loyverse / TPV / manual) con hora, items, total y método.
@@ -44202,18 +44712,14 @@ function _confirmBorrarCuenta(id) {
  }
  }
 
+ // v1.3.1616 Lote 6.4 fase B: KPI ahora muestra Nº productos con coste subido
+ //   (comprasSubidas ya estaba calculado arriba). Verde si 0, naranja 1-3, rojo >3.
  var varEl = document.getElementById('snap-variacion-compras');
  if (varEl) {
- if (variacionCostes !== null) {
- var sign = variacionCostes >= 0 ? '+' : '';
- varEl.textContent = sign + _snapFmt(variacionCostes, 1) + '%';
- varEl.style.color = variacionCostes > 5
- ? 'var(--red)'
- : variacionCostes < -5 ? 'var(--success)' : 'var(--ink)';
- } else {
- varEl.textContent = '—';
- varEl.style.color = '';
- }
+ varEl.textContent = String(comprasSubidas);
+ if (comprasSubidas === 0) varEl.style.color = 'var(--success)';
+ else if (comprasSubidas <= 3) varEl.style.color = 'var(--warning)';
+ else varEl.style.color = 'var(--red)';
  }
  }
 
@@ -68658,6 +69164,8 @@ document.addEventListener('keydown', function(e) {
       try { if (window.Utils && Utils.triggerHaptic) Utils.triggerHaptic('selection'); } catch(_){}
       if (target === 'top-ventas' && App.dash.openTopVentasModal) App.dash.openTopVentasModal();
       else if (target === 'mas-comprados' && App.dash._openComprasCompletasSheet) App.dash._openComprasCompletasSheet();
+      // v1.3.1616 Lote 6.5 fase B
+      else if (target === 'ultimos-movimientos' && window._openUltimosMovsSheet) window._openUltimosMovsSheet();
       else console.warn('[L6.1604] sti-tap target desconocido:', target);
      } catch(e) { console.warn('[L6.1604] sti-tap error:', e && e.message); }
      return;
@@ -68677,6 +69185,11 @@ document.addEventListener('keydown', function(e) {
       if (ktarget === 'tickets-periodo' && App.dash._openTicketsPeriodoSheet) App.dash._openTicketsPeriodoSheet();
       else if ((ktarget === 'margen-rendimiento' || ktarget === 'margen-compras') && window._openMargenAnalysisSheet) window._openMargenAnalysisSheet();
       else if (ktarget === 'compras-historial' && App.dash._openComprasCompletasSheet) App.dash._openComprasCompletasSheet();
+      // v1.3.1616 Lote fase B: 4 nuevos modales
+      else if (ktarget === 'subidas-coste' && window._openSubidasCosteSheet) window._openSubidasCosteSheet();
+      else if (ktarget === 'ingresos-fc' && window._openIngresosFcSheet) window._openIngresosFcSheet();
+      else if (ktarget === 'gastos-fc' && window._openGastosFcSheet) window._openGastosFcSheet();
+      else if (ktarget === 'runway-fc' && window._openRunwayFcSheet) window._openRunwayFcSheet();
       else console.warn('[L6.1615] kpi-tap target desconocido:', ktarget);
      } catch(e) { console.warn('[L6.1615] kpi-tap error:', e && e.message); }
      return;
