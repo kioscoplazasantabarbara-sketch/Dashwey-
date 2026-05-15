@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1613";
+ var CURRENT_CACHE = "dashwey-v1-3-1614";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1613</title>
+<title>Dashwey v1.3.1614</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13857,6 +13857,21 @@ window._DashweySyncAhora = async function() {
    window._DashweyApplyingRemote = prevApplying || false;
   }
 
+  // v1.3.1614 FIX SANITY: recalcular saldos de cuentas ANTES del render.
+  //   Antes: SyncAhora traía ventas/gastos/ingresos frescos pero los saldos
+  //   (campo derivado de cuenta.saldoInicial + transacciones) quedaban
+  //   obsoletos hasta el siguiente reinicio. Hung reportó: "sincronizo y
+  //   sigue descuadrada 57.61€, solo cuadra cuando reinicio Dashwey".
+  //   Root cause: el boot ejecuta _bbRecalcSaldos pero Sync no.
+  //   Fix: invocar recalc tras pull subcolecciones, antes del render para
+  //   que la UI pinte los saldos ya correctos. Idempotente y safe.
+  try {
+   if (typeof window._recalcSaldosCuentas === 'function') {
+    window._recalcSaldosCuentas();
+    console.info('[Dashwey/SyncAhora] ✓ saldos cuentas recalculados');
+   }
+  } catch(e) { console.warn('[SyncAhora] recalc saldos error:', e && e.message); }
+
   // Forzar render
   try {
    const barsEl = document.getElementById('ev-chart-bars');
@@ -21333,7 +21348,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1613';
+ const _APP_VERSION = 'v1.3.1614';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -62038,6 +62053,23 @@ window._DashweyDeviceId = (() => {
      // PASO 3 — Validate accounts
      record.steps.accounts = window._dashweyValidateAccounts();
 
+     // v1.3.1614 FIX SANITY: si detecta descuadre, intentar recalc primero.
+     //   Antes: warning "descuadra X€" sin ofrecer reparación. Hung tenía
+     //   que reiniciar Dashwey para que cuadrara. Ahora: recalc + re-validar.
+     //   Si tras recalc sigue descuadrando → es problema real (warning OK).
+     //   Si tras recalc cuadra → era obsoleto, ya reparado, no warning.
+     if (record.steps.accounts && !record.steps.accounts.ok) {
+      try {
+       if (typeof window._recalcSaldosCuentas === 'function') {
+        window._recalcSaldosCuentas();
+        // Re-validar tras recalc
+        record.steps.accounts = window._dashweyValidateAccounts();
+        record.steps.recalcAttempted = true;
+        console.info('[Dashwey/Sanity] recalc intentado, accounts.ok ahora:', record.steps.accounts.ok);
+       }
+      } catch(e) { console.warn('[Sanity] recalc error:', e && e.message); }
+     }
+
      // PASO 4 — Validate convergence LIGHT
      record.steps.convergence = window._dashweyValidateConvergence();
 
@@ -67485,6 +67517,15 @@ document.addEventListener('keydown', function(e) {
    if (typeof window._DashweySyncAhora === 'function') {
     await window._DashweySyncAhora();
    }
+   // v1.3.1614 FIX SANITY: recalc saldos defensivo tras pull completo.
+   //   SyncAhora ya invoca recalc, pero este callsite asegura que aunque ese
+   //   flujo falle por alguna razón, los saldos terminan correctos.
+   //   Idempotente y safe.
+   try {
+    if (typeof window._recalcSaldosCuentas === 'function') {
+     window._recalcSaldosCuentas();
+    }
+   } catch(e) { console.warn('[v1513 resync] recalc error:', e && e.message); }
    console.info('[v1513 resync] ✓ done');
   } catch (e) {
    console.warn('[v1513 resync] error:', e && e.message);
