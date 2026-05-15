@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1594";
+ var CURRENT_CACHE = "dashwey-v1-3-1596";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1594</title>
+<title>Dashwey v1.3.1596</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21203,7 +21203,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1594';
+ const _APP_VERSION = 'v1.3.1596';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38814,6 +38814,259 @@ function _confirmBorrarCuenta(id) {
  }, 0);
  var topRoi = (function(){ try { return KPI.getTopRoi(period); } catch(_){return [];} })();
 
+ // ════════════════════════════════════════════════════════════════════
+ // v1.3.1596 SPEC L3 · Variables auxiliares para insights ampliados (17 nuevas)
+ //   Todas con try/catch defensivo. Si fallan -> null/default -> frase no aparece.
+ //   NO repiten KPIs visibles. SI aportan info derivada/cruzada/anomala accionable.
+ // ════════════════════════════════════════════════════════════════════
+
+ // AUX-1 · Cuenta principal (la marcada isPrimary, sino primera viva)
+ var cuentaPrincipal = null;
+ try {
+  var cuentasAll = State.get.cuentas ? (State.get.cuentas() || []) : [];
+  cuentaPrincipal = cuentasAll.find(function(c){ return c && !c.deleted && c.isPrimary; })
+                 || cuentasAll.find(function(c){ return c && !c.deleted; })
+                 || null;
+ } catch(_) {}
+ var saldoPrincipal = cuentaPrincipal ? (cuentaPrincipal.saldo || 0) : 0;
+ var nombrePrincipal = cuentaPrincipal ? (cuentaPrincipal.nombre || 'Principal') : null;
+
+ // AUX-2 · Cobertura pedidos pendientes (cuantas veces principal cubre pendientes)
+ var coberturaPedPend = (saldoPrincipal > 0 && invCam > 0)
+  ? Math.round((saldoPrincipal / invCam) * 10) / 10 : null;
+
+ // AUX-3 · Runway especifico cuenta principal (distinto de runway global)
+ var runwayPrincipal = (gastoMensual > 0 && saldoPrincipal > 0)
+  ? Math.round((saldoPrincipal / gastoMensual) * 10) / 10 : null;
+
+ // AUX-4 · Concentracion liquidez cuenta principal
+ var concentracionPrincipal = (saldoActual > 0 && saldoPrincipal > 0)
+  ? Math.round((saldoPrincipal / saldoActual) * 100) : null;
+
+ // AUX-5 · Proximos pedidos a 7 dias (capital comprometido inminente)
+ var _ms7d = Date.now() + 7 * 86400000;
+ var _pedidos7d = pendOrd.filter(function(o){
+  var fEnt = o.fechaEntrega ? new Date(o.fechaEntrega).getTime() : 0;
+  return fEnt > 0 && fEnt <= _ms7d;
+ });
+ var capital7d = _pedidos7d.reduce(function(s, o) {
+  return s + ((typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste)
+   ? FinEngine.pedidoCoste(o)
+   : (o.items||[]).reduce(function(ss,i){ return ss+(i.ncajas||0)*(i.precio||0)*1.10; }, 0));
+ }, 0);
+
+ // AUX-6 · Ultimo cierre + horas transcurridas
+ var ultimoCierre = null;
+ try {
+  var cierres = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
+  ultimoCierre = cierres.slice().sort(function(a,b){
+   return (b.cierreTs || 0) - (a.cierreTs || 0);
+  })[0] || null;
+ } catch(_) {}
+ var horasDesdeUltCierre = ultimoCierre && ultimoCierre.cierreTs
+  ? Math.floor((Date.now() - ultimoCierre.cierreTs) / 3600000) : null;
+
+ // AUX-7 · Productos zombie (sin ventas en 14d con stock > 0)
+ var productosZombie = 0;
+ var costeZombie = 0;
+ try {
+  var prods = State.get.productos ? (State.get.productos() || []) : [];
+  var ventas14d = State.get.ventas ? (State.get.ventas() || []).filter(function(v){
+   return new Date(v.fecha).getTime() >= Date.now() - 14*86400000;
+  }) : [];
+  var prodIdsConVentas14d = new Set();
+  ventas14d.forEach(function(v){
+   (v.items||[]).forEach(function(i){ if (i.prodId) prodIdsConVentas14d.add(i.prodId); });
+  });
+  prods.forEach(function(p){
+   if (p.deleted) return;
+   if (!p.stockActual || p.stockActual <= 0) return;
+   if (prodIdsConVentas14d.has(p.id)) return;
+   productosZombie++;
+   var udsCaja = p.udscaja || 1;
+   costeZombie += (p.stockActual || 0) * ((p.precioCompra || 0) / udsCaja);
+  });
+ } catch(_) {}
+
+ // AUX-8 · Beneficio neto absoluto (alias semantico — la frase usa beneficioAbs)
+ var beneficioAbs = ben;
+
+ // AUX-9 · Dia con anomalia (valle < 50% del promedio resto)
+ var diaAnomalia = null;
+ try {
+  if (chartV && chartV.vals && chartV.vals.length > 1) {
+   var _max = Math.max.apply(null, chartV.vals);
+   var promResto = chartV.vals.length > 1
+    ? chartV.vals.filter(function(v){ return v < _max; }).reduce(function(s,v){return s+v;}, 0) / (chartV.vals.length - 1)
+    : 0;
+   if (promResto > 50) {
+    var minIdx = chartV.vals.indexOf(Math.min.apply(null, chartV.vals));
+    var minVal = chartV.vals[minIdx];
+    if (minVal > 0 && minVal < promResto * 0.5 && chartV.labels[minIdx]) {
+     diaAnomalia = { label: chartV.labels[minIdx], val: minVal, prom: Math.round(promResto) };
+    }
+   }
+  }
+ } catch(_) {}
+
+ // AUX-10 · Margen del top producto vendido (cruce ventas vs rentabilidad)
+ var margenTopProd = null;
+ try {
+  if (topV[0] && topV[0].prod && vta > 0) {
+   var pTopV = topV[0].prod;
+   if (pTopV.precioVenta > 0 && pTopV.precioCompra > 0) {
+    var margP = Math.round(((pTopV.precioVenta - pTopV.precioCompra) / pTopV.precioVenta) * 100);
+    if (margP >= -50 && margP <= 100) margenTopProd = margP;
+   }
+  }
+ } catch(_) {}
+
+ // AUX-11 · Proyeccion mensual (solo si periodo actual = mes en curso)
+ var proyeccionMes = null;
+ try {
+  var rangePM = KPI.getRange(period);
+  var ahoraPM = Date.now();
+  var startMs = rangePM.start.getTime ? rangePM.start.getTime() : rangePM.start;
+  var endMs = rangePM.end.getTime ? rangePM.end.getTime() : rangePM.end;
+  var duracionDias = (endMs - startMs) / 86400000;
+  if (duracionDias >= 28 && duracionDias <= 31 && ahoraPM >= startMs && ahoraPM <= endMs) {
+   var diasTranscurridos = (ahoraPM - startMs) / 86400000;
+   if (diasTranscurridos >= 5 && diasTranscurridos < duracionDias - 1) {
+    proyeccionMes = Math.round((vta / diasTranscurridos) * duracionDias);
+   }
+  }
+ } catch(_) {}
+
+ // AUX-12 · Stock vs velocidad ventas top (dias que cubre al ritmo actual)
+ var stockDiasTop = null;
+ try {
+  if (topV[0] && topV[0].prod && topV[0].uds > 0) {
+   var pStock = topV[0].prod;
+   var stockUds = (pStock.stockActual || 0);
+   var diasPeriodo = (function(){
+    try { var r = KPI.getRange(period);
+     return ((r.end.getTime ? r.end.getTime() : r.end) - (r.start.getTime ? r.start.getTime() : r.start)) / 86400000;
+    } catch(_){ return 30; }
+   })();
+   var ventasPorDia = topV[0].uds / Math.max(diasPeriodo, 1);
+   if (ventasPorDia > 0 && stockUds > 0) {
+    stockDiasTop = Math.round(stockUds / ventasPorDia);
+   }
+  }
+ } catch(_) {}
+
+ // AUX-13 · Dias desde ultima compra del top vendido
+ var diasUltCompraTop = null;
+ try {
+  if (topV[0] && topV[0].prod) {
+   var prodIdTop = topV[0].prod.id;
+   var ultCompra = null;
+   pedidos.forEach(function(o){
+    if (!o.items) return;
+    if (o.items.some(function(it){ return it.prodId === prodIdTop; })) {
+     var fOrden = new Date(o.fecha).getTime();
+     if (!ultCompra || fOrden > ultCompra) ultCompra = fOrden;
+    }
+   });
+   if (ultCompra) diasUltCompraTop = Math.floor((Date.now() - ultCompra) / 86400000);
+  }
+ } catch(_) {}
+
+ // AUX-14 · ROI ratio (recuperaste vs invertiste mismo periodo)
+ var ratioROI = (inv >= 50 && vta > 0) ? Math.round((vta / inv) * 10) / 10 : null;
+
+ // AUX-15 · Coste medio pedido vs trimestre anterior
+ var costeMedioActual = null;
+ var costeMedioAnterior = null;
+ try {
+  var pedAct = pedidos.filter(function(p){
+   var f = new Date(p.fecha).getTime();
+   return f >= Date.now() - 30*86400000 && f < Date.now();
+  });
+  var pedAnt = pedidos.filter(function(p){
+   var f = new Date(p.fecha).getTime();
+   return f >= Date.now() - 120*86400000 && f < Date.now() - 30*86400000;
+  });
+  if (pedAct.length >= 3) {
+   var sumAct = pedAct.reduce(function(s,o){
+    return s + ((typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(o) : 0);
+   }, 0);
+   costeMedioActual = sumAct / pedAct.length;
+  }
+  if (pedAnt.length >= 3) {
+   var sumAnt = pedAnt.reduce(function(s,o){
+    return s + ((typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(o) : 0);
+   }, 0);
+   costeMedioAnterior = sumAnt / pedAnt.length;
+  }
+ } catch(_) {}
+
+ // AUX-16 · Dia sobrecargado proximo (>3 eventos en proximos 7d)
+ var diaSobrecargado = null;
+ try {
+  var eventos7d = {};
+  var hoyAA = new Date(); hoyAA.setHours(0,0,0,0); var hoyMs = hoyAA.getTime();
+  var fin7d = hoyMs + 7*86400000;
+  pendOrd.forEach(function(o){
+   var fechaP = o.fecha ? new Date(o.fecha).getTime() : 0;
+   var fechaE = o.fechaEntrega ? new Date(o.fechaEntrega).getTime() : 0;
+   [fechaP, fechaE].forEach(function(f){
+    if (f >= hoyMs && f <= fin7d) {
+     var key = new Date(f).toISOString().slice(0,10);
+     eventos7d[key] = (eventos7d[key] || 0) + 1;
+    }
+   });
+  });
+  visPend.forEach(function(v){
+   var f = new Date(v.fecha).getTime();
+   if (f >= hoyMs && f <= fin7d) {
+    var key = new Date(f).toISOString().slice(0,10);
+    eventos7d[key] = (eventos7d[key] || 0) + 1;
+   }
+  });
+  var maxKey = null, maxVal = 0;
+  Object.keys(eventos7d).forEach(function(k){
+   if (eventos7d[k] > maxVal) { maxVal = eventos7d[k]; maxKey = k; }
+  });
+  if (maxVal >= 3 && maxKey) {
+   var dSob = new Date(maxKey + 'T12:00:00');
+   diaSobrecargado = {
+    label: dSob.toLocaleDateString('es-ES', { weekday: 'long', day: '2-digit', month: 'short' }),
+    count: maxVal
+   };
+  }
+ } catch(_) {}
+
+ // AUX-17 · Proveedor retrasado (>1.5x su ritmo habitual sin pedido)
+ var provRetrasado = null;
+ try {
+  var provsAUX = State.get.proveedores ? (State.get.proveedores() || []) : [];
+  var hoy2 = Date.now();
+  var candidatos = [];
+  provsAUX.forEach(function(p){
+   if (p.deleted) return;
+   if (!p.diasPedido || !p.diasPedido.length) return;
+   var pedidosProv = pedidos.filter(function(o){ return o.provId === p.id; });
+   if (pedidosProv.length < 2) return;
+   var ultPed = pedidosProv.slice().sort(function(a,b){ return new Date(b.fecha) - new Date(a.fecha); })[0];
+   var diasDesdeUlt = Math.floor((hoy2 - new Date(ultPed.fecha).getTime()) / 86400000);
+   if (pedidosProv.length >= 3) {
+    var diffs = [];
+    var sorted = pedidosProv.slice().sort(function(a,b){ return new Date(b.fecha) - new Date(a.fecha); });
+    for (var i = 1; i < Math.min(5, sorted.length); i++) {
+     diffs.push(Math.floor((new Date(sorted[i-1].fecha) - new Date(sorted[i].fecha)) / 86400000));
+    }
+    var ritmoMedio = diffs.reduce(function(s,d){return s+d;}, 0) / diffs.length;
+    if (ritmoMedio > 0 && diasDesdeUlt > ritmoMedio * 1.5) {
+     candidatos.push({ nombre: p.nombre, dias: diasDesdeUlt, ritmo: Math.round(ritmoMedio) });
+    }
+   }
+  });
+  if (candidatos.length) {
+   provRetrasado = candidatos.sort(function(a,b){ return b.dias - a.dias; })[0];
+  }
+ } catch(_) {}
+
  // v1.3.1363 — REFACTOR INSIGHTS: filosofía
  //   1. NO repetir KPI visible (ticket medio, hora pico, ventas totales, top producto, etc.)
  //   2. NO mostrar texto inútil ("sin datos", "sin transacciones") — devolver null y filtrar abajo
@@ -38827,46 +39080,72 @@ function _confirmBorrarCuenta(id) {
 
  var phrases = {
  rendimiento: _build([
-  // Comparación temporal con clamp anti-valor-absurdo
-  (vta > 0 && delta !== null && Math.abs(delta) >= 10)
+  // v1.3.1596 SPEC L3 · 10 candidatas (relajadas 1+2+5, 5 nuevas V1-V5)
+  // 1. Comparacion temporal (RELAJADO >=5%, antes >=10%)
+  (vta > 0 && delta !== null && Math.abs(delta) >= 5)
    ? (delta > 0
      ? 'Vas ' + delta + '% por encima del periodo anterior. Sigue el ritmo.'
      : 'Vas ' + Math.abs(delta) + '% por debajo del periodo anterior. Revisa qué cambió.')
    : null,
-  // Concentración en top producto (solo si dependes mucho de uno)
-  (topVnom && concentracionTop >= 40 && totalUdsTop > 20)
+  // 2. Concentracion top (RELAJADO >=30%, antes >=40%; mantiene filtro totalUdsTop>20)
+  (topVnom && concentracionTop >= 30 && totalUdsTop > 20)
    ? concentracionTop + '% de tus ventas dependen de ' + topVnom + '. Asegura su stock.'
    : null,
-  // Margen bajo — accionable
+  // 3. Margen bajo accionable
   (vta > 100 && margen > 0 && margen < 20)
    ? 'Margen del ' + margen + '% — por debajo del 20% recomendado. Revisa precios o costes.'
    : null,
-  // Margen negativo — crítico
+  // 4. Margen negativo critico
   (vta > 100 && margen < 0)
    ? 'Margen negativo: pierdes dinero en cada venta. Revisa costes urgente.'
    : null,
-  // Tramos flojos detectados (oportunidad de promo)
-  (nTramosFlojos >= 3 && picoH)
+  // 5. Tramos flojos (RELAJADO >=2, antes >=3)
+  (nTramosFlojos >= 2 && picoH)
    ? nTramosFlojos + ' tramos con ventas flojas. Oportunidad de lanzar promo.'
+   : null,
+  // 6. V1 · Beneficio neto absoluto (NO redundante con margen %)
+  (beneficioAbs !== 0 && vta > 100 && Math.abs(beneficioAbs) <= vta * 2)
+   ? (beneficioAbs > 0
+     ? 'Has ganado ' + feur(beneficioAbs) + ' este periodo (margen ' + margen + '%).'
+     : 'Pérdidas de ' + feur(Math.abs(beneficioAbs)) + ' este periodo. Revisa costes urgente.')
+   : null,
+  // 7. V2 · Dia con anomalia (valle)
+  diaAnomalia
+   ? diaAnomalia.label + ' con ventas inusualmente bajas: ' + feur(diaAnomalia.val) + ' (típico: ' + feur(diaAnomalia.prom) + ').'
+   : null,
+  // 8. V3 · Productos zombie (sin ventas 14d con stock)
+  (productosZombie >= 3 && costeZombie > 50)
+   ? productosZombie + ' productos sin vender en 14 días — ' + feur(costeZombie) + ' inmovilizados.'
+   : null,
+  // 9. V4 · Cruce ventas top vs margen del top
+  (margenTopProd !== null && topVnom && margen > 0)
+   ? (margenTopProd < margen - 5
+     ? 'Tu top vendido (' + topVnom + ') deja ' + margenTopProd + '% — por debajo de tu media ' + margen + '%.'
+     : (margenTopProd > margen + 5
+       ? 'Tu top vendido (' + topVnom + ') deja ' + margenTopProd + '% — por encima de tu media ' + margen + '%.'
+       : null))
+   : null,
+  // 10. V5 · Proyeccion mensual (si periodo = mes en curso)
+  proyeccionMes !== null
+   ? 'Al ritmo actual proyectas ' + feur(proyeccionMes) + ' este mes.'
    : null,
  ]),
 
  compras: _build([
-  // Capital pendiente (no visible en card de compras)
+  // v1.3.1596 SPEC L3 · 10 candidatas (relajadas 2+3, 5 nuevas I1-I5)
+  // 1. Capital pendiente
   (invCam > 50)
    ? feur(invCam) + ' en pedidos pendientes de recibir.'
    : null,
-  // Concentración en proveedor (riesgo de dependencia)
-  (prov1 && prov1.pct >= 50)
-   ? prov1.pct + '% del gasto concentrado en ' + prov1.nombre + '. Riesgo de dependencia.'
+  // 2. Concentracion proveedor (RELAJADO >=30%, antes >=50%)
+  (prov1 && prov1.pct >= 30)
+   ? prov1.pct + '% del gasto concentrado en ' + prov1.nombre + (prov1.pct >= 50 ? '. Riesgo de dependencia.' : '.')
    : null,
-  // Margen del proveedor top (si es dato útil)
-  (prov1 && prov1.margen !== undefined && prov1.margen < 15 && prov1.pct >= 30)
+  // 3. Margen proveedor top (RELAJADO pct>=20%, antes >=30%)
+  (prov1 && prov1.margen !== undefined && prov1.margen < 15 && prov1.pct >= 20)
    ? 'Margen del ' + prov1.margen + '% con ' + prov1.nombre + '. Negocia o diversifica.'
    : null,
-  // ROI bajo (alerta) o alto (felicitación)
-  // v1.3.1364: requiere inv >= 100 y |ben| <= inv*5 para evitar ROI absurdos
-  //   (ej. -2475% cuando inv=222€ y pérdida=5500€ — datos no comparables)
+  // 4. ROI bajo/alto (sin cambio)
   (inv >= 100 && Math.abs(ben) <= inv * 5 && roi !== 0)
    ? (roi >= 30
      ? 'ROI del ' + roi + '% sobre la inversión. Buen ritmo.'
@@ -38874,63 +39153,120 @@ function _confirmBorrarCuenta(id) {
        ? 'ROI negativo (' + roi + '%). Las compras no están rentando.'
        : 'ROI del ' + roi + '%. Margen de mejora.'))
    : null,
-  // Coste medio pedido (si hay >=3 pedidos)
+  // 5. Coste medio pedido (sin cambio)
   (pedRecientes.length >= 3 && cosMedia > 0)
    ? 'Coste medio por pedido: ' + feur(cosMedia) + ' (últimos 30 días).'
+   : null,
+  // 6. I1 · Ratio ROI compra/venta
+  (ratioROI !== null && ratioROI >= 1.2)
+   ? 'Compraste ' + feur(inv) + ', vendiste ' + feur(vta) + ' → recuperaste ' + ratioROI + '× en mismo periodo.'
+   : null,
+  // 7. I2 · Stock vs velocidad ventas (prediccion rotura)
+  (stockDiasTop !== null && topV[0] && topV[0].prod)
+   ? (stockDiasTop <= 7
+     ? topV[0].prod.nombre + ': stock cubre ' + stockDiasTop + ' días al ritmo actual. Reposición urgente.'
+     : (stockDiasTop <= 21
+       ? topV[0].prod.nombre + ': stock para ' + stockDiasTop + ' días.'
+       : null))
+   : null,
+  // 8. I3 · Dias desde ultima compra del top
+  (diasUltCompraTop !== null && topV[0] && topV[0].prod && diasUltCompraTop >= 14)
+   ? 'Última compra de ' + topV[0].prod.nombre + ' hace ' + diasUltCompraTop + ' días.'
+   : null,
+  // 9. I4 · Coste medio actual vs trimestre anterior
+  (costeMedioActual !== null && costeMedioAnterior !== null && costeMedioAnterior > 0)
+   ? (function(){
+      var deltaC = Math.round(((costeMedioActual - costeMedioAnterior) / costeMedioAnterior) * 100);
+      if (Math.abs(deltaC) < 10) return null;
+      return 'Coste medio por pedido ' + feur(costeMedioActual) + ' (' + (deltaC > 0 ? '+' : '') + deltaC + '% vs trimestre anterior).';
+     })()
+   : null,
+  // 10. I5 · Pedidos pendientes con cuenta principal contextualizada
+  (pendOrd.length >= 2 && nombrePrincipal && invCam > 50)
+   ? pendOrd.length + ' pedidos pendientes (' + feur(invCam) + ') a cargo de ' + nombrePrincipal + '.'
    : null,
  ]),
 
  'flujo-caja': _build([
-  // v1.3.1363 FIX BUG-INSIGHT-B: signo correcto en flujo
-  // Runway al ritmo actual (insight estrella)
+  // v1.3.1596 SPEC L3 · 10 candidatas (sin cambios 1-5, 5 nuevas F1-F5)
+  // 1. Runway global (2 variantes mantenidas)
   (runwayMeses !== null && runwayMeses < 6)
    ? 'Tu caja aguantará ' + runwayMeses + ' meses al ritmo actual de gasto.'
    : (runwayMeses !== null && runwayMeses >= 6 && runwayMeses < 24
      ? 'Tu caja aguantará ' + runwayMeses + ' meses al ritmo actual.'
      : null),
-  // Beneficio del periodo (no visible directamente — es derivado de margen)
-  // v1.3.1364: solo mostrar si los datos son razonables (|ben| <= vta*2)
-  //   evita pérdidas absurdas tipo -5508€ con vta=242€ (inv mal calculada)
+  // 2. Beneficio del periodo
   (vta > 100 && ben !== 0 && Math.abs(ben) <= vta * 2)
    ? (ben >= 0
      ? 'Beneficio bruto del periodo: ' + feur(ben) + ' (margen ' + margen + '%).'
      : 'Pérdida de ' + feur(Math.abs(ben)) + ' este periodo. Revisa precios o gastos.')
    : null,
-  // Mayor gasto del periodo (no visible — útil saber concepto)
+  // 3. Mayor gasto
   (gasMax && gasMax.importe > 100)
    ? 'Mayor gasto: ' + (gasMax.concepto||'sin concepto') + ' (' + feur(gasMax.importe||0) + ').'
    : null,
-  // Capital inmovilizado en stock (no visible aquí)
+  // 4. Stock inmovilizado
   (valInv > 500)
    ? 'Tienes ' + feur(valInv) + ' inmovilizados en stock.'
    : null,
-  // Saldo bajo crítico
+  // 5. Saldo bajo critico
   (saldoActual > 0 && saldoActual < 500)
    ? 'Saldo bajo (' + feur(saldoActual) + '). Considera frenar gastos no esenciales.'
+   : null,
+  // 6. F1 · Cobertura pedidos pendientes (cuenta principal)
+  (coberturaPedPend !== null && nombrePrincipal && invCam > 100)
+   ? (coberturaPedPend < 1
+     ? nombrePrincipal + ' NO cubre los pedidos pendientes (' + coberturaPedPend + '× — falta ' + feur(invCam - saldoPrincipal) + ').'
+     : nombrePrincipal + ' cubre ' + coberturaPedPend + '× los pedidos pendientes (' + feur(saldoPrincipal) + ' / ' + feur(invCam) + ').')
+   : null,
+  // 7. F2 · Runway cuenta principal (distinto runway global)
+  (runwayPrincipal !== null && nombrePrincipal && runwayPrincipal < 12)
+   ? 'Al ritmo actual, ' + nombrePrincipal + ' dura ' + runwayPrincipal + ' meses sin nuevos ingresos.'
+   : null,
+  // 8. F3 · Proximos pagos 7d
+  (capital7d > 100 && nombrePrincipal)
+   ? 'Próximos pedidos: ' + feur(capital7d) + ' en 7 días. ' + nombrePrincipal + ' tiene ' + feur(saldoPrincipal) + '.'
+   : (capital7d > 100 ? 'Próximos pedidos: ' + feur(capital7d) + ' en 7 días.' : null),
+  // 9. F4 · Concentracion liquidez (solo extremos)
+  (concentracionPrincipal !== null && nombrePrincipal && (concentracionPrincipal > 60 || concentracionPrincipal < 30))
+   ? nombrePrincipal + ' = ' + concentracionPrincipal + '% de tu liquidez total' +
+     (concentracionPrincipal > 60 ? ' — concentración alta.' : ' — diversificación interesante.')
+   : null,
+  // 10. F5 · Ultimo cierre reciente (NOTA: campo real es .ventas no .ventasTotal — verificado schema linea 16609)
+  (ultimoCierre && horasDesdeUltCierre !== null && horasDesdeUltCierre <= 48 && ultimoCierre.ventas)
+   ? 'Último cierre hace ' + (horasDesdeUltCierre < 24 ? horasDesdeUltCierre + 'h' : Math.floor(horasDesdeUltCierre/24) + 'd') + ': ' + feur(ultimoCierre.ventas) + '.'
    : null,
  ]),
 
  agenda: _build([
-  // v1.3.1363 FIX BUG-INSIGHT-C: insights útiles, no mensajes vacíos
-  // Pedidos pendientes (capital comprometido)
+  // v1.3.1596 SPEC L3 · 7 candidatas (mantiene 1-4 con fix B2 v1.3.1592 visPend>=hoy ya aplicado arriba, +3 nuevas A1-A3, elimina "Sin pedidos en 30d" anti-pattern)
+  // 1. Pedidos pendientes
   (pendOrd.length > 0 && invCam > 0)
    ? pendOrd.length + ' pedido' + (pendOrd.length !== 1 ? 's' : '') + ' pendiente' + (pendOrd.length !== 1 ? 's' : '') + ' (' + feur(invCam) + ').'
    : null,
-  // Próxima visita comercial (accionable)
+  // 2. Proxima visita (con fix B2 ya aplicado linea 38803)
   visProx
    ? 'Próxima visita: ' + new Date(visProx.fecha).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) + '.'
    : null,
-  // Visitas pendientes acumuladas (alerta si muchas)
+  // 3. Visitas acumuladas
   (visPend.length >= 3)
    ? visPend.length + ' visitas comerciales pendientes acumuladas.'
    : null,
-  // Caducidades urgentes (cruzar info)
+  // 4. Caducidades urgentes
   (cad7.length > 0 && cadVal > 50)
    ? cad7.length + ' producto' + (cad7.length !== 1 ? 's' : '') + ' caduca' + (cad7.length !== 1 ? 'n' : '') + ' en 7 días (' + feur(cadVal) + ' en riesgo).'
    : null,
-  // Pedidos recientes (ritmo de reposición)
-  (pedRecientes.length === 0 && pendOrd.length === 0)
-   ? 'Sin pedidos en 30 días. ¿Toca reponer mercancía?'
+  // 5. A1 · Dia sobrecargado proximo
+  diaSobrecargado
+   ? diaSobrecargado.label + ': ' + diaSobrecargado.count + ' eventos. Prepárate.'
+   : null,
+  // 6. A2 · Capital comprometido contextualizado con principal
+  (capital7d > 100 && nombrePrincipal)
+   ? feur(capital7d) + ' comprometidos en 7 días (' + nombrePrincipal + ' tiene ' + feur(saldoPrincipal) + ').'
+   : null,
+  // 7. A3 · Proveedor con patron roto
+  provRetrasado
+   ? provRetrasado.nombre + ': ' + provRetrasado.dias + ' días sin pedido (ritmo habitual: ' + provRetrasado.ritmo + 'd).'
    : null,
  ]),
 
