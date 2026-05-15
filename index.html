@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1605";
+ var CURRENT_CACHE = "dashwey-v1-3-1606";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1605</title>
+<title>Dashwey v1.3.1606</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21471,7 +21471,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1605';
+ const _APP_VERSION = 'v1.3.1606';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -63278,6 +63278,12 @@ if (typeof State !== 'undefined') window.State = State;
 else if (window.App?.State) window.State = window.App.State;
 if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
 else if (window.App?.DashweyBus) window.DashweyBus = window.App.DashweyBus;
+// v1.3.1606 FIX KpiSheet: exponer KPI y FinEngine globalmente. Necesario para que
+//   helpers en scripts separados (como _DashweyKpiSheet) puedan acceder a las APIs.
+//   Antes del fix: el helper veía KPI/FinEngine como undefined -> try/catch silencioso
+//   -> valores mostrados como 0 y listas vacías.
+if (typeof KPI !== 'undefined') window.KPI = KPI;
+if (typeof FinEngine !== 'undefined') window.FinEngine = FinEngine;
 // ──────────────────────────────────────────────────────────────────────
 
 /* Splash controller moved to inline script before App script */
@@ -68442,10 +68448,10 @@ document.addEventListener('keydown', function(e) {
  }
 })();
 
-/* ─── v1.3.1605 SPEC L6 KPI Sheet · Menú flotante con header + lista scroll ──
-   Helper window._DashweyKpiSheet.open(kpiKey) que abre overlay centrado backdrop oscuro.
-   v1605: header estático con info KPI + body con LISTA REAL scrollable (tickets, top
-   productos, etc.). Elimina paso intermedio "Ver tickets" botón redundante.
+/* ─── v1.3.1606 SPEC L6 KPI Sheet · Menú flotante con header + lista scroll ──
+   Helper window._DashweyKpiSheet.open(kpiKey). v1606: FIX critico — acceder a
+   APIs via window.KPI, window.FinEngine, window.State porque KPI/FinEngine son
+   const dentro del script principal y NO accesibles desde este script separado.
    Idempotente vía _DashweyKpiSheetInstalled.
 */
 (function() {
@@ -68471,17 +68477,35 @@ document.addEventListener('keydown', function(e) {
   } catch(_) { return ''; }
  }
 
- // Builders devuelven {title, value, sub, subColor, desc, listHtml}
+ // Resolver APIs defensivamente
+ function _getPeriod() {
+  try { return window.State && window.State.get && window.State.get.period ? window.State.get.period() : { type:'month', offset:0 }; }
+  catch(_) { return { type:'month', offset:0 }; }
+ }
+ function _getSnap(period) {
+  try { return window.FinEngine && window.FinEngine.snapshot ? window.FinEngine.snapshot(period) : null; }
+  catch(e) { console.warn('[KpiSheet] FinEngine.snapshot error:', e && e.message); return null; }
+ }
+ function _getVentas(period) {
+  try { return window.KPI && window.KPI.ventasEnPeriodo ? (window.KPI.ventasEnPeriodo(period) || []) : []; }
+  catch(e) { console.warn('[KpiSheet] KPI.ventasEnPeriodo error:', e && e.message); return []; }
+ }
+ function _getBeneficio(period) {
+  try { return window.KPI && window.KPI.getBeneficioNeto ? (window.KPI.getBeneficioNeto(period) || {}) : {}; }
+  catch(e) { console.warn('[KpiSheet] KPI.getBeneficioNeto error:', e && e.message); return {}; }
+ }
+ function _getProductos() {
+  try { return window.State && window.State.get && window.State.get.productos ? (window.State.get.productos() || []) : []; }
+  catch(_) { return []; }
+ }
+
  var _CONFIG = {
   'ticket-medio': function() {
-   var period, snap, ventas = [];
-   try {
-    period = State.get.period();
-    snap = FinEngine.snapshot(period);
-    ventas = (KPI.ventasEnPeriodo(period) || []).slice().sort(function(a,b){
-     return new Date(b.fecha || 0) - new Date(a.fecha || 0);
-    });
-   } catch(_) {}
+   var period = _getPeriod();
+   var snap = _getSnap(period);
+   var ventas = _getVentas(period).slice().sort(function(a,b){
+    return new Date(b.fecha || 0) - new Date(a.fecha || 0);
+   });
    var ticket = (snap && snap.ticketMedio) || 0;
    var n = ventas.length;
 
@@ -68515,22 +68539,17 @@ document.addEventListener('keydown', function(e) {
   },
 
   'margen-ventas': function() {
-   var period, snap, ventas = [];
-   try {
-    period = State.get.period();
-    snap = FinEngine.snapshot(period);
-    ventas = KPI.ventasEnPeriodo(period) || [];
-   } catch(_) {}
+   var period = _getPeriod();
+   var snap = _getSnap(period);
+   var ventas = _getVentas(period);
    var margen = (snap && snap.margenBruto) || 0;
    var color = margen < 0 ? 'down' : (margen >= 20 ? 'up' : '');
 
-   // Top productos por margen € total (cantidad × margenUnit)
-   var prodMap = {};
-   var prods = [];
-   try { prods = State.get.productos() || []; } catch(_) {}
+   var prods = _getProductos();
    var prodById = {};
    prods.forEach(function(p){ if (p && p.id) prodById[p.id] = p; });
 
+   var prodMap = {};
    ventas.forEach(function(v) {
     (v.items || []).forEach(function(it) {
      if (!it.prodId) return;
@@ -68559,14 +68578,13 @@ document.addEventListener('keydown', function(e) {
      var emoji = (row.p && row.p.e) || '📦';
      var foto = (row.p && row.p.foto) || null;
      var iconHtml = foto ? '<img src="' + _esc(foto) + '" alt="">' : _esc(emoji);
-     var pctClass = row.pct < 0 ? 'kpi-sheet-list-val' : (row.pct >= 20 ? 'kpi-sheet-list-val' : 'kpi-sheet-list-val');
      listHtml += '<div class="kpi-sheet-list-item">' +
        '<div class="kpi-sheet-list-icon">' + iconHtml + '</div>' +
        '<div class="kpi-sheet-list-main">' +
         '<div class="kpi-sheet-list-name">' + _esc((row.p && row.p.nombre) || 'Producto') + '</div>' +
         '<div class="kpi-sheet-list-sub">' + row.qty + ' vendidos · ' + row.pct.toFixed(0) + '%</div>' +
        '</div>' +
-       '<div class="' + pctClass + '" style="color:' + (row.totalMargen < 0 ? 'var(--red)' : '#2A9D7C') + '">' + _fmtEur(row.totalMargen) + '</div>' +
+       '<div class="kpi-sheet-list-val" style="color:' + (row.totalMargen < 0 ? 'var(--red)' : '#2A9D7C') + '">' + _fmtEur(row.totalMargen) + '</div>' +
       '</div>';
     });
    }
@@ -68583,18 +68601,15 @@ document.addEventListener('keydown', function(e) {
   },
 
   'beneficio-neto': function() {
-   var period, ben = { beneficio: 0, vta: 0, inv: 0 }, snap;
-   try {
-    period = State.get.period();
-    ben = KPI.getBeneficioNeto(period) || ben;
-    snap = FinEngine.snapshot(period);
-   } catch(_) {}
-   var color = ben.beneficio < 0 ? 'down' : (ben.beneficio > 0 ? 'up' : '');
+   var period = _getPeriod();
+   var snap = _getSnap(period);
+   var ben = _getBeneficio(period);
+   var color = (ben.beneficio || 0) < 0 ? 'down' : ((ben.beneficio || 0) > 0 ? 'up' : '');
 
-   // Lista: desglose financiero
    var gastos = (snap && snap.gastos) || 0;
    var costeMerc = ben.inv || 0;
    var ventas = ben.vta || 0;
+   var beneficio = ben.beneficio || 0;
 
    var listHtml =
     '<div class="kpi-sheet-list-item">' +
@@ -68622,17 +68637,17 @@ document.addEventListener('keydown', function(e) {
      '<div class="kpi-sheet-list-val" style="color:var(--red)">−' + _fmtEur(gastos) + '</div>' +
     '</div>' +
     '<div class="kpi-sheet-list-item" style="border-top:2px solid var(--ink);background:rgba(0,0,0,0.02)">' +
-     '<div class="kpi-sheet-list-icon" style="background:' + (ben.beneficio < 0 ? 'rgba(139,26,47,0.15)' : 'rgba(42,157,124,0.15)') + '">=</div>' +
+     '<div class="kpi-sheet-list-icon" style="background:' + (beneficio < 0 ? 'rgba(139,26,47,0.15)' : 'rgba(42,157,124,0.15)') + '">=</div>' +
      '<div class="kpi-sheet-list-main">' +
       '<div class="kpi-sheet-list-name">Beneficio neto</div>' +
       '<div class="kpi-sheet-list-sub">Resultado final del periodo</div>' +
      '</div>' +
-     '<div class="kpi-sheet-list-val" style="color:' + (ben.beneficio < 0 ? 'var(--red)' : '#2A9D7C') + ';font-size:var(--fs-base)">' + _fmtEur(ben.beneficio) + '</div>' +
+     '<div class="kpi-sheet-list-val" style="color:' + (beneficio < 0 ? 'var(--red)' : '#2A9D7C') + ';font-size:var(--fs-base)">' + _fmtEur(beneficio) + '</div>' +
     '</div>';
 
    return {
     title: 'Beneficio neto',
-    value: _fmtEur(ben.beneficio),
+    value: _fmtEur(beneficio),
     sub: 'Resultado del periodo',
     subColor: color,
     desc: 'Beneficio = ventas − coste mercancía vendida − gastos operativos.',
@@ -68691,7 +68706,7 @@ document.addEventListener('keydown', function(e) {
  }
 
  window._DashweyKpiSheet = { open: open };
- console.info('[Dashwey/KpiSheet] Helper v1.3.1605 instalado (header sticky + lista scroll)');
+ console.info('[Dashwey/KpiSheet] Helper v1.3.1606 instalado (window.KPI/FinEngine/State)');
 })();
 
 /* ─── v1.3.1594 SPEC L6.3 · Flujo Caja taps Cuentas + Vista Global ─────────────
