@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1600";
+ var CURRENT_CACHE = "dashwey-v1-3-1601";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1600</title>
+<title>Dashwey v1.3.1601</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21301,7 +21301,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1600';
+ const _APP_VERSION = 'v1.3.1601';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33934,6 +33934,10 @@ function _openMovimientoFullscreen(opts) {
   '<input type="hidden" id="mov-recur-n" value="1">' +
   '<input type="hidden" id="mov-recur-unit" value="month">' +
   '<input type="hidden" id="mov-fecha" value="' + hoy + '">' +
+  // v1.3.1601 SPEC L5.3-mini: hora separada del input fecha. mds sheet permite
+  //   editar fecha (calendario) y hora (input time). _confirmarMovimiento
+  //   concatena fecha + hora a ISO completo.
+  '<input type="hidden" id="mov-hora" value="12:00">' +
   '<input type="hidden" id="mov-concepto" value="">' +
 
   // v1.3.1532: Fila cuenta (sin botón "+"). En modo normal cuenta ocupa todo
@@ -34031,6 +34035,10 @@ function _openMovimientoFullscreen(opts) {
      parts.push(d.getDate() + '/' + (d.getMonth()+1));
     }
    }
+   // v1.3.1601: Hora (solo si distinta de 12:00 default)
+   var hEl = document.getElementById('mov-hora');
+   var hVal = hEl ? hEl.value : '';
+   if (hVal && hVal !== '12:00') parts.push(hVal);
    // Ingreso tipo (solo si ingreso)
    if (_movTipo === 'ingreso') {
     var itMap = { normal:'', caja:'Caja', reembolso_proveedor:'Reembolso' };
@@ -34186,6 +34194,8 @@ function _DashweyMovDetallesSheet(onClose) {
   ingresoTipo: window._movFsIngresoTipo || 'normal',
   historial: window._movFsHistorial !== false,
   fecha: (document.getElementById('mov-fecha') || {}).value || new Date().toISOString().slice(0,10),
+  // v1.3.1601: hora separada (default 12:00) para el time picker en mds sheet
+  hora: (document.getElementById('mov-hora') || {}).value || '12:00',
   concepto: (document.getElementById('mov-concepto') || {}).value || '',
   recurN: (document.getElementById('mov-recur-n') || {}).value || '1',
   recurU: (document.getElementById('mov-recur-unit') || {}).value || 'month',
@@ -34257,6 +34267,11 @@ function _DashweyMovDetallesSheet(onClose) {
       '<div class="mds-cal-dow">D</div>' +
      '</div>' +
      '<div class="mds-cal-grid" id="mds-cal-grid"></div>' +
+    '</div>' +
+    // v1.3.1601 SPEC L5.3-mini: input hora bajo el calendario
+    '<div class="mds-hora-wrap" style="margin-top:var(--sp-2);display:flex;align-items:center;gap:var(--sp-2)">' +
+     '<label for="mds-hora" style="font-size:var(--fs-sm);color:var(--ink-soft);font-family:var(--font);font-weight:var(--fw-semi)">Hora</label>' +
+     '<input class="fi" id="mds-hora" type="time" value="' + esc(snapshot.hora) + '" style="flex:1">' +
     '</div>' +
    '</div>' +
 
@@ -34366,8 +34381,16 @@ function _DashweyMovDetallesSheet(onClose) {
     if (cellDate.getTime() === today.getTime()) b.classList.add('today');
     if (cellDate.getTime() === selDate.getTime()) b.classList.add('selected');
     b.addEventListener('click', function(){
-     _selFecha = new Date(year, month, day, 12, 0, 0);
-     // Sync al hidden del modal padre
+     // v1.3.1601: usar hora del input mds-hora (no hardcoded 12:00) para preservar
+     //   selección del usuario al cambiar de día.
+     var _horaEl = document.getElementById('mds-hora');
+     var _h = 12, _m = 0;
+     if (_horaEl && _horaEl.value) {
+      var _parts = _horaEl.value.split(':');
+      _h = parseInt(_parts[0], 10) || 12;
+      _m = parseInt(_parts[1], 10) || 0;
+     }
+     _selFecha = new Date(year, month, day, _h, _m, 0);
      var f = document.getElementById('mov-fecha');
      if (f) f.value = _selFecha.toISOString().slice(0,10);
      _mdsRenderCal();
@@ -34398,6 +34421,15 @@ function _DashweyMovDetallesSheet(onClose) {
   _mdsRenderCal();
  });
 
+ // v1.3.1601 SPEC L5.3-mini: handler input hora -> sync hidden mov-hora
+ var _mdsHoraEl = document.getElementById('mds-hora');
+ if (_mdsHoraEl) {
+  _mdsHoraEl.addEventListener('input', function(){
+   var f = document.getElementById('mov-hora');
+   if (f) f.value = _mdsHoraEl.value || '12:00';
+  });
+ }
+
  // ── Wire cerrar ───────────────────────────────────────────────
  var _close = function() {
   sheet.classList.remove('visible');
@@ -34413,6 +34445,8 @@ function _DashweyMovDetallesSheet(onClose) {
   window._movFsIngresoTipo = snapshot.ingresoTipo;
   window._movFsHistorial = snapshot.historial;
   var f = document.getElementById('mov-fecha');     if (f) f.value = snapshot.fecha;
+  // v1.3.1601: restaurar hora también
+  var fh = document.getElementById('mov-hora');     if (fh) fh.value = snapshot.hora;
   var c = document.getElementById('mov-concepto');  if (c) c.value = snapshot.concepto;
   var rn = document.getElementById('mov-recur-n');  if (rn) rn.value = snapshot.recurN;
   var ru = document.getElementById('mov-recur-unit'); if (ru) ru.value = snapshot.recurU;
@@ -34545,49 +34579,69 @@ function _openEditMovimientoSheet(id, src) {
 
   var sheet = document.createElement('div');
   sheet.className = 'mov-sheet-overlay';
+  // v1.3.1601: convertir fecha registro a datetime-local format (YYYY-MM-DDTHH:MM)
+  //   Si registro.fecha es ISO completa -> extraer fecha+hora local.
+  //   Si solo YYYY-MM-DD -> añadir T12:00 default.
+  var _fechaDT;
+  try {
+   var _d = registro.fecha ? new Date(registro.fecha) : new Date();
+   if (isNaN(_d.getTime())) _d = new Date();
+   var _pad = function(n){ return String(n).padStart(2,'0'); };
+   _fechaDT = _d.getFullYear() + '-' + _pad(_d.getMonth()+1) + '-' + _pad(_d.getDate())
+            + 'T' + _pad(_d.getHours()) + ':' + _pad(_d.getMinutes());
+  } catch(_) {
+   _fechaDT = fecha + 'T12:00';
+  }
+
   sheet.innerHTML =
    '<div class="mov-sheet-panel">' +
    '<div class="mov-sheet-handle"></div>' +
-   '<div style="padding:var(--sp-3_5) 16px 4px;display:flex;align-items:center;justify-content:space-between">' +
-   '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink)">Editar movimiento</div>' +
-   '<button id="edit-mov-close" style="background:none;border:none;font-size:var(--fs-h2);color:var(--ink-soft);cursor:pointer;padding:var(--sp-1)">×</button>' +
+   // v1.3.1601 SPEC L5.3-mini: header con botón circular .form-btn-x (clase L5.2),
+   //   tamaño consistente con DTP recordatorio. Patrón premium propagado.
+   '<div style="padding:var(--sp-2) 16px var(--sp-2);display:flex;align-items:center;justify-content:space-between">' +
+   '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink);font-family:var(--font)">Editar movimiento</div>' +
+   '<button id="edit-mov-close" class="form-btn-x" aria-label="Cerrar">' +
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+   '</button>' +
    '</div>' +
    '<div class="mov-amount-wrap"><div class="mov-amount-inner"><input class="mov-amount-input" id="edit-mov-input" type="text" inputmode="decimal" pattern="[0-9.,]*" value="' + (importe || '') + '" placeholder="0"><span class="mov-amount-euro">€</span></div></div>' +
    '<div class="mov-fields">' +
    '<input class="fi" id="edit-mov-nombre" type="text" placeholder="Concepto" value="' + esc(nombre) + '">' +
-   // v1.3.1165: campo notas opcional — mostrado bajo el nombre en historial
    '<input class="fi" id="edit-mov-notas" type="text" placeholder="Notas (opcional)" value="' + esc(notas) + '">' +
-   '<input class="fi" id="edit-mov-fecha" type="date" value="' + fecha + '">' +
+   // v1.3.1601: datetime-local sustituye type="date". Picker nativo Android muestra
+   //   fecha + hora en un solo input. Schema gastos/ingresos ya guarda ISO completo.
+   '<input class="fi" id="edit-mov-fecha" type="datetime-local" value="' + _fechaDT + '">' +
    '</div>' +
-   '<div style="display:flex;flex-direction:column;gap:var(--sp-2);padding:var(--sp-1) 16px 0">' +
-   // v1.3.1408 — UX FIX: editor siempre permite Guardar cambios.
-   //   Antes: si estado='pendiente', solo aparecía "Confirmar pago" → no se podía
-   //   editar fecha/concepto/importe sin promover a confirmado.
-   //   Ahora: Guardar siempre disponible. Si pendiente, aparece "Confirmar pago"
-   //   en línea propia debajo (acción destructiva separada visualmente).
+   '<div style="display:flex;flex-direction:column;gap:var(--sp-2);padding:var(--sp-2) 16px 0">' +
+   // v1.3.1601: ambos botones flex:1 (mismo ancho) + misma altura via clase consistente.
+   //   Antes: flex:2 vs flex:1 -> 2:1 desigual visual. Cambio a equitativo.
    '<div style="display:flex;gap:var(--sp-2)">' +
-   '<button class="mov-submit-btn" id="edit-mov-save" style="flex:2">Guardar cambios</button>' +
-   // v1.3.1433 BUG-019: si origen externo (loyverse/budgetbakers), botón visualmente
-   //   bloqueado (opacity, cursor) — al pulsar muestra mensaje explicativo en lugar de
-   //   intentar delete y fallar silencioso. import_loyverse permite borrado normal.
+   '<button class="mov-submit-btn" id="edit-mov-save" style="flex:1">Guardar</button>' +
    '<button class="mov-submit-btn" id="edit-mov-del" style="flex:1;background:rgba(139,26,47,0.12);color:var(--red)' + (_isExtBlocked ? ';opacity:0.5;cursor:not-allowed' : '') + '">Eliminar</button>' +
    '</div>' +
    (registro.estado === 'pendiente'
-    ? '<button id="edit-mov-confirm" style="width:100%;height:46px;border-radius:var(--r-md);background:var(--success);color:#fff;border:none;font-size:var(--fs-base);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:var(--sp-1_5)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Confirmar pago</button>'
+    // v1.3.1601: Confirmar pago usa misma height/radius que mov-submit-btn (clase fix).
+    ? '<button class="mov-submit-btn" id="edit-mov-confirm" style="width:100%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;gap:var(--sp-1_5)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Confirmar pago</button>'
     : '') +
    '</div>' +
    '</div>';
 
   document.body.appendChild(sheet);
-  // v1.3.1401 — fix flickering al abrir modal:
-  //   1. Single RAF (doble era innecesario, causaba retraso de paint)
-  //   2. Sin scrollIntoView smooth durante la animación del panel (animaciones competían)
-  //   3. focus() exactamente al final de la animación CSS (320ms), no dispersos
-  requestAnimationFrame(function() { sheet.classList.add('open'); });
+  // v1.3.1601: doble RAF + force reflow para que la transform inicial translateY(100%)
+  //   se aplique ANTES de añadir .open. Sin esto, en WebView Android a veces el
+  //   primer paint ya muestra el sheet sin animar -> flickering.
+  //   Force reflow vía offsetHeight read.
+  var _panel = sheet.querySelector('.mov-sheet-panel');
+  if (_panel) { void _panel.offsetHeight; }
+  requestAnimationFrame(function() {
+   requestAnimationFrame(function() {
+    sheet.classList.add('open');
+   });
+  });
   setTimeout(function() {
    var inp = document.getElementById('edit-mov-input');
    if (inp) inp.focus();
-  }, 320);
+  }, 340);
 
   // Cerrar overlay
   sheet.addEventListener('click', function(e) {
@@ -34626,7 +34680,11 @@ function _openEditMovimientoSheet(id, src) {
    if (!nuevoImporte || nuevoImporte <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
 
    var _transferId = registro.transferId || null;
-   var _fechaISO = new Date(nuevaFecha+'T12:00:00').toISOString();
+   // v1.3.1601: input es datetime-local (YYYY-MM-DDTHH:MM). new Date() lo parsea
+   //   directo en zona local. Si por compat algún registro old llega solo con
+   //   fecha YYYY-MM-DD -> añadir T12:00 antes de parsear.
+   var _dtParse = nuevaFecha.length === 10 ? (nuevaFecha + 'T12:00') : nuevaFecha;
+   var _fechaISO = new Date(_dtParse).toISOString();
 
    // ──────────────────────────────────────────────────────────────────
    // v1.3.1431 FIX PENDIENTE-AUTO en editor — recalcular estado por fecha
@@ -34639,7 +34697,8 @@ function _openEditMovimientoSheet(id, src) {
    //   estado original (no son flujo programable estándar).
    // ──────────────────────────────────────────────────────────────────
    var _hoyEdit = new Date().toISOString().slice(0,10);
-   var _esPendEdit = nuevaFecha > _hoyEdit;
+   // v1.3.1601: comparar solo parte fecha (nuevaFecha es datetime-local con hora)
+   var _esPendEdit = nuevaFecha.slice(0,10) > _hoyEdit;
    var _esTransfer = !!_transferId || (registro.metaTipo === 'transfer') || (registro.tipo === 'transferencia');
    var _esAjuste = (registro.metaTipo === 'ajuste') || (registro.tipo === 'ajuste');
    var _recalcularEstado = !_esTransfer && !_esAjuste;
@@ -34650,7 +34709,8 @@ function _openEditMovimientoSheet(id, src) {
    if (src === 'gasto') {
     var gastos = State.get.gastosOp().map(function(g) {
      if (g.id !== id) return g;
-     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha, notas: nuevasNotas, estado: _estadoEdit });
+     // v1.3.1601: fechaPago siempre YYYY-MM-DD (compat con código legacy que la lee así)
+     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha.slice(0,10), notas: nuevasNotas, estado: _estadoEdit });
     });
     State.set.setGastos(gastos);
     // Cascade: gemelo en ingresosFin con mismo transferId (importe + fecha + notas)
@@ -34837,6 +34897,10 @@ function _openEditMovimientoSheet(id, src) {
   var cuentaA = cuentaAEl ? cuentaAEl.value : '';
   var cuentaB = cuentaBEl ? cuentaBEl.value : '';
   var fecha = fechaEl ? fechaEl.value : new Date().toISOString().slice(0,10);
+  // v1.3.1601 SPEC L5.3-mini: leer hora desde hidden mov-hora (sincronizada con
+  //   input mds-hora del sheet "Tipo de movimiento"). Default 12:00 compat legacy.
+  var _horaEl = document.getElementById('mov-hora');
+  var _horaStr = (_horaEl && _horaEl.value && /^\d{2}:\d{2}/.test(_horaEl.value)) ? _horaEl.value.slice(0,5) : '12:00';
   var concepto = conceptoEl ? conceptoEl.value.trim() : '';
 
   // Subtipo activo — sheet legacy o fullscreen (window._movFsSubtipo)
@@ -34888,7 +34952,7 @@ function _openEditMovimientoSheet(id, src) {
      categoria: 'Otros',
      importe: importe,
      mensualEq: mensualEq,
-     fecha: new Date(fecha + 'T12:00:00').toISOString(),
+     fecha: new Date(fecha + 'T' + _horaStr + ':00').toISOString(),
      fechaPago: fecha,
      cuentaId: cuentaA,
      recurrente: recurrente,
@@ -34901,7 +34965,7 @@ function _openEditMovimientoSheet(id, src) {
 
   } else if (_movTipo === 'ingreso') {
    var _mIT = (_movSheet && typeof _movSheet._ingresoTipo === 'function') ? _movSheet._ingresoTipo() : (window._movFsIngresoTipo || 'normal');
-   var fechaISO = new Date(fecha + 'T12:00:00').toISOString();
+   var fechaISO = new Date(fecha + 'T' + _horaStr + ':00').toISOString();
    // v1.3.1001 Fase 3: pendientes NO mutan saldo
    if (cuentaA && _mIT !== 'caja' && !_esPendiente) {
     var cI = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
@@ -34951,7 +35015,7 @@ function _openEditMovimientoSheet(id, src) {
    // El motor reconoce la pareja vía transferId → cascade save/delete + exclusión KPIs.
    // tipo:'transferencia' conservado por retrocompat (detección dual _isTransfer).
    var _transferId = 'tr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-   var _fechaISO = new Date(fecha + 'T12:00:00').toISOString();
+   var _fechaISO = new Date(fecha + 'T' + _horaStr + ':00').toISOString();
    // v1.3.1489: transferencia ahora respeta Único/Recurrente (subtipo unificado)
    var _trFrec = recurrente ? (recurN + '_' + recurUnit) : 'unico';
    var _trMens = recurrente ? mensualEq : importe;
