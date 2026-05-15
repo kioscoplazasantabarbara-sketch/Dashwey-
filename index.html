@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1608";
+ var CURRENT_CACHE = "dashwey-v1-3-1609";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1608</title>
+<title>Dashwey v1.3.1609</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21471,7 +21471,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1608';
+ const _APP_VERSION = 'v1.3.1609';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -63278,61 +63278,70 @@ if (typeof State !== 'undefined') window.State = State;
 else if (window.App?.State) window.State = window.App.State;
 if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
 else if (window.App?.DashweyBus) window.DashweyBus = window.App.DashweyBus;
-// v1.3.1607 FIX KpiSheet: namespace window._DashweyData expone funciones de datos
-//   resueltas desde el scope del script principal (donde KPI, FinEngine, State
-//   son accesibles). Los helpers en scripts separados consumen este namespace.
-//   v1606 expuso window.KPI/FinEngine directamente pero no funcionaba en todos
-//   los scopes — un namespace centralizado es más robusto.
-// v1.3.1608 DIAGNOSTIC: expose APIs con logging que delata error real
+// v1.3.1609 FIX DEFINITIVO KpiSheet:
+//   ROOT CAUSE encontrado: el script principal tiene 'use strict' en línea 14757.
+//   En strict mode, declaraciones const/let top-level NO se exponen como window.X.
+//   Por eso `typeof KPI === 'undefined'` desde dentro de funciones de objeto,
+//   aunque KPI esté declarado en el mismo script.
+//   FIX: exponer KPI/FinEngine explícitamente como window.X (igual que State).
+//   Luego, dentro del namespace, usar window.X (no X directo) para acceder.
+if (typeof KPI !== 'undefined') window.KPI = KPI;
+if (typeof FinEngine !== 'undefined') window.FinEngine = FinEngine;
+console.info('[Dashwey/Data] v1609 expose pre-namespace:', {
+ KPI_expuesto: typeof window.KPI,
+ FinEngine_expuesto: typeof window.FinEngine,
+ State_expuesto: typeof window.State
+});
+
 window._DashweyData = {
  _diag: function() {
   return {
-   typeofKPI: typeof KPI,
-   typeofFinEngine: typeof FinEngine,
-   typeofState: typeof State,
-   hasKpiVentas: (typeof KPI !== 'undefined' && KPI && typeof KPI.ventasEnPeriodo === 'function'),
-   hasFinSnapshot: (typeof FinEngine !== 'undefined' && FinEngine && typeof FinEngine.snapshot === 'function')
+   windowKPI: typeof window.KPI,
+   windowFinEngine: typeof window.FinEngine,
+   windowState: typeof window.State,
+   hasKpiVentas: !!(window.KPI && typeof window.KPI.ventasEnPeriodo === 'function'),
+   hasFinSnapshot: !!(window.FinEngine && typeof window.FinEngine.snapshot === 'function')
   };
  },
  getPeriod: function() {
   try {
-   if (typeof State === 'undefined' || !State.get || !State.get.period) {
-    console.warn('[DashweyData/getPeriod] State no disponible. typeof=', typeof State);
+   if (!window.State || !window.State.get || !window.State.get.period) {
+    console.warn('[DashweyData/getPeriod] window.State no disponible');
     return { type:'month', offset:0 };
    }
-   return State.get.period();
+   return window.State.get.period();
   }
   catch(e) { console.error('[DashweyData/getPeriod] error:', e); return { type:'month', offset:0 }; }
  },
  getSnapshot: function(period) {
   try {
-   if (typeof FinEngine === 'undefined') {
-    console.error('[DashweyData/getSnapshot] FinEngine UNDEFINED en este scope!');
+   if (!window.FinEngine) {
+    console.error('[DashweyData/getSnapshot] window.FinEngine UNDEFINED');
     return null;
    }
-   if (!FinEngine.snapshot) {
-    console.error('[DashweyData/getSnapshot] FinEngine.snapshot no existe. keys:', Object.keys(FinEngine));
+   if (!window.FinEngine.snapshot) {
+    console.error('[DashweyData/getSnapshot] window.FinEngine.snapshot no existe');
     return null;
    }
-   var snap = FinEngine.snapshot(period);
-   if (!snap) console.warn('[DashweyData/getSnapshot] snapshot() devolvió null/undefined');
+   var snap = window.FinEngine.snapshot(period);
+   if (!snap) console.warn('[DashweyData/getSnapshot] devolvió null');
    return snap;
   } catch(e) {
-   console.error('[DashweyData/getSnapshot] EXCEPTION:', e && e.message, e && e.stack);
+   console.error('[DashweyData/getSnapshot] EXCEPTION:', e && e.message);
    return null;
   }
  },
  getVentasEnPeriodo: function(period) {
   try {
-   if (typeof KPI === 'undefined') {
-    console.error('[DashweyData/getVentas] KPI UNDEFINED en este scope!');
+   if (!window.KPI) {
+    console.error('[DashweyData/getVentas] window.KPI UNDEFINED');
     return [];
    }
-   if (!KPI.ventasEnPeriodo) {
-    console.error('[DashweyData/getVentas] KPI.ventasEnPeriodo no existe');
+   if (!window.KPI.ventasEnPeriodo) {
+    console.error('[DashweyData/getVentas] window.KPI.ventasEnPeriodo no existe');
     return [];
    }
-   return KPI.ventasEnPeriodo(period) || [];
+   return window.KPI.ventasEnPeriodo(period) || [];
   } catch(e) {
    console.error('[DashweyData/getVentas] EXCEPTION:', e && e.message);
    return [];
@@ -63340,23 +63349,23 @@ window._DashweyData = {
  },
  getBeneficioNeto: function(period) {
   try {
-   if (typeof KPI === 'undefined' || !KPI.getBeneficioNeto) {
-    console.error('[DashweyData/getBeneficio] KPI.getBeneficioNeto no accesible');
+   if (!window.KPI || !window.KPI.getBeneficioNeto) {
+    console.error('[DashweyData/getBeneficio] window.KPI.getBeneficioNeto no accesible');
     return {};
    }
-   return KPI.getBeneficioNeto(period) || {};
+   return window.KPI.getBeneficioNeto(period) || {};
   } catch(e) {
    console.error('[DashweyData/getBeneficio] EXCEPTION:', e && e.message);
    return {};
   }
  },
  getProductos: function() {
-  try { return (typeof State !== 'undefined' && State.get && State.get.productos) ? (State.get.productos() || []) : []; }
+  try { return (window.State && window.State.get && window.State.get.productos) ? (window.State.get.productos() || []) : []; }
   catch(_) { return []; }
  }
 };
 // Diagnóstico inmediato al cargar
-console.info('[Dashwey/Data] v1608 expuesto. Diagnóstico:', window._DashweyData._diag());
+console.info('[Dashwey/Data] v1609 expuesto. Diagnóstico:', window._DashweyData._diag());
 // ──────────────────────────────────────────────────────────────────────
 
 /* Splash controller moved to inline script before App script */
