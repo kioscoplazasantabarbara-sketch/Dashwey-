@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1620";
+ var CURRENT_CACHE = "dashwey-v1-3-1621";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1620</title>
+<title>Dashwey v1.3.1621</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13555,6 +13555,84 @@ window._dashweyCircuitReset = function() {
  return { ok: true };
 };
 
+// ──────────────────────────────────────────────────────────────────
+// v1.3.1621 — COMPRESIÓN OBLIGATORIA DE IMÁGENES
+// ──────────────────────────────────────────────────────────────────
+// Origen: incidente 17-18 may 2026 (loop infinito writes Firestore).
+// 40 productos con foto base64 inline pesaban 3.52 MB → payload 3.97 MB
+// → Firestore límite 1 MB → invalid-argument → loop reintentos.
+//
+// REGLA DURA: TODA imagen subida (producto, proveedor, banner, perfil)
+// DEBE pasar por _DashweyCompressImage antes de ir a State. Sin excepciones.
+//
+// La compresión es iterativa: intenta cumplir targetKB bajando dimensión
+// y calidad. Garantiza que ninguna foto subida rompa sync nunca más.
+//
+// PRESETS POR TIPO:
+//   productoFoto:    400px max,  q=0.7,  target 30KB
+//   proveedorFoto:   200px max,  q=0.75, target 15KB (avatar pequeño)
+//   proveedorBanner: 800px max,  q=0.75, target 50KB
+//   perfilUser:      300px max,  q=0.75, target 25KB
+// ──────────────────────────────────────────────────────────────────
+window._DASHWEY_PHOTO_PRESETS = {
+ productoFoto:    { maxDim: 400, quality: 0.7,  targetKB: 30 },
+ proveedorFoto:   { maxDim: 200, quality: 0.75, targetKB: 15 },
+ proveedorBanner: { maxDim: 800, quality: 0.75, targetKB: 50 },
+ perfilUser:      { maxDim: 300, quality: 0.75, targetKB: 25 }
+};
+
+window._DashweyCompressImage = function(input, opts) {
+ opts = opts || {};
+ var maxDim   = opts.maxDim   || 400;
+ var quality  = opts.quality  || 0.7;
+ var targetKB = opts.targetKB || 40;
+
+ return new Promise(function(resolve, reject){
+  function _doCompress(b64){
+   var img = new Image();
+   img.onload = function(){
+    var ow = img.width, oh = img.height;
+    var dim = maxDim;
+    var q = quality;
+    var out = null;
+    // Iterar hasta cumplir target o agotar 4 intentos
+    for (var i = 0; i < 4; i++){
+     var ratio = ow > oh ? dim / ow : dim / oh;
+     if (ratio >= 1) ratio = 1;
+     var rw = Math.max(1, Math.round(ow * ratio));
+     var rh = Math.max(1, Math.round(oh * ratio));
+     var canvas = document.createElement('canvas');
+     canvas.width = rw; canvas.height = rh;
+     var ctx = canvas.getContext('2d');
+     ctx.drawImage(img, 0, 0, rw, rh);
+     try { out = canvas.toDataURL('image/jpeg', q); }
+     catch(e){ return reject(e); }
+     if (out.length / 1024 <= targetKB) break;
+     // Próxima iteración más agresiva
+     dim = Math.round(dim * 0.8);
+     q = Math.max(q - 0.1, 0.5);
+    }
+    if (!out) return reject(new Error('Compression failed'));
+    resolve(out);
+   };
+   img.onerror = function(){ reject(new Error('Image load fail')); };
+   img.src = b64;
+  }
+
+  if (typeof input === 'string') {
+   _doCompress(input);
+  } else if (input instanceof File || input instanceof Blob) {
+   var r = new FileReader();
+   r.onload = function(e){ _doCompress(e.target.result); };
+   r.onerror = function(){ reject(new Error('FileReader fail')); };
+   r.readAsDataURL(input);
+  } else {
+   reject(new Error('Input must be base64 string or File/Blob'));
+  }
+ });
+};
+console.info('[Dashwey/v1621] _DashweyCompressImage helper instalado');
+
 
 // ── v1.3.1469 LOTE C · TIMERS MANAGER (expandido) ──────────────────
 // Sistema de inventario + pausa-on-hidden para timers no críticos.
@@ -15484,6 +15562,43 @@ const State = (() => {
        if (_ns <= 900 * 1024) break;
       } catch(_) { break; }
      }
+    }
+    // v1.3.1621 GUARD ANTI-LOOP HARDENING — tras limpieza, si sigue >900KB,
+    // ABORTAR + circuit breaker 1h. Sin esto, código entraba en loop infinito
+    // reintentando un payload que Firestore siempre rechazaría (incidente 17 may
+    // 2026: 40 productos con fotos base64 inline → 3.97 MB → loop 22min).
+    let _finalSize = 0;
+    try { _finalSize = JSON.stringify(rootPayload).length; } catch(_) {}
+    if (_finalSize > 900 * 1024) {
+     // Identificar campo más pesado para diagnóstico
+     let _biggestKey = '?', _biggestSize = 0;
+     try {
+      for (const _k of Object.keys(rootPayload)) {
+       const _s = JSON.stringify(rootPayload[_k]).length;
+       if (_s > _biggestSize) { _biggestSize = _s; _biggestKey = _k; }
+      }
+     } catch(_) {}
+     console.error('[Dashwey/FB] PAYLOAD OVERFLOW — ' + (_finalSize/1024).toFixed(0) +
+                   'KB tras limpieza. Campo más pesado: ' + _biggestKey +
+                   ' (' + (_biggestSize/1024).toFixed(0) + ' KB). ABORTANDO write (anti-loop).');
+     // Circuit breaker 1 hora — bloquea TODOS los writes futuros
+     window._DashweyResourceExhaustedUntil = Date.now() + 60 * 60 * 1000;
+     // Telemetría
+     window._DashweyOverflowCount = (window._DashweyOverflowCount || 0) + 1;
+     try { localStorage.setItem('dashwey_overflow_count', String(window._DashweyOverflowCount)); } catch(_) {}
+     try { localStorage.setItem('dashwey_overflow_last', JSON.stringify({
+      ts: Date.now(), sizeKB: Math.round(_finalSize/1024),
+      biggestKey: _biggestKey, biggestKB: Math.round(_biggestSize/1024)
+     })); } catch(_) {}
+     // Toast al usuario
+     try {
+      if (typeof showToast === 'function') {
+       showToast('⚠️ Sync pausada — datos demasiado pesados. Revisar fotos.', 'warning', 8000);
+      }
+     } catch(_) {}
+     // Limpiar dirty para evitar reintentos
+     try { window._DashweyDirty = false; } catch(_) {}
+     return false; // abort, no retry
     }
    }
    // v1.3.1141: marcar __dualBypass por defensa en profundidad (root guard no reentrante)
@@ -21755,7 +21870,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1620';
+ const _APP_VERSION = 'v1.3.1621';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -52726,14 +52841,31 @@ function _parseIva(iva) {
 
  function _eaLoadPhoto(inp) {
  const file = inp.files?.[0]; if (!file) return;
- const reader = new FileReader();
- reader.onload = ev => {
- _editPhoto = ev.target.result;
- const prev = document.getElementById('ea-photo-prev');
- if (prev) prev.innerHTML =
- '<img src="' + _editPhoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-md)">';
- };
- reader.readAsDataURL(file);
+ // v1.3.1621 COMPRESIÓN OBLIGATORIA — antes guardaba raw base64,
+ // permitía fotos de 600KB+ que rompían sync (incidente 17 may 2026)
+ if (typeof window._DashweyCompressImage === 'function') {
+  window._DashweyCompressImage(file, window._DASHWEY_PHOTO_PRESETS.productoFoto)
+   .then(function(compressed){
+    _editPhoto = compressed;
+    const prev = document.getElementById('ea-photo-prev');
+    if (prev) prev.innerHTML =
+     '<img src="' + _editPhoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-md)">';
+   })
+   .catch(function(e){
+    console.warn('[ea-photo] compresión falló:', e && e.message);
+    try { showToast('⚠️ No se pudo procesar la imagen', 'warning'); } catch(_) {}
+   });
+ } else {
+  // Fallback ultra-defensivo si helper no cargó
+  const reader = new FileReader();
+  reader.onload = ev => {
+   _editPhoto = ev.target.result;
+   const prev = document.getElementById('ea-photo-prev');
+   if (prev) prev.innerHTML =
+    '<img src="' + _editPhoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-md)">';
+  };
+  reader.readAsDataURL(file);
+ }
  }
 
  function _eaRecalc() {
@@ -54428,22 +54560,40 @@ function _parseIva(iva) {
  function _loadProvBanner(provId, input) {
  const file = input.files[0];
  if (!file) return;
- // v1.3.427: validar tamano maximo 2MB
+ // v1.3.427: validar tamano maximo 2MB (archivo de entrada)
  if (file.size > 2 * 1024 * 1024) {
  showToast('⚠️ Imagen demasiado grande (max 2MB)', 'warning');
  return;
  }
- const reader = new FileReader();
- reader.onload = function(e) {
- State.set.updateProv(provId, { banner: e.target.result });
- // Actualizar preview en el formulario
- const preview = document.getElementById('pe-banner-preview');
- if (preview) {
- preview.innerHTML = '<img src="'+e.target.result+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
+ // v1.3.1621 COMPRESIÓN OBLIGATORIA — antes guardaba raw, podía meter 2MB
+ // en state. Ahora pasa por helper, queda ~50KB JPEG.
+ if (typeof window._DashweyCompressImage === 'function') {
+  window._DashweyCompressImage(file, window._DASHWEY_PHOTO_PRESETS.proveedorBanner)
+   .then(function(compressed){
+    State.set.updateProv(provId, { banner: compressed });
+    const preview = document.getElementById('pe-banner-preview');
+    if (preview) {
+     preview.innerHTML = '<img src="'+compressed+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
+    }
+    showToast('✅ Banner actualizado', 'success');
+   })
+   .catch(function(e){
+    console.warn('[banner-prov] compresión falló:', e && e.message);
+    showToast('⚠️ No se pudo procesar la imagen', 'warning');
+   });
+ } else {
+  // Fallback defensivo
+  const reader = new FileReader();
+  reader.onload = function(e) {
+   State.set.updateProv(provId, { banner: e.target.result });
+   const preview = document.getElementById('pe-banner-preview');
+   if (preview) {
+    preview.innerHTML = '<img src="'+e.target.result+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
+   }
+   showToast('✅ Banner actualizado', 'success');
+  };
+  reader.readAsDataURL(file);
  }
- showToast('✅ Banner actualizado', 'success');
- };
- reader.readAsDataURL(file);
  }
 
  // v1.3.427: limpiar proveedor pendiente si el usuario cancela sin guardar
@@ -62216,6 +62366,102 @@ _eaRecalc();
  window._DashweyOnLocalWrite = () => {};
  // Marcar sync inicial completado (permite writes a Firebase)
  window._DashweyInitialSyncDone = true;
+
+ // v1.3.1621 — MIGRACIÓN RUNTIME DE FOTOS PESADAS (idempotente).
+ // Si detecta fotos legacy >50KB en productos o proveedores, las comprime
+ // con el helper estándar. Se ejecuta UNA SOLA VEZ (flag en localStorage).
+ // Fire-and-forget: no bloquea sync, corre en background.
+ setTimeout(function(){
+  try {
+   if (localStorage.getItem('dashwey_photo_migration_v1') === 'done') return;
+   if (typeof window._DashweyCompressImage !== 'function') return;
+
+   var _S = window.App && window.App.State;
+   if (!_S || !_S.get) return;
+
+   var changed = 0;
+   var tasks = [];
+
+   // PRODUCTOS — comprimir cualquier foto >50KB
+   try {
+    var prods = (_S.raw && _S.raw.productos) ? _S.raw.productos() : _S.get.productos();
+    for (var i = 0; i < prods.length; i++){
+     var p = prods[i];
+     if (!p || !p.foto || typeof p.foto !== 'string') continue;
+     if (p.foto.indexOf('data:image') !== 0) continue;
+     if (p.foto.length <= 50 * 1024) continue;
+     (function(prod){
+      tasks.push(
+       window._DashweyCompressImage(prod.foto, window._DASHWEY_PHOTO_PRESETS.productoFoto)
+        .then(function(nueva){ prod.foto = nueva; changed++; })
+        .catch(function(e){ console.warn('[migrate-foto] producto', prod.id, e && e.message); })
+      );
+     })(p);
+    }
+   } catch(_) {}
+
+   // PROVEEDORES — foto + banner
+   try {
+    var provs = (_S.raw && _S.raw.proveedores) ? _S.raw.proveedores() : _S.get.proveedores();
+    for (var j = 0; j < provs.length; j++){
+     var pr = provs[j];
+     if (!pr) continue;
+     if (pr.foto && typeof pr.foto === 'string' && pr.foto.indexOf('data:image') === 0 && pr.foto.length > 50 * 1024){
+      (function(prov){
+       tasks.push(
+        window._DashweyCompressImage(prov.foto, window._DASHWEY_PHOTO_PRESETS.proveedorFoto)
+         .then(function(nueva){ prov.foto = nueva; changed++; })
+         .catch(function(e){ console.warn('[migrate-foto] prov foto', prov.id, e && e.message); })
+       );
+      })(pr);
+     }
+     if (pr.banner && typeof pr.banner === 'string' && pr.banner.indexOf('data:image') === 0 && pr.banner.length > 80 * 1024){
+      (function(prov){
+       tasks.push(
+        window._DashweyCompressImage(prov.banner, window._DASHWEY_PHOTO_PRESETS.proveedorBanner)
+         .then(function(nueva){ prov.banner = nueva; changed++; })
+         .catch(function(e){ console.warn('[migrate-foto] prov banner', prov.id, e && e.message); })
+       );
+      })(pr);
+     }
+    }
+   } catch(_) {}
+
+   if (tasks.length === 0) {
+    localStorage.setItem('dashwey_photo_migration_v1', 'done');
+    return;
+   }
+
+   Promise.all(tasks).then(function(){
+    if (changed > 0){
+     console.info('[Dashwey/v1621] ' + changed + ' fotos comprimidas (migración runtime)');
+     try { window._DashweyDirty = true; } catch(_) {}
+     try {
+      if (typeof save === 'function') save();
+      else if (window.App && window.App.State && window.App.State.save) window.App.State.save();
+     } catch(_) {}
+    }
+    localStorage.setItem('dashwey_photo_migration_v1', 'done');
+   });
+  } catch(e){
+   console.warn('[Dashwey/v1621] migración fotos error:', e && e.message);
+  }
+ }, 5000); // 5s post initial sync — no compite con boot
+
+ // v1.3.1621 — CHEQUEO BACKLOG CIERRES (BUG-DATOS-004 15 may).
+ // Cierre puede quedar congelado si ventas Loyverse llegaron tarde tras cierre.
+ // Ejecutar reconciliación retroactiva últimos 3 días al boot. Idempotente.
+ setTimeout(function(){
+  try {
+   if (typeof window._DashweyAutoCierreCheckBacklog === 'function') {
+    window._DashweyAutoCierreCheckBacklog(3);
+    console.info('[Dashwey/v1621] cierre backlog check ejecutado (3 días)');
+   }
+  } catch(e){
+   console.warn('[Dashwey/v1621] cierre backlog error:', e && e.message);
+  }
+ }, 8000); // 8s post initial sync — tras Loyverse sync inicial
+
  // v1.3.1567 LOTE TELEMETRY · fin flow normal initial sync
  try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_done'); } catch(_) {}
  // v1.3.1438: notificar a UI reactiva (sd-status badge en Ajustes)
