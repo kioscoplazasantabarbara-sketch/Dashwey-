@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1622";
+ var CURRENT_CACHE = "dashwey-v1-3-1623";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1622</title>
+<title>Dashwey v1.3.1623</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21870,7 +21870,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1622';
+ const _APP_VERSION = 'v1.3.1623';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -36497,6 +36497,13 @@ function _openEditMovimientoSheet(id, src) {
   try { ventas = (KPI && KPI.ventasEnPeriodo) ? (KPI.ventasEnPeriodo(period) || []) : []; } catch(_) {}
 
   // Cálculo ingresos brutos, COGS, margen
+  // v1.3.1623 BUG-KPI-2 FIX: antes calculaba cst = precioCompra * qty, pero precioCompra
+  //   en Dashwey es el coste del BULTO entero (caja), no por unidad. Para vender 1 chuche
+  //   suelta no se gastan 5 EUR (precio caja 100uds) sino 0,05 EUR. El sheet mostraba COGS
+  //   100x inflado (ej. 174,30 EUR en lugar de ~59 EUR coherente con Beneficio Neto).
+  //   Fix: prioridad de coste correcta -- (1) it.coste si la venta lo guardó al crear,
+  //   (2) precioCompra / udscaja como fallback prorrateado, (3) 0 si no hay datos.
+  //   Misma jerarquía que ventaCoste() en FinEngine -> coherencia con Beneficio Neto.
   var ingresosBrutos = 0, costeTotal = 0;
   var prodMap = {};
   prods.forEach(function(p){ if (p && p.id) prodMap[p.id] = p; });
@@ -36508,9 +36515,16 @@ function _openEditMovimientoSheet(id, src) {
     var p = prodMap[pid];
     var pvp = it.pvp || (p && p.precioVenta) || 0;
     var qty = it.qty || 0;
-    var pc = (p && p.precioCompra) || 0;
+    // Coste unitario REAL prorrateado (no precio del bulto)
+    var costeUnit = 0;
+    if (it.coste != null && it.coste > 0) {
+     costeUnit = it.coste; // ya prorrateado al crear la venta
+    } else if (p && p.precioCompra > 0) {
+     var uds = (p.udscaja && p.udscaja > 0) ? p.udscaja : 1;
+     costeUnit = p.precioCompra / uds;
+    }
     var ingr = pvp * qty;
-    var cst = pc * qty;
+    var cst = costeUnit * qty;
     ingresosBrutos += ingr;
     costeTotal += cst;
     if (!perProd[pid]) perProd[pid] = { uds: 0, ingresos: 0, coste: 0, nombre: (p && p.nombre) || '—' };
@@ -36889,8 +36903,21 @@ function _openEditMovimientoSheet(id, src) {
    if (snap) {
     rw = snap.runway;
     saldo = snap.saldo || 0;
-    gastoMes = snap.gastoMensual || 0;
    }
+   // v1.3.1623 BUG-KPI-1 FIX: el sheet mostraba snap.gastoMensual (= gastoMensualTotal,
+   //   suma TODOS los gastos como equivalente mensual SIN filtrar por fecha) mientras que
+   //   runway() internamente usa gastoGlobalPeriodo(mesActualRange()) — denominador
+   //   distinto al numerador mostrado. Resultado visible: "207.392 EUR/mes" vs runway "15,1m"
+   //   incoherente (saldo/207.392 = 0,23m, no 15,1m).
+   //   Fix: reconstruir gastoMes desde la MISMA fuente que runway() para coherencia.
+   try {
+    if (rw !== null && rw !== undefined && rw > 0 && saldo > 0) {
+     // gastoMes real = saldo / rw (despeje exacto de la formula runway = saldo/gastoMes)
+     gastoMes = saldo / rw;
+    } else if (FinEngine.gastoGlobalPeriodo && FinEngine.mesActualRange) {
+     gastoMes = FinEngine.gastoGlobalPeriodo(FinEngine.mesActualRange()) || 0;
+    }
+   } catch(_) {}
   } catch(_) {}
 
   var heroColor, heroValue, heroExplain;
@@ -36898,6 +36925,10 @@ function _openEditMovimientoSheet(id, src) {
    heroColor = 'var(--ink-soft)';
    heroValue = '—';
    heroExplain = 'Necesitas saldo positivo y gastos registrados para calcular el runway.';
+  } else if (rw >= 12) {
+   heroColor = 'var(--success)';
+   heroValue = rw.toFixed(1).replace('.',',') + 'm';
+   heroExplain = 'Saldo muy holgado: cubre más de un año al ritmo actual.';
   } else if (rw >= 6) {
    heroColor = 'var(--success)';
    heroValue = rw.toFixed(1).replace('.',',') + 'm';
@@ -40259,7 +40290,16 @@ function _confirmBorrarCuenta(id) {
  var _fcRangePhr = (function(){ try { return KPI.getRange(period); } catch(_){ return null; } })();
  var gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangePhr) : 0;
- var gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){ return window._isKpiVisible ? window._isKpiVisible(g) : (!window._isTransfer || !window._isTransfer(g)); }) : [];
+ // v1.3.1623 BUG-KPI-3 FIX: el insight "Mayor gasto" mostraba a veces ingresos legacy
+ //   (ej. "Ingreso Trimestral 2102 EUR") porque filtraba solo _isKpiVisible sin validar
+ //   tipo ni signo. gastosOp puede contener movimientos mixtos por importacion historica.
+ //   Fix: excluir items con tipo='ingreso' explicito o importe<=0 (gastos siempre positivos).
+ var gastos = State.get.gastosOp ? (State.get.gastosOp() || []).filter(function(g){
+  if (!g) return false;
+  if (g.tipo === 'ingreso') return false; // proteccion: nunca contar ingresos como gasto
+  if ((g.importe || 0) <= 0) return false; // gastos validos tienen importe positivo
+  return window._isKpiVisible ? window._isKpiVisible(g) : (!window._isTransfer || !window._isTransfer(g));
+ }) : [];
  var gasMax = gastos.slice().sort(function(a,b){return (b.importe||0)-(a.importe||0);})[0]||null;
  var ingresos= (State.get.ingresosFin&&State.get.ingresosFin()||[]).filter(function(i){ return window._isKpiVisible ? window._isKpiVisible(i) : (!window._isTransfer || !window._isTransfer(i)); });
  var ingTotal= ingresos.reduce(function(s,i){return s+(i.importe||0);},0);
