@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1623";
+ var CURRENT_CACHE = "dashwey-v1-3-1624";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1623</title>
+<title>Dashwey v1.3.1624</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21870,7 +21870,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1623';
+ const _APP_VERSION = 'v1.3.1624';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -36497,7 +36497,7 @@ function _openEditMovimientoSheet(id, src) {
   try { ventas = (KPI && KPI.ventasEnPeriodo) ? (KPI.ventasEnPeriodo(period) || []) : []; } catch(_) {}
 
   // Cálculo ingresos brutos, COGS, margen
-  // v1.3.1623 BUG-KPI-2 FIX: antes calculaba cst = precioCompra * qty, pero precioCompra
+  // v1.3.1624 BUG-KPI-2 FIX: antes calculaba cst = precioCompra * qty, pero precioCompra
   //   en Dashwey es el coste del BULTO entero (caja), no por unidad. Para vender 1 chuche
   //   suelta no se gastan 5 EUR (precio caja 100uds) sino 0,05 EUR. El sheet mostraba COGS
   //   100x inflado (ej. 174,30 EUR en lugar de ~59 EUR coherente con Beneficio Neto).
@@ -36748,6 +36748,12 @@ function _openEditMovimientoSheet(id, src) {
  // 4+5) INGRESOS / GASTOS FC — modal compartido Flujo Caja
  // ══════════════════════════════════════════════════════════════════════
  function _fcAggregateMovements(type, range) {
+  // v1.3.1624 BUG-KPI-4 FIX: el sheet "Ingresos" solo agregaba ingresosFin (manuales)
+  //   y excluia ventas TPV/Loyverse, mostrando "0 EUR" mientras Dashboard mostraba
+  //   42 EUR ventas mismo dia. Inconsistente: misma pantalla, mismo periodo, mismo concepto
+  //   "Ingresos" -> dos totales distintos. Decision producto (Hung): mostrar TOTAL real
+  //   = ventas + ingresos manuales (coherente con FinEngine.revenue()).
+  //   Para gastos: sin cambio (gastosOp sigue siendo la fuente correcta).
   var arr = type === 'ingresos'
    ? (State.get.ingresosFin ? (State.get.ingresosFin() || []) : [])
    : (State.get.gastosOp ? (State.get.gastosOp() || []) : []);
@@ -36756,10 +36762,47 @@ function _openEditMovimientoSheet(id, src) {
    try { if (typeof _matchesScope === 'function' && !_matchesScope(m)) return false; } catch(_){}
    if (m.tipo === 'transfer' || m.tipo === 'ajuste') return false;
    if (m.estado === 'pendiente') return false;
+   // v1.3.1624: para 'ingresos' excluir auto-creados desde Loyverse/TPV (doble conteo).
+   //   Misma logica que FinEngine.revenue() linea ~19008.
+   if (type === 'ingresos') {
+    if (m.tipo === 'reembolso_proveedor') return false;
+    if (m.origen === 'loyverse' || m.origen === 'tpv' || m.origen === 'cierre_caja_auto') return false;
+   }
    var d = new Date(m.fecha);
    return range && d >= range.start && d < range.end;
   });
-  var total = inPeriod.reduce(function(s, m){ return s + (m.importe || 0); }, 0);
+
+  // v1.3.1624: ventas TPV/Loyverse del periodo (solo lado 'ingresos')
+  var ventasItems = [];
+  var totalVentas = 0;
+  if (type === 'ingresos') {
+   try {
+    var ventasArr = State.get.ventas ? (State.get.ventas() || []) : [];
+    ventasArr.forEach(function(v){
+     if (!v || v.deleted) return;
+     try { if (typeof _isKpiVisible === 'function' && !_isKpiVisible(v)) return; } catch(_){}
+     var d = new Date(v.fecha);
+     if (!range || d < range.start || d >= range.end) return;
+     var imp = (typeof FinEngine !== 'undefined' && FinEngine.ventaIngresos)
+      ? FinEngine.ventaIngresos(v)
+      : (v.total || 0);
+     if (imp <= 0) return;
+     totalVentas += imp;
+     // Item sintetico compatible con _renderLastMovs (espera descripcion, fecha, importe)
+     ventasItems.push({
+      id: v.id,
+      descripcion: 'Venta ' + (v.origen === 'loyverse' ? 'Loyverse' : 'TPV'),
+      categoria: 'Ventas',
+      tipo: 'venta',
+      fecha: v.fecha,
+      importe: imp,
+      _esVenta: true
+     });
+    });
+   } catch(_){}
+  }
+
+  var total = inPeriod.reduce(function(s, m){ return s + (m.importe || 0); }, 0) + totalVentas;
   var groups = {};
   var provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
   var provMap = {};
@@ -36776,6 +36819,10 @@ function _openEditMovimientoSheet(id, src) {
    }
    groups[key] = (groups[key] || 0) + (m.importe || 0);
   });
+  // v1.3.1624: ventas TPV/Loyverse como categoria propia en el desglose
+  if (type === 'ingresos' && totalVentas > 0) {
+   groups['Ventas TPV / Loyverse'] = (groups['Ventas TPV / Loyverse'] || 0) + totalVentas;
+  }
   var groupArr = Object.keys(groups).map(function(k){ return { name: k, total: groups[k] }; });
   groupArr.sort(function(a,b){ return b.total - a.total; });
   var top5 = groupArr.slice(0, 5);
@@ -36784,10 +36831,12 @@ function _openEditMovimientoSheet(id, src) {
    var restTotal = rest.reduce(function(s,g){ return s + g.total; }, 0);
    top5.push({ name: 'Resto (' + rest.length + ')', total: restTotal, isRest: true });
   }
-  var lastMovs = inPeriod.slice().sort(function(a,b){
+  // v1.3.1624: lastMovs unifica ingresosFin + ventas (ordenadas por fecha desc)
+  var todosMovs = inPeriod.concat(ventasItems);
+  var lastMovs = todosMovs.slice().sort(function(a,b){
    return new Date(b.fecha || 0) - new Date(a.fecha || 0);
   }).slice(0, 10);
-  return { total: total, groups: top5, count: inPeriod.length, lastMovs: lastMovs };
+  return { total: total, groups: top5, count: todosMovs.length, lastMovs: lastMovs };
  }
  function _fcDeltaPeriodo(type, range) {
   if (!range) return null;
@@ -36904,7 +36953,7 @@ function _openEditMovimientoSheet(id, src) {
     rw = snap.runway;
     saldo = snap.saldo || 0;
    }
-   // v1.3.1623 BUG-KPI-1 FIX: el sheet mostraba snap.gastoMensual (= gastoMensualTotal,
+   // v1.3.1624 BUG-KPI-1 FIX: el sheet mostraba snap.gastoMensual (= gastoMensualTotal,
    //   suma TODOS los gastos como equivalente mensual SIN filtrar por fecha) mientras que
    //   runway() internamente usa gastoGlobalPeriodo(mesActualRange()) — denominador
    //   distinto al numerador mostrado. Resultado visible: "207.392 EUR/mes" vs runway "15,1m"
@@ -40290,7 +40339,7 @@ function _confirmBorrarCuenta(id) {
  var _fcRangePhr = (function(){ try { return KPI.getRange(period); } catch(_){ return null; } })();
  var gasTotal = (typeof FinEngine !== 'undefined' && FinEngine.gastoGlobalPeriodo)
   ? FinEngine.gastoGlobalPeriodo(_fcRangePhr) : 0;
- // v1.3.1623 BUG-KPI-3 FIX: el insight "Mayor gasto" mostraba a veces ingresos legacy
+ // v1.3.1624 BUG-KPI-3 FIX: el insight "Mayor gasto" mostraba a veces ingresos legacy
  //   (ej. "Ingreso Trimestral 2102 EUR") porque filtraba solo _isKpiVisible sin validar
  //   tipo ni signo. gastosOp puede contener movimientos mixtos por importacion historica.
  //   Fix: excluir items con tipo='ingreso' explicito o importe<=0 (gastos siempre positivos).
