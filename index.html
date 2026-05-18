@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1633";
+ var CURRENT_CACHE = "dashwey-v1-3-1635";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1633</title>
+<title>Dashwey v1.3.1635</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11755,6 +11755,14 @@ function _authTabSafe(tab) {
  </svg>
  <span class="hdr-sync-badge is-warning" data-sanity-badge="1" aria-hidden="true">!</span>
  </button>
+ <!-- v1.3.1635: botón 🔍 abre Spotlight (overlay con buscador + autocompletado + crear nuevo) -->
+ <button class="alm-hdr-icon-btn" onclick="try{Utils.triggerHaptic('light');}catch(_){}try{window._spotlightOpen&&window._spotlightOpen();}catch(_){}" aria-label="Buscar artículo" data-tooltip="Buscar artículo"
+ style="-webkit-tap-highlight-color:transparent">
+ <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none">
+ <circle cx="11" cy="11" r="8"/>
+ <path d="m21 21-4.35-4.35"/>
+ </svg>
+ </button>
  <button class="alm-hdr-icon-btn" onclick="try{Utils.triggerHaptic('light');}catch(_){}App.ui.openSettings()" aria-label="Menú" data-tooltip="Ajustes"
  style="-webkit-tap-highlight-color:transparent">
  <svg width="20" height="20" viewBox="0 0 22 22" fill="none" style="pointer-events:none">
@@ -21722,7 +21730,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1633';
+ const _APP_VERSION = 'v1.3.1635';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29206,9 +29214,24 @@ const ui = (() => {
      razonSospecha = 'collapse_a_zero:' + saldoActual.toFixed(2) + '→0';
     }
     if (sospechoso) {
-     console.warn('[Dashwey/recalcSaldos] RESULTADO SOSPECHOSO — NO sobrescribiendo. Cuenta:', c.nombre, '·', razonSospecha, '· counts:', {
-      ventas: ventas.length, gastos: gastos.length, ingresos: ingresos.length, pedidos: pedidos.length
-     });
+     // v1.3.1635: throttle log SOSPECHOSO a 1/60s por cuenta.
+     //   Antes: spam continuo cada segundo en consola (self-heal + onSnapshot
+     //   triggers + emit listeners) cuando hay descuadre real persistente.
+     //   El warning solo aporta valor la 1ª vez tras boot; las repeticiones son
+     //   ruido. Mantenemos el guard (LAYER 2) y el flag _DashweyRecalcPending
+     //   intactos; solo silenciamos la salida de consola.
+     try {
+      if (!window._DashweyRecalcLogThrottle) window._DashweyRecalcLogThrottle = {};
+      var _now = Date.now();
+      var _key = c.id || c.nombre || 'unknown';
+      var _last = window._DashweyRecalcLogThrottle[_key] || 0;
+      if (_now - _last > 60000) {
+       console.warn('[Dashwey/recalcSaldos] RESULTADO SOSPECHOSO — NO sobrescribiendo. Cuenta:', c.nombre, '·', razonSospecha, '· counts:', {
+        ventas: ventas.length, gastos: gastos.length, ingresos: ingresos.length, pedidos: pedidos.length
+       });
+       window._DashweyRecalcLogThrottle[_key] = _now;
+      }
+     } catch(_) {}
      // Marcar pending para que se reintente cuando llegue más data
      window._DashweyRecalcPending = true;
      return; // siguiente cuenta
@@ -29242,7 +29265,15 @@ const ui = (() => {
    // Datos listos: limpiar flag y ejecutar
    window._DashweyRecalcPending = false;
    try {
-    console.info('[Dashwey/recalcSaldos] self-heal disparado tras hidratación');
+    // v1.3.1635: throttle a 1/60s — antes ruido continuo cuando descuadre persiste
+    try {
+     var _nowSh = Date.now();
+     var _lastSh = window._DashweyRecalcSelfHealLastLog || 0;
+     if (_nowSh - _lastSh > 60000) {
+      console.info('[Dashwey/recalcSaldos] self-heal disparado tras hidratación');
+      window._DashweyRecalcSelfHealLastLog = _nowSh;
+     }
+    } catch(_) {}
     _bbRecalcSaldos();
    } catch(e) { console.warn('[Dashwey/recalcSaldos] self-heal err:', e && e.message); }
   }, 1000);
@@ -41687,13 +41718,19 @@ function _confirmBorrarCuenta(id) {
     }
     if (isNaN(fp.getTime()) || fp < _hoy00Hero) return;
     var nom = (provV && provV.nombre) || v.provId || 'Proveedor';
+    // v1.3.1635: clave para detectar si este pedido ya fue marcado completado
+    //   en la agenda. Coherente con _dwyEvKey: tipo='pedido' → 'ped_' + id.
+    //   Si v no tiene .id (ciclos predichos sin id estable), fallback null →
+    //   nunca se filtra como completado (correcto, no se puede marcar predichos).
+    var _doneKeyP = (v && v.id) ? ('ped_' + v.id) : null;
     _candidatos.push({
      ts: fp.getTime(),
      icon: '🧑‍💼',
      title: 'Realizar pedido · ' + nom,
      date: fp,
      suffix: '',
-     _noHora: v._src === 'predicho' || v._src === 'pending'
+     _noHora: v._src === 'predicho' || v._src === 'pending',
+     _doneKey: _doneKeyP
     });
    });
    // Entregas próximas (allPedidos: calcular fecha entrega)
@@ -41724,13 +41761,16 @@ function _confirmBorrarCuenta(id) {
     if (!fe || isNaN(fe.getTime()) || fe < _hoy00Hero) return;
     var nom = (prov && prov.nombre) || p.provId || 'Proveedor';
     var nArts = (p.items && p.items.length) || 0;
+    // v1.3.1635: clave para "entrega completada" — tipo='entrega' → 'ent_' + id.
+    var _doneKeyE = (p && p.id) ? ('ent_' + p.id) : null;
     _candidatos.push({
      ts: fe.getTime(),
      icon: '🚚',
      title: 'Recibir entrega · ' + nom,
      date: fe,
      suffix: nArts > 0 ? (' · ' + nArts + ' arts.') : '',
-     _noHora: p._src === 'pending' // pending hora ya no es relevante, fecha del editor sin hora real
+     _noHora: p._src === 'pending', // pending hora ya no es relevante, fecha del editor sin hora real
+     _doneKey: _doneKeyE
     });
    });
    // Recordatorios próximos
@@ -41741,15 +41781,35 @@ function _confirmBorrarCuenta(id) {
     if (!r || !r.fecha) return;
     var fr = new Date(r.fecha);
     if (isNaN(fr.getTime()) || fr < _hoy00Hero) return;
+    // v1.3.1635: recordatorios marcados done (r.done=true) no aparecen en hero.
+    //   Coherente con _dwyEvIsDone: para tipo='recordatorio', si ev.recordatorio.done
+    //   → true. Aquí filtramos directamente por r.done.
+    if (r.done === true) return;
     var _recTitle = r.titulo || 'Recordatorio';
     _candidatos.push({
      ts: fr.getTime(),
      icon: '⏰',
      title: _recTitle,
      date: fr,
-     suffix: ''
+     suffix: '',
+     _doneKey: (r.id ? ('rec_' + r.id) : null)
     });
    });
+   // v1.3.1635: filtrar candidatos completados ANTES del sort.
+   //   Lee eventosCompletados (State + localStorage fallback como _dwyEvIsDone).
+   //   Sin esto, pedidos/entregas marcados como completados en el panel seguían
+   //   apareciendo en el hero "Próximo evento" del Dashboard.
+   try {
+    var _evDoneMap = (typeof State !== 'undefined' && State.get && State.get.eventosCompletados) ? (State.get.eventosCompletados() || {}) : {};
+    var _evDoneLs = {};
+    try { _evDoneLs = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_) {}
+    _candidatos = _candidatos.filter(function(cnd) {
+     if (!cnd._doneKey) return true; // sin key estable → no se puede marcar done → mantener
+     if (_evDoneMap[cnd._doneKey]) return false;
+     if (_evDoneLs[cnd._doneKey]) return false;
+     return true;
+    });
+   } catch(_) { /* si falla el filtro, no romper el hero */ }
    // Ordenar y coger el primero
    _candidatos.sort(function(a, b) { return a.ts - b.ts; });
    var prox = _candidatos[0];
