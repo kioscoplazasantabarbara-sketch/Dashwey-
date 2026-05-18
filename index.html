@@ -738,7 +738,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1621";
+ var CURRENT_CACHE = "dashwey-v1-3-1622";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -757,7 +757,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1621</title>
+<title>Dashwey v1.3.1622</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21870,7 +21870,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1621';
+ const _APP_VERSION = 'v1.3.1622';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -62339,13 +62339,40 @@ _eaRecalc();
       }
       // v1.3.1126: render eliminado — el State.set ya dispara events (venta/gasto/etc)
       // que el Dashboard escucha. El render forzado con setTimeout causaba parpadeo visual.
-      // Extra safety: limpiar cualquier dirty que se haya podido filtrar
-      try { window._DashweyClearDirty(stateKey); } catch(_) {}
-      // v1.3.1094: actualizar snapshot "último sincronizado" con la verdad del remoto.
-      // Los items recibidos son la verdad de Firestore → ese es el baseline para diff.
+      //
+      // v1.3.1622 FIX RAÍZ BUG-LOCAL-LOST (incidente 18-may venta 8-abril 119,80€):
+      //   ANTES: tras recibir snapshot remoto, se ejecutaba _DashweyClearDirty(stateKey)
+      //          que vaciaba TODA la cola dirty + se reseteaba _DashweyLastSyncedSnap[stateKey]={}
+      //          con solo items remotos. Resultado: items locales pendientes de subir
+      //          (ej: venta recién creada, edición pendiente tras auth caída) perdían
+      //          su marca dirty → siguiente write no los subía → primera mutación
+      //          posterior del array los hacía desaparecer sin tombstone.
+      //   AHORA: limpieza selectiva. Solo se quitan de dirty los IDs que SÍ existen
+      //          en items remotos (esos están confirmados subidos). Items locales-only
+      //          mantienen su dirty para próximo flush. lastSyncedSnap se actualiza
+      //          per-item (merge) en lugar de reset total, preservando baseline de
+      //          items locales-only para que _diffMarkDirty no los re-marque en bucle.
+      try {
+       const dirty = window._DashweyDirtyItems && window._DashweyDirtyItems[stateKey];
+       if (dirty instanceof Set && dirty.size > 0) {
+        const _remoteIds = new Set();
+        for (const _rit of items) { if (_rit && _rit.id) _remoteIds.add(_rit.id); }
+        const _toRemove = [];
+        dirty.forEach(function(id) { if (_remoteIds.has(id)) _toRemove.push(id); });
+        _toRemove.forEach(function(id) { dirty.delete(id); });
+        if (_toRemove.length > 0 || dirty.size > 0) {
+         console.info('[Dashwey/SubB] dirty selectivo ' + stateKey + ': limpiado=' + _toRemove.length + ' preservado=' + dirty.size);
+        }
+        try { window._DashweyPersistDirty && window._DashweyPersistDirty(); } catch(_) {}
+       }
+      } catch(_) {}
+      // v1.3.1094 + v1.3.1622: actualizar snapshot "último sincronizado" SIN reset total.
+      //   Items remotos refrescan/añaden su entrada en lastSynced.
+      //   Items locales-only (sin remoto) MANTIENEN su entrada previa (si existía)
+      //   o quedan ausentes (y _diffMarkDirty los marcará dirty al próximo set, que es lo correcto).
       try {
        if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
-       window._DashweyLastSyncedSnap[stateKey] = {};
+       if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
        const snap = window._DashweyLastSyncedSnap[stateKey];
        for (const rit of items) {
         if (rit?.id) { try { snap[rit.id] = JSON.stringify(rit); } catch(_) {} }
