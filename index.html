@@ -754,7 +754,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1643";
+ var CURRENT_CACHE = "dashwey-v1-3-1644";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -773,7 +773,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1643</title>
+<title>Dashwey v1.3.1644</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11862,6 +11862,8 @@ function _authTabSafe(tab) {
 
  <!-- v1.3.674: Lista de pedidos — reemplaza el banner superior -->
  <div id="alm-lista-compra"></div>
+ <!-- v1.3.1644: Cajón "Lista de la compra" (cesta) con estilo Pedido programado -->
+ <div id="alm-lista-compra-cajon"></div>
  <!-- v1.3.1324: 9 spans alm-banner-* compat eliminados — el bloque IIFE que los
       tocaba (línea ~42211) muere al primer `if (!banner) return` porque
       #alm-progress-banner ya no existe en el DOM (reemplazado por
@@ -21826,7 +21828,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1643';
+ const _APP_VERSION = 'v1.3.1644';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51331,6 +51333,8 @@ const alm = (() => {
  const prov = State.get.prov(sel);
  // v1.3.652: D01 — sugerencia de pedido
  try { _renderSugerencia(sel); } catch(_) {}
+ // v1.3.1644: cajón Lista de la compra (cesta)
+ try { _renderListaCompraCajon(); } catch(_) {}
  const wrap = document.getElementById('alm-cat-inline');
  const empty = document.getElementById('alm-empty');
  if (!wrap) return;
@@ -51383,41 +51387,23 @@ const alm = (() => {
  }
  if (empty) empty.style.display = 'none';
 
- // v1.3.1642 — Artículos en cesta arriba.
- // v1.3.1643 — Ordenación alfabética + total en cesta + texto "Lista de la compra".
- //   Hung 19 may: lista alfabética (cesta + cada categoría + orden categorías),
- //   total €IVA en edge derecho de la label "Lista de la compra".
- //   Fórmula total alineada con FAB pill (línea 57834): qty × precioCompra × ivaFactor.
+ // v1.3.1644 — Cesta movida a cajón propio "Lista de la compra" arriba
+ //   (fuera del scroll, junto con Pedido programado). El catálogo vuelve a
+ //   ser plano por categoría, ordenado alfabéticamente.
+ //   Los artículos en cesta NO desaparecen del catálogo: el badge stepper
+ //   (contador +/-) sigue apareciendo en el item del catálogo. El cajón
+ //   "Lista de la compra" es la VISTA ALTERNATIVA, no exclusiva.
  const _byName = function(a, b) {
   return (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' });
  };
- const enCesta = prods.filter(p => (_ordenCarrito[p.id] || 0) > 0).sort(_byName);
- const resto = prods.filter(p => !((_ordenCarrito[p.id] || 0) > 0)).sort(_byName);
- // Total cesta (fuente: misma fórmula que FAB pill, single source of truth)
- const _ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
- const _totalCesta = enCesta.reduce(function(s, p) {
-  var q = _ordenCarrito[p.id] || 0;
-  return s + q * ((p.precioCompra || 0) * _ivaF(p.iva));
- }, 0);
  let html = '';
  let _staggerIdx = 0; // v1.3.393: índice global para stagger
  try {
- // Sección "Lista de la compra" — solo si hay items
- if (enCesta.length > 0) {
-  html += '<div class="alm-cat-section-lbl alm-cat-section-lbl--cart">' +
-          '<span class="alm-cat-section-lbl-txt">Lista de la compra · ' + enCesta.length + '</span>' +
-          '<span class="alm-cat-section-lbl-total">Total ' + feur(_totalCesta) + '</span>' +
-          '</div>';
-  enCesta.forEach(p => {
-   try { html += _buildCatInlineItem(p, Math.min(_staggerIdx++, 5)); }
-   catch(_) { html += ''; }
-  });
- }
- // Resto agrupado por categoría — categorías y items en orden alfabético
- const cats = [...new Set(resto.map(p => p.cat || 'Sin categoría'))]
+ // Categorías ordenadas alfabéticamente + items ordenados alfabéticamente
+ const cats = [...new Set(prods.map(p => p.cat || 'Sin categoría'))]
    .sort(function(a, b){ return a.localeCompare(b, 'es', { sensitivity: 'base' }); });
  cats.forEach(cat => {
-  const items = resto.filter(p => (p.cat || 'Sin categoría') === cat).sort(_byName);
+  const items = prods.filter(p => (p.cat || 'Sin categoría') === cat).sort(_byName);
   if (items.length === 0) return;
   html += '<div class="alm-cat-section-lbl">' + esc(cat) + '</div>';
   items.forEach(p => {
@@ -51523,29 +51509,83 @@ function _parseIva(iva) {
  let _catInlineLpTimer = null;
  let _catInlineLpEl = null;
 
- // v1.3.1643 — Refrescar el total mostrado en la label "Lista de la compra"
- //   sin re-render del catálogo. Recalcula sobre el _ordenCarrito actual.
- //   Usar sólo cuando se cambian cantidades dentro de cesta (movimiento interno).
- //   En cruces de umbral 0↔1 se hace renderCatInline completo que ya rehace todo.
- function _refreshListaCompraTotal() {
-  var totalEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-total');
-  var txtEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-txt');
-  if (!totalEl) return;
+ // v1.3.1644 — Cajón "Lista de la compra" (cesta) con mismo estilo que
+ //   "Reponer stock" / "Pedido programado". Header rojo + badge total IVA.
+ //   Colapsado por defecto: solo header. Expandido: body con items.
+ //   Tap en header → abre modal cesta completa (`_ldcAbrirDetalleCarrito`).
+ //   Tap en chevron → expande/colapsa body inline.
+ let _ldcCajonExpanded = false;
+ function _renderListaCompraCajon() {
+  var wrap = document.getElementById('alm-lista-compra-cajon');
+  if (!wrap) return;
+  var sel = State.get.selectedProv();
+  if (!sel) { wrap.innerHTML = ''; return; }
+
+  // Items en cesta del proveedor activo (orden alfabético)
   var ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
+  var items = [];
   var total = 0;
-  var count = 0;
   Object.keys(_ordenCarrito).forEach(function(pid) {
    var q = _ordenCarrito[pid] || 0;
    if (q <= 0) return;
    var p = State.get.prod(pid);
-   if (!p) return;
-   // Solo contar productos del proveedor activo (los visibles en el catálogo)
-   if (p.prov !== State.get.selectedProv()) return;
-   count += 1;
+   if (!p || p.prov !== sel) return;
+   items.push({ p: p, q: q });
    total += q * ((p.precioCompra || 0) * ivaF(p.iva));
   });
-  totalEl.textContent = 'Total ' + feur(total);
-  if (txtEl) txtEl.textContent = 'Lista de la compra · ' + count;
+  items.sort(function(a, b) {
+   return (a.p.nombre || '').localeCompare(b.p.nombre || '', 'es', { sensitivity: 'base' });
+  });
+
+  // Cesta vacía → vaciar cajón
+  if (items.length === 0) { wrap.innerHTML = ''; return; }
+
+  // Header — mismo estilo que Pedido programado / Reponer stock
+  var hdr = '<div class="alm-sug-hdr" style="gap:var(--sp-2);background:var(--red);border-radius:var(--r-md) 12px 0 0">' +
+   '<div class="alm-sug-title" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:var(--sp-1);color:#fff" ' +
+   'onclick="try{Utils.triggerHaptic(\'selection\');}catch(_){}; try{App.alm._ldcAbrirDetalleCarrito(App.alm._getSelectedProv());}catch(_){}">' +
+   'Lista de la compra' +
+   '</div>' +
+   '<button aria-label="Expandir/Colapsar" ' +
+   'onclick="event.stopPropagation();try{Utils.triggerHaptic(\'selection\');}catch(_){};App.alm._ldcCajonToggle()" ' +
+   'style="background:rgba(255,255,255,0.18);border:none;width:24px;height:24px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;touch-action:manipulation">' +
+   '<svg width="11" height="11" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24" style="transform:rotate(' + (_ldcCajonExpanded ? '90' : '0') + 'deg);transition:transform var(--dur-short, 200ms) ease"><polyline points="9 18 15 12 9 6"/></svg>' +
+   '</button>' +
+   '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff;font-variant-numeric:tabular-nums">Total ' + feur(total) + '</span>' +
+   '</div>';
+
+  // Body (solo si expandido) — items con stepper
+  var body = '';
+  if (_ldcCajonExpanded) {
+   var rows = items.map(function(it) {
+    var p = it.p;
+    var q = it.q;
+    var sub = q * ((p.precioCompra || 0) * ivaF(p.iva));
+    return '<div class="alm-sug-item">' +
+     '<div class="alm-sug-e">' + (p.e || '📦') + '</div>' +
+     '<div class="alm-sug-info">' +
+     '<div class="alm-sug-name">' + esc(p.nombre) + '</div>' +
+     '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + q + ' × ' + feur((p.precioCompra || 0) * ivaF(p.iva)) + ' = ' + feur(sub) + '</div>' +
+     '</div>' +
+     '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' +
+     '<button class="alm-sug-add" style="background:var(--bg);color:var(--ink-mid)" ' +
+     'ontouchend="event.preventDefault();event.stopPropagation();App.alm._catInlineStep(\'' + p.id + '\',-1)" ' +
+     'onclick="event.stopPropagation();if(event.pointerType!==\'touch\')App.alm._catInlineStep(\'' + p.id + '\',-1)">−</button>' +
+     '<button class="alm-sug-add" ' +
+     'ontouchend="event.preventDefault();event.stopPropagation();App.alm._catInlineStep(\'' + p.id + '\',1)" ' +
+     'onclick="event.stopPropagation();if(event.pointerType!==\'touch\')App.alm._catInlineStep(\'' + p.id + '\',1)">+</button>' +
+     '</div>' +
+     '</div>';
+   }).join('');
+   body = '<div class="alm-sug-body">' + rows + '</div>';
+  }
+
+  wrap.innerHTML = '<div class="alm-sug-card">' + hdr + body + '</div>';
+ }
+
+ function _ldcCajonToggle() {
+  _ldcCajonExpanded = !_ldcCajonExpanded;
+  _renderListaCompraCajon();
  }
 
  // ── TAP: añade 1 bulto al carrito y refresca el item ──────────
@@ -51568,18 +51608,9 @@ function _parseIva(iva) {
  setTimeout(() => _tapEl.classList.remove('alm-tap-flash'), 180);
  }
  _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
- // v1.3.1642 — si el artículo acaba de entrar a la cesta (era 0, ahora 1),
- //   forzar re-render completo para que suba a la sección "En cesta" arriba.
- //   Si ya estaba en cesta (2+, 3+...), refresh in-place rápido como siempre.
- const _wasNotInCart = (_ordenCarrito[prodId] === 1);
- if (_wasNotInCart) {
-  _catInlineHash = ''; // invalida hash → renderCatInline reordena
-  renderCatInline();
- } else {
-  _catInlineRefreshItem(prodId);
-  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
-  try { _refreshListaCompraTotal(); } catch(_) {}
- }
+ _catInlineRefreshItem(prodId);
+ // v1.3.1644 — refrescar cajón "Lista de la compra" (header + body si abierto)
+ try { _renderListaCompraCajon(); } catch(_) {}
  _updateAcceptBtn();
  updateBadge();
  // Pasar coordenadas ya capturadas a _flyToCart
@@ -51597,18 +51628,9 @@ function _parseIva(iva) {
  } else {
  _ordenCarrito[prodId] = next;
  }
- // v1.3.1642 — re-render completo si cruza el umbral cesta↔fuera (0→1 o 1→0).
- //   Necesario para mover el item entre la sección "En cesta" y su categoría.
- //   En movimientos internos (>0 → >0) refresh in-place rápido como antes.
- const _crossedThreshold = (cur === 0 && next > 0) || (cur > 0 && next === 0);
- if (_crossedThreshold) {
-  _catInlineHash = '';
-  renderCatInline();
- } else {
-  _catInlineRefreshItem(prodId);
-  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
-  try { _refreshListaCompraTotal(); } catch(_) {}
- }
+ _catInlineRefreshItem(prodId);
+ // v1.3.1644 — refrescar cajón "Lista de la compra" (header + body si abierto)
+ try { _renderListaCompraCajon(); } catch(_) {}
  _updateAcceptBtn();
  updateBadge();
  _saveCarritoLocal();
@@ -57591,6 +57613,8 @@ _eaRecalc();
  // Cesta
  openCestaFs, confirmarPedido, descargarFactura,
  _renderSugerencia, _sugToggle, _reToggle, _renderListaCompra, _ldcToggle, _ldcAbrirDetalleCarrito, _ldcAbrirDetallePedido, _ldcSyncBotones,
+ // v1.3.1644 — cajón "Lista de la compra"
+ _renderListaCompraCajon, _ldcCajonToggle,
  _getSelectedProv: function(){ return State.get.selectedProv(); },
  // Merma
  openMerma, saveMerma,
@@ -57898,26 +57922,23 @@ _eaRecalc();
  }, 0);
 
  if (_carritoLineas > 0 && !_hasOverlay) {
-  // Estado B — mostrar cesta
-  // v1.3.1338: badge contador con cap "99+" y transform sin translateY
-  var _pArts  = document.getElementById('alm-fab-pill-arts');
-  var _pTotal = document.getElementById('alm-fab-pill-total');
-  var _strArts  = _carritoCount > 99 ? '99+' : String(_carritoCount);
-  var _strTotal = feur(_carritoTotal);
-  if (_pArts && _pArts.textContent !== _strArts)   _pArts.textContent  = _strArts;
-  if (_pTotal && _pTotal.textContent !== _strTotal) _pTotal.textContent = _strTotal;
-  if (_navbar) _navbar.classList.add('cart-mode');
-  // Refuerzo inline (WebView Android puede no aplicar la transición CSS)
-  if (_pill) {
-   _pill.style.opacity = '1';
-   _pill.style.pointerEvents = 'auto';
-   _pill.style.transform = 'scale(1)';
-  }
-  if (_fabSolo) { _fabSolo.style.opacity = '0'; _fabSolo.style.pointerEvents = 'none'; }
- } else {
-  // Estado A — ocultar cesta
+  // v1.3.1644 — FAB ya NO entra en cart-mode. El acceso a la cesta es vía
+  //   el cajón "Lista de la compra" arriba (debajo de Pedidos programados).
+  //   Conservamos cálculo de count/total para compatibilidad legacy y porque
+  //   `_renderListaCompraCajon` lee `_ordenCarrito` directamente — no
+  //   actualizamos textos del pill (queda invisible por la rama A).
+  //
+  //   Fuerza estado A: navbar sin cart-mode, pill oculto siempre.
   if (_navbar) _navbar.classList.remove('cart-mode');
-  // Refuerzo inline para garantizar ocultamiento
+  if (_pill) {
+   _pill.style.opacity = '0';
+   _pill.style.pointerEvents = 'none';
+   _pill.style.transform = 'scale(0.92)';
+  }
+  if (_fabSolo) { _fabSolo.style.opacity = '1'; _fabSolo.style.pointerEvents = ''; }
+ } else {
+  // Estado A — sin cesta, FAB normal
+  if (_navbar) _navbar.classList.remove('cart-mode');
   if (_pill) {
    _pill.style.opacity = '0';
    _pill.style.pointerEvents = 'none';
@@ -59904,7 +59925,7 @@ _eaRecalc();
 
  var html_carrito =
  '<div class="modal-header-dark"><div class="mhd-row"><div>' +
- '<h2 class="mhd-title">Carrito</h2>' +
+ '<h2 class="mhd-title">Lista de la compra</h2>' +
  '<div class="mhd-sub">' + (prov?.icon||'🏪') + ' ' + esc(prov?.nombre||'') + ' · ' + itemsCarrito.length + ' artículo' + (itemsCarrito.length!==1?'s':'') + '</div>' +
  '</div>' +
  '<div style="display:flex;gap:var(--sp-1_5);align-items:center">' +
