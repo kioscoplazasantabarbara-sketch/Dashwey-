@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1648";
+ var CURRENT_CACHE = "dashwey-v1-3-1700";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1648</title>
+<title>Dashwey v1.3.1700</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -14194,8 +14194,8 @@ window._DashweySyncAhora = async function() {
   // Bloquear writes durante el pull para evitar loop
   const ctrl = window._DashweySavingCtrl;
   const prevSaving = ctrl?.isSaving;
-  const prevApplying = window._DashweyApplyingRemote;
-  window._DashweyApplyingRemote = true;
+  /* v1.3.1700 BUG-5: API counter idempotente (acquire/release) en lugar de prev=flag legacy */
+  window._DashweyApplyingAcquire();
   if (ctrl) ctrl.isSaving = true;
 
   try {
@@ -14251,7 +14251,8 @@ window._DashweySyncAhora = async function() {
    }
   } finally {
    if (ctrl) ctrl.isSaving = prevSaving || false;
-   window._DashweyApplyingRemote = prevApplying || false;
+   /* v1.3.1700 BUG-5: release counter (atómico) */
+   window._DashweyApplyingRelease();
   }
 
   // v1.3.1614 FIX SANITY: recalcular saldos de cuentas ANTES del render.
@@ -14543,14 +14544,14 @@ window._adminCleanFirestoreVentasDups = async function(opts) {
     // Bloquear flags durante el set para evitar loop save→subir→bajar
     const ctrl = window._DashweySavingCtrl;
     const prevSaving = ctrl && ctrl.isSaving;
-    const prevApplying = window._DashweyApplyingRemote;
-    window._DashweyApplyingRemote = true;
+    /* v1.3.1700 BUG-5: API counter idempotente */
+    window._DashweyApplyingAcquire();
     if (ctrl) ctrl.isSaving = true;
     try {
      App.State.set.ventas(cleaned);
     } finally {
      if (ctrl) ctrl.isSaving = prevSaving || false;
-     window._DashweyApplyingRemote = prevApplying || false;
+     window._DashweyApplyingRelease();
     }
     log('State local sincronizado:', localRaw.length, '→', cleaned.length);
    }
@@ -17008,7 +17009,7 @@ const State = (() => {
  }
  }, // no save: solo en memoria
  lastVal: (id, vals) => { _state.lastVals[id] = Object.assign(_state.lastVals[id]||{}, vals); save(); },
- addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); c.updatedAt = c.updatedAt || new Date().toISOString(); c.createdAt = c.createdAt || c.updatedAt; if (typeof c._updatedAt !== 'number') c._updatedAt = Date.now(); /* v1.3.1463 BUG-N1.A-LITE: LWW guard per-field espera _updatedAt numérico */ } _state.cuentas.push(c); save(); },
+ addCuenta: (c) => { if(c){ c.tipo = c.tipo || 'cash'; c.scope = c.scope || (_state.settings?.activeScope || 'negocio'); if (typeof c.saldoInicial !== 'number') c.saldoInicial = (typeof c.saldo === 'number' ? c.saldo : 0); c.updatedAt = c.updatedAt || new Date().toISOString(); c.createdAt = c.createdAt || c.updatedAt; if (typeof c._updatedAt !== 'number') c._updatedAt = Date.now(); /* v1.3.1463 BUG-N1.A-LITE: LWW guard per-field espera _updatedAt numérico */ } _state.cuentas.push(c); try { if (c?.id) window._DashweyMarkDirty('cuentas', c.id); } catch(_) {} /* v1.3.1700 BUG-2: marcar dirty para evitar race onSnapshot vs create */ save(); },
  setLotesStock: (v) => { _state.lotesStock = Array.isArray(v) ? v : []; save(); },
  addLoteStock: (l) => { if (!_state.lotesStock) _state.lotesStock = []; if (l?.id && _state.lotesStock.some(x => x.id === l.id)) return; _state.lotesStock.push(l); save(); },
 
@@ -17136,8 +17137,32 @@ const State = (() => {
  // v1.3.992 LOTE C — Recordatorios (entidades libres)
  setRecordatorios: (v) => { _state.recordatorios = Array.isArray(v) ? v : []; save(); },
  addRecordatorio: (r) => { if (!_state.recordatorios) _state.recordatorios = []; if (r?.id && _state.recordatorios.some(x => x.id === r.id)) return; if (r) { if (typeof r._updatedAt !== 'number') r._updatedAt = Date.now(); /* v1.3.1444 LWW lite */ if (!r.updatedAt) r.updatedAt = new Date(r._updatedAt).toISOString(); /* v1.3.1444 legacy ISO */ } _state.recordatorios.push(r); try { if (r?.id) window._DashweyMarkDirty('recordatorios', r.id); } catch(_) {} save(); },
- updateRecordatorio: (id, v) => { const r = (_state.recordatorios||[]).find(x => x.id === id); if (r) { Object.assign(r, v); save(); } },
- deleteRecordatorio: (id) => { _state.recordatorios = (_state.recordatorios||[]).filter(x => x.id !== id); save(); },
+ updateRecordatorio: (id, v) => {
+  const r = (_state.recordatorios||[]).find(x => x.id === id);
+  if (r) {
+   /* v1.3.1700 BUG-4: estampar _updatedAt + marcar dirty + emit bus (alinea con updateGasto) */
+   const _nowR = Date.now();
+   Object.assign(r, v, { _updatedAt: _nowR, updatedAt: new Date(_nowR).toISOString() });
+   try { window._DashweyMarkDirty('recordatorios', id); } catch(_) {}
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('recordatorio'); } catch(_) {}
+  }
+ },
+ deleteRecordatorio: (id) => {
+  /* v1.3.1700 BUG-3: SOFT DELETE — hard delete causaba resurrecciones zombi en multi-device.
+     Pixel borra → Tablet aún tiene → sync → _mergeById resucita en Pixel.
+     Mismo patrón que removePendingOrder (v1.3.1242). */
+  const r = (_state.recordatorios||[]).find(x => x.id === id);
+  if (!r) return;
+  const _nowR = Date.now();
+  r.deleted = true;
+  r.deletedAt = _nowR;
+  r._updatedAt = _nowR;
+  r.updatedAt = new Date(_nowR).toISOString();
+  try { window._DashweyMarkDirty('recordatorios', id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('recordatorio'); } catch(_) {}
+ },
  // v1.3.1493: setter para eventos completados
  setEventoCompletado: (key, ts) => {
   if (!_state.eventosCompletados) _state.eventosCompletados = {};
@@ -17146,8 +17171,30 @@ const State = (() => {
   save();
  },
  addVisita: (v) => { if (!_state.visitasComerciales) _state.visitasComerciales = []; if (v?.id && _state.visitasComerciales.some(x => x.id === v.id)) return; /* v1.3.1444 BUG-238 dedup */ if (v) { if (typeof v._updatedAt !== 'number') v._updatedAt = Date.now(); /* v1.3.1444 LWW lite */ if (!v.updatedAt) v.updatedAt = new Date(v._updatedAt).toISOString(); /* v1.3.1444 legacy ISO */ } _state.visitasComerciales.push(v); try { if (v?.id) window._DashweyMarkDirty('visitasComerciales', v.id); } catch(_) {} save(); },
- updateVisita: (id, data) => { const v = (_state.visitasComerciales||[]).find(x=>x.id===id); if(v) { Object.assign(v,data); save(); } },
- deleteVisita: (id) => { _state.visitasComerciales = (_state.visitasComerciales||[]).filter(x=>x.id!==id); save(); },
+ updateVisita: (id, data) => {
+  const v = (_state.visitasComerciales||[]).find(x=>x.id===id);
+  if (v) {
+   /* v1.3.1700 BUG-4: estampar _updatedAt + marcar dirty + emit bus */
+   const _nowV = Date.now();
+   Object.assign(v, data, { _updatedAt: _nowV, updatedAt: new Date(_nowV).toISOString() });
+   try { window._DashweyMarkDirty('visitasComerciales', id); } catch(_) {}
+   save();
+   try { window.DashweyBus && window.DashweyBus.emit('visita'); } catch(_) {}
+  }
+ },
+ deleteVisita: (id) => {
+  /* v1.3.1700 BUG-3: SOFT DELETE — hard delete causaba resurrecciones zombi multi-device. */
+  const v = (_state.visitasComerciales||[]).find(x=>x.id===id);
+  if (!v) return;
+  const _nowV = Date.now();
+  v.deleted = true;
+  v.deletedAt = _nowV;
+  v._updatedAt = _nowV;
+  v.updatedAt = new Date(_nowV).toISOString();
+  try { window._DashweyMarkDirty('visitasComerciales', id); } catch(_) {}
+  save();
+  try { window.DashweyBus && window.DashweyBus.emit('visita'); } catch(_) {}
+ },
  notifPrefs: (v) => { if (!_state.settings) _state.settings = {}; _state.settings.notifPrefs = Object.assign({}, _state.settings.notifPrefs||{}, v); save(); },
  setCuentas: (v) => { _state.cuentas = _preserveDeleted('cuentas', v); save(); },
  updateCuenta: (id, v) => {
@@ -17190,7 +17237,7 @@ const State = (() => {
  // v1.3.1144 HÍBRIDO: setters update (trazabilidad closureId)
  // v1.3.1146 CAPA 1: bloquear intento de poner deleted:true en item externo
  // v1.3.1150 EVENT-DRIVEN: campos inmutables protegidos
- updateGasto: (id, vals) => { const g = (_state.gastosOp || []).find(x => x.id === id); if (!g) return; if (vals && vals.deleted === true && g.origen && _EXT_ORIGINS[g.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateGasto: bloqueado deleted:true en item externo', g.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_G = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bg = []; for (const k of _IMMUTABLE_G) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== g[k]) { _bg.push(k); delete vals[k]; } } if (_bg.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateGasto: inmutables bloqueados', g.id, ':', _bg.join(',')); } Object.assign(g, vals); try { window._DashweyMarkDirty('gastosOp', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} },
+ updateGasto: (id, vals) => { const g = (_state.gastosOp || []).find(x => x.id === id); if (!g) return; if (vals && vals.deleted === true && g.origen && _EXT_ORIGINS[g.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateGasto: bloqueado deleted:true en item externo', g.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_G = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bg = []; for (const k of _IMMUTABLE_G) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== g[k]) { _bg.push(k); delete vals[k]; } } if (_bg.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateGasto: inmutables bloqueados', g.id, ':', _bg.join(',')); } /* v1.3.1700 BUG-1: estampar _updatedAt SIEMPRE para LWW determinista — no depender del caller */ const _nowG = Date.now(); vals = Object.assign({}, vals, { _updatedAt: _nowG, updatedAt: new Date(_nowG).toISOString() }); Object.assign(g, vals); try { window._DashweyMarkDirty('gastosOp', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('gasto'); } catch(_) {} },
   // v1.3.1142 — Cierre de caja: setters robustos (patrón addGasto/setGastos)
   // Esquema cierre: { id, aperturaTs, cierreTs, jornadaLabel, saldoInicial,
   //                   saldoEsperado, saldoReal, diferencia, ventas, gastos,
@@ -17481,7 +17528,7 @@ const State = (() => {
   try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {}
   try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
  },
- updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; if (vals && vals.deleted === true && i.origen && _EXT_ORIGINS[i.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: bloqueado deleted:true en item externo', i.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_I = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bi = []; for (const k of _IMMUTABLE_I) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== i[k]) { _bi.push(k); delete vals[k]; } } if (_bi.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: inmutables bloqueados', i.id, ':', _bi.join(',')); } Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
+ updateIngreso: (id, vals) => { const i = (_state.ingresosFin || []).find(x => x.id === id); if (!i) return; if (vals && vals.deleted === true && i.origen && _EXT_ORIGINS[i.origen]) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: bloqueado deleted:true en item externo', i.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_I = ['id','importe','fecha','origen','sourceRefId','cuentaId','transferId','metaTipo']; let _bi = []; for (const k of _IMMUTABLE_I) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== i[k]) { _bi.push(k); delete vals[k]; } } if (_bi.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateIngreso: inmutables bloqueados', i.id, ':', _bi.join(',')); } /* v1.3.1700 BUG-1: estampar _updatedAt SIEMPRE para LWW determinista */ const _nowI = Date.now(); vals = Object.assign({}, vals, { _updatedAt: _nowI, updatedAt: new Date(_nowI).toISOString() }); Object.assign(i, vals); try { window._DashweyMarkDirty('ingresosFin', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('ingreso'); } catch(_) {} },
  setIngresos: (v) => { const _snap = _snapshotMap(_state.ingresosFin); _state.ingresosFin = _preserveDeleted('ingresosFin', _guardExt(v)); _diffMarkDirty('ingresosFin', _snap, _state.ingresosFin); save(); },
  // addPedido: PUNTO DE INTEGRACIÓN FIREBASE
  // Para migrar a Firestore: reemplazar save() por db.collection('pedidos').add(p)
@@ -17776,7 +17823,7 @@ const State = (() => {
  //   Razón: cuando llega autoridad API loyverse al mismo día, las sintéticas
  //   se vuelven duplicados fantasma → DEBEN poder borrarse. Solo origen='loyverse'
  //   (API real) y 'budgetbakers' (CSV completo) siguen bloqueadas.
- updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen] && v.origen !== 'import_loyverse') { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_V = ['id','total','items','fecha','origen','sourceRefId','cuentaId','metaTipo','ticketId']; let _blocked = []; for (const k of _IMMUTABLE_V) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== v[k]) { _blocked.push(k); delete vals[k]; } } if (_blocked.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: campos inmutables bloqueados en venta', v.id, ':', _blocked.join(',')); } Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
+ updateVenta: (id, vals) => { const v = (_state.ventas || []).find(x => x.id === id); if (!v) return; if (vals && vals.deleted === true && v.origen && _EXT_ORIGINS[v.origen] && v.origen !== 'import_loyverse') { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: bloqueado deleted:true en item externo', v.id); const safe = Object.assign({}, vals); delete safe.deleted; delete safe.deletedAt; vals = safe; } const _IMMUTABLE_V = ['id','total','items','fecha','origen','sourceRefId','cuentaId','metaTipo','ticketId']; let _blocked = []; for (const k of _IMMUTABLE_V) { if (vals && Object.prototype.hasOwnProperty.call(vals, k) && vals[k] !== v[k]) { _blocked.push(k); delete vals[k]; } } if (_blocked.length) { window._DashweyHealth.zombiesBlocked++; console.warn('[Dashwey/Guard] updateVenta: campos inmutables bloqueados en venta', v.id, ':', _blocked.join(',')); } /* v1.3.1700 BUG-1: estampar _updatedAt SIEMPRE para LWW determinista */ const _nowV = Date.now(); vals = Object.assign({}, vals, { _updatedAt: _nowV, updatedAt: new Date(_nowV).toISOString() }); Object.assign(v, vals); try { window._DashweyMarkDirty('ventas', id); } catch(_) {} save(); try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {} },
  // v1.3.1262 FIX P0: estampar updatedAt+createdAt al crear producto.
  //   Sin esto, _mergeById ve _ts=0 → remoto gana → producto local desaparece tras reinicio
  //   si por algún motivo el remote no tiene el item nuevo (write fallido, sync race, etc.)
@@ -17799,6 +17846,7 @@ const State = (() => {
   p._updatedAt = _now;
   _state.productos.push(p);
   _prodById.set(p.id, p); // v1.3.1470 LOTE 4: mantener Map sincronizado
+  try { window._DashweyMarkDirty('productos', p.id); } catch(_) {} /* v1.3.1700 BUG-2: marcar dirty para evitar race onSnapshot vs create */
   save();
   try { window.DashweyBus && window.DashweyBus.emit('producto'); } catch(_) {}
  },
@@ -17834,6 +17882,7 @@ const State = (() => {
   p._updatedAt = _now;
   _state.proveedores.push(p);
   _provById.set(p.id, p); // v1.3.1470 LOTE 4: mantener Map sincronizado
+  try { window._DashweyMarkDirty('proveedores', p.id); } catch(_) {} /* v1.3.1700 BUG-2: marcar dirty para evitar race onSnapshot vs create */
   save();
   try { window.DashweyBus && window.DashweyBus.emit('proveedor'); } catch(_) {}
  },
@@ -19983,7 +20032,13 @@ const CierreEngine = (() => {
    } catch(_){}
   }
   const c = {
-   id: _genId(),
+   /* v1.3.1700 BUG-7: ID determinístico por dateKey+cuentaId.
+      Antes: _genId() random → si tablet y Pixel abren jornada el mismo día, dos
+      cierres distintos en Firestore. Ahora: mismo ID en ambos devices → _mergeById
+      deduplica por construcción. Alineado con _autoCierreCrearCierreReal v1.3.1397.
+      Si _DashweyYaHayCierreHoy lee local stale → no bloquea, pero el dedup por
+      ID en Firestore garantiza idempotencia. */
+   id: 'cierre_' + _jornadaLabel(aperturaTs) + '_' + (_ctaIdRes || 'nocta'),
    aperturaTs,
    cierreTs: null,
    jornadaLabel: _jornadaLabel(aperturaTs),
@@ -21818,7 +21873,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1648';
+ const _APP_VERSION = 'v1.3.1700';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31194,9 +31249,9 @@ const dash = (() => {
      recordatorios:'setRecordatorios' };
     // v1.3.1129: envolver setters con guard applyingRemote — evita loop
     // save() → upload 1613KB → onSnapshot rebota → refresh → save → ...
-    var _prevAppR = window._DashweyApplyingRemote;
+    /* v1.3.1700 BUG-5: API counter idempotente (acquire/release atómicos) */
     var _prevSavR = window._DashweySavingCtrl?.isSaving;
-    window._DashweyApplyingRemote = true;
+    window._DashweyApplyingAcquire();
     if (window._DashweySavingCtrl) window._DashweySavingCtrl.isSaving = true;
     try {
     Object.keys(merged).forEach(function(k) {
@@ -31209,7 +31264,7 @@ const dash = (() => {
      // Limpiar dirty que setters hayan podido filtrar
      try { window._DashweyDirty = false; } catch(_) {}
      setTimeout(function() {
-      window._DashweyApplyingRemote = _prevAppR || false;
+      window._DashweyApplyingRelease();
      }, 150);
     }
    }
@@ -56584,15 +56639,15 @@ _eaRecalc();
    lotesStock:'setLotesStock',
    gruposVenta:'setGrupos' };
   // v1.3.1090: proteger marcado dirty durante merge remoto
-  var _prevApp = window._DashweyApplyingRemote;
-  window._DashweyApplyingRemote = true;
+  /* v1.3.1700 BUG-5: API counter idempotente */
+  window._DashweyApplyingAcquire();
   try {
    Object.keys(merged).forEach(function(k) {
     var sk = (_sm[k] !== undefined) ? _sm[k] : k;
     if (typeof State.set[sk] === 'function') State.set[sk](merged[k]);
    });
   } finally {
-   window._DashweyApplyingRemote = _prevApp || false;
+   window._DashweyApplyingRelease();
   }
  }
  }
@@ -60047,9 +60102,9 @@ _eaRecalc();
    var migrated = 0;
    var ctrl = window._DashweySavingCtrl;
    var prevSaving = ctrl && ctrl.isSaving;
-   var prevApplying = window._DashweyApplyingRemote;
    // Aplicar como remote para no disparar save individual por cada updateProv
-   window._DashweyApplyingRemote = true;
+   /* v1.3.1700 BUG-5: API counter idempotente */
+   window._DashweyApplyingAcquire();
    if (ctrl) ctrl.isSaving = true;
    try {
     raw.forEach(function(p) {
@@ -60065,7 +60120,7 @@ _eaRecalc();
     });
    } finally {
     if (ctrl) ctrl.isSaving = prevSaving || false;
-    window._DashweyApplyingRemote = prevApplying || false;
+    window._DashweyApplyingRelease();
    }
    if (migrated > 0) {
     console.info('[Dashwey/MigrateLV] sourceName añadido a ' + migrated + ' proveedores Loyverse');
@@ -60268,8 +60323,8 @@ _eaRecalc();
  } catch(_) {}
  // v1.3.730: merge por ID para arrays acumulativos
  // v1.3.1135 FIX#3: activar flag ANTES del merge (por si _mergeById llama setters)
- var _prevApp_preMerge = window._DashweyApplyingRemote;
- window._DashweyApplyingRemote = true;
+ /* v1.3.1700 BUG-5: API counter idempotente */
+ window._DashweyApplyingAcquire();
  // v1.3.1261 FIX P0 BUG-RENAME: incluir productos y proveedores en merge by-id.
  //   Antes se sobreescribían directamente vía L44729-44732 sin _mergeById, causando
  //   pérdida de renames locales si el remoto era considerado "más nuevo" por timestamp
@@ -60298,8 +60353,6 @@ _eaRecalc();
  });
  // Bloquear writes durante merge para no re-subir lo que bajamos
  window._DashweySavingCtrl.isSaving = true;
- // v1.3.1090: también bloquear marcado dirty durante merge inicial remoto
- var _prevApp3 = _prevApp_preMerge; // ya activo desde L38591
  try {
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
@@ -60316,7 +60369,8 @@ _eaRecalc();
   });
  } finally {
  window._DashweySavingCtrl.isSaving = false;
- window._DashweyApplyingRemote = _prevApp3 || false;
+ /* v1.3.1700 BUG-5: release counter */
+ window._DashweyApplyingRelease();
  // BUG-REAL-03: forzar re-sync si hubo cambios durante el merge
  try { window._DashweySavingCtrl.resetHash(); } catch(_) {}
  }
@@ -60476,20 +60530,44 @@ _eaRecalc();
  //   otro device se descartaban silenciosamente porque cuentas/productos/settings no
  //   cambiaban → digest idéntico → SKIP. Resultado: Samsung crea pedido Matutano,
  //   Pixel nunca lo recibe. Incluir el length de estos arrays restaura sync correcto.
+ // v1.3.1700 BUG-6: length-based digest seguía siendo inseguro — si editas un item
+ //   sin cambiar count, digest idéntico → snapshot ignorado. Sustituido por
+ //   fingerprint FNV-1a sobre id+_updatedAt de cada item. Cualquier edición que
+ //   estampe _updatedAt (cubierto por Bugs 1+4) cambia el fingerprint.
+ //   Peor caso: falso positivo → re-aplica setters (re-render innecesario, sin
+ //   pérdida de datos). Mejor que falso negativo (datos perdidos).
  try {
   if (window._DashweyUseSubcollections === true) {
    var _lastRootDigest = window._DashweyLastRootDigest || '';
-   // Firma extendida: incluye arrays SOLO-ROOT que cambian por acción usuario
+   /* v1.3.1700 BUG-6: FNV-1a hash sobre id+_updatedAt — detecta CUALQUIER edición */
+   var _hashCol = function(arr) {
+    if (!Array.isArray(arr)) return '0';
+    var sum = 0;
+    for (var _hi = 0; _hi < arr.length; _hi++) {
+     var _it = arr[_hi];
+     if (!_it || !_it.id) continue;
+     var _h = 2166136261;
+     var _s = String(_it.id);
+     for (var _ci = 0; _ci < _s.length; _ci++) {
+      _h ^= _s.charCodeAt(_ci);
+      _h = Math.imul(_h, 16777619);
+     }
+     sum ^= (_h >>> 0) ^ (_it._updatedAt || 0);
+    }
+    return sum.toString(36);
+   };
    var _digest = (remoteData?._schemaVersion || 0) + '|' +
-                 (remoteData?.cuentas?.length || 0) + '|' +
-                 (remoteData?.productos?.length || 0) + '|' +
-                 (remoteData?.pendingOrders?.length || 0) + '|' +
-                 (remoteData?.visitasComerciales?.length || 0) + '|' +
-                 (remoteData?.recordatorios?.length || 0) + '|' +
-                 (remoteData?.proveedores?.length || 0) + '|' +
-                 Object.keys(remoteData?.settings || {}).length;
+                 _hashCol(remoteData?.cuentas) + '|' +
+                 _hashCol(remoteData?.productos) + '|' +
+                 _hashCol(remoteData?.proveedores) + '|' +
+                 _hashCol(remoteData?.pendingOrders) + '|' +
+                 _hashCol(remoteData?.visitasComerciales) + '|' +
+                 _hashCol(remoteData?.recordatorios) + '|' +
+                 Object.keys(remoteData?.settings || {}).length + '|' +
+                 (remoteData?.settings?._updatedAt || 0) + '|' +
+                 (remoteData?.perfil?._updatedAt || 0);
    if (_digest === _lastRootDigest) {
-    return; // sin cambios estructurales — skip aplicar
+    return; // sin cambios — skip aplicar
    }
    window._DashweyLastRootDigest = _digest;
   }
@@ -60597,8 +60675,8 @@ _eaRecalc();
  // v1.3.1090: también bloquear marcado dirty durante merge monolítico
  // (sin esto, cualquier snapshot remoto → todos los items marcados dirty
  // → al activar flag subcolecciones se drena masivamente)
- var _prevApplying = window._DashweyApplyingRemote;
- window._DashweyApplyingRemote = true;
+ /* v1.3.1700 BUG-5: API counter idempotente */
+ window._DashweyApplyingAcquire();
  try {
   var _sm = { cuentas:'setCuentas', gastosOp:'setGastos', ingresosFin:'setIngresos',
    visitasComerciales:'visitasComerciales', cierresCaja:'cierresCaja',
@@ -60615,9 +60693,9 @@ _eaRecalc();
   });
  } finally {
  window._DashweySavingCtrl.isSaving = false;
- // v1.3.1104: NO restaurar _DashweyApplyingRemote aún — los emits siguientes deben verlo true
+ // v1.3.1104: NO liberar counter aún — los emits siguientes deben verlo activo
  // para evitar que _recalcSaldosListener dispare updateCuenta → save → LOOP
- // Se restaura al FINAL del bloque, después de _renderAll()
+ // Se libera al FINAL del bloque, después de _renderAll() (rAF + setTimeout)
  // v1.3.735: resetear hash para que save() suba el estado fusionado
  window._DashweySavingCtrl.resetHash();
  }
@@ -60649,14 +60727,15 @@ _eaRecalc();
  //   hasta que el listener recalc corrija (los emits arriba se procesan en setTimeout(0) y el
  //   listener tiene guard _DashweyApplyingRemote que aún es true).
  //   Recalc síncrono fuerza valores correctos antes del primer paint.
- //   Liberamos el flag temporalmente solo para esta llamada controlada.
+ //   Liberamos el counter temporalmente solo para esta llamada controlada.
  try {
-  var _prevApplyForRecalc = window._DashweyApplyingRemote;
-  window._DashweyApplyingRemote = false;
+  /* v1.3.1700 BUG-5: release temporal para recalc, re-acquire después.
+     El acquire/release son atómicos sobre el contador interno. */
+  window._DashweyApplyingRelease();
   if (typeof window._recalcSaldosCuentas === 'function') {
    window._recalcSaldosCuentas();
   }
-  window._DashweyApplyingRemote = _prevApplyForRecalc;
+  window._DashweyApplyingAcquire();
  } catch(eRecalc) { console.warn('[onSnap] recalc post-merge falló:', eRecalc && eRecalc.message); }
  // v1.3.1544 — Defer _renderAll() con requestAnimationFrame para evitar bloqueo
  //   del hilo principal durante scroll activo del usuario. Antes este render
@@ -60670,13 +60749,14 @@ _eaRecalc();
  //   ANTES del render → _recalcSaldosListener ve flag=false → save loop.
  requestAnimationFrame(function() {
   try { _renderAll(); } catch(e) { console.warn('[onSnap] _renderAll diferido:', e); }
-  // v1.3.1131: restaurar el flag DESPUÉS del setTimeout(0) del Bus.emit
-  // Los handlers corren en setTimeout(0) → si restauramos aquí síncronamente,
+  // v1.3.1131: liberar el counter DESPUÉS del setTimeout(0) del Bus.emit
+  // Los handlers corren en setTimeout(0) → si liberamos aquí síncronamente,
   // _recalcSaldosListener ve flag=false → save loop.
   // setTimeout(150) garantiza que los handlers del Bus + sus setTimeouts internos
-  // ya han terminado antes de liberar el flag.
+  // ya han terminado antes de liberar el counter.
   setTimeout(function() {
-   window._DashweyApplyingRemote = _prevApplying || false;
+   /* v1.3.1700 BUG-5: release counter diferido */
+   window._DashweyApplyingRelease();
   }, 150);
  });
 
@@ -60809,17 +60889,17 @@ _eaRecalc();
       // durante la aplicación (los items ya están en el remoto, no hay que re-subirlos).
       const ctrl = window._DashweySavingCtrl;
       const prevSaving = ctrl?.isSaving;
-      const prevApplying = window._DashweyApplyingRemote;
-      window._DashweyApplyingRemote = true;
+      /* v1.3.1700 BUG-5: API counter idempotente */
+      window._DashweyApplyingAcquire();
       if (ctrl) ctrl.isSaving = true;
       try {
        _S.set[setterName](merged);
       } finally {
        if (ctrl) ctrl.isSaving = prevSaving || false;
-       // v1.3.1131: diferir restore del flag var(--dur-micro) — cualquier Bus.emit diferido
-       // de los setters (setTimeout 0) verá el flag=true y no disparará save loop
+       // v1.3.1131: diferir release del counter — cualquier Bus.emit diferido
+       // de los setters (setTimeout 0) verá el counter activo y no disparará save loop
        setTimeout(function() {
-        window._DashweyApplyingRemote = prevApplying || false;
+        window._DashweyApplyingRelease();
        }, 150);
       }
       // v1.3.1126: render eliminado — el State.set ya dispara events (venta/gasto/etc)
