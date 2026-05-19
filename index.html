@@ -754,7 +754,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1640";
+ var CURRENT_CACHE = "dashwey-v1-3-1642";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -773,7 +773,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1640</title>
+<title>Dashwey v1.3.1642</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5025,6 +5025,28 @@ body.spotlight-active #bottom-tabs {
              transform var(--dur-short, 200ms) var(--spring);
 }
 
+/* v1.3.1641 — Animación entrada/salida Spotlight container.
+   Entrada: 200ms slide-up + fade con curva spring iOS (cubic-bezier
+   0.32, 0.72, 0, 1). Salida: 160ms slide-down + fade ease-out.
+   Patrón sheet bottom estándar iOS/Material — "salir más rápido que entrar". */
+#alm-spotlight-container {
+ transform: translateY(100%);
+ opacity: 0;
+ transition: transform 200ms cubic-bezier(0.32, 0.72, 0, 1),
+             opacity 200ms ease-out;
+ will-change: transform, opacity;
+}
+#alm-spotlight-container.is-open {
+ transform: translateY(0);
+ opacity: 1;
+}
+#alm-spotlight-container.is-closing {
+ transform: translateY(100%);
+ opacity: 0;
+ transition: transform 160ms ease-in,
+             opacity 140ms ease-in;
+}
+
 /* ── FAB DINÁMICO v1.3.404 ─────────────────────────────────────────────
  FAB contextual que cambia según módulo y tarjeta snap activa.
  Invisible en Almacén (usa su propio FAB) y en modos no-hub.
@@ -7744,6 +7766,9 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  display: flex; flex-direction: column; gap: 10px;
 }
 .alm-cat-section-lbl { font-size: 9px; font-weight: var(--fw-xbold); letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); padding:var(--sp-2) 2px 4px; }
+/* v1.3.1642 — Label sección "En cesta" diferenciada (rojo Dashwey + dot). */
+.alm-cat-section-lbl--cart { color: var(--red); display: flex; align-items: center; gap: 6px; }
+.alm-cat-section-lbl--cart::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
 .alm-cat-item {
  display: flex; align-items: center; gap:var(--sp-3);
  padding: 11px 12px;
@@ -21780,7 +21805,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1640';
+ const _APP_VERSION = 'v1.3.1642';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51337,13 +51362,30 @@ const alm = (() => {
  }
  if (empty) empty.style.display = 'none';
 
- // Agrupar por categoría
- const cats = [...new Set(prods.map(p => p.cat || 'Sin categoría'))];
+ // v1.3.1642 — Artículos en cesta arriba.
+ //   Hung 19 may: cuando un artículo está en cesta, el usuario quiere
+ //   verlo arriba para subir/bajar cantidades sin scroll. Sección "En
+ //   cesta" todos juntos (sin sub-agrupar por categoría) + resto
+ //   agrupado por categoría como siempre.
+ //   El buscador (_catInlineQ) ya filtra `prods` antes, así que esta
+ //   partición respeta automáticamente el filtro Spotlight.
+ const enCesta = prods.filter(p => (_ordenCarrito[p.id] || 0) > 0);
+ const resto = prods.filter(p => !((_ordenCarrito[p.id] || 0) > 0));
  let html = '';
  let _staggerIdx = 0; // v1.3.393: índice global para stagger
  try {
+ // Sección "En cesta" — solo si hay items
+ if (enCesta.length > 0) {
+  html += '<div class="alm-cat-section-lbl alm-cat-section-lbl--cart">En cesta · ' + enCesta.length + '</div>';
+  enCesta.forEach(p => {
+   try { html += _buildCatInlineItem(p, Math.min(_staggerIdx++, 5)); }
+   catch(_) { html += ''; }
+  });
+ }
+ // Resto agrupado por categoría
+ const cats = [...new Set(resto.map(p => p.cat || 'Sin categoría'))];
  cats.forEach(cat => {
-  const items = prods.filter(p => (p.cat || 'Sin categoría') === cat);
+  const items = resto.filter(p => (p.cat || 'Sin categoría') === cat);
   if (items.length === 0) return;
   html += '<div class="alm-cat-section-lbl">' + esc(cat) + '</div>';
   items.forEach(p => {
@@ -51469,7 +51511,16 @@ function _parseIva(iva) {
  setTimeout(() => _tapEl.classList.remove('alm-tap-flash'), 180);
  }
  _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
- _catInlineRefreshItem(prodId);
+ // v1.3.1642 — si el artículo acaba de entrar a la cesta (era 0, ahora 1),
+ //   forzar re-render completo para que suba a la sección "En cesta" arriba.
+ //   Si ya estaba en cesta (2+, 3+...), refresh in-place rápido como siempre.
+ const _wasNotInCart = (_ordenCarrito[prodId] === 1);
+ if (_wasNotInCart) {
+  _catInlineHash = ''; // invalida hash → renderCatInline reordena
+  renderCatInline();
+ } else {
+  _catInlineRefreshItem(prodId);
+ }
  _updateAcceptBtn();
  updateBadge();
  // Pasar coordenadas ya capturadas a _flyToCart
@@ -51487,7 +51538,16 @@ function _parseIva(iva) {
  } else {
  _ordenCarrito[prodId] = next;
  }
- _catInlineRefreshItem(prodId);
+ // v1.3.1642 — re-render completo si cruza el umbral cesta↔fuera (0→1 o 1→0).
+ //   Necesario para mover el item entre la sección "En cesta" y su categoría.
+ //   En movimientos internos (>0 → >0) refresh in-place rápido como antes.
+ const _crossedThreshold = (cur === 0 && next > 0) || (cur > 0 && next === 0);
+ if (_crossedThreshold) {
+  _catInlineHash = '';
+  renderCatInline();
+ } else {
+  _catInlineRefreshItem(prodId);
+ }
  _updateAcceptBtn();
  updateBadge();
  _saveCarritoLocal();
@@ -57948,8 +58008,11 @@ _eaRecalc();
  return;
  }
  // Flujo legacy (catálogo normal sin spotlight)
+ const _wasNotInCart = !(_ordenCarrito[prodId] > 0);
  _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
- _catInlineRefreshItem(prodId);
+ // v1.3.1642 — re-render completo si acaba de entrar a la cesta
+ if (_wasNotInCart) { _catInlineHash = ''; renderCatInline(); }
+ else { _catInlineRefreshItem(prodId); }
  _updateAcceptBtn();
  updateBadge();
  showToast('✅ ' + p.nombre + ' (+1 al pedido)');
@@ -66468,9 +66531,19 @@ window._almCarritoOptions = function() {
  } catch(_) {}
 
  // Mostrar overlay (solo barra de input)
+ // v1.3.1641: animación entrada — display:block primero, luego rAF doble
+ //   para garantizar que el navegador pinte el estado inicial (translateY100%)
+ //   antes de aplicar .is-open. Sin esto, el navegador colapsa ambos estados
+ //   en un solo paint y la animación no se ve.
  container.style.display = 'block';
  if (dim) dim.style.display = 'none'; // v1.3.1638: dim desactivado
  window._searchOverlayOpen = true;
+ container.classList.remove('is-closing');
+ requestAnimationFrame(function() {
+  requestAnimationFrame(function() {
+   container.classList.add('is-open');
+  });
+ });
 
  // v1.3.1640: ocultar navbar (tabs + FAB) mientras spotlight está activo.
  try { document.body.classList.add('spotlight-active'); } catch(_) {}
@@ -66512,7 +66585,19 @@ window._almCarritoOptions = function() {
  inp.blur();
  }
 
- if (container) container.style.display = 'none';
+ // v1.3.1641: animación salida — addClass is-closing, esperar 200ms, ocultar.
+ //   transitionend no fiable Android → setTimeout fallback canónico (CLAUDE.md
+ //   WebView quirks). Resetear ambas clases tras hide para próximo open limpio.
+ if (container) {
+  container.classList.remove('is-open');
+  container.classList.add('is-closing');
+  setTimeout(function() {
+   if (container) {
+    container.style.display = 'none';
+    container.classList.remove('is-closing');
+   }
+  }, 200);
+ }
  if (dim) dim.style.display = 'none';
  if (res) { res.innerHTML = ''; res.style.display = 'none'; }
 
