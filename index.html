@@ -754,7 +754,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1649";
+ var CURRENT_CACHE = "dashwey-v1-3-1643";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -773,7 +773,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1649</title>
+<title>Dashwey v1.3.1643</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11862,8 +11862,6 @@ function _authTabSafe(tab) {
 
  <!-- v1.3.674: Lista de pedidos — reemplaza el banner superior -->
  <div id="alm-lista-compra"></div>
- <!-- v1.3.1644: Cajón "Lista de la compra" (cesta) con estilo Pedido programado -->
- <div id="alm-lista-compra-cajon"></div>
  <!-- v1.3.1324: 9 spans alm-banner-* compat eliminados — el bloque IIFE que los
       tocaba (línea ~42211) muere al primer `if (!banner) return` porque
       #alm-progress-banner ya no existe en el DOM (reemplazado por
@@ -21828,7 +21826,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1649';
+ const _APP_VERSION = 'v1.3.1643';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51283,7 +51281,7 @@ const alm = (() => {
  }
 
  var _sugExpanded = false; // estado de colapso
-  var _ldcExpanded = false;  // v1.3.1649: colapsado por defecto (Hung 19 may)
+  var _ldcExpanded = true;  // lista de pedidos abierta por defecto
 
  function _renderSugerencia(sel) {
   var wrap = document.getElementById('alm-sugerencia');
@@ -51333,8 +51331,6 @@ const alm = (() => {
  const prov = State.get.prov(sel);
  // v1.3.652: D01 — sugerencia de pedido
  try { _renderSugerencia(sel); } catch(_) {}
- // v1.3.1644: cajón Lista de la compra (cesta)
- try { _renderListaCompraCajon(); } catch(_) {}
  const wrap = document.getElementById('alm-cat-inline');
  const empty = document.getElementById('alm-empty');
  if (!wrap) return;
@@ -51387,23 +51383,41 @@ const alm = (() => {
  }
  if (empty) empty.style.display = 'none';
 
- // v1.3.1644 — Cesta movida a cajón propio "Lista de la compra" arriba
- //   (fuera del scroll, junto con Pedido programado). El catálogo vuelve a
- //   ser plano por categoría, ordenado alfabéticamente.
- //   Los artículos en cesta NO desaparecen del catálogo: el badge stepper
- //   (contador +/-) sigue apareciendo en el item del catálogo. El cajón
- //   "Lista de la compra" es la VISTA ALTERNATIVA, no exclusiva.
+ // v1.3.1642 — Artículos en cesta arriba.
+ // v1.3.1643 — Ordenación alfabética + total en cesta + texto "Lista de la compra".
+ //   Hung 19 may: lista alfabética (cesta + cada categoría + orden categorías),
+ //   total €IVA en edge derecho de la label "Lista de la compra".
+ //   Fórmula total alineada con FAB pill (línea 57834): qty × precioCompra × ivaFactor.
  const _byName = function(a, b) {
   return (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' });
  };
+ const enCesta = prods.filter(p => (_ordenCarrito[p.id] || 0) > 0).sort(_byName);
+ const resto = prods.filter(p => !((_ordenCarrito[p.id] || 0) > 0)).sort(_byName);
+ // Total cesta (fuente: misma fórmula que FAB pill, single source of truth)
+ const _ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
+ const _totalCesta = enCesta.reduce(function(s, p) {
+  var q = _ordenCarrito[p.id] || 0;
+  return s + q * ((p.precioCompra || 0) * _ivaF(p.iva));
+ }, 0);
  let html = '';
  let _staggerIdx = 0; // v1.3.393: índice global para stagger
  try {
- // Categorías ordenadas alfabéticamente + items ordenados alfabéticamente
- const cats = [...new Set(prods.map(p => p.cat || 'Sin categoría'))]
+ // Sección "Lista de la compra" — solo si hay items
+ if (enCesta.length > 0) {
+  html += '<div class="alm-cat-section-lbl alm-cat-section-lbl--cart">' +
+          '<span class="alm-cat-section-lbl-txt">Lista de la compra · ' + enCesta.length + '</span>' +
+          '<span class="alm-cat-section-lbl-total">Total ' + feur(_totalCesta) + '</span>' +
+          '</div>';
+  enCesta.forEach(p => {
+   try { html += _buildCatInlineItem(p, Math.min(_staggerIdx++, 5)); }
+   catch(_) { html += ''; }
+  });
+ }
+ // Resto agrupado por categoría — categorías y items en orden alfabético
+ const cats = [...new Set(resto.map(p => p.cat || 'Sin categoría'))]
    .sort(function(a, b){ return a.localeCompare(b, 'es', { sensitivity: 'base' }); });
  cats.forEach(cat => {
-  const items = prods.filter(p => (p.cat || 'Sin categoría') === cat).sort(_byName);
+  const items = resto.filter(p => (p.cat || 'Sin categoría') === cat).sort(_byName);
   if (items.length === 0) return;
   html += '<div class="alm-cat-section-lbl">' + esc(cat) + '</div>';
   items.forEach(p => {
@@ -51509,346 +51523,29 @@ function _parseIva(iva) {
  let _catInlineLpTimer = null;
  let _catInlineLpEl = null;
 
- // v1.3.1644 / v1.3.1645 — Cajón "Lista de la compra"
- //   Estilo y comportamiento idéntico a "Pedido programado":
- //   tap header completo → toggle expandir/colapsar inline. Chevron SVG
- //   inline al título (mismo: width:10, opacity:0.7, rotate 90deg→0).
- //   Body cuando expandido contiene:
- //     1) Listas guardadas (status:'lista' en pendingOrders) arriba — long-press
- //        para eliminar (mismo flujo que pedido programado), tap para EDITAR
- //        (carga snapshot a _ordenCarrito).
- //     2) Cesta actual (_ordenCarrito) abajo con × N (sin botones −/+).
- //     3) Footer: Guardar + Confirmar pedido (solo si hay cesta).
- //   Badge derecha: Total IVA si hay cesta, "N lista(s)" si solo listas, vacío.
- let _ldcCajonExpanded = false;
- let _ldcListaEditandoId = null; // si !=null, "Guardar" sobrescribe esta lista
-
- function _renderListaCompraCajon() {
-  var wrap = document.getElementById('alm-lista-compra-cajon');
-  if (!wrap) return;
-  var sel = State.get.selectedProv();
-  if (!sel) { wrap.innerHTML = ''; _ldcListaEditandoId = null; return; }
-
+ // v1.3.1643 — Refrescar el total mostrado en la label "Lista de la compra"
+ //   sin re-render del catálogo. Recalcula sobre el _ordenCarrito actual.
+ //   Usar sólo cuando se cambian cantidades dentro de cesta (movimiento interno).
+ //   En cruces de umbral 0↔1 se hace renderCatInline completo que ya rehace todo.
+ function _refreshListaCompraTotal() {
+  var totalEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-total');
+  var txtEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-txt');
+  if (!totalEl) return;
   var ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
-
-  // ── Items cesta actual del proveedor activo (orden alfabético) ────
-  var items = [];
-  var totalCesta = 0;
+  var total = 0;
+  var count = 0;
   Object.keys(_ordenCarrito).forEach(function(pid) {
    var q = _ordenCarrito[pid] || 0;
    if (q <= 0) return;
    var p = State.get.prod(pid);
-   if (!p || p.prov !== sel) return;
-   items.push({ p: p, q: q });
-   totalCesta += q * ((p.precioCompra || 0) * ivaF(p.iva));
+   if (!p) return;
+   // Solo contar productos del proveedor activo (los visibles en el catálogo)
+   if (p.prov !== State.get.selectedProv()) return;
+   count += 1;
+   total += q * ((p.precioCompra || 0) * ivaF(p.iva));
   });
-  items.sort(function(a, b) {
-   return (a.p.nombre || '').localeCompare(b.p.nombre || '', 'es', { sensitivity: 'base' });
-  });
-
-  // ── Listas guardadas del proveedor activo (status:'lista') ────────
-  var listas = (State.get.pendingOrders ? State.get.pendingOrders() : [])
-   .filter(function(o) { return o.status === 'lista' && o.provId === sel; })
-   .sort(function(a, b) { return (b._updatedAt || 0) - (a._updatedAt || 0); });
-
-  var hasCesta = items.length > 0;
-  var hasListas = listas.length > 0;
-
-  // Cajón vacío total → no mostrar nada (salvo si estamos editando una lista
-  // y se vació accidentalmente, mantenemos el cajón para que el usuario
-  // pueda guardar de nuevo)
-  if (!hasCesta && !hasListas) {
-   _ldcListaEditandoId = null;
-   wrap.innerHTML = '';
-   return;
-  }
-
-  // Si la lista que estábamos editando ya no existe, limpiar flag
-  if (_ldcListaEditandoId && !listas.find(function(l){ return l.id === _ldcListaEditandoId; })) {
-   _ldcListaEditandoId = null;
-  }
-
-  // ── Título dinámico ───────────────────────────────────────────────
-  // v1.3.1649 — Título dinámico simplificado.
-  //   "Lista" cuando hay cesta activa (lo que el usuario está construyendo)
-  //   "Listas guardadas" cuando solo hay listas (sin cesta nueva)
-  //   "Lista" como fallback (no debería darse — el cajón se vacía si no hay nada)
-  var _titulo;
-  if (hasCesta) _titulo = 'Lista';
-  else if (hasListas) _titulo = listas.length === 1 ? 'Lista guardada' : 'Listas guardadas';
-  else _titulo = 'Lista';
-
-  // ── Badge derecha — total cesta o contador listas ─────────────────
-  var _badgeHdr;
-  if (hasCesta) {
-   _badgeHdr = '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff;font-variant-numeric:tabular-nums">' + feur(totalCesta) + '</span>';
-  } else if (hasListas) {
-   _badgeHdr = '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff">' + listas.length + ' lista' + (listas.length!==1?'s':'') + '</span>';
-  } else {
-   _badgeHdr = '<span style="font-size:var(--fs-2xs);color:rgba(255,255,255,0.7)">vacío</span>';
-  }
-
-  // v1.3.1649 — Iconos SVG inline para Guardar + Confirmar (solo si hay cesta).
-  //   Aparecen en el header mismo (siempre visibles aunque colapsado).
-  //   data-ldc-action: enganchado con addEventListener post-render para
-  //   evitar regresión del bug onclick inline (v1.3.1646).
-  var _iconActions = '';
-  if (hasCesta) {
-   var _lblGuardar = _ldcListaEditandoId ? 'Actualizar lista' : 'Guardar lista';
-   var _bsIcon = 'background:rgba(255,255,255,0.18);border:none;width:32px;height:32px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent';
-   _iconActions =
-    // Guardar: floppy disk icon
-    '<button data-ldc-action="guardar" aria-label="' + _lblGuardar + '" title="' + _lblGuardar + '" style="' + _bsIcon + '">'
-    + '<svg width="16" height="16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>'
-    + '</button>'
-    // Confirmar pedido: check icon (blanco sólido sobre rojo intensificado para destacar)
-    + '<button data-ldc-action="confirmar" aria-label="Confirmar pedido" title="Confirmar pedido" style="' + _bsIcon + ';background:rgba(255,255,255,0.32)">'
-    + '<svg width="16" height="16" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
-    + '</button>';
-  }
-
-  // ── Header — mismo estilo Pedido programado + iconos acción inline ─
-  //   Chevron rotado 90° colapsado / 0° expandido (igual que Pedido prog).
-  //   onclick en el div título → toggle (sin propagar a iconos via stopPropagation).
-  var _chevronRot = _ldcCajonExpanded ? '0' : '90';
-  var _hdr =
-   '<div class="alm-sug-hdr" style="gap:var(--sp-2);background:var(--red);border-radius:var(--r-md) 12px 0 0">'
-   + '<div class="alm-sug-title" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:var(--sp-1);color:#fff;min-width:0" onclick="App.alm._ldcCajonToggle()">'
-   + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _titulo + '</span>'
-   + '<svg width="10" height="10" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24" style="flex-shrink:0;opacity:0.7;transform:rotate(' + _chevronRot + 'deg);transition:transform var(--dur-short, 200ms) ease"><polyline points="9 18 15 12 9 6"/></svg>'
-   + '</div>'
-   + _badgeHdr
-   + _iconActions
-   + '</div>';
-
-  // ── Body cuando expandido ─────────────────────────────────────────
-  var body = '';
-  if (_ldcCajonExpanded) {
-
-   // ── Filas listas guardadas (arriba) ──────────────────────────────
-   var rowsListas = '';
-   if (hasListas) {
-    var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-    var fmtFecha = function(ts) {
-     try { var d = new Date(ts); return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
-     catch(_) { return '—'; }
-    };
-    rowsListas = listas.map(function(l) {
-     var nArt = (l.items || []).length;
-     var totalL = (l.items || []).reduce(function(s, it) {
-      var p = State.get.prod(it.prodId);
-      var iva = it.iva != null ? it.iva : (p && p.iva ? p.iva : '10%');
-      return s + (it.ncajas || 0) * (it.precio || (p ? p.precioCompra : 0) || 0) * ivaF(iva);
-     }, 0);
-     var esEditando = (l.id === _ldcListaEditandoId);
-     var bgRow = esEditando ? 'background:rgba(239,68,68,0.06);' : '';
-     return '<div class="alm-sug-item ldc-lista-row" data-list-id="' + esc(l.id) + '" style="cursor:pointer;' + bgRow + '">' +
-      '<div class="alm-sug-e">📋</div>' +
-      '<div class="alm-sug-info">' +
-      '<div class="alm-sug-name">' + fmtFecha(l._updatedAt || l.ts) + (esEditando ? ' <span style="color:var(--red);font-weight:var(--fw-bold);font-size:var(--fs-2xs)">· editando</span>' : '') + '</div>' +
-      '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · Total ' + feur(totalL) + '</div>' +
-      '</div>' +
-      '<svg width="14" height="14" fill="none" stroke="var(--ink-soft)" stroke-width="2.5" viewBox="0 0 24 24" style="flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>' +
-      '</div>';
-    }).join('');
-   }
-
-   // ── Filas cesta actual (abajo) con × N (sin steppers) ────────────
-   var rowsCesta = items.map(function(it) {
-    var p = it.p;
-    var q = it.q;
-    var sub = q * ((p.precioCompra || 0) * ivaF(p.iva));
-    return '<div class="alm-sug-item">' +
-     '<div class="alm-sug-e">' + (p.e || '📦') + '</div>' +
-     '<div class="alm-sug-info">' +
-     '<div class="alm-sug-name">' + esc(p.nombre) + '</div>' +
-     '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + feur((p.precioCompra || 0) * ivaF(p.iva)) + '/bulto · ' + feur(sub) + '</div>' +
-     '</div>' +
-     '<span style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink);font-variant-numeric:tabular-nums;flex-shrink:0;padding:0 4px">× ' + q + '</span>' +
-     '</div>';
-   }).join('');
-
-   // v1.3.1649 — Footer eliminado: botones Guardar/Confirmar viven ahora
-   //   en el header (iconos SVG blancos). Body solo muestra listas + items.
-   body = '<div class="alm-sug-body">' + rowsListas + rowsCesta + '</div>';
-  }
-
-  wrap.innerHTML = '<div class="alm-sug-card">' + _hdr + body + '</div>';
-
-  // v1.3.1646 / v1.3.1649 — Listeners iconos Guardar/Confirmar (header).
-  //   Siempre visibles si hay cesta (incluso cajón colapsado). Usar
-  //   addEventListener + setTimeout(0) desacopla del re-render interno.
-  if (hasCesta) {
-   var btnGuardar = wrap.querySelector('button[data-ldc-action="guardar"]');
-   var btnConfirmar = wrap.querySelector('button[data-ldc-action="confirmar"]');
-   if (btnGuardar) {
-    btnGuardar.addEventListener('click', function(e) {
-     e.preventDefault(); e.stopPropagation();
-     try { Utils.triggerHaptic('selection'); } catch(_) {}
-     // setTimeout 0 desacopla: el click se completa, luego ejecutamos
-     setTimeout(function(){ try { _ldcGuardarLista(); } catch(err) { console.error('[LDC] Guardar:', err); } }, 0);
-    });
-   }
-   if (btnConfirmar) {
-    btnConfirmar.addEventListener('click', function(e) {
-     e.preventDefault(); e.stopPropagation();
-     try { Utils.triggerHaptic('selection'); } catch(_) {}
-     setTimeout(function(){ try { _ldcConfirmarDesdeCajon(); } catch(err) { console.error('[LDC] Confirmar:', err); } }, 0);
-    });
-   }
-  }
-
-  // Long-press y tap en listas guardadas (mismo patrón que _renderListaCompra)
-  if (_ldcCajonExpanded && hasListas) {
-   wrap.querySelectorAll('.ldc-lista-row').forEach(function(row) {
-    var _lpTimer = null;
-    row.addEventListener('touchstart', function(){
-     _lpTimer = setTimeout(function(){
-      _lpTimer = null;
-      try { Utils.triggerHaptic('warning'); } catch(_) {}
-      var lid = row.dataset.listId;
-      var _list = (State.get.pendingOrders ? State.get.pendingOrders() : []).find(function(o){ return o.id === lid; });
-      var _nArt = _list ? (_list.items||[]).length : 0;
-      window._showDestructiveConfirm({
-       title: 'Eliminar lista guardada',
-       message: 'Se eliminará la lista' + (_nArt ? ' con ' + _nArt + ' artículo' + (_nArt!==1?'s':'') : '') + '. Esta acción no se puede deshacer.',
-       confirmLabel: 'Eliminar',
-       onConfirm: function() {
-        try { State.set.removePendingOrder(lid); } catch(_) {}
-        try { Utils.showToast('🗑️ Lista eliminada'); } catch(_) {}
-        if (_ldcListaEditandoId === lid) _ldcListaEditandoId = null;
-        try { _renderListaCompraCajon(); } catch(_) {}
-       }
-      });
-     }, 600);
-    }, { passive: true });
-    row.addEventListener('touchend',  function(){ if(_lpTimer){ clearTimeout(_lpTimer); _lpTimer=null; } });
-    row.addEventListener('touchmove', function(){ if(_lpTimer){ clearTimeout(_lpTimer); _lpTimer=null; } }, { passive: true });
-    row.addEventListener('click', function(){
-     if (!_lpTimer && _lpTimer !== null) return; // long press consumed
-     var lid = row.dataset.listId;
-     try { _ldcCargarLista(lid); } catch(_) {}
-    });
-   });
-  }
- }
-
- function _ldcCajonToggle() {
-  _ldcCajonExpanded = !_ldcCajonExpanded;
-  _renderListaCompraCajon();
- }
-
- // ── Guardar lista actual a pendingOrders con status:'lista' ─────────
- //   Si _ldcListaEditandoId != null, sobrescribe la lista existente
- //   (remove + add) — mantiene posición temporal por _updatedAt fresco.
- function _ldcGuardarLista() {
-  var sel = State.get.selectedProv();
-  if (!sel) return;
-  if (Object.keys(_ordenCarrito).length === 0) {
-   try { Utils.showToast('🛒 Cesta vacía'); } catch(_) {}
-   return;
-  }
-  // Construir items snapshot (formato compatible pendingOrders)
-  var items = Object.entries(_ordenCarrito).map(function(entry) {
-   var prodId = entry[0]; var ncajas = entry[1];
-   var p = State.get.prod(prodId);
-   var savedUds = (typeof getLV === 'function') ? getLV(prodId, { udscaja: p ? p.udscaja || 12 : 12 }).udscaja : (p ? p.udscaja : 12);
-   var udscaja = (p && p.udscaja) || savedUds || 12;
-   return { prodId: prodId, provId: sel, ncajas: ncajas, udscaja: udscaja,
-            precio: p ? p.precioCompra || 0 : 0, pvp: p ? p.pvp || 0 : 0, iva: p ? p.iva : '10%' };
-  });
-  var nuevoId;
-  if (_ldcListaEditandoId) {
-   // Sobrescribir: remove + add (más simple que update porque _updatedAt sale fresco)
-   try { State.set.removePendingOrder(_ldcListaEditandoId); } catch(_) {}
-  }
-  nuevoId = 'list_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-  try {
-   State.set.addPendingOrder({
-    id: nuevoId,
-    provId: sel,
-    items: items,
-    status: 'lista',
-    kind: 'lista',
-    ts: Date.now()
-   });
-  } catch(e) { console.warn('[Dashwey] _ldcGuardarLista:', e); }
-  // Vaciar cesta y refrescar
-  Object.keys(_ordenCarrito).forEach(function(k){ delete _ordenCarrito[k]; });
-  _ldcListaEditandoId = null;
-  try { _saveCarritoLocal(); } catch(_) {}
-  try { _updateAcceptBtn(); } catch(_) {}
-  try { updateBadge(); } catch(_) {}
-  try { Utils.showToast('💾 Lista guardada'); } catch(_) {}
-  // Re-render catálogo (items vuelven a estado sin cesta) + cajón
-  _catInlineHash = '';
-  try { renderCatInline(); } catch(_) {}
- }
-
- // ── Cargar lista a _ordenCarrito para edición ─────────────────────
- function _ldcCargarLista(listId) {
-  var lista = (State.get.pendingOrders ? State.get.pendingOrders() : []).find(function(o){ return o.id === listId; });
-  if (!lista || lista.status !== 'lista') return;
-  // Si ya hay cesta, confirmar reemplazo
-  var hasCesta = Object.keys(_ordenCarrito).length > 0;
-  var aplicar = function() {
-   Object.keys(_ordenCarrito).forEach(function(k){ delete _ordenCarrito[k]; });
-   (lista.items || []).forEach(function(it) {
-    _ordenCarrito[it.prodId] = it.ncajas || 0;
-   });
-   _ldcListaEditandoId = listId;
-   try { _saveCarritoLocal(); } catch(_) {}
-   try { _updateAcceptBtn(); } catch(_) {}
-   try { updateBadge(); } catch(_) {}
-   _catInlineHash = '';
-   try { renderCatInline(); } catch(_) {}
-   try { Utils.showToast('✏️ Editando lista'); } catch(_) {}
-  };
-  if (hasCesta) {
-   window._showDestructiveConfirm({
-    title: 'Reemplazar cesta actual',
-    message: 'Tu cesta actual se sustituirá por los artículos de la lista guardada. ¿Continuar?',
-    confirmLabel: 'Reemplazar',
-    onConfirm: aplicar
-   });
-  } else {
-   aplicar();
-  }
- }
-
- // ── Confirmar pedido desde el cajón ─────────────────────────────────
- //   v1.3.1648 Hung 19 may: NO abrir popup análisis antiguo (score/KPIs/
- //   sugerencias) ni "Comprobar recepción" del centro pantalla. Esos
- //   son flujos legacy. Confirmar pedido AHORA = mover cesta directamente
- //   al cajón "Pedido programado" arriba como pendingOrder normal.
- //   Delegamos en `_guardarComoOrdenPendiente()` que es el flujo canónico
- //   (mismo que botón "Guardar pedido programado" del modal cesta legacy):
- //     - addPendingOrder con status:'pending'
- //     - vacía _ordenCarrito + localStorage
- //     - re-render catálogo + badge
- //     - animación caja flotante → cajón pedidos
- //   Si estábamos editando una lista guardada, se elimina al convertirse
- //   en pedido real (la lista deja de tener sentido).
- function _ldcConfirmarDesdeCajon() {
-  var sel = State.get.selectedProv();
-  if (!sel) return;
-  if (Object.keys(_ordenCarrito).length === 0) {
-   try { Utils.showToast('🛒 Cesta vacía'); } catch(_) {}
-   return;
-  }
-  var listaParaBorrar = _ldcListaEditandoId;
-  _ldcListaEditandoId = null;
-  try {
-   _guardarComoOrdenPendiente();
-  } catch(e) { console.error('[LDC] _ldcConfirmarDesdeCajon:', e); return; }
-  // La lista guardada queda obsoleta (sus items ya son pedido programado)
-  if (listaParaBorrar) {
-   try { State.set.removePendingOrder(listaParaBorrar); } catch(_) {}
-  }
-  // Re-render del cajón Lista de la compra (carrito vacío → cajón se oculta
-  // o se queda solo con listas guardadas restantes). renderCatInline ya lo
-  // dispara internamente, pero por si acaso:
-  try { _renderListaCompraCajon(); } catch(_) {}
+  totalEl.textContent = 'Total ' + feur(total);
+  if (txtEl) txtEl.textContent = 'Lista de la compra · ' + count;
  }
 
  // ── TAP: añade 1 bulto al carrito y refresca el item ──────────
@@ -51871,9 +51568,18 @@ function _parseIva(iva) {
  setTimeout(() => _tapEl.classList.remove('alm-tap-flash'), 180);
  }
  _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
- _catInlineRefreshItem(prodId);
- // v1.3.1644 — refrescar cajón "Lista de la compra" (header + body si abierto)
- try { _renderListaCompraCajon(); } catch(_) {}
+ // v1.3.1642 — si el artículo acaba de entrar a la cesta (era 0, ahora 1),
+ //   forzar re-render completo para que suba a la sección "En cesta" arriba.
+ //   Si ya estaba en cesta (2+, 3+...), refresh in-place rápido como siempre.
+ const _wasNotInCart = (_ordenCarrito[prodId] === 1);
+ if (_wasNotInCart) {
+  _catInlineHash = ''; // invalida hash → renderCatInline reordena
+  renderCatInline();
+ } else {
+  _catInlineRefreshItem(prodId);
+  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
+  try { _refreshListaCompraTotal(); } catch(_) {}
+ }
  _updateAcceptBtn();
  updateBadge();
  // Pasar coordenadas ya capturadas a _flyToCart
@@ -51891,9 +51597,18 @@ function _parseIva(iva) {
  } else {
  _ordenCarrito[prodId] = next;
  }
- _catInlineRefreshItem(prodId);
- // v1.3.1644 — refrescar cajón "Lista de la compra" (header + body si abierto)
- try { _renderListaCompraCajon(); } catch(_) {}
+ // v1.3.1642 — re-render completo si cruza el umbral cesta↔fuera (0→1 o 1→0).
+ //   Necesario para mover el item entre la sección "En cesta" y su categoría.
+ //   En movimientos internos (>0 → >0) refresh in-place rápido como antes.
+ const _crossedThreshold = (cur === 0 && next > 0) || (cur > 0 && next === 0);
+ if (_crossedThreshold) {
+  _catInlineHash = '';
+  renderCatInline();
+ } else {
+  _catInlineRefreshItem(prodId);
+  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
+  try { _refreshListaCompraTotal(); } catch(_) {}
+ }
  _updateAcceptBtn();
  updateBadge();
  _saveCarritoLocal();
@@ -57876,9 +57591,6 @@ _eaRecalc();
  // Cesta
  openCestaFs, confirmarPedido, descargarFactura,
  _renderSugerencia, _sugToggle, _reToggle, _renderListaCompra, _ldcToggle, _ldcAbrirDetalleCarrito, _ldcAbrirDetallePedido, _ldcSyncBotones,
- // v1.3.1644 / v1.3.1645 — cajón "Lista de la compra"
- _renderListaCompraCajon, _ldcCajonToggle,
- _ldcGuardarLista, _ldcConfirmarDesdeCajon,
  _getSelectedProv: function(){ return State.get.selectedProv(); },
  // Merma
  openMerma, saveMerma,
@@ -58186,23 +57898,26 @@ _eaRecalc();
  }, 0);
 
  if (_carritoLineas > 0 && !_hasOverlay) {
-  // v1.3.1644 — FAB ya NO entra en cart-mode. El acceso a la cesta es vía
-  //   el cajón "Lista de la compra" arriba (debajo de Pedidos programados).
-  //   Conservamos cálculo de count/total para compatibilidad legacy y porque
-  //   `_renderListaCompraCajon` lee `_ordenCarrito` directamente — no
-  //   actualizamos textos del pill (queda invisible por la rama A).
-  //
-  //   Fuerza estado A: navbar sin cart-mode, pill oculto siempre.
-  if (_navbar) _navbar.classList.remove('cart-mode');
+  // Estado B — mostrar cesta
+  // v1.3.1338: badge contador con cap "99+" y transform sin translateY
+  var _pArts  = document.getElementById('alm-fab-pill-arts');
+  var _pTotal = document.getElementById('alm-fab-pill-total');
+  var _strArts  = _carritoCount > 99 ? '99+' : String(_carritoCount);
+  var _strTotal = feur(_carritoTotal);
+  if (_pArts && _pArts.textContent !== _strArts)   _pArts.textContent  = _strArts;
+  if (_pTotal && _pTotal.textContent !== _strTotal) _pTotal.textContent = _strTotal;
+  if (_navbar) _navbar.classList.add('cart-mode');
+  // Refuerzo inline (WebView Android puede no aplicar la transición CSS)
   if (_pill) {
-   _pill.style.opacity = '0';
-   _pill.style.pointerEvents = 'none';
-   _pill.style.transform = 'scale(0.92)';
+   _pill.style.opacity = '1';
+   _pill.style.pointerEvents = 'auto';
+   _pill.style.transform = 'scale(1)';
   }
-  if (_fabSolo) { _fabSolo.style.opacity = '1'; _fabSolo.style.pointerEvents = ''; }
+  if (_fabSolo) { _fabSolo.style.opacity = '0'; _fabSolo.style.pointerEvents = 'none'; }
  } else {
-  // Estado A — sin cesta, FAB normal
+  // Estado A — ocultar cesta
   if (_navbar) _navbar.classList.remove('cart-mode');
+  // Refuerzo inline para garantizar ocultamiento
   if (_pill) {
    _pill.style.opacity = '0';
    _pill.style.pointerEvents = 'none';
@@ -58884,13 +58599,6 @@ _eaRecalc();
 
  // v1.3.665: IVA real por artículo
  const _getIvaP = (o) => { try { const p=State.get.prod(o.prodId); const r=o.iva!=null?o.iva:(p?.iva??'10%'); return parseFloat(String(r).replace('%',''))/100||0.10; } catch(_){return 0.10;} };
- // v1.3.1647 FIX: _ivaItemFn estaba declarado SOLO en openCestaFs (L55554),
- //   no en este scope. Cuando _openAceptarPopupFromCarrito se llamaba
- //   directamente (sin pasar antes por openCestaFs) → ReferenceError en
- //   L58876 → todo el flujo abortaba silenciosamente (popup nunca aparecía).
- //   Bug histórico latente expuesto al añadir el botón "Confirmar pedido"
- //   del cajón Lista de la compra. Misma fórmula que _getIvaP.
- const _ivaItemFn = _getIvaP;
  const totalInv = items.reduce((s,o)=>s+(o.ncajas||1)*(o.precio||0)*(1+_getIvaP(o)),0);
  const totalVta = items.reduce((s,o)=>s+(o.ncajas||1)*(o.udscaja||1)*(o.pvp||0),0);
  const ganancia = totalVta - totalInv;
@@ -60196,7 +59904,7 @@ _eaRecalc();
 
  var html_carrito =
  '<div class="modal-header-dark"><div class="mhd-row"><div>' +
- '<h2 class="mhd-title">Lista de la compra</h2>' +
+ '<h2 class="mhd-title">Carrito</h2>' +
  '<div class="mhd-sub">' + (prov?.icon||'🏪') + ' ' + esc(prov?.nombre||'') + ' · ' + itemsCarrito.length + ' artículo' + (itemsCarrito.length!==1?'s':'') + '</div>' +
  '</div>' +
  '<div style="display:flex;gap:var(--sp-1_5);align-items:center">' +
