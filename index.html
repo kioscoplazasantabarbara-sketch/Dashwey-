@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1706";
+ var CURRENT_CACHE = "dashwey-v1-3-1707";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1706</title>
+<title>Dashwey v1.3.1707</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22212,7 +22212,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1706';
+ const _APP_VERSION = 'v1.3.1707';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26871,10 +26871,16 @@ const ui = (() => {
    var cierreTs = _autoCierreTzToUtc(hoy, hhC, mmC, zona);
    var bruto = 0;
    var nTickets = 0;
+   /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable (excluir transferencias/ajustes/pendientes)
+      y excluir ventas ya estampadas con closureId (evita doble contabilidad).
+      Boundary: < cierreTs (exclusive, consistente con _autoCierreCrearCierreReal). */
+   var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
    ventas.forEach(function(v){
     if (!v || v.deleted) return;
+    if (!_aggCheck(v)) return;
+    if (v.closureId) return;
     var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
-    if (ts >= aperturaTs && ts <= cierreTs) {
+    if (ts >= aperturaTs && ts < cierreTs) {
      var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
      bruto += imp;
      nTickets++;
@@ -27094,6 +27100,22 @@ const ui = (() => {
     }
    });
    cierreReal.eventIds = { ventas: eventIdsVentas, gastos: [], ingresos: [] };
+   /* v1.3.1706 BUG-DATOS-003 FIX: recalcular ventas/nVentas desde las ventas EFECTIVAMENTE estampadas.
+      Antes: cierreReal.ventas = info.bruto (de _autoCierreCalcBruto/ForDay) que podía diferir
+      de las ventas realmente capturadas por el filtro _aggCheck + closureId.
+      Ahora: suma exacta de v.total de cada venta en eventIdsVentas → 0 divergencia con recalcularCierre. */
+   var _realVentasSum = 0;
+   var _evSet = new Set(eventIdsVentas);
+   ventasAll.forEach(function(v){
+    if (v && !v.deleted && _evSet.has(v.id)) {
+     _realVentasSum += (typeof v.total === 'number') ? v.total : 0;
+    }
+   });
+   _realVentasSum = Math.round(_realVentasSum * 100) / 100;
+   cierreReal.ventas = _realVentasSum;
+   cierreReal.nVentas = eventIdsVentas.length;
+   cierreReal.saldoEsperado = _realVentasSum;
+   cierreReal.saldoReal = _realVentasSum;
    cierreReal.isCached = true;
    cierreReal.cachedAt = now;
 
@@ -27443,10 +27465,15 @@ const ui = (() => {
    var cierreTs = _autoCierreTzToUtc(cierreKey, hhC, mmC, zona);
    var bruto = 0;
    var nTickets = 0;
+   /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable y closureId (misma lógica que _autoCierreCalcBruto).
+      Boundary < cierreTs (exclusive, consistente con _autoCierreCrearCierreReal). */
+   var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
    ventas.forEach(function(v){
     if (!v || v.deleted) return;
+    if (!_aggCheck(v)) return;
+    if (v.closureId) return;
     var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
-    if (ts >= aperturaTs && ts <= cierreTs) {
+    if (ts >= aperturaTs && ts < cierreTs) {
      var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
      bruto += imp;
      nTickets++;
@@ -27550,11 +27577,14 @@ const ui = (() => {
 
    if (estampados > 0) {
     console.info('[Reconciliación v1.3.1405] ✓ ' + estampados + ' ventas tardías estampadas retroactivamente');
+    /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable al recalcular totales del cierre.
+       Consistente con recalcularCierre y _autoCierreCrearCierreReal. */
+    var _aggReconcile = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
     // Recalcular totales de cada cierre afectado desde scratch
     cierresValidos.forEach(function(c){
      if (!afectados[c.id]) return;
      var ventasCierre = ventas.filter(function(v){
-      return v && !v.deleted && v.closureId === c.id;
+      return v && !v.deleted && v.closureId === c.id && _aggReconcile(v);
      });
      var sumNew = ventasCierre.reduce(function(s, v){
       return s + (typeof v.total === 'number' ? v.total : 0);
