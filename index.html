@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1702";
+ var CURRENT_CACHE = "dashwey-v1-3-1703";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1702</title>
+<title>Dashwey v1.3.1703</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22157,7 +22157,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1702';
+ const _APP_VERSION = 'v1.3.1703';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -60187,7 +60187,163 @@ _eaRecalc();
    // Ambos vivos o ambos deleted → comparar timestamps
    if (_ts(item) > _ts(existing)) map[item.id] = item;
   });
+  var result = Object.values(map);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // v1.3.1703 BUG-8 SHADOW LOG: ejecutar _mergeById_v2 en paralelo y comparar
+  // ════════════════════════════════════════════════════════════════════════
+  // v2 difiere SOLO en el bloque tombstone: con v1 el tombstone gana SIEMPRE,
+  // con v2 solo gana si su timestamp es >= la edición opuesta. Sin esto,
+  // tablet edita item X (_updatedAt=2000) + Pixel borra item X (deletedAt=1000)
+  // → tombstone Pixel gana → edición tablet perdida.
+  // Shadow log: NO aplicamos v2, solo registramos divergencias para validar
+  // 7 días antes de activar como default (sesión futura).
+  try {
+   if (window._DashweyMergeShadowEnabled !== false) {
+    var v2Result = _mergeById_v2(localArr, remoteArr);
+    _mergeShadowCompare(result, v2Result, localArr, remoteArr);
+   }
+  } catch(eShadow) {
+   // Silencioso — shadow log NO debe afectar producción
+   if (!window._DashweyMergeShadowQuiet) {
+    console.warn('[MergeShadow] error interno:', eShadow && eShadow.message);
+   }
+  }
+
+  return result;
+ }
+
+ // ─────────────────────────────────────────────────────────────────────────
+ // v1.3.1703 BUG-8 — _mergeById_v2: tombstones con timestamps
+ // ─────────────────────────────────────────────────────────────────────────
+ // Diferencia vs v1:
+ //   v1: tombstone siempre gana sobre versión viva (independiente del ts)
+ //   v2: tombstone gana SOLO si su timestamp es >= la versión opuesta
+ // Resultado: edición posterior a un tombstone "resucita" el item legítimamente
+ // (en lugar de perderse silenciosamente).
+ //
+ // RIESGO ANALIZADO: si v2 fuera incorrecto, podría reaparecer un item borrado.
+ // Pero solo si la edición opuesta tiene timestamp > deletedAt → significa que
+ // el otro device editó DESPUÉS del borrado → tiene info más nueva que el
+ // tombstone → es legítimo conservar la edición.
+ //
+ // Esta v2 NO está activa todavía — solo corre en shadow para validar 7 días.
+ // Para activar (sesión futura tras 7 días sin warnings): cambiar la última
+ // línea de _mergeById de `return result;` a `return v2Result;`.
+ function _mergeById_v2(localArr, remoteArr) {
+  if (!Array.isArray(localArr) || !Array.isArray(remoteArr)) {
+   return remoteArr || localArr || [];
+  }
+  var hasId = function(arr) { return arr.length > 0 && arr[0] && arr[0].id; };
+  if (!hasId(localArr) && !hasId(remoteArr)) {
+   return remoteArr.length >= localArr.length ? remoteArr : localArr;
+  }
+  var map = {};
+  var _ts = function(x) {
+   if (!x) return 0;
+   if (typeof x._updatedAt === 'number' && x._updatedAt > 0) return x._updatedAt;
+   var f = x.deletedAt || x.updatedAt || x.fecha || x.createdAt || 0;
+   if (!f) return 0;
+   if (typeof f === 'number') return f;
+   var d = new Date(f); return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+  localArr.forEach(function(item) {
+   if (item && item.id) map[item.id] = item;
+  });
+  remoteArr.forEach(function(item) {
+   if (!item || !item.id) return;
+   var existing = map[item.id];
+   if (!existing) { map[item.id] = item; return; }
+
+   // ★ DIFERENCIA CON V1: tombstone gana solo si su timestamp ≥ opuesto
+   if (existing.deleted && !item.deleted) {
+    // Tombstone local vs item vivo remoto
+    if (_ts(existing) >= _ts(item)) return; // tombstone reciente → local gana
+    map[item.id] = item; // edición remota es más reciente → resucitar
+    return;
+   }
+   if (item.deleted && !existing.deleted) {
+    // Tombstone remoto vs item vivo local
+    if (_ts(item) >= _ts(existing)) { map[item.id] = item; return; } // tombstone reciente → remoto gana
+    return; // edición local es más reciente → conservar
+   }
+
+   // LWW asimétrico (idéntico a v1)
+   var existingHasLWW = typeof existing._updatedAt === 'number' && existing._updatedAt > 0;
+   var itemHasLWW     = typeof item._updatedAt === 'number'     && item._updatedAt > 0;
+   if (existingHasLWW && !itemHasLWW) return;
+   if (!existingHasLWW && itemHasLWW) { map[item.id] = item; return; }
+   // Ambos vivos o ambos deleted → comparar timestamps
+   if (_ts(item) > _ts(existing)) map[item.id] = item;
+  });
   return Object.values(map);
+ }
+
+ // ─────────────────────────────────────────────────────────────────────────
+ // v1.3.1703 BUG-8 SHADOW — Comparador con telemetría
+ // ─────────────────────────────────────────────────────────────────────────
+ // Compara resultados v1 vs v2. Si difieren, registra en window._DashweyMergeShadowStats.
+ // Solo emite console.warn las primeras 10 divergencias por tipo (anti-spam).
+ // Stats accesibles desde consola: window._DashweyMergeShadowStats
+ window._DashweyMergeShadowStats = {
+  calls: 0,           // total llamadas comparadas
+  divergent: 0,       // calls donde v1 ≠ v2
+  resurrected_v2: 0,  // items que v2 resucita y v1 mantiene borrados
+  buried_v2: 0,       // items que v2 borra y v1 mantiene vivos (raro)
+  examples: [],       // primeros 10 ejemplos para análisis
+  lastDivergenceAt: 0,
+ };
+ function _mergeShadowCompare(v1Result, v2Result, localArr, remoteArr) {
+  var stats = window._DashweyMergeShadowStats;
+  stats.calls++;
+
+  // Indexar por id para comparación O(n)
+  var v1Map = {}, v2Map = {};
+  v1Result.forEach(function(x){ if (x && x.id) v1Map[x.id] = x; });
+  v2Result.forEach(function(x){ if (x && x.id) v2Map[x.id] = x; });
+
+  var diffIds = [];
+  // Items presentes en v1 pero no v2 (o viceversa) → divergencia grosera
+  Object.keys(v1Map).forEach(function(id) {
+   var a = v1Map[id], b = v2Map[id];
+   if (!b) { diffIds.push({ id: id, kind: 'missing-in-v2', v1: a }); return; }
+   // Mismo id presente en ambos: comparar deleted state
+   if (!!a.deleted !== !!b.deleted) {
+    diffIds.push({ id: id, kind: 'deleted-mismatch', v1Deleted: !!a.deleted, v2Deleted: !!b.deleted });
+   }
+  });
+  Object.keys(v2Map).forEach(function(id) {
+   if (!v1Map[id]) diffIds.push({ id: id, kind: 'missing-in-v1', v2: v2Map[id] });
+  });
+
+  if (diffIds.length === 0) return; // sin divergencias
+
+  stats.divergent++;
+  stats.lastDivergenceAt = Date.now();
+
+  diffIds.forEach(function(d) {
+   if (d.kind === 'deleted-mismatch') {
+    if (!d.v1Deleted && d.v2Deleted) stats.buried_v2++;
+    if (d.v1Deleted && !d.v2Deleted) stats.resurrected_v2++;
+   } else if (d.kind === 'missing-in-v1') {
+    stats.resurrected_v2++;
+   } else if (d.kind === 'missing-in-v2') {
+    stats.buried_v2++;
+   }
+  });
+
+  // Anti-spam: máximo 10 ejemplos guardados
+  if (stats.examples.length < 10) {
+   diffIds.slice(0, 10 - stats.examples.length).forEach(function(d) {
+    stats.examples.push({
+     at: Date.now(),
+     kind: d.kind,
+     id: d.id,
+     details: d,
+    });
+   });
+   console.warn('[MergeShadow] divergencia v1/v2:', diffIds.length, 'items |', diffIds.slice(0, 3));
+  }
  }
 
  // ─────────────────────────────────────────────────────────────
