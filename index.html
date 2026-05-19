@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1700";
+ var CURRENT_CACHE = "dashwey-v1-3-1701";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1700</title>
+<title>Dashwey v1.3.1701</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13405,6 +13405,280 @@ window._DashweyClearDirty = function(stateKey) {
  } catch(_) {}
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v1.3.1701 — AUTO-PURGE TOMBSTONES
+// ═══════════════════════════════════════════════════════════════════════════
+// Garbage collector de tombstones (items con deleted:true) viejos.
+// Sin esto, los tombstones se acumulan indefinidamente → degradación a 1-3 años:
+//   - cold-start cada vez más lento (initial sync baja también lápidas)
+//   - _mergeById itera sobre tombstones en cada snapshot
+//   - localStorage crece infinitamente
+//   - bytes Firestore $$$
+//
+// POLÍTICA CONSERVADORA v1:
+//   - TTL = 180 días desde deletedAt (cualquier device usado en 6 meses ya vio el tombstone)
+//   - Throttle = 1 vez por día (no en cada boot)
+//   - Trigger = 60s tras initial sync done (sin prisa, no bloquea UI)
+//   - Safety = no purga si offline, dirty pendiente, o sync en curso
+//   - Externos (Loyverse/BudgetBakers) NUNCA se purgan (gestionados por fuente)
+//
+// PEOR CASO: device dormido 6+ meses se reconecta tras purga → puede revivir 1-2
+// items que tendrás que volver a borrar manualmente. ZERO pérdida de datos.
+//
+// Uso manual debug:
+//   window._DashweyAutoPurgeTombstones({ dryRun: true })  // solo cuenta
+//   window._DashweyAutoPurgeTombstones({ ttlDays: 30 })   // TTL custom
+//   window._DashweyAutoPurgeTombstones({ force: true })   // saltar throttle
+// ═══════════════════════════════════════════════════════════════════════════
+window._DashweyAutoPurgeTombstones = function(opts) {
+ opts = opts || {};
+ var ttlDays = typeof opts.ttlDays === 'number' ? opts.ttlDays : 180;
+ var dryRun = opts.dryRun === true;
+ var force = opts.force === true;
+ var TTL_MS = ttlDays * 24 * 60 * 60 * 1000;
+ var NOW = Date.now();
+
+ // Throttle: máximo 1 ejecución cada 24h (salvo force)
+ var THROTTLE_KEY = 'dashwey_autopurge_lastrun';
+ if (!force) {
+  try {
+   var lastRun = parseInt(localStorage.getItem(THROTTLE_KEY) || '0', 10);
+   if (lastRun && (NOW - lastRun) < (20 * 60 * 60 * 1000)) {
+    console.info('[Dashwey/AutoPurge] skip — última ejecución hace', Math.round((NOW - lastRun) / (60 * 60 * 1000)), 'h (throttle 24h, usar force:true para saltar)');
+    return { skipped: 'throttle', lastRun: lastRun };
+   }
+  } catch(_) {}
+ }
+
+ // Safety: initial sync debe estar completado
+ if (!window._DashweyInitialSyncDone) {
+  console.info('[Dashwey/AutoPurge] skip — initial sync no completado');
+  return { skipped: 'no-initial-sync' };
+ }
+
+ // Safety: no purgar mientras se aplica snapshot remoto
+ if (window._DashweyApplyingRemoteCount > 0) {
+  console.info('[Dashwey/AutoPurge] skip — sync en curso (counter>0)');
+  return { skipped: 'sync-in-progress' };
+ }
+
+ // Safety: no purgar offline (no podemos propagar)
+ if (!navigator.onLine) {
+  console.info('[Dashwey/AutoPurge] skip — offline');
+  return { skipped: 'offline' };
+ }
+
+ var State = (window.App && window.App.State) || window.State;
+ if (!State || !State.raw) {
+  console.warn('[Dashwey/AutoPurge] State.raw no disponible');
+  return { skipped: 'no-state' };
+ }
+
+ // Colecciones a procesar — SOLO arrays root-only (no subcoleccionadas)
+ // Subcolecciones (ventas/gastosOp/ingresosFin/historialPedidos/mermas/facturas)
+ // requieren borrado vía batch.delete del doc subcol — fuera de scope v1.
+ // Para root-only, basta con quitar el item del array local y disparar save:
+ // el doc remoto se sobrescribe con el array sin esos items.
+ // EXTERNOS (Loyverse/BB) están protegidos por _isExternal check más abajo.
+ var collections = [
+  'pendingOrders',
+  'productos',
+  'proveedores',
+  'cuentas',
+  'recordatorios',
+  'visitasComerciales',
+  'cierresCaja',
+  'lotesStock'
+ ];
+
+ // Helper: leer set dirty (items pendientes subir — NUNCA purgar)
+ var _isDirty = function(stateKey, id) {
+  try {
+   var d = window._DashweyDirtyItems;
+   return !!(d && d[stateKey] && typeof d[stateKey].has === 'function' && d[stateKey].has(id));
+  } catch(_) { return false; }
+ };
+
+ // Helper: detectar item externo (no purgar externos)
+ var _EXT = { loyverse: 1, budgetbakers: 1, import_loyverse: 1 };
+ var _isExternal = function(item) {
+  return !!(item && item.origen && _EXT[item.origen]);
+ };
+
+ var totalPurged = 0;
+ var summary = {};
+ var purgedIds = {}; // { stateKey: [ids...] } — para propagar tombstones a Firestore subcol
+
+ collections.forEach(function(key) {
+  try {
+   var rawFn = State.raw[key];
+   if (typeof rawFn !== 'function') return;
+   // arr es REFERENCIA al array interno _state[key] — mutación in-place segura
+   var arr = rawFn();
+   if (!Array.isArray(arr) || arr.length === 0) return;
+
+   var purgedThisCol = [];
+
+   // Recorrer de atrás hacia adelante para usar splice sin invalidar índices
+   for (var i = arr.length - 1; i >= 0; i--) {
+    var it = arr[i];
+    if (!it || it.deleted !== true) continue; // vivo: skip
+    if (_isExternal(it)) continue;             // externo: skip
+    if (_isDirty(key, it.id)) continue;        // dirty: skip (subir primero)
+    var dAt = it.deletedAt;
+    if (typeof dAt !== 'number' || dAt <= 0) continue; // sin deletedAt fiable
+    var age = NOW - dAt;
+    if (age < TTL_MS) continue; // joven
+
+    // Purgar este tombstone — mutación in-place del array raw
+    if (!dryRun) {
+     arr.splice(i, 1);
+    }
+    purgedThisCol.push(it.id);
+   }
+
+   if (purgedThisCol.length > 0) {
+    summary[key] = purgedThisCol.length;
+    purgedIds[key] = purgedThisCol;
+    totalPurged += purgedThisCol.length;
+   }
+  } catch(eCol) {
+   console.warn('[Dashwey/AutoPurge] error col ' + key + ':', eCol && eCol.message);
+  }
+ });
+
+ if (totalPurged > 0 && !dryRun) {
+  // Disparar save legítimo: serializa _state mutado a localStorage + Firestore.
+  // Como los tombstones se quitaron del array root, el doc remoto se sobrescribe
+  // sin ellos → purga propagada a Firestore y otros devices.
+  // Cache _nd no requiere invalidación: los tombstones nunca estaban en él
+  // (siempre se filtran como deleted), y los vivos no cambiaron.
+  try {
+   var sCtrl = window._DashweySavingCtrl;
+   if (sCtrl) {
+    sCtrl.resetHash && sCtrl.resetHash(); // forzar save aunque hash no cambie
+    if (typeof sCtrl.triggerSave === 'function') {
+     sCtrl.triggerSave();
+    }
+   }
+  } catch(_) {}
+ }
+
+ if (totalPurged > 0) {
+  var summaryStr = Object.keys(summary).map(function(k){ return k + '=' + summary[k]; }).join(', ');
+  console.info('[Dashwey/AutoPurge] ' + (dryRun ? 'DRY-RUN ' : '') + 'eliminados ' + totalPurged + ' tombstones >' + ttlDays + 'd: ' + summaryStr);
+ } else {
+  console.info('[Dashwey/AutoPurge] ' + (dryRun ? 'DRY-RUN: ' : '') + 'sin tombstones a purgar (TTL=' + ttlDays + 'd)');
+ }
+
+ if (!dryRun) {
+  try { localStorage.setItem(THROTTLE_KEY, String(NOW)); } catch(_) {}
+  if (totalPurged > 0) {
+   try {
+    window._DashweyHealth.lastAutoPurgeAt = NOW;
+    window._DashweyHealth.lastAutoPurgeCount = totalPurged;
+   } catch(_) {}
+  }
+ }
+
+ return { purged: totalPurged, breakdown: summary, dryRun: dryRun, ttlDays: ttlDays };
+};
+
+// Auto-trigger: 60s tras initial sync done, en cada boot.
+// Throttle interno garantiza max 1 ejecución cada 24h aunque haya muchos boots.
+(function _autoPurgeScheduler() {
+ var _scheduled = false;
+ var _trySchedule = function() {
+  if (_scheduled) return;
+  if (!window._DashweyInitialSyncDone) return;
+  _scheduled = true;
+  setTimeout(function() {
+   try { window._DashweyAutoPurgeTombstones(); } catch(e) {
+    console.warn('[Dashwey/AutoPurge] auto-trigger error:', e && e.message);
+   }
+  }, 60000); // 60s tras initial sync done
+ };
+ // Intentar cada 10s durante los primeros 5min (cubre initial sync lento)
+ var _ticks = 0;
+ var _maxTicks = 30; // 5 min
+ var _interval = setInterval(function() {
+  _ticks++;
+  if (_scheduled || _ticks >= _maxTicks) {
+   clearInterval(_interval);
+   return;
+  }
+  _trySchedule();
+ }, 10000);
+})();
+// ═══════════════════════════════════════════════════════════════════════════
+// FIN AUTO-PURGE TOMBSTONES
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v1.3.1701 BUG-9 EXT — Listener bus 'producto': detecta tombstones llegados
+// vía sync remoto y limpia lotesStock asociados huérfanos. Complementa a
+// _softDeleteProductFull (que cubre solo borrados locales).
+// ═══════════════════════════════════════════════════════════════════════════
+(function _bug9LoteCleanupListener() {
+ var _attached = false;
+ var _tryAttach = function() {
+  if (_attached) return;
+  if (!window.DashweyBus || typeof window.DashweyBus.on !== 'function') return;
+  _attached = true;
+  window.DashweyBus.on('producto', function() {
+   try {
+    // Skip si estamos aplicando snapshot remoto — el otro device ya manejó esto
+    // y queremos evitar loops (purgar lote → save → snapshot → purgar otra vez)
+    if (window._DashweyApplyingRemoteCount > 0) return;
+    var State = (window.App && window.App.State) || window.State;
+    if (!State || !State.raw) return;
+    var prods = State.raw.productos ? State.raw.productos() : [];
+    var lotes = State.raw.lotesStock ? State.raw.lotesStock() : [];
+    if (!Array.isArray(prods) || !Array.isArray(lotes)) return;
+    if (lotes.length === 0) return;
+
+    // Construir set de productos eliminados (deleted:true)
+    var deletedProdIds = new Set();
+    prods.forEach(function(p) {
+     if (p && p.deleted && p.id) deletedProdIds.add(p.id);
+    });
+    if (deletedProdIds.size === 0) return;
+
+    // Marcar lotes vivos asociados a productos eliminados
+    var now = Date.now();
+    var mutated = false;
+    lotes.forEach(function(l) {
+     if (!l || l.deleted) return;
+     if (l.prodId && deletedProdIds.has(l.prodId)) {
+      l.deleted = true;
+      l.deletedAt = now;
+      l._updatedAt = now;
+      l.updatedAt = new Date(now).toISOString();
+      mutated = true;
+     }
+    });
+    if (mutated) {
+     try {
+      if (typeof State.set.setLotesStock === 'function') {
+       State.set.setLotesStock(lotes);
+      }
+     } catch(_) {}
+    }
+   } catch(eL) {
+    console.warn('[Dashwey/Bug9] listener lotes:', eL && eL.message);
+   }
+  });
+ };
+ // Reintentar cada 250ms los primeros 10s — DashweyBus se inicializa tras State
+ var _ticks = 0;
+ var _interval = setInterval(function() {
+  _ticks++;
+  _tryAttach();
+  if (_attached || _ticks >= 40) clearInterval(_interval);
+ }, 250);
+})();
+// ═══════════════════════════════════════════════════════════════════════════
+
 // v1.3.1119: limpieza global reutilizable — undefined/NaN/Infinity → null
 // Usada por batches subcolecciones y fb.write (coherencia total)
 // v1.3.1134: endurecimiento — BigInt, claves inválidas, circular refs, arrays vacíos
@@ -17314,7 +17588,19 @@ const State = (() => {
   save();
  },
  saveTicket: (t) => { const idx = _state.ticketsAbiertos.findIndex(x => x.id === t.id); if(idx >= 0) _state.ticketsAbiertos[idx] = t; else _state.ticketsAbiertos.push(t); save(); },
- deleteTicket: (id) => { _state.ticketsAbiertos = _state.ticketsAbiertos.filter(t => t.id !== id); save(); },
+ deleteTicket: (id) => {
+  /* v1.3.1701 BUG-13: SOFT DELETE — TPV pausado pero el setter existe en código activo.
+     Si en el futuro se reactiva multi-device, hard delete causaría resurrecciones zombi
+     (mismo bug que recordatorios/visitas pre-v1700). Conservador: marcar deleted + dirty. */
+  const t = (_state.ticketsAbiertos || []).find(x => x.id === id);
+  if (!t) return;
+  const _now = Date.now();
+  t.deleted = true;
+  t.deletedAt = _now;
+  t._updatedAt = _now;
+  try { window._DashweyMarkDirty && window._DashweyMarkDirty('ticketsAbiertos', id); } catch(_) {}
+  save();
+ },
  clearTickets: () => { _state.ticketsAbiertos = []; save(); },
  // v1.3.1262: emit + asegurar updatedAt para _mergeById.
  updateProv: (id, vals) => {
@@ -21873,7 +22159,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1700';
+ const _APP_VERSION = 'v1.3.1701';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -52284,6 +52570,32 @@ function _parseIva(iva) {
     if (tpv._invalidateCatsHash) tpv._invalidateCatsHash();
    }
   } catch(_) {}
+  // 5. v1.3.1701 BUG-9: limpiar lotesStock asociados al producto borrado.
+  //    Sin esto, los lotes quedan huérfanos en BBDD apuntando a un producto
+  //    que ya no existe — distorsiona stock valuación + sync trae basura.
+  try {
+   var _lotesRaw = (State.raw && State.raw.lotesStock) ? State.raw.lotesStock() : (State.get.lotesStock ? State.get.lotesStock() : []);
+   if (Array.isArray(_lotesRaw) && _lotesRaw.length > 0) {
+    var _nowL = Date.now();
+    var _mutated = false;
+    var _lotesCopy = _lotesRaw.slice();
+    _lotesCopy.forEach(function(l) {
+     if (!l || l.deleted) return;
+     if (l.prodId === id) {
+      l.deleted = true;
+      l.deletedAt = _nowL;
+      l._updatedAt = _nowL;
+      l.updatedAt = new Date(_nowL).toISOString();
+      _mutated = true;
+     }
+    });
+    if (_mutated && typeof State.set.setLotesStock === 'function') {
+     State.set.setLotesStock(_lotesCopy);
+    }
+   }
+  } catch(eLotes) {
+   console.warn('[Dashwey/SoftDelProd] error cleanup lotes:', eLotes && eLotes.message);
+  }
   return _nombre;
  }
 
