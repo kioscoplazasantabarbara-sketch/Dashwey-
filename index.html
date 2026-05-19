@@ -754,7 +754,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1644";
+ var CURRENT_CACHE = "dashwey-v1-3-1645";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -773,7 +773,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1644</title>
+<title>Dashwey v1.3.1645</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -21828,7 +21828,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1644';
+ const _APP_VERSION = 'v1.3.1645';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51509,55 +51509,126 @@ function _parseIva(iva) {
  let _catInlineLpTimer = null;
  let _catInlineLpEl = null;
 
- // v1.3.1644 — Cajón "Lista de la compra" (cesta) con mismo estilo que
- //   "Reponer stock" / "Pedido programado". Header rojo + badge total IVA.
- //   Colapsado por defecto: solo header. Expandido: body con items.
- //   Tap en header → abre modal cesta completa (`_ldcAbrirDetalleCarrito`).
- //   Tap en chevron → expande/colapsa body inline.
+ // v1.3.1644 / v1.3.1645 — Cajón "Lista de la compra"
+ //   Estilo y comportamiento idéntico a "Pedido programado":
+ //   tap header completo → toggle expandir/colapsar inline. Chevron SVG
+ //   inline al título (mismo: width:10, opacity:0.7, rotate 90deg→0).
+ //   Body cuando expandido contiene:
+ //     1) Listas guardadas (status:'lista' en pendingOrders) arriba — long-press
+ //        para eliminar (mismo flujo que pedido programado), tap para EDITAR
+ //        (carga snapshot a _ordenCarrito).
+ //     2) Cesta actual (_ordenCarrito) abajo con × N (sin botones −/+).
+ //     3) Footer: Guardar + Confirmar pedido (solo si hay cesta).
+ //   Badge derecha: Total IVA si hay cesta, "N lista(s)" si solo listas, vacío.
  let _ldcCajonExpanded = false;
+ let _ldcListaEditandoId = null; // si !=null, "Guardar" sobrescribe esta lista
+
  function _renderListaCompraCajon() {
   var wrap = document.getElementById('alm-lista-compra-cajon');
   if (!wrap) return;
   var sel = State.get.selectedProv();
-  if (!sel) { wrap.innerHTML = ''; return; }
+  if (!sel) { wrap.innerHTML = ''; _ldcListaEditandoId = null; return; }
 
-  // Items en cesta del proveedor activo (orden alfabético)
   var ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
+
+  // ── Items cesta actual del proveedor activo (orden alfabético) ────
   var items = [];
-  var total = 0;
+  var totalCesta = 0;
   Object.keys(_ordenCarrito).forEach(function(pid) {
    var q = _ordenCarrito[pid] || 0;
    if (q <= 0) return;
    var p = State.get.prod(pid);
    if (!p || p.prov !== sel) return;
    items.push({ p: p, q: q });
-   total += q * ((p.precioCompra || 0) * ivaF(p.iva));
+   totalCesta += q * ((p.precioCompra || 0) * ivaF(p.iva));
   });
   items.sort(function(a, b) {
    return (a.p.nombre || '').localeCompare(b.p.nombre || '', 'es', { sensitivity: 'base' });
   });
 
-  // Cesta vacía → vaciar cajón
-  if (items.length === 0) { wrap.innerHTML = ''; return; }
+  // ── Listas guardadas del proveedor activo (status:'lista') ────────
+  var listas = (State.get.pendingOrders ? State.get.pendingOrders() : [])
+   .filter(function(o) { return o.status === 'lista' && o.provId === sel; })
+   .sort(function(a, b) { return (b._updatedAt || 0) - (a._updatedAt || 0); });
 
-  // Header — mismo estilo que Pedido programado / Reponer stock
-  var hdr = '<div class="alm-sug-hdr" style="gap:var(--sp-2);background:var(--red);border-radius:var(--r-md) 12px 0 0">' +
-   '<div class="alm-sug-title" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:var(--sp-1);color:#fff" ' +
-   'onclick="try{Utils.triggerHaptic(\'selection\');}catch(_){}; try{App.alm._ldcAbrirDetalleCarrito(App.alm._getSelectedProv());}catch(_){}">' +
-   'Lista de la compra' +
-   '</div>' +
-   '<button aria-label="Expandir/Colapsar" ' +
-   'onclick="event.stopPropagation();try{Utils.triggerHaptic(\'selection\');}catch(_){};App.alm._ldcCajonToggle()" ' +
-   'style="background:rgba(255,255,255,0.18);border:none;width:24px;height:24px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;touch-action:manipulation">' +
-   '<svg width="11" height="11" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24" style="transform:rotate(' + (_ldcCajonExpanded ? '90' : '0') + 'deg);transition:transform var(--dur-short, 200ms) ease"><polyline points="9 18 15 12 9 6"/></svg>' +
-   '</button>' +
-   '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff;font-variant-numeric:tabular-nums">Total ' + feur(total) + '</span>' +
-   '</div>';
+  var hasCesta = items.length > 0;
+  var hasListas = listas.length > 0;
 
-  // Body (solo si expandido) — items con stepper
+  // Cajón vacío total → no mostrar nada (salvo si estamos editando una lista
+  // y se vació accidentalmente, mantenemos el cajón para que el usuario
+  // pueda guardar de nuevo)
+  if (!hasCesta && !hasListas) {
+   _ldcListaEditandoId = null;
+   wrap.innerHTML = '';
+   return;
+  }
+
+  // Si la lista que estábamos editando ya no existe, limpiar flag
+  if (_ldcListaEditandoId && !listas.find(function(l){ return l.id === _ldcListaEditandoId; })) {
+   _ldcListaEditandoId = null;
+  }
+
+  // ── Título dinámico ───────────────────────────────────────────────
+  var _titulo = hasListas ? (listas.length === 1 ? 'Lista de la compra' : 'Listas de la compra') : 'Lista de la compra';
+
+  // ── Badge derecha — total cesta o contador listas ─────────────────
+  var _badgeHdr;
+  if (hasCesta) {
+   _badgeHdr = '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff;font-variant-numeric:tabular-nums">' + feur(totalCesta) + '</span>';
+  } else if (hasListas) {
+   _badgeHdr = '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-bold);padding:var(--sp-0_5) var(--sp-2);border-radius:var(--r-chip);background:rgba(255,255,255,0.22);color:#fff">' + listas.length + ' lista' + (listas.length!==1?'s':'') + '</span>';
+  } else {
+   _badgeHdr = '<span style="font-size:var(--fs-2xs);color:rgba(255,255,255,0.7)">vacío</span>';
+  }
+
+  // ── Header — copia exacta estilo Pedido programado ───────────────
+  //   onclick en el div título completo → toggle (igual que _ldcToggle).
+  //   Chevron SVG inline al título: width:10, opacity:0.7, rotate 90deg
+  //   colapsado / 0deg expandido.
+  var _chevronRot = _ldcCajonExpanded ? '0' : '90';
+  var _hdr =
+   '<div class="alm-sug-hdr" style="gap:var(--sp-2);background:var(--red);border-radius:var(--r-md) 12px 0 0">'
+   + '<div class="alm-sug-title" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:var(--sp-1);color:#fff" onclick="App.alm._ldcCajonToggle()">'
+   + _titulo
+   + '<svg width="10" height="10" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24" style="flex-shrink:0;opacity:0.7;transform:rotate(' + _chevronRot + 'deg);transition:transform var(--dur-short, 200ms) ease"><polyline points="9 18 15 12 9 6"/></svg>'
+   + '</div>'
+   + _badgeHdr
+   + '</div>';
+
+  // ── Body cuando expandido ─────────────────────────────────────────
   var body = '';
   if (_ldcCajonExpanded) {
-   var rows = items.map(function(it) {
+
+   // ── Filas listas guardadas (arriba) ──────────────────────────────
+   var rowsListas = '';
+   if (hasListas) {
+    var MON = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    var fmtFecha = function(ts) {
+     try { var d = new Date(ts); return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
+     catch(_) { return '—'; }
+    };
+    rowsListas = listas.map(function(l) {
+     var nArt = (l.items || []).length;
+     var totalL = (l.items || []).reduce(function(s, it) {
+      var p = State.get.prod(it.prodId);
+      var iva = it.iva != null ? it.iva : (p && p.iva ? p.iva : '10%');
+      return s + (it.ncajas || 0) * (it.precio || (p ? p.precioCompra : 0) || 0) * ivaF(iva);
+     }, 0);
+     var esEditando = (l.id === _ldcListaEditandoId);
+     var bgRow = esEditando ? 'background:rgba(239,68,68,0.06);' : '';
+     return '<div class="alm-sug-item ldc-lista-row" data-list-id="' + esc(l.id) + '" style="cursor:pointer;' + bgRow + '">' +
+      '<div class="alm-sug-e">📋</div>' +
+      '<div class="alm-sug-info">' +
+      '<div class="alm-sug-name">' + fmtFecha(l._updatedAt || l.ts) + (esEditando ? ' <span style="color:var(--red);font-weight:var(--fw-bold);font-size:var(--fs-2xs)">· editando</span>' : '') + '</div>' +
+      '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + nArt + ' artículo' + (nArt!==1?'s':'') + ' · Total ' + feur(totalL) + '</div>' +
+      '</div>' +
+      '<svg width="14" height="14" fill="none" stroke="var(--ink-soft)" stroke-width="2.5" viewBox="0 0 24 24" style="flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>' +
+      '</div>';
+    }).join('');
+   }
+
+   // ── Filas cesta actual (abajo) con × N (sin steppers) ────────────
+   var rowsCesta = items.map(function(it) {
     var p = it.p;
     var q = it.q;
     var sub = q * ((p.precioCompra || 0) * ivaF(p.iva));
@@ -51565,27 +51636,171 @@ function _parseIva(iva) {
      '<div class="alm-sug-e">' + (p.e || '📦') + '</div>' +
      '<div class="alm-sug-info">' +
      '<div class="alm-sug-name">' + esc(p.nombre) + '</div>' +
-     '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + q + ' × ' + feur((p.precioCompra || 0) * ivaF(p.iva)) + ' = ' + feur(sub) + '</div>' +
+     '<div class="alm-sug-days" style="color:var(--ink-soft);font-variant-numeric:tabular-nums">' + feur((p.precioCompra || 0) * ivaF(p.iva)) + '/bulto · ' + feur(sub) + '</div>' +
      '</div>' +
-     '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' +
-     '<button class="alm-sug-add" style="background:var(--bg);color:var(--ink-mid)" ' +
-     'ontouchend="event.preventDefault();event.stopPropagation();App.alm._catInlineStep(\'' + p.id + '\',-1)" ' +
-     'onclick="event.stopPropagation();if(event.pointerType!==\'touch\')App.alm._catInlineStep(\'' + p.id + '\',-1)">−</button>' +
-     '<button class="alm-sug-add" ' +
-     'ontouchend="event.preventDefault();event.stopPropagation();App.alm._catInlineStep(\'' + p.id + '\',1)" ' +
-     'onclick="event.stopPropagation();if(event.pointerType!==\'touch\')App.alm._catInlineStep(\'' + p.id + '\',1)">+</button>' +
-     '</div>' +
+     '<span style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink);font-variant-numeric:tabular-nums;flex-shrink:0;padding:0 4px">× ' + q + '</span>' +
      '</div>';
    }).join('');
-   body = '<div class="alm-sug-body">' + rows + '</div>';
+
+   // ── Footer: Guardar + Confirmar pedido (solo si hay cesta) ───────
+   var footer = '';
+   if (hasCesta) {
+    var _lblGuardar = _ldcListaEditandoId ? 'Actualizar lista' : 'Guardar';
+    footer =
+     '<div style="display:flex;gap:var(--sp-2);padding:var(--sp-3) var(--sp-3) var(--sp-3_5);border-top:1px solid var(--border)">'
+     + '<button onclick="try{Utils.triggerHaptic(\'selection\');}catch(_){};App.alm._ldcGuardarLista()" style="flex:1;height:44px;border:1.5px solid var(--red);background:transparent;color:var(--red);border-radius:var(--r-md);font-weight:var(--fw-bold);font-size:var(--fs-md);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-family:var(--font)">' + _lblGuardar + '</button>'
+     + '<button onclick="try{Utils.triggerHaptic(\'success\');}catch(_){};App.alm._ldcConfirmarDesdeCajon()" style="flex:1;height:44px;border:none;background:var(--red);color:#fff;border-radius:var(--r-md);font-weight:var(--fw-bold);font-size:var(--fs-md);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-family:var(--font)">Confirmar pedido</button>'
+     + '</div>';
+   }
+
+   body = '<div class="alm-sug-body">' + rowsListas + rowsCesta + '</div>' + footer;
   }
 
-  wrap.innerHTML = '<div class="alm-sug-card">' + hdr + body + '</div>';
+  wrap.innerHTML = '<div class="alm-sug-card">' + _hdr + body + '</div>';
+
+  // Long-press y tap en listas guardadas (mismo patrón que _renderListaCompra)
+  if (_ldcCajonExpanded && hasListas) {
+   wrap.querySelectorAll('.ldc-lista-row').forEach(function(row) {
+    var _lpTimer = null;
+    row.addEventListener('touchstart', function(){
+     _lpTimer = setTimeout(function(){
+      _lpTimer = null;
+      try { Utils.triggerHaptic('warning'); } catch(_) {}
+      var lid = row.dataset.listId;
+      var _list = (State.get.pendingOrders ? State.get.pendingOrders() : []).find(function(o){ return o.id === lid; });
+      var _nArt = _list ? (_list.items||[]).length : 0;
+      window._showDestructiveConfirm({
+       title: 'Eliminar lista guardada',
+       message: 'Se eliminará la lista' + (_nArt ? ' con ' + _nArt + ' artículo' + (_nArt!==1?'s':'') : '') + '. Esta acción no se puede deshacer.',
+       confirmLabel: 'Eliminar',
+       onConfirm: function() {
+        try { State.set.removePendingOrder(lid); } catch(_) {}
+        try { Utils.showToast('🗑️ Lista eliminada'); } catch(_) {}
+        if (_ldcListaEditandoId === lid) _ldcListaEditandoId = null;
+        try { _renderListaCompraCajon(); } catch(_) {}
+       }
+      });
+     }, 600);
+    }, { passive: true });
+    row.addEventListener('touchend',  function(){ if(_lpTimer){ clearTimeout(_lpTimer); _lpTimer=null; } });
+    row.addEventListener('touchmove', function(){ if(_lpTimer){ clearTimeout(_lpTimer); _lpTimer=null; } }, { passive: true });
+    row.addEventListener('click', function(){
+     if (!_lpTimer && _lpTimer !== null) return; // long press consumed
+     var lid = row.dataset.listId;
+     try { _ldcCargarLista(lid); } catch(_) {}
+    });
+   });
+  }
  }
 
  function _ldcCajonToggle() {
   _ldcCajonExpanded = !_ldcCajonExpanded;
   _renderListaCompraCajon();
+ }
+
+ // ── Guardar lista actual a pendingOrders con status:'lista' ─────────
+ //   Si _ldcListaEditandoId != null, sobrescribe la lista existente
+ //   (remove + add) — mantiene posición temporal por _updatedAt fresco.
+ function _ldcGuardarLista() {
+  var sel = State.get.selectedProv();
+  if (!sel) return;
+  if (Object.keys(_ordenCarrito).length === 0) {
+   try { Utils.showToast('🛒 Cesta vacía'); } catch(_) {}
+   return;
+  }
+  // Construir items snapshot (formato compatible pendingOrders)
+  var items = Object.entries(_ordenCarrito).map(function(entry) {
+   var prodId = entry[0]; var ncajas = entry[1];
+   var p = State.get.prod(prodId);
+   var savedUds = (typeof getLV === 'function') ? getLV(prodId, { udscaja: p ? p.udscaja || 12 : 12 }).udscaja : (p ? p.udscaja : 12);
+   var udscaja = (p && p.udscaja) || savedUds || 12;
+   return { prodId: prodId, provId: sel, ncajas: ncajas, udscaja: udscaja,
+            precio: p ? p.precioCompra || 0 : 0, pvp: p ? p.pvp || 0 : 0, iva: p ? p.iva : '10%' };
+  });
+  var nuevoId;
+  if (_ldcListaEditandoId) {
+   // Sobrescribir: remove + add (más simple que update porque _updatedAt sale fresco)
+   try { State.set.removePendingOrder(_ldcListaEditandoId); } catch(_) {}
+  }
+  nuevoId = 'list_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  try {
+   State.set.addPendingOrder({
+    id: nuevoId,
+    provId: sel,
+    items: items,
+    status: 'lista',
+    kind: 'lista',
+    ts: Date.now()
+   });
+  } catch(e) { console.warn('[Dashwey] _ldcGuardarLista:', e); }
+  // Vaciar cesta y refrescar
+  Object.keys(_ordenCarrito).forEach(function(k){ delete _ordenCarrito[k]; });
+  _ldcListaEditandoId = null;
+  try { _saveCarritoLocal(); } catch(_) {}
+  try { _updateAcceptBtn(); } catch(_) {}
+  try { updateBadge(); } catch(_) {}
+  try { Utils.showToast('💾 Lista guardada'); } catch(_) {}
+  // Re-render catálogo (items vuelven a estado sin cesta) + cajón
+  _catInlineHash = '';
+  try { renderCatInline(); } catch(_) {}
+ }
+
+ // ── Cargar lista a _ordenCarrito para edición ─────────────────────
+ function _ldcCargarLista(listId) {
+  var lista = (State.get.pendingOrders ? State.get.pendingOrders() : []).find(function(o){ return o.id === listId; });
+  if (!lista || lista.status !== 'lista') return;
+  // Si ya hay cesta, confirmar reemplazo
+  var hasCesta = Object.keys(_ordenCarrito).length > 0;
+  var aplicar = function() {
+   Object.keys(_ordenCarrito).forEach(function(k){ delete _ordenCarrito[k]; });
+   (lista.items || []).forEach(function(it) {
+    _ordenCarrito[it.prodId] = it.ncajas || 0;
+   });
+   _ldcListaEditandoId = listId;
+   try { _saveCarritoLocal(); } catch(_) {}
+   try { _updateAcceptBtn(); } catch(_) {}
+   try { updateBadge(); } catch(_) {}
+   _catInlineHash = '';
+   try { renderCatInline(); } catch(_) {}
+   try { Utils.showToast('✏️ Editando lista'); } catch(_) {}
+  };
+  if (hasCesta) {
+   window._showDestructiveConfirm({
+    title: 'Reemplazar cesta actual',
+    message: 'Tu cesta actual se sustituirá por los artículos de la lista guardada. ¿Continuar?',
+    confirmLabel: 'Reemplazar',
+    onConfirm: aplicar
+   });
+  } else {
+   aplicar();
+  }
+ }
+
+ // ── Confirmar pedido desde el cajón (delega al flujo existente) ───
+ function _ldcConfirmarDesdeCajon() {
+  var sel = State.get.selectedProv();
+  if (!sel) return;
+  if (Object.keys(_ordenCarrito).length === 0) {
+   try { Utils.showToast('🛒 Cesta vacía'); } catch(_) {}
+   return;
+  }
+  // Si estamos editando una lista guardada y el usuario confirma el pedido,
+  // borramos la lista (ya pasa a ser pedido programado real).
+  var listaParaBorrar = _ldcListaEditandoId;
+  _ldcListaEditandoId = null;
+  try {
+   if (typeof _openAceptarPopupFromCarrito === 'function') {
+    _openAceptarPopupFromCarrito(sel);
+   }
+  } catch(e) { console.warn('[Dashwey] _ldcConfirmarDesdeCajon:', e); }
+  // Borrado de la lista guardada se hace tras el popup de confirmación
+  // (sin esperar — si el usuario cancela, la lista sigue ahí; si confirma,
+  // ya se habrá vaciado el carrito y la lista queda obsoleta). Solución
+  // simple y segura: borrar de inmediato. Si cancela puede recuperar via
+  // historial — mejor pequeño riesgo que dejar lista duplicada.
+  if (listaParaBorrar) {
+   try { State.set.removePendingOrder(listaParaBorrar); } catch(_) {}
+  }
  }
 
  // ── TAP: añade 1 bulto al carrito y refresca el item ──────────
@@ -57613,8 +57828,9 @@ _eaRecalc();
  // Cesta
  openCestaFs, confirmarPedido, descargarFactura,
  _renderSugerencia, _sugToggle, _reToggle, _renderListaCompra, _ldcToggle, _ldcAbrirDetalleCarrito, _ldcAbrirDetallePedido, _ldcSyncBotones,
- // v1.3.1644 — cajón "Lista de la compra"
+ // v1.3.1644 / v1.3.1645 — cajón "Lista de la compra"
  _renderListaCompraCajon, _ldcCajonToggle,
+ _ldcGuardarLista, _ldcConfirmarDesdeCajon,
  _getSelectedProv: function(){ return State.get.selectedProv(); },
  // Merma
  openMerma, saveMerma,
