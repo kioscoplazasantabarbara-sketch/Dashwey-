@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1707";
+ var CURRENT_CACHE = "dashwey-v1-3-1708";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1707</title>
+<title>Dashwey v1.3.1708</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13070,6 +13070,10 @@ window._DashweyFirebase = {
 
   function _checkLoop(collection, caller) {
    // Loop = snapshot remoto recibido <2s antes de un write a la misma colección
+   // v1.3.1708: excluir writes durante SyncAhora o ApplyingRemote — son legítimos
+   //   (pull remoto → set local → save → write). Antes generaba console.warn spam
+   //   que confundía diagnóstico de loops reales.
+   if (window._DashweyApplyingRemote) return;
    var now = Date.now();
    var lastSnap = _lastSnapshotTs[collection] || 0;
    var gap = now - lastSnap;
@@ -14551,6 +14555,19 @@ window._DashweySyncAhora = async function() {
    if (App.dash && App.dash.render) App.dash.render();
    console.info('[Dashwey/SyncAhora] ✓ render disparado');
   } catch(e) { console.warn('[SyncAhora] render error:', e.message); }
+
+  /* v1.3.1708: reconciliar closureId en ventas tardías tras pull.
+     Antes solo corría post-sync Loyverse. Si ventas llegaban vía subcol onSnapshot
+     sin sync LV intermediario, cierres auto quedaban con cifras incompletas.
+     Idempotente — solo escribe si hay ventas huérfanas que caen en cierres reales. */
+  try {
+   if (typeof window._DashweyReconciliarClosureId === 'function') {
+    var _nRecSync = window._DashweyReconciliarClosureId();
+    if (_nRecSync > 0) {
+     console.info('[Dashwey/SyncAhora] ✓ reconciliación closureId:', _nRecSync, 'ventas estampadas');
+    }
+   }
+  } catch(_) {}
 
   // v1.3.1237 BUG-CRIT-8: SyncAhora trajo el state real de Firestore →
   // declarar InitialSync OK. Permite recovery manual desde consola para
@@ -22212,7 +22229,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1707';
+ const _APP_VERSION = 'v1.3.1708';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -61548,6 +61565,21 @@ _eaRecalc();
        }
       } catch(_) {}
      }
+     /* v1.3.1708: reconciliar closureId cuando llegan ventas tardías vía subcol.
+        Antes solo corría post-sync Loyverse → ventas que llegaban vía onSnapshot
+        subcol sin sync LV intermediario no se estampaban con closureId.
+        Debounce 2s para evitar ejecución múltiple en ráfaga de snapshots. */
+     if (stateKey === 'ventas' && typeof window._DashweyReconciliarClosureId === 'function') {
+      try {
+       clearTimeout(window._DashweyReconcileDebounce);
+       window._DashweyReconcileDebounce = setTimeout(function() {
+        try {
+         var _nR = window._DashweyReconciliarClosureId();
+         if (_nR > 0) console.info('[Dashwey/SubB] reconciliación closureId post-ventas:', _nR, 'estampadas');
+        } catch(_) {}
+       }, 2000);
+      } catch(_) {}
+     }
     } catch(e) { console.warn('[Dashwey/SubB] merge handler error:', e?.message); }
    });
   }
@@ -68510,8 +68542,20 @@ document.addEventListener('keydown', function(e) {
   if (!a || !b) return false;
   // Saldo: tolerancia 0.01€ (rounding en ronda independiente)
   if (Math.abs((a.saldoTotal || 0) - (b.saldoTotal || 0)) > 0.01) return false;
-  return a.nVentas === b.nVentas
-      && a.nGastos === b.nGastos
+  /* v1.3.1708: tolerar nVentas divergente si local >= peer.
+     Subcol ventas llega asíncronamente — el peer puede tener count menor temporalmente
+     porque aún no recibió todas las ventas de la subcol. Esto generaba falsos positivos
+     que activaban el badge rojo de divergencia sin pérdida real de datos.
+     Solo alertar si el peer tiene MÁS (señal de pérdida local).
+     Resto de campos: igualdad exacta (cuentas/productos/proveedores son root doc → sincrónicos). */
+  var localIsMore = (a.nVentas >= b.nVentas);
+  var peerIsMore  = (b.nVentas > a.nVentas);
+  // Si ninguno tiene más ventas que el otro → deben ser iguales
+  if (!localIsMore && !peerIsMore && a.nVentas !== b.nVentas) return false;
+  // Si peer tiene más ventas → divergencia real (posible pérdida local)
+  if (peerIsMore) return false;
+  // nVentas OK (local >= peer). Verificar resto exacto.
+  return a.nGastos === b.nGastos
       && a.nIngresos === b.nIngresos
       && a.nProductos === b.nProductos
       && a.nProveedores === b.nProveedores;
