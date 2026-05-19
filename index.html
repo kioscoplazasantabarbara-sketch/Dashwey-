@@ -754,7 +754,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1642";
+ var CURRENT_CACHE = "dashwey-v1-3-1643";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -773,7 +773,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1642</title>
+<title>Dashwey v1.3.1643</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7766,9 +7766,30 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  display: flex; flex-direction: column; gap: 10px;
 }
 .alm-cat-section-lbl { font-size: 9px; font-weight: var(--fw-xbold); letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); padding:var(--sp-2) 2px 4px; }
-/* v1.3.1642 — Label sección "En cesta" diferenciada (rojo Dashwey + dot). */
-.alm-cat-section-lbl--cart { color: var(--red); display: flex; align-items: center; gap: 6px; }
-.alm-cat-section-lbl--cart::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+/* v1.3.1642 — Label sección "Lista de la compra" diferenciada (rojo Dashwey + dot).
+   v1.3.1643 — Layout flex con total en edge derecho. */
+.alm-cat-section-lbl--cart {
+ color: var(--red);
+ display: flex;
+ align-items: center;
+ gap: 6px;
+}
+.alm-cat-section-lbl--cart::before {
+ content: "";
+ width: 6px;
+ height: 6px;
+ border-radius: 50%;
+ background: var(--red);
+ flex-shrink: 0;
+}
+.alm-cat-section-lbl--cart .alm-cat-section-lbl-txt { flex: 1; }
+.alm-cat-section-lbl--cart .alm-cat-section-lbl-total {
+ font-size: 11px;
+ letter-spacing: 0.2px;
+ text-transform: none;
+ font-variant-numeric: tabular-nums;
+ color: var(--red);
+}
 .alm-cat-item {
  display: flex; align-items: center; gap:var(--sp-3);
  padding: 11px 12px;
@@ -21805,7 +21826,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1642';
+ const _APP_VERSION = 'v1.3.1643';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51363,29 +51384,40 @@ const alm = (() => {
  if (empty) empty.style.display = 'none';
 
  // v1.3.1642 — Artículos en cesta arriba.
- //   Hung 19 may: cuando un artículo está en cesta, el usuario quiere
- //   verlo arriba para subir/bajar cantidades sin scroll. Sección "En
- //   cesta" todos juntos (sin sub-agrupar por categoría) + resto
- //   agrupado por categoría como siempre.
- //   El buscador (_catInlineQ) ya filtra `prods` antes, así que esta
- //   partición respeta automáticamente el filtro Spotlight.
- const enCesta = prods.filter(p => (_ordenCarrito[p.id] || 0) > 0);
- const resto = prods.filter(p => !((_ordenCarrito[p.id] || 0) > 0));
+ // v1.3.1643 — Ordenación alfabética + total en cesta + texto "Lista de la compra".
+ //   Hung 19 may: lista alfabética (cesta + cada categoría + orden categorías),
+ //   total €IVA en edge derecho de la label "Lista de la compra".
+ //   Fórmula total alineada con FAB pill (línea 57834): qty × precioCompra × ivaFactor.
+ const _byName = function(a, b) {
+  return (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' });
+ };
+ const enCesta = prods.filter(p => (_ordenCarrito[p.id] || 0) > 0).sort(_byName);
+ const resto = prods.filter(p => !((_ordenCarrito[p.id] || 0) > 0)).sort(_byName);
+ // Total cesta (fuente: misma fórmula que FAB pill, single source of truth)
+ const _ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
+ const _totalCesta = enCesta.reduce(function(s, p) {
+  var q = _ordenCarrito[p.id] || 0;
+  return s + q * ((p.precioCompra || 0) * _ivaF(p.iva));
+ }, 0);
  let html = '';
  let _staggerIdx = 0; // v1.3.393: índice global para stagger
  try {
- // Sección "En cesta" — solo si hay items
+ // Sección "Lista de la compra" — solo si hay items
  if (enCesta.length > 0) {
-  html += '<div class="alm-cat-section-lbl alm-cat-section-lbl--cart">En cesta · ' + enCesta.length + '</div>';
+  html += '<div class="alm-cat-section-lbl alm-cat-section-lbl--cart">' +
+          '<span class="alm-cat-section-lbl-txt">Lista de la compra · ' + enCesta.length + '</span>' +
+          '<span class="alm-cat-section-lbl-total">Total ' + feur(_totalCesta) + '</span>' +
+          '</div>';
   enCesta.forEach(p => {
    try { html += _buildCatInlineItem(p, Math.min(_staggerIdx++, 5)); }
    catch(_) { html += ''; }
   });
  }
- // Resto agrupado por categoría
- const cats = [...new Set(resto.map(p => p.cat || 'Sin categoría'))];
+ // Resto agrupado por categoría — categorías y items en orden alfabético
+ const cats = [...new Set(resto.map(p => p.cat || 'Sin categoría'))]
+   .sort(function(a, b){ return a.localeCompare(b, 'es', { sensitivity: 'base' }); });
  cats.forEach(cat => {
-  const items = resto.filter(p => (p.cat || 'Sin categoría') === cat);
+  const items = resto.filter(p => (p.cat || 'Sin categoría') === cat).sort(_byName);
   if (items.length === 0) return;
   html += '<div class="alm-cat-section-lbl">' + esc(cat) + '</div>';
   items.forEach(p => {
@@ -51491,6 +51523,31 @@ function _parseIva(iva) {
  let _catInlineLpTimer = null;
  let _catInlineLpEl = null;
 
+ // v1.3.1643 — Refrescar el total mostrado en la label "Lista de la compra"
+ //   sin re-render del catálogo. Recalcula sobre el _ordenCarrito actual.
+ //   Usar sólo cuando se cambian cantidades dentro de cesta (movimiento interno).
+ //   En cruces de umbral 0↔1 se hace renderCatInline completo que ya rehace todo.
+ function _refreshListaCompraTotal() {
+  var totalEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-total');
+  var txtEl = document.querySelector('.alm-cat-section-lbl--cart .alm-cat-section-lbl-txt');
+  if (!totalEl) return;
+  var ivaF = window._ivaFactor || function(iva){ var n=parseFloat(String(iva||'').replace('%','')); return 1 + ((isNaN(n)?10:n)/100); };
+  var total = 0;
+  var count = 0;
+  Object.keys(_ordenCarrito).forEach(function(pid) {
+   var q = _ordenCarrito[pid] || 0;
+   if (q <= 0) return;
+   var p = State.get.prod(pid);
+   if (!p) return;
+   // Solo contar productos del proveedor activo (los visibles en el catálogo)
+   if (p.prov !== State.get.selectedProv()) return;
+   count += 1;
+   total += q * ((p.precioCompra || 0) * ivaF(p.iva));
+  });
+  totalEl.textContent = 'Total ' + feur(total);
+  if (txtEl) txtEl.textContent = 'Lista de la compra · ' + count;
+ }
+
  // ── TAP: añade 1 bulto al carrito y refresca el item ──────────
  function _catInlineTap(prodId, evt) {
  if (!prodId) return;
@@ -51520,6 +51577,8 @@ function _parseIva(iva) {
   renderCatInline();
  } else {
   _catInlineRefreshItem(prodId);
+  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
+  try { _refreshListaCompraTotal(); } catch(_) {}
  }
  _updateAcceptBtn();
  updateBadge();
@@ -51547,6 +51606,8 @@ function _parseIva(iva) {
   renderCatInline();
  } else {
   _catInlineRefreshItem(prodId);
+  // v1.3.1643 — refrescar total cesta en label "Lista de la compra"
+  try { _refreshListaCompraTotal(); } catch(_) {}
  }
  _updateAcceptBtn();
  updateBadge();
