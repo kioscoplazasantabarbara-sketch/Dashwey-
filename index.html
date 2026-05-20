@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1730";
+ var CURRENT_CACHE = "dashwey-v1-3-1731";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1730</title>
+<title>Dashwey v1.3.1731</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22125,6 +22125,10 @@ function getLV(id,defaults) { return Utils.getLV(id,defaults); }
 // =========================================================================
 const ui = (() => {
 
+ // v1.3.1730: contador de generación de cierre del fs (ver closeFs) — evita que un
+ //   vaciado diferido borre contenido recién reabierto.
+ var _fsCloseGen = 0;
+
  function setFs(html) { (document.getElementById('fs-content')||{}).innerHTML = html; }
 
  //
@@ -22208,6 +22212,11 @@ const ui = (() => {
  document.getElementById('header')?.classList.remove('menu-open');
  document.body.style.overflow = '';
 
+ /* v1.3.1730: contador de generación. Si el usuario reabre el fs antes de que termine
+    la animación de cierre (CLOSE_DUR), el setTimeout NO debe vaciar el contenido nuevo. */
+ _fsCloseGen = (_fsCloseGen || 0) + 1;
+ var _myCloseGen = _fsCloseGen;
+
  // GUARD: cleanup SIEMPRE después de CLOSE_DUR — nunca antes (evita layout jank)
  /* v1.3.1708 FIX UX-ANIM: CLOSE_DUR debe coincidir con --sheet-duration (280ms).
     Antes: 220ms — cleanup 60ms antes de que la transición CSS terminara → flash visible. */
@@ -22226,6 +22235,22 @@ const ui = (() => {
    _fsC2.style.overflow = '';
    _fsC2.style.display = '';
    _fsC2.style.flexDirection = '';
+   /* v1.3.1730 FIX RAÍZ DEFINITIVA — modales fantasma/congelados/flickering:
+      closeFs() quitaba .open pero NUNCA vaciaba el innerHTML del #fs-content. El contenido
+      del modal permanecía en el DOM tras cerrar. Consecuencias en cadena que conectan TODOS
+      los bugs reportados:
+        1. Modal "fantasma" visible detrás de otras pantallas (el contenido seguía ahí).
+        2. Tras swipe a recientes, el contenido viejo reaparecía → "modal congelado".
+        3. Flickering al abrir otro modal: setFs reemplazaba contenido viejo que aún estaba
+           en pantalla → repaint del viejo + nuevo en el mismo frame.
+        4. Solo NO afectaba a Ajustes (usa su propio drawer, no fs-content) — por eso su
+           animación "mejoró" con los otros fixes mientras el resto seguía roto.
+      SOLUCIÓN: vaciar el contenido al cerrar. Cada modal parte de cero, sin residuos.
+      Guard de generación: solo vacía si el fs NO se reabrió durante la animación de cierre. */
+   if (_myCloseGen === _fsCloseGen && !overlay.classList.contains('open')) {
+    _fsC2.innerHTML = '';
+    _fsC2.removeAttribute('data-cuenta-id');
+   }
   }
  } catch(_) {}
  if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
@@ -22319,6 +22344,12 @@ const ui = (() => {
  /* v1.3.1708 FIX UX-ANIM: alinear con --sheet-duration (280ms) */
  setTimeout(function() {
  try { if (sheet) sheet.style.willChange = ''; if (backdrop) backdrop.style.willChange = ''; } catch(_) {}
+ /* v1.3.1730 FIX RAÍZ: vaciar modal-content tras cerrar (igual que closeFs) — evita modales
+    fantasma persistentes en el DOM que reaparecen tras background o causan flicker al reabrir. */
+ try {
+  var _mc = document.getElementById('modal-content');
+  if (_mc) _mc.innerHTML = '';
+ } catch(_) {}
  /* v1.3.1718: restaurar backdrop-filter del navbar/header SOLO si no queda otro
     modal/sheet abierto (evita reactivar el blur mientras un fs-overlay sigue abierto). */
  try {
@@ -22373,7 +22404,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1730';
+ const _APP_VERSION = 'v1.3.1731';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -55027,8 +55058,7 @@ function _parseIva(iva) {
     var allChk = items.every(function(o){ return !!_checked[o.prodId]; });
     var _bR2 = document.getElementById('ldc-btn-recibido');
     if (_bR2) _bR2.style.opacity = allChk ? '1' : '0.5';
-    var _bGS = document.getElementById('ldc-btn-guardar');
-    if (_bGS) _bGS.style.opacity = allChk ? '1' : '0.5';
+    // v1.3.1730: ldc-btn-guardar (Emitir factura) eliminado — sin referencia de opacidad
    };
 
    // KPIs — solo Inversión, Venta est., Margen (sin ROI ni Score — redundantes)
@@ -55094,8 +55124,7 @@ function _parseIva(iva) {
     +'</div>'
     +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--sp-2);padding-top:8px;border-top:1px solid var(--border)"><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Total con cargos</span><span id="ldc-imp-total" style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(totalInv)+'</span></div>'
     +'</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">'
-    +'<button id="ldc-btn-guardar" class="btn-sec" style="height:44px;opacity:0.5">Emitir factura</button>'
+    +'<div style="display:grid;grid-template-columns:1fr;gap:var(--sp-2)">'
     +'<button id="ldc-btn-recibido" class="btn-ok" style="height:44px;opacity:0.5">Pedido recibido</button>'
     +'</div>'
     +'</div>'
@@ -55224,57 +55253,11 @@ function _parseIva(iva) {
      });
     }
 
-    // Botón Guardar
-    var _bG = document.getElementById('ldc-btn-guardar');
-    if (_bG) {
-     _bG.addEventListener('click', function() {
-      var allChkF=items.every(function(o){return !!_checked[o.prodId];});
-      if(!allChkF){try{showToast('☑️ Comprueba todos los artículos antes de emitir la factura');}catch(_){}return;}
-      if (_bG.dataset.p==='1') return; _bG.dataset.p='1';
-      try {
-       var _ord=(State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
-       if (_ord) {
-        var _pv=State.get.prov(_ord.provId)||{};
-        var _now=new Date();
-        var _ymd=_now.getFullYear()+''+String(_now.getMonth()+1).padStart(2,'0')+String(_now.getDate()).padStart(2,'0');
-        var _fid='FAC-'+_ymd+'-'+String(Math.floor(Math.random()*900)+100);
-        // Leer impuestos adicionales si panel abierto
-        // v1.3.1487 BUG-3: defaults 0,00 (sin pre-cálc 5.2% auto). Añadido descuento.
-        var _reVal = parseFloat((document.getElementById('ldc-imp-re')||{}).value)||0;
-        var _pvVal = parseFloat((document.getElementById('ldc-imp-pv')||{}).value)||0;
-        var _exVal = parseFloat((document.getElementById('ldc-imp-extra')||{}).value)||0;
-        var _dcVal = parseFloat((document.getElementById('ldc-imp-desc')||{}).value)||0;
-        // Construir lineas de factura
-        var _lineas=(_ord.items||[]).map(function(it){
-         var _p=State.get.prod(it.prodId)||{};
-         // v1.3.1137 FIX#5: usar helper global _ivaPct
-         var _ivaPct=(window._ivaPct ? window._ivaPct(_p.iva) : 10)/100;
-         var _uds=(it.ncajas||1)*(it.udscaja||_p.udscaja||1);
-         var _precioBase=(it.precio||0)/(1+_ivaPct); // precio bulto sin IVA
-         var _ivaLin=(it.precio||0)-_precioBase;
-         var _tot=(it.ncajas||1)*(it.precio||0);
-         return {nombre:_p.nombre||'Artículo',ncajas:it.ncajas||1,udscaja:it.udscaja||_p.udscaja||1,
-          precioUnit:_precioBase,ivaPct:Math.round(_ivaPct*100),
-          importeBase:(it.ncajas||1)*_precioBase,importeIva:(it.ncajas||1)*_ivaLin,total:_tot};
-        });
-        var _subBase=_lineas.reduce(function(s,l){return s+l.importeBase;},0);
-        var _totIva=_lineas.reduce(function(s,l){return s+l.importeIva;},0);
-        var _totRE=_reVal+_pvVal+_exVal;
-        // v1.3.1487 BUG-3: descuento RESTA al total de la factura
-        var _factura={
-         id:_fid,fecha:_now.toISOString(),provId:_ord.provId,
-         provNombre:_pv.nombre||'',provCif:_pv.cif||'',provDireccion:_pv.direccion||'',
-         items:_lineas,subtotalBase:_subBase,totalIva:_totIva,
-         totalRE:_totRE,descuento:_dcVal,total:_subBase+_totIva+_totRE-_dcVal,
-         impuestos:{re:_reVal,pv:_pvVal,extra:_exVal,descuento:_dcVal}
-        };
-        try{State.set.addFactura(_factura);}catch(_){}
-        try{showToast('🟢 Factura '+_fid+' emitida');}catch(_){}
-        try{App.ui.closeFs();}catch(_){}
-       }
-      } catch(e){_bG.dataset.p='';}
-     });
-    }
+    // v1.3.1730: botón "Emitir factura" ELIMINADO de este modal (decisión de producto).
+    //   Creaba una factura HUÉRFANA (entrada FAC- en historial) sin marcar el pedido recibido
+    //   ni generar el gasto contable → dos entradas distintas confusas para el mismo pedido.
+    //   Ahora solo existe "Pedido recibido" (flujo completo correcto). La emisión de factura
+    //   se hace desde el detalle del pedido ya recibido. Handler de ldc-btn-guardar eliminado.
 
     // Botón Pedido recibido
     var _bR = document.getElementById('ldc-btn-recibido');
