@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1733";
+ var CURRENT_CACHE = "dashwey-v1-3-1734";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1733</title>
+<title>Dashwey v1.3.1734</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8121,6 +8121,24 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
 #fs-box.sheet-half { max-height: var(--sheet-half); }
 #fs-box.sheet-true-full { height: 100dvh; max-height: 100dvh; }
 #fs-overlay.open #fs-box { transform: translateY(0); }
+/* v1.3.1734 DEFENSA RAÍZ — PANEL BLANCO FANTASMA (definitiva, no depende de cleanup JS):
+   El fantasma es el #fs-box plantado con un transform inline residual del drag cuando el
+   cierre no llega a limpiarlo (swipe a recientes del Pixel que no dispara visibilitychange,
+   o overlay que se quedó con datos → _keepFs evita cerrarlo). El inline GANA sobre el CSS
+   de cierre → box visible. Las limpiezas JS (v1.3.1733) fallan por timing/condiciones.
+   SOLUCIÓN CSS irrebatible: el box es INVISIBLE siempre que su overlay NO tenga .open.
+   - visibility (no transform) → no interfiere con los drags ni con _commitClose.
+   - transition-delay = duración del cierre → durante el cierre normal el box sigue VISIBLE
+     mientras anima translateY hacia abajo (porque .open se quita y el delay pospone el
+     hidden hasta que la animación termina). Solo se oculta AL FINAL, cuando ya no debe verse.
+   - Si hay transform residual SIN animación (el fantasma), el delay transcurre igual y el
+     box termina hidden pase lo que pase. Ningún transform inline puede mantenerlo visible. */
+#fs-overlay:not(.open) #fs-box {
+ visibility: hidden;
+ transition: transform var(--sheet-duration) var(--sheet-spring),
+             visibility 0s linear var(--sheet-duration);
+}
+#fs-overlay.open #fs-box { visibility: visible; }
 #fs-box::before {
  content: ''; display: block;
  width: 32px; height: 4px;
@@ -8210,6 +8228,15 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  /* v1.3.1714: will-change permanente revertido (ver #fs-box) — ahora dinámico via JS */
 }
 #modal-overlay.open #modal-sheet { transform: translateY(0) scale(1); }
+/* v1.3.1734 DEFENSA RAÍZ — panel fantasma (igual que #fs-box): sheet invisible si su
+   overlay no tiene .open. transition-delay en visibility = no interfiere con el cierre
+   animado pero garantiza que ningún transform residual lo deje plantado sobre el navbar. */
+#modal-overlay:not(.open) #modal-sheet {
+ visibility: hidden;
+ transition: transform var(--sheet-duration) var(--sheet-spring),
+             visibility 0s linear var(--sheet-duration);
+}
+#modal-overlay.open #modal-sheet { visibility: visible; }
 #modal-sheet::before {
  content: ''; display: block;
  width: 32px; height: 4px;
@@ -22433,7 +22460,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1733';
+ const _APP_VERSION = 'v1.3.1734';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57977,7 +58004,7 @@ _eaRecalc();
  _openProvPeriodSheet, _refreshProvPeriodBtn,
  openCarritoReport, openCurrentOrder, openPendingOrders, _vaciarCesta,
  _almOverlay, _closeAlmOverlay,
- openHistorialPedidos, _reabrirPedidoHistorial, _imprimirPedido,
+ openHistorialPedidos, _reabrirPedidoHistorial, _imprimirPedido, _imprimirFactura,
  _invalidateCatHash: function(){ _catInlineHash = ''; },
  _loadProvBanner, _clearProvBanner,
  // v1.3.1520: avatar proveedor
@@ -59258,6 +59285,91 @@ _eaRecalc();
   } catch(e){console.error('[ALM] _imprimirPedido:',e);}
  }
 
+ /* v1.3.1734 — _imprimirFactura: imprime/comparte una FACTURA del historial con sus datos
+    fiscales (base, IVA, recargos, total). Mismo motor adaptativo APK(share)/web(iframe print)
+    que _imprimirPedido. No reutiliza _imprimirPedido porque éste busca solo en historialPedidos
+    y el desglose fiscal es distinto. */
+ function _imprimirFactura(facId) {
+  try {
+   var fac = (State.get.facturas?State.get.facturas():[]).find(function(f){return f.id===facId;});
+   if(!fac){showToast('\u26a0\ufe0f Factura no encontrada');return;}
+   var MON=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+   var fmtD=function(iso){try{var d=new Date(iso);return String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()]+' '+d.getFullYear();}catch(_){return '\u2014';}};
+   var filas=(fac.items||[]).map(function(l){
+    var uds=(l.ncajas||1)*(l.udscaja||1);
+    return '<tr><td>'+esc(l.nombre||'Art\u00edculo')+'</td><td style="text-align:center">'+(l.ncajas||1)+' bulto</td><td style="text-align:center">'+uds+' uds</td><td style="text-align:center">'+(l.ivaPct||0)+'%</td><td style="text-align:right">'+feur(l.total||0)+'</td></tr>';
+   }).join('');
+   var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Factura '+esc(facId)+'</title>'
+    +'<style>body{font-family:var(--font);font-size:var(--fs-md);color:#111;margin:32px 40px}'
+    +'h1{font-size:var(--fs-h2);font-weight:var(--fw-xbold);margin:0 0 4px}p{margin:var(--sp-0_5) 0;color:#555;font-size:var(--fs-sm)}'
+    +'table{width:100%;border-collapse:collapse;margin-top:var(--sp-5)}'
+    +'th{background:#f4f4f4;padding:var(--sp-2) 10px;text-align:left;font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:var(--ls-wide);border-bottom:2px solid #ddd}'
+    +'td{padding:9px 10px;border-bottom:1px solid #eee;vertical-align:top}'
+    +'.sum td{padding:4px 10px;border:none;color:#555}.sum .v{text-align:right;color:#111;font-weight:var(--fw-semi)}'
+    +'.total-row td{font-weight:var(--fw-xbold);font-size:var(--fs-lg);border-top:2px solid #111;border-bottom:none;padding-top:10px}'
+    +'@media print{body{margin:var(--sp-5) 24px}}</style>'
+    +'</head><body>'
+    +'<h1>'+esc(fac.provNombre||'Proveedor')+'</h1>'
+    +(fac.provCif?'<p>CIF: '+esc(fac.provCif)+'</p>':'')
+    +(fac.provDireccion?'<p>'+esc(fac.provDireccion)+'</p>':'')
+    +'<p style="margin-top:var(--sp-2);color:#111;font-weight:var(--fw-semi)">Factura: '+esc(facId)+'</p>'
+    +'<p>Fecha: '+fmtD(fac.fecha)+'</p>'
+    +'<table><thead><tr><th>Artículo</th><th style="text-align:center">Bultos</th><th style="text-align:center">Uds</th><th style="text-align:center">IVA</th><th style="text-align:right">Importe</th></tr></thead>'
+    +'<tbody>'+filas+'</tbody>'
+    +'<tfoot>'
+    +'<tr class="sum"><td colspan="4">Base imponible</td><td class="v">'+feur(fac.subtotalBase||0)+'</td></tr>'
+    +'<tr class="sum"><td colspan="4">IVA</td><td class="v">'+feur(fac.totalIva||0)+'</td></tr>'
+    +((fac.totalRE&&fac.totalRE>0)?'<tr class="sum"><td colspan="4">Recargos</td><td class="v">'+feur(fac.totalRE)+'</td></tr>':'')
+    +'<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">'+feur(fac.total||0)+'</td></tr>'
+    +'</tfoot>'
+    +'</table></body></html>';
+   var _esAPK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+   if (_esAPK) {
+    var _txtLineas = (fac.items||[]).map(function(l){
+     var uds=(l.ncajas||1)*(l.udscaja||1);
+     return '• '+(l.nombre||'Artículo')+' — '+(l.ncajas||1)+' bulto · '+uds+' uds · IVA '+(l.ivaPct||0)+'% · '+feur(l.total||0);
+    }).join('\n');
+    var _txtShare = (fac.provNombre||'Proveedor')+'\n'
+     +'Factura: '+facId+'\n'
+     +'Fecha: '+fmtD(fac.fecha)+'\n\n'
+     +_txtLineas+'\n\n'
+     +'Base imponible: '+feur(fac.subtotalBase||0)+'\n'
+     +'IVA: '+feur(fac.totalIva||0)+'\n'
+     +((fac.totalRE&&fac.totalRE>0)?'Recargos: '+feur(fac.totalRE)+'\n':'')
+     +'TOTAL: '+feur(fac.total||0);
+    try {
+     if (navigator.share) {
+      navigator.share({ title: 'Factura '+(fac.provNombre||''), text: _txtShare }).catch(function(){});
+     } else if (window.Capacitor?.Plugins?.Share) {
+      window.Capacitor.Plugins.Share.share({ title: 'Factura', text: _txtShare });
+     } else { try { showToast('⚠️ Compartir no disponible'); } catch(_){} }
+    } catch(e) { try { showToast('⚠️ No se pudo compartir'); } catch(_){} console.error('[ALM] share factura:', e); }
+   } else {
+    try {
+     var _oldIf = document.getElementById('_dashwey-print-frame');
+     if (_oldIf && _oldIf.parentNode) _oldIf.parentNode.removeChild(_oldIf);
+    } catch(_) {}
+    var ifr = document.createElement('iframe');
+    ifr.id = '_dashwey-print-frame';
+    ifr.setAttribute('aria-hidden', 'true');
+    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(ifr);
+    try {
+     var _doc = ifr.contentWindow.document;
+     _doc.open(); _doc.write(html); _doc.close();
+     setTimeout(function(){
+      try { ifr.contentWindow.focus(); ifr.contentWindow.print(); }
+      catch(_) { try { showToast('⚠️ No se pudo abrir la impresión'); } catch(__){} }
+      setTimeout(function(){ try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){} }, 1500);
+     }, 350);
+    } catch(e) {
+     try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){}
+     console.error('[ALM] _imprimirFactura iframe:', e);
+    }
+   }
+  } catch(e){console.error('[ALM] _imprimirFactura:',e);}
+ }
+
  function openHistorialPedidos(provId) {
  const fmtDate = iso => {
  try {
@@ -59311,6 +59423,19 @@ _eaRecalc();
       'Importe: ' + (_coste ? _coste.toFixed(2) + '€' : '—') + '\n\n' +
       'Se borrará el pedido, su gasto asociado y se restaurará el saldo de la cuenta.';
     }
+   } else {
+    /* v1.3.1734: confirmación contextual también para FACTURAS — muestra proveedor,
+       importe y fecha para que Hung borre con conocimiento (igual que los pedidos). */
+    var _fac = (State.get.facturas?State.get.facturas():[]).find(function(f){ return f && f.id === itemId; });
+    if (_fac) {
+     var _fFecha = '';
+     try { _fFecha = new Date(_fac.fecha).toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'numeric'}); } catch(_) {}
+     _msg = '¿Eliminar la factura ' + (_fac.id||'') + '?\n\n' +
+      'Proveedor: ' + (_fac.provNombre||'—') + '\n' +
+      'Fecha: ' + _fFecha + '\n' +
+      'Total: ' + (_fac.total ? feur(_fac.total) : '—') + '\n\n' +
+      'Solo se elimina el registro de la factura del historial.';
+    }
    }
   } catch(_) {}
   window._showDestructiveConfirm({
@@ -59348,18 +59473,27 @@ _eaRecalc();
    +'<span style="font-size:var(--fs-base);font-weight:var(--fw-bold);color:var(--ink)">TOTAL</span>'
    +'<span style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(fac.total||0)+'</span></div>'
    +'</div>';
-  var facHtml='<div style="display:flex;flex-direction:column;overflow:hidden">'
-   +'<div style="flex-shrink:0;padding:var(--sp-3_5) 16px 10px;border-bottom:1px solid var(--border)">'
+  var facHtml='<div style="display:flex;flex-direction:column;height:100%;overflow:hidden">'
+   +'<div style="flex-shrink:0;padding:var(--sp-4) 16px 12px;border-bottom:1px solid var(--border)">'
    +'<div style="display:flex;align-items:flex-start;justify-content:space-between">'
-   +'<div><div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">'+esc(fac.provNombre||'Proveedor')+'</div>'
-   +'<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">'+esc(fac.id||'FACTURA')+' · '+fmtD(fac.fecha)+'</div>'
+   +'<div style="flex:1;min-width:0"><div style="font-size:var(--fs-2xl);font-weight:var(--fw-xbold);color:var(--ink);letter-spacing:-0.5px">'+esc(fac.provNombre||'Proveedor')+'</div>'
+   +'<div style="font-size:var(--fs-md);color:var(--ink-soft);margin-top:3px">'+esc(fac.id||'FACTURA')+' · '+fmtD(fac.fecha)+'</div>'
    +(fac.provCif?'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">CIF: '+esc(fac.provCif)+'</div>':'')
    +(fac.provDireccion?'<div style="font-size:var(--fs-xs);color:var(--ink-soft)">'+esc(fac.provDireccion)+'</div>':'')
-   +'<div style="display:flex;align-items:center;gap:var(--sp-2)">'
-   +'<button onclick="try{App.alm.openHistorialPedidos(\''+fac.provId+'\');}catch(_){}" style="height:32px;padding:0 12px;border-radius:var(--r-sm2);border:1px solid var(--border);background:var(--surface);color:var(--ink-soft);font-size:var(--fs-sm);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">← Volver</button>'
+   +'</div>'
+   +'<div style="display:flex;align-items:center;gap:var(--sp-2);flex-shrink:0;margin-left:var(--sp-2)">'
+   +'<button onclick="try{App.alm.openHistorialPedidos(\''+(fac.provId||'')+'\');}catch(_){}" style="height:32px;padding:0 12px;border-radius:var(--r-sm2);border:1px solid var(--border);background:var(--surface);color:var(--ink-soft);font-size:var(--fs-sm);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">← Volver</button>'
    +'<button class="mhd-close" onclick="App.ui.closeFs()">×</button>'
    +'</div></div></div>'
    +'<div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px">'+lineas+totHtml+'</div>'
+   +'<div style="flex-shrink:0;border-top:1px solid var(--border);padding:var(--sp-3) 16px;display:flex;justify-content:space-between;align-items:center">'
+   +'<div style="font-size:var(--fs-sm);color:var(--ink-soft)">'+(fac.items||[]).length+' artículo'+((fac.items||[]).length!==1?'s':'')+'</div>'
+   +'<div style="font-size:var(--fs-lg);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(fac.total||0)+'</div>'
+   +'</div>'
+   +'<div style="flex-shrink:0;padding:var(--sp-2_5) 16px 16px;display:flex;gap:var(--sp-2)">'
+   +'<button onclick="App.alm._imprimirFactura(\''+esc(fac.id||'')+'\')" style="flex:1;height:40px;border-radius:var(--r-md);border:1px solid var(--border);background:var(--surface);color:var(--ink);font-size:var(--fs-sm);font-weight:var(--fw-semi);font-family:var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:var(--sp-1_5)">'
+   +'<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Imprimir / PDF</button>'
+   +'</div>'
    +'</div>';
   try{App.ui.setFs(facHtml);}catch(_){ui.setFs(facHtml);}
   /* v1.3.1727 FIX RAÍZ: _histOpenFactura solo hacía setFs() asumiendo que el fs-overlay
