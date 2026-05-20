@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1713";
+ var CURRENT_CACHE = "dashwey-v1-3-1714";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1713</title>
+<title>Dashwey v1.3.1714</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22275,7 +22275,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1713';
+ const _APP_VERSION = 'v1.3.1714';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -64702,6 +64702,9 @@ window._almCarritoOptions = function() {
  let _fsBox = null;
  let _boxH = 0; // altura del sheet al inicio del gesto
  let _isHalf = false; // el sheet está en modo half al inicio
+ let _dragRaf = null; // v1.3.1713: rAF throttle del arrastre
+ let _lastResistance = 0; // v1.3.1713: último valor calculado para el rAF
+ let _dragConfirmed = false; // v1.3.1713: true solo cuando hay arrastre vertical real
 
  function _isSheetOpen() {
  return document.getElementById('fs-overlay')?.classList.contains('open');
@@ -64806,10 +64809,12 @@ window._almCarritoOptions = function() {
  _boxH = _fsBox.getBoundingClientRect().height || window.innerHeight * 0.9;
  _isHalf = _fsBox.classList.contains('sheet-half');
  _active = true;
-
- _fsBox.style.willChange = 'transform';
- // Desactivar transición durante el arrastre para seguir el dedo
- _fsBox.style.transition = 'none';
+ _dragConfirmed = false; // v1.3.1713: aún no sabemos si arrastra o solo toca
+ /* v1.3.1713 FIX TEMBLOR INICIAL: NO tocar transition/willChange aquí.
+    Antes se ponía transition='none' al SIMPLE TOQUE (antes de saber si hay arrastre).
+    Si el usuario solo tocaba (tap) o scrolleaba, el touchend restauraba transition=''
+    → cambio de estado del compositor = el temblor/pulsación al pulsar.
+    Ahora el setup se difiere hasta confirmar arrastre vertical real (patrón del drawer). */
  }, { passive: true });
 
  document.addEventListener('touchmove', function(e) {
@@ -64818,7 +64823,7 @@ window._almCarritoOptions = function() {
  const dx = Math.abs(e.touches[0].clientX - _x0);
 
  // Cancelar si el gesto es más horizontal que vertical
- if (dx > MAX_DX && dx > Math.abs(dy)) { _active = false; _snapBack(); return; }
+ if (dx > MAX_DX && dx > Math.abs(dy)) { _active = false; if (_dragConfirmed) _snapBack(); return; }
 
  // Swipe hacia ARRIBA desde half → expandir a full (sin arrastre visual)
  if (dy < -30 && _isHalf) {
@@ -64831,14 +64836,36 @@ window._almCarritoOptions = function() {
  // Solo arrastrar hacia abajo (dy > 0) con resistencia natural
  if (dy <= 0) return;
 
- // Resistencia logarítmica: difícil de arrastrar mucho
- const resistance = Math.log(1 + dy / 50) * 50;
- _fsBox.style.transform = `translateY(${resistance}px)`;
+ /* v1.3.1713: confirmar arrastre — setup transition/willChange UNA vez aquí,
+    no en touchstart. Umbral de 4px evita activar con micro-movimientos del tap. */
+ if (!_dragConfirmed) {
+ if (dy < 4) return; // todavía no es un arrastre claro
+ _dragConfirmed = true;
+ _fsBox.style.transition = 'none';
+ // will-change ya es permanente en CSS (v1.3.1713) — no hace falta setearlo
+ }
+
+ /* rAF throttle — 1 escritura por frame, igual que el drawer de Ajustes. */
+ _lastResistance = Math.log(1 + dy / 50) * 50;
+ if (_dragRaf) return;
+ _dragRaf = requestAnimationFrame(function(){
+ if (_fsBox) _fsBox.style.transform = `translateY(${_lastResistance}px)`;
+ _dragRaf = null;
+ });
  }, { passive: true });
 
  document.addEventListener('touchend', function(e) {
  if (!_active || !_fsBox) return;
  _active = false;
+ /* v1.3.1713: cancelar rAF de arrastre pendiente — evita que un frame tardío
+    sobreescriba la animación de cierre/snap con el último translateY del drag. */
+ if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = null; }
+
+ /* v1.3.1713 FIX TEMBLOR: si NO hubo arrastre confirmado, fue un simple tap.
+    No tocamos transition ni transform — el sheet nunca se movió, así que no hay
+    nada que restaurar. Esto elimina el cambio de estado del compositor en cada toque. */
+ if (!_dragConfirmed) { _dragConfirmed = false; return; }
+ _dragConfirmed = false;
 
  const t = e.changedTouches[0];
  const dy = t.clientY - _y0;
@@ -64869,8 +64896,124 @@ window._almCarritoOptions = function() {
 
  document.addEventListener('touchcancel', function() {
  _active = false;
+ if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = null; }
  if (_fsBox) _fsBox.style.willChange = '';
  _snapBack();
+ }, { passive: true });
+})();
+</script>
+
+<script>
+/* ═══ DRAG-TO-DISMISS — Modal Sheet (bottom navbar) v1.3.1713 ════
+ Unifica el gesto de los modales #modal-sheet con el de #fs-box.
+ Antes: #modal-sheet NO tenía drag — se sentía "muerto" comparado con fs-box.
+ Ahora: mismo patrón premium iOS — sigue el dedo con resistencia, cierra al
+ soltar si supera umbral, vuelve a su sitio si no.
+
+ CLAVE anti-temblor: igual que fs-box v1.3.1713 — NO se toca transition en
+ touchstart (solo al confirmar arrastre vertical real >4px). rAF throttle.
+
+ ZONA DE ARRASTRE: solo handle (top 60px del sheet) + .modal-header-dark.
+ Nunca desde #modal-content (para no romper el scroll interno).
+ ═══════════════════════════════════════════════════════════════ */
+(function() {
+ const MAX_DX = 40, VEL_CLOSE = 0.4, PCT_CLOSE = 0.40, HANDLE_ZONE = 60;
+ let _y0 = 0, _x0 = 0, _t0 = 0, _active = false, _confirmed = false;
+ let _sheet = null, _boxH = 0, _raf = null, _lastR = 0;
+
+ function _isModalOpen() {
+  return document.getElementById('modal-overlay')?.classList.contains('open');
+ }
+
+ // Solo permitir arrastre desde el handle (top del sheet) o el header sticky.
+ function _isDragZone(target, sheet) {
+  if (!sheet) return false;
+  const hdr = sheet.querySelector('.modal-header-dark');
+  if (hdr && hdr.contains(target)) return true;
+  // Handle = zona superior del sheet (donde está el ::before). El target debe ser
+  //   el propio sheet o estar en los primeros HANDLE_ZONE px.
+  const rect = sheet.getBoundingClientRect();
+  const touchY = _y0;
+  if (touchY - rect.top <= HANDLE_ZONE) {
+   // Y no debe estar dentro de un control interactivo
+   const tag = target.tagName;
+   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return false;
+   return true;
+  }
+  return false;
+ }
+
+ function _snapBack() {
+  if (!_sheet) return;
+  _sheet.style.transition = `transform var(--sheet-duration) var(--sheet-spring)`;
+  _sheet.style.transform = '';
+  setTimeout(function(){ if (_sheet) _sheet.style.transition = ''; }, 280);
+ }
+
+ function _commitClose() {
+  if (!_sheet) return;
+  _sheet.style.transition = `transform var(--dur-std) var(--ease-accelerate)`;
+  _sheet.style.transform = `translateY(${_boxH}px)`;
+  setTimeout(function(){
+   try { if (App?.ui?.closeModal) App.ui.closeModal(); } catch(_) {}
+   setTimeout(function(){ if (_sheet) { _sheet.style.transition = ''; _sheet.style.transform = ''; } }, 60);
+  }, 220);
+  try { Utils?.triggerHaptic?.('light'); } catch(_) {}
+ }
+
+ document.addEventListener('touchstart', function(e) {
+  if (!_isModalOpen()) { _active = false; return; }
+  _sheet = document.getElementById('modal-sheet');
+  if (!_sheet || !_sheet.contains(e.target)) { _active = false; return; }
+  _y0 = e.touches[0].clientY;
+  _x0 = e.touches[0].clientX;
+  if (!_isDragZone(e.target, _sheet)) { _active = false; return; }
+  _t0 = Date.now();
+  _boxH = _sheet.getBoundingClientRect().height || window.innerHeight * 0.8;
+  _active = true;
+  _confirmed = false;
+  /* anti-temblor: NO tocar transition aquí (ver fs-box v1.3.1713) */
+ }, { passive: true });
+
+ document.addEventListener('touchmove', function(e) {
+  if (!_active || !_sheet) return;
+  const dy = e.touches[0].clientY - _y0;
+  const dx = Math.abs(e.touches[0].clientX - _x0);
+  if (dx > MAX_DX && dx > Math.abs(dy)) { _active = false; if (_confirmed) _snapBack(); return; }
+  if (dy <= 0) return;
+  if (!_confirmed) {
+   if (dy < 4) return;
+   _confirmed = true;
+   _sheet.style.transition = 'none';
+  }
+  _lastR = Math.log(1 + dy / 50) * 50;
+  if (_raf) return;
+  _raf = requestAnimationFrame(function(){
+   if (_sheet) _sheet.style.transform = `translateY(${_lastR}px) scale(1)`;
+   _raf = null;
+  });
+ }, { passive: true });
+
+ document.addEventListener('touchend', function(e) {
+  if (!_active || !_sheet) return;
+  _active = false;
+  if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
+  if (!_confirmed) { _confirmed = false; return; } // simple tap → no tocar nada
+  _confirmed = false;
+  const t = e.changedTouches[0];
+  const dy = t.clientY - _y0, dx = Math.abs(t.clientX - _x0);
+  const dt = Date.now() - _t0 || 1, vel = dy / dt;
+  _sheet.style.transition = '';
+  if (dx > MAX_DX) { _snapBack(); return; }
+  const pct = dy / _boxH;
+  if (vel > VEL_CLOSE || pct > PCT_CLOSE) { _commitClose(); return; }
+  _snapBack();
+ }, { passive: true });
+
+ document.addEventListener('touchcancel', function() {
+  _active = false; _confirmed = false;
+  if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
+  _snapBack();
  }, { passive: true });
 })();
 </script>
