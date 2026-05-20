@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1742</title>
+<title>Dashwey v1.3.1743</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10451,7 +10451,7 @@ html, body { background: var(--bg); }
  justify-content: center;
 }
 /* Sheet */
-.cmp-sheet { display: flex; flex-direction: column; max-height: 80vh; }
+.cmp-sheet { display: flex; flex-direction: column; max-height: 100%; min-height: 0; padding: 0 4px; }
 .cmp-head {
  display: flex; align-items: center; justify-content: space-between;
  padding: 4px 4px 14px;
@@ -10465,7 +10465,14 @@ html, body { background: var(--bg); }
 }
 .cmp-close svg { width: 18px; height: 18px; }
 .cmp-close:active { transform: scale(0.92); }
-.cmp-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; flex: 1; }
+/* v1.3.1743: padding-bottom con safe-area — la última fila (Sistema/Revisar) ya
+   no queda cortada contra el borde inferior / barra de gestos. Patrón estándar
+   bottom-sheet: max(base, env(safe-area-inset-bottom)+base). */
+.cmp-scroll {
+ overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; flex: 1;
+ padding: 0 2px;
+ padding-bottom: max(24px, calc(var(--sab, 0px) + 24px));
+}
 .cmp-grp {
  font-size: var(--fs-xs); font-weight: var(--fw-bold); text-transform: uppercase;
  letter-spacing: 0.5px; color: var(--ink-mid); margin: 6px 2px 8px;
@@ -22569,7 +22576,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1742';
+ const _APP_VERSION = 'v1.3.1743';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -39990,15 +39997,15 @@ function _confirmBorrarCuenta(id) {
 
      if (_esSameDay(p.provId, fp)){
       items.push({ ev:{tipo:'pedido_entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
-       kind:'pedido_entrega', accion:'agenda', titulo:'Pedido y entrega de '+nombre,
-       sub: atras>0 ? ('Vencido hace '+atras+'d') : 'Hoy haces el pedido y llega el mismo día',
+       kind:'pedido_entrega', accion:'recibir:'+p.id, titulo:'Pedido y entrega de '+nombre,
+       sub: atras>0 ? ('Vencido hace '+atras+'d · comprobar') : 'Comprobar pedido · llega hoy',
        fecha: atras>0 ? feMid : hoy, atrasado: atras>0 });
       return;
      }
-     // entrega pendiente (pedido ya hecho, esperando recepción)
+     // entrega pendiente (pedido ya hecho, esperando recepción) → abrir para comprobar/recibir
      items.push({ ev:{tipo:'entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
-      kind:'entrega', accion:'agenda', titulo:'Entrega de '+nombre,
-      sub: atras>0 ? ('Vencida hace '+atras+'d · '+((p.items||[]).length)+' artículos') : ('Llega pronto · '+((p.items||[]).length)+' artículos'),
+      kind:'entrega', accion:'recibir:'+p.id, titulo:'Recibir pedido de '+nombre,
+      sub: atras>0 ? ('Vencida hace '+atras+'d · '+((p.items||[]).length)+' artículos') : ('Llega pronto · '+((p.items||[]).length)+' artículos · comprobar'),
       fecha: atras>0 ? feMid : feMid, atrasado: atras>0 });
     });
    } catch(_){}
@@ -40021,7 +40028,7 @@ function _confirmBorrarCuenta(id) {
      var same=_esSameDay(p.id, fped);
      var diaEntStr = _fmtDiaCorto(fent);
      items.push({ ev:{tipo: same?'pedido_entrega':'pedido', pedido:{id:'_predicho_'+p.id+'_p0', provId:p.id, fecha:fped.toISOString()}},
-      kind: same?'pedido_entrega':'pedido', accion:'agenda',
+      kind: same?'pedido_entrega':'pedido', accion:'pedido:'+p.id,
       titulo: (same?'Pedido y entrega de ':'Realizar pedido de ')+nombre,
       sub: same ? 'Hoy haces el pedido y llega el mismo día' : ('Día de pedido · entrega '+diaEntStr),
       fecha: fpedMid, atrasado:false });
@@ -40247,11 +40254,26 @@ function _confirmBorrarCuenta(id) {
       var pid=acc.slice(9);
       App.nav.goTab(2); // Almacén
       setTimeout(function(){ try { App.alm.openEditArt(pid); } catch(_){} }, 350);
+     } else if (acc.indexOf('pedido:')===0){
+      // Realizar pedido → abrir Almacén en el catálogo de ESE proveedor
+      var provId=acc.slice(7);
+      App.nav.goTab(2);
+      setTimeout(function(){ try { if (App.alm && App.alm.selProv) App.alm.selProv(provId); } catch(_){} }, 350);
+     } else if (acc.indexOf('recibir:')===0){
+      // Recibir/comprobar pedido → abrir el pedido programado pendiente
+      var pedId=acc.slice(8);
+      App.nav.goTab(2);
+      setTimeout(function(){
+       try {
+        if (App.alm && App.alm._abrirPedidoProgramadoById) App.alm._abrirPedidoProgramadoById(pedId);
+        else if (App.alm && App.alm._ldcAbrirDetallePedido) App.alm._ldcAbrirDetallePedido(pedId);
+       } catch(_){}
+      }, 350);
      } else if (acc==='almacen'){ App.nav.goTab(2); }
      else if (acc==='recordatorio'){
       App.nav.goTab(0); // Dashboard (agenda vive en dashboard)
       setTimeout(function(){ try { if (it.ev.recordatorio && App.dash._openRecordatorioSheet) App.dash._openRecordatorioSheet(it.ev.recordatorio.id); } catch(_){} }, 350);
-     } else { // 'agenda' → Dashboard donde está la tarjeta agenda
+     } else { // fallback → Dashboard donde está la tarjeta agenda
       App.nav.goTab(0);
      }
     } catch(e){ console.warn('[Campana] nav fail', e); }
