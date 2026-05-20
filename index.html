@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1718";
+ var CURRENT_CACHE = "dashwey-v1-3-1719";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1718</title>
+<title>Dashwey v1.3.1719</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -4763,6 +4763,21 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
   0 -2px 8px rgba(229, 57, 53, 0.04);
 }
 #bottom-tabs.nav-hidden { opacity: 0; pointer-events: none; visibility: hidden; }
+
+/* ═══ v1.3.1718 FIX PARPADEO RAÍZ GLOBAL ═══════════════════════════════
+   CAUSA: el navbar (#bottom-tabs) y el header (#header) tienen backdrop-filter:blur
+   y están SIEMPRE presentes. Al abrir CUALQUIER modal, el scrim oscurece la pantalla →
+   el backdrop-filter detecta que su fondo cambió → RECALCULA el blur → repaint forzado
+   justo en el frame donde arranca la animación del modal = el PARPADEO que se veía en
+   TODOS los modales de la app.
+   FIX: cuando hay un modal/sheet abierto, desactivar backdrop-filter del navbar y header.
+   Quedan detrás del scrim, así que NO se ven igualmente → cero pérdida visual, cero repaint.
+   El navbar/header recuperan su blur al cerrar el modal. */
+body.modal-bg-freeze #bottom-tabs,
+body.modal-bg-freeze #header {
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
 
 body.keyboard-open #bottom-tabs {
  opacity: 0;
@@ -22121,6 +22136,8 @@ const ui = (() => {
     ANTES de abrir, eliminando el frame fantasma del double rAF. */
  box.style.transition = 'none';
  void box.offsetHeight; // reflow síncrono — estado base compuesto AHORA
+ /* v1.3.1718: congelar backdrop-filter del navbar/header (elimina parpadeo de apertura) */
+ document.body.classList.add('modal-bg-freeze');
  requestAnimationFrame(() => {
  box.style.transition = '';
  overlay.classList.add('open');
@@ -22185,6 +22202,11 @@ const ui = (() => {
  if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
  try { if (App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
  try { Utils.triggerHaptic('edgeRelease'); } catch(_) {}
+ /* v1.3.1718: restaurar backdrop-filter SOLO si no queda otro modal abierto */
+ try {
+  var _modalOpen = document.getElementById('modal-overlay')?.classList.contains('open');
+  if (!_modalOpen) document.body.classList.remove('modal-bg-freeze');
+ } catch(_) {}
  }, CLOSE_DUR);
  } catch(e) { console.error('[Dashwey] closeFs error:', e); } }
  function closeFsOvl(e) { const box = document.getElementById('fs-box'); if(box && !box.contains(e.target)) closeFs(); }
@@ -22210,6 +22232,9 @@ const ui = (() => {
     3. Restaurar transición y añadir .open en el MISMO frame
     Resultado: la transición SIEMPRE arranca desde el estado base correcto, sin frame fantasma. */
  (document.getElementById('modal-content')||{}).innerHTML = html;
+ /* v1.3.1718: congelar backdrop-filter del navbar/header para eliminar el repaint
+    que causaba el parpadeo al abrir el modal. */
+ document.body.classList.add('modal-bg-freeze');
  if (overlay && sheet) {
   // 1. Fijar estado base sin transición
   overlay.style.transition = 'none';
@@ -22253,6 +22278,12 @@ const ui = (() => {
  /* v1.3.1708 FIX UX-ANIM: alinear con --sheet-duration (280ms) */
  setTimeout(function() {
  try { if (sheet) sheet.style.willChange = ''; if (backdrop) backdrop.style.willChange = ''; } catch(_) {}
+ /* v1.3.1718: restaurar backdrop-filter del navbar/header SOLO si no queda otro
+    modal/sheet abierto (evita reactivar el blur mientras un fs-overlay sigue abierto). */
+ try {
+  var _fsOpen = document.getElementById('fs-overlay')?.classList.contains('open');
+  if (!_fsOpen) document.body.classList.remove('modal-bg-freeze');
+ } catch(_) {}
  try { if (typeof App !== 'undefined' && App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
  }, 280);
  } catch(e) { console.error('[Dashwey] closeModal error:', e); }
@@ -22301,7 +22332,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1718';
+ const _APP_VERSION = 'v1.3.1719';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -48659,6 +48690,32 @@ function _confirmBorrarCuenta(id) {
   // Forzar siempre limpio el header de Almacén (no depende de scroll)
   var _almHdr = document.querySelector('.alm-page-header');
   if (_almHdr) _almHdr.classList.remove('hdr-compact');
+ }, { passive: true });
+
+ /* v1.3.1718 FIX CASCADA: re-disparar la animación en cascada del catálogo al entrar
+    a Almacén (tab 2). Las .tab-page usan translateX (no display:none), así que los items
+    ya están en el DOM y la animación CSS no se re-ejecuta sola al navegar.
+    Solución premium + barata: re-aplicar la animación SOLO a los primeros 8 items
+    (los visibles en viewport) reseteando su animation via clase. Re-animar toda la lista
+    sería costoso en gama baja; 8 items es imperceptible en coste y da el efecto premium. */
+ window.addEventListener('dashwey:tab-changed', function(ev) {
+  try {
+   if (!ev || !ev.detail || ev.detail.tab !== 2) return;
+   var wrap = document.getElementById('alm-cat-inline');
+   if (!wrap) return;
+   var items = wrap.querySelectorAll('.alm-cat-item');
+   if (!items.length) return;
+   var n = Math.min(items.length, 8);
+   for (var i = 0; i < n; i++) {
+    (function(el, idx){
+     el.style.animation = 'none';
+     el.style.setProperty('--item-index', idx);
+     // Reflow para resetear la animación, luego re-aplicar
+     void el.offsetWidth;
+     el.style.animation = '';
+    })(items[i], i);
+   }
+  } catch(_) {}
  }, { passive: true });
  }
  if (document.readyState === 'loading') {
