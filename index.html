@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1722";
+ var CURRENT_CACHE = "dashwey-v1-3-1724";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1722</title>
+<title>Dashwey v1.3.1724</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8704,6 +8704,10 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  overflow-x: hidden;
  -webkit-overflow-scrolling: touch;
  flex-shrink: 0;
+ /* v1.3.1723 FIX TEMBLOR: overflow-anchor:none impide que WebView reajuste el scrollTop
+    para "preservar el ancla" cuando el drawer padre se anima con transform → era la causa
+    del temblor (contenido haciendo scroll abajo→arriba rápido al abrir/cerrar). */
+ overflow-anchor: none;
 }
 /* sd-section needs flex column so sticky header works in Android WebView */
 #sd-section {
@@ -22350,7 +22354,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1722';
+ const _APP_VERSION = 'v1.3.1724';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -23318,6 +23322,13 @@ const ui = (() => {
  }
 
  drawer.style.willChange = 'transform';
+ /* v1.3.1723 FIX TEMBLOR (v2): el temblor "scroll abajo→arriba" del contenido al abrir
+    es el scroll-anchoring de WebView: cuando un overflow:auto está dentro de un transform
+    animado, el navegador intenta preservar el ancla de scroll y reajusta scrollTop en
+    cada frame → temblor. Fix: resetear scrollTop a 0 al abrir (el drawer siempre empieza
+    arriba) y dejar que overflow-anchor:none (en CSS) impida el reajuste. */
+ var _sdMain = document.getElementById('sd-main');
+ if (_sdMain) { _sdMain.scrollTop = 0; }
  // open
  overlay.classList.add('open');
  drawer.classList.add('open');
@@ -23325,7 +23336,9 @@ const ui = (() => {
  // v1.3.1004: inicializar campo token Loyverse
  try { App.ui._initLoyverseTokenField(); } catch(_) {}
  // Liberar GPU layer tras la transición (ANIM_DELAY = 220ms)
- setTimeout(() => { if (drawer) drawer.style.willChange = ''; }, Utils.ANIM_DELAY);
+ setTimeout(() => {
+ if (drawer) drawer.style.willChange = '';
+ }, Utils.ANIM_DELAY);
  // Marcar tema activo en selector
  const _tm = window._DashweyTheme?.get() || 'auto';
  requestAnimationFrame(() => {
@@ -23356,7 +23369,9 @@ const ui = (() => {
  document.body.classList.remove('settings-open'); // v1.3.437
  // Cerrar SideSheets si hay alguno abierto
  try { if (window.SideSheet) window.SideSheet.closeAll(); } catch(_) {}
- setTimeout(() => { if (drawer) drawer.style.willChange = ''; }, Utils.ANIM_DELAY);
+ setTimeout(() => {
+ if (drawer) drawer.style.willChange = '';
+ }, Utils.ANIM_DELAY);
  } catch(e) { console.error('[Dashwey] closeSettings error:', e); } }
 
  // ══ SUBPANEL EN CASCADA v7.9 ══════════════════════════════════
@@ -35003,6 +35018,14 @@ function _openMovimientoFullscreenLegacy() {
 // → _openMovimientoFullscreen y eliminar esta sección.
 // ════════════════════════════════════════════════════════════════════
 function _openMovimientoFullscreen(opts) {
+ /* v1.3.1722 FIX CRASH: guard contra apertura múltiple / apilamiento. Sin esto, taps
+    repetidos (o tap mientras otro modal anima) apilaban el sheet de movimiento sobre
+    otros modales → estado roto → crash. No abrir si ya hay un fs-overlay o modal activo. */
+ try {
+  if (document.getElementById('fs-overlay')?.classList.contains('open')) return;
+  if (document.getElementById('modal-overlay')?.classList.contains('open')) return;
+  if (document.getElementById('prov-picker-sheet')?.classList.contains('open')) return;
+ } catch(_) {}
  // v1.3.1593 SPEC L6.1: aceptar opcional {cuentaId} para pre-seleccionar cuenta.
  //   Caso de uso: tap FAB con Detalle Cuenta abierto -> sheet abre con la
  //   cuenta correspondiente ya seleccionada. UX mas fluida.
@@ -63220,6 +63243,26 @@ window._DashweyDeviceId = (() => {
 
  // 1. Restaurar overflow -- puede quedar bloqueado por un modal abierto al ir a recientes
  try { if (document.body.style.overflow === 'hidden') document.body.style.overflow = ''; } catch(_) {}
+
+ /* v1.3.1723 FIX CRASH: si el usuario hizo swipe-up de Android (recientes) MIENTRAS un
+    modal estaba animando, ese modal queda en estado intermedio (clase .open puesta pero
+    transform/opacity a medias). Al volver y abrir otro modal, el estado roto crasheaba.
+    Fix: al volver de background, cerrar limpiamente cualquier picker/sheet ligero que
+    quedó abierto (NO el fs-box ni modal-sheet con datos del usuario — esos se respetan).
+    Solo se limpian los selectores efímeros (proveedor, periodo) que no contienen edición. */
+ try {
+  var _pps2 = document.getElementById('prov-picker-sheet');
+  if (_pps2 && _pps2.classList.contains('open')) {
+   _pps2.classList.remove('open');
+   try { if (App.alm && App.alm._closeProvPickerSheet) App.alm._closeProvPickerSheet(); } catch(_) {}
+  }
+  var _dps2 = document.getElementById('dash-period-sheet');
+  if (_dps2 && _dps2.classList.contains('open')) _dps2.classList.remove('open');
+  // Liberar guard de animación por si quedó atascado
+  try { if (window.App && App.alm) { /* _almAnimLock vive en el IIFE de alm; se auto-libera por timeout */ } } catch(_) {}
+  // Quitar freeze de backdrop-filter si quedó puesto
+  document.body.classList.remove('modal-bg-freeze');
+ } catch(_) {}
 
  // 2. Recalcular posicion del swipe-track
  // La orientacion puede haber cambiado en reposo -- _getTabWidth() devuelve valor obsoleto
