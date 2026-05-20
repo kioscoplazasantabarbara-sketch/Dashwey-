@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1724";
+ var CURRENT_CACHE = "dashwey-v1-3-1725";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1724</title>
+<title>Dashwey v1.3.1725</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22354,7 +22354,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1724';
+ const _APP_VERSION = 'v1.3.1725';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -63244,24 +63244,56 @@ window._DashweyDeviceId = (() => {
  // 1. Restaurar overflow -- puede quedar bloqueado por un modal abierto al ir a recientes
  try { if (document.body.style.overflow === 'hidden') document.body.style.overflow = ''; } catch(_) {}
 
- /* v1.3.1723 FIX CRASH: si el usuario hizo swipe-up de Android (recientes) MIENTRAS un
-    modal estaba animando, ese modal queda en estado intermedio (clase .open puesta pero
-    transform/opacity a medias). Al volver y abrir otro modal, el estado roto crasheaba.
-    Fix: al volver de background, cerrar limpiamente cualquier picker/sheet ligero que
-    quedó abierto (NO el fs-box ni modal-sheet con datos del usuario — esos se respetan).
-    Solo se limpian los selectores efímeros (proveedor, periodo) que no contienen edición. */
+ /* v1.3.1724 FIX CRASH RAÍZ (universal): el problema NO era cada modal individual.
+    Era que CUALQUIER overlay con clase .open quedaba en estado intermedio si el usuario
+    hacía un gesto de Android (recientes/atrás) durante su animación. Al volver, el guard
+    `if (overlay.classList.contains('open')) return` bloqueaba la reapertura → modal corrupto
+    congelado. Esto se repetía en TODOS los modales (prov-picker, movimiento, vista global...).
+    SOLUCIÓN DE RAÍZ: al volver de background, cerrar TODOS los overlays efímeros de golpe
+    para garantizar estado coherente. Solo se conserva el fs-box SI contiene un formulario
+    con datos a medio escribir Y el usuario estuvo fuera poco tiempo (vistazo rápido <8s). */
  try {
-  var _pps2 = document.getElementById('prov-picker-sheet');
-  if (_pps2 && _pps2.classList.contains('open')) {
-   _pps2.classList.remove('open');
-   try { if (App.alm && App.alm._closeProvPickerSheet) App.alm._closeProvPickerSheet(); } catch(_) {}
+  var _backMs = _hiddenAt > 0 ? (Date.now() - _hiddenAt) : 0;
+  // ¿El fs-box tiene un formulario con datos sin guardar? (importe escrito, nombre, etc.)
+  var _fsHasData = false;
+  try {
+   var _fsC = document.getElementById('fs-content');
+   if (_fsC) {
+    var _inps = _fsC.querySelectorAll('input, textarea');
+    for (var _ii = 0; _ii < _inps.length; _ii++) {
+     var _v = (_inps[_ii].value || '').trim();
+     if (_v && _v !== '0' && _v !== '0,00' && _v !== '0.00') { _fsHasData = true; break; }
+    }
+   }
+  } catch(_) {}
+  // Conservar fs-box solo si hay datos Y fue un vistazo rápido (<8s)
+  var _keepFs = _fsHasData && _backMs < 8000;
+
+  // Overlays efímeros (pickers, selectores, vistas sin edición) → cerrar siempre
+  var _ephemeralOverlays = [
+   'prov-picker-sheet', 'dash-period-sheet', 'gs-overlay',
+   'order-selector-overlay', 'ns-overlay', 'check-modal-overlay'
+  ];
+  _ephemeralOverlays.forEach(function(id){
+   var el = document.getElementById(id);
+   if (el && el.classList.contains('open')) el.classList.remove('open');
+  });
+  try { if (App.alm && App.alm._closeProvPickerSheet) App.alm._closeProvPickerSheet(); } catch(_) {}
+
+  // fs-overlay y modal-overlay: cerrar SOLO si no hay datos a conservar
+  if (!_keepFs) {
+   var _fsO = document.getElementById('fs-overlay');
+   if (_fsO && _fsO.classList.contains('open')) {
+    try { if (App.ui && App.ui.closeFs) App.ui.closeFs(); else _fsO.classList.remove('open'); } catch(_) { _fsO.classList.remove('open'); }
+   }
+   var _mO = document.getElementById('modal-overlay');
+   if (_mO && _mO.classList.contains('open')) {
+    try { if (App.ui && App.ui.closeModal) App.ui.closeModal(); else _mO.classList.remove('open'); } catch(_) { _mO.classList.remove('open'); }
+   }
   }
-  var _dps2 = document.getElementById('dash-period-sheet');
-  if (_dps2 && _dps2.classList.contains('open')) _dps2.classList.remove('open');
-  // Liberar guard de animación por si quedó atascado
-  try { if (window.App && App.alm) { /* _almAnimLock vive en el IIFE de alm; se auto-libera por timeout */ } } catch(_) {}
-  // Quitar freeze de backdrop-filter si quedó puesto
+  // Quitar freeze de backdrop-filter y restaurar scroll por si quedaron atascados
   document.body.classList.remove('modal-bg-freeze');
+  if (document.body.style.overflow === 'hidden') document.body.style.overflow = '';
  } catch(_) {}
 
  // 2. Recalcular posicion del swipe-track
