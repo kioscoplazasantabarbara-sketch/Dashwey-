@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1735";
+ var CURRENT_CACHE = "dashwey-v1-3-1736";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1735</title>
+<title>Dashwey v1.3.1736</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3612,6 +3612,50 @@ body[data-dash-snap="1"] .sti-item {
 }
 .sti-empty { font-size: var(--fs-xs); color: var(--ink-soft); padding: var(--sp-2) 0; opacity: 0.65; }
 .sti-section { padding-bottom: var(--sp-3); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   v1.3.1736 · SCROLL SHADOWS (estilo inset iOS) — affordance de cajón
+   ───────────────────────────────────────────────────────────────────
+   Diferencia visualmente el cajón con scroll de la zona sin scroll.
+   Dos capas de gradiente (top/bottom) sobre un WRAPPER del scroller.
+   Aparecen SOLO cuando hay contenido oculto en esa dirección:
+   - .ss-top    → hay contenido oculto ARRIBA (no estás en el tope)
+   - .ss-bottom → hay contenido oculto ABAJO (no estás en el final)
+   El JS (_DashweyScrollShadows) togglea estas clases con rAF throttle.
+
+   POR QUÉ wrapper y no el scroller directo: las sombras deben quedar
+   FIJAS mientras el contenido scrollea por debajo. Si fueran ::before
+   del scroller, scrollearían con él. El wrapper es position:relative y
+   no scrollea; las sombras son ::before/::after absolute sobre él.
+
+   WebView: NO se anima la sombra en sí (solo su opacity → barato).
+   NO usa transform en ancestros de fixed. Gradiente = inset simulado,
+   más fiable en A17 que box-shadow:inset condicional por borde.
+   ═══════════════════════════════════════════════════════════════════ */
+.ss-wrap { position: relative; min-height: 0; display: flex; flex-direction: column; flex: 1; }
+.ss-wrap::before,
+.ss-wrap::after {
+ content: '';
+ position: absolute;
+ left: 0; right: 0;
+ height: 20px;
+ pointer-events: none;
+ z-index: 3;
+ opacity: 0;
+ transition: opacity var(--dur-std, 200ms) var(--ease, ease);
+}
+.ss-wrap::before {
+ top: 0;
+ background: linear-gradient(to bottom, rgba(0,0,0,0.16), rgba(0,0,0,0));
+}
+.ss-wrap::after {
+ bottom: 0;
+ background: linear-gradient(to top, rgba(0,0,0,0.16), rgba(0,0,0,0));
+}
+.ss-wrap.ss-top::before { opacity: 1; }
+.ss-wrap.ss-bottom::after { opacity: 1; }
+[data-theme="dark"] .ss-wrap::before { background: linear-gradient(to bottom, rgba(0,0,0,0.42), rgba(0,0,0,0)); }
+[data-theme="dark"] .ss-wrap::after  { background: linear-gradient(to top, rgba(0,0,0,0.42), rgba(0,0,0,0)); }
 
 #snap-chart-tip-compras { background: rgba(30,58,138,0.92); }
 
@@ -22460,7 +22504,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1735';
+ const _APP_VERSION = 'v1.3.1736';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -65630,6 +65674,112 @@ window._almCarritoOptions = function() {
   if (_raf) { cancelAnimationFrame(_raf); _raf = null; }
   _snapBack();
  }, { passive: true });
+})();
+</script>
+
+<script>
+/* ═══ SCROLL SHADOWS v1.3.1736 — affordance de cajón (inset iOS) ════
+   Aplica sombras de borde a los cajones con scroll del Dashboard para
+   diferenciarlos visualmente de la zona sin scroll (más vendidos, más
+   comprados, últimos movimientos, rendimiento, cajones flujo de caja,
+   timeline agenda). Las sombras aparecen solo cuando hay contenido
+   oculto en esa dirección y se desvanecen al llegar al tope/fondo.
+
+   FUNCIONAMIENTO:
+   1. Detecta scrollers por selector (clases existentes, sin tocar HTML).
+   2. Los envuelve UNA vez en un .ss-wrap (idempotente, transfiere el rol
+      flex para no romper el layout de los cajones flex:1/min-height:0).
+   3. Listener scroll con rAF throttle + passive → togglea .ss-top/.ss-bottom.
+   4. Re-evalúa tras re-render (el contenido cambia con innerHTML) vía
+      MutationObserver ligero sobre cada scroller + recheck en visibilitychange.
+
+   SEGURIDAD: puramente visual (#0.3). No toca datos/sync. rAF+passive en
+   el hot path (LESSON-007). No transform en ancestros de fixed.
+   ═══════════════════════════════════════════════════════════════ */
+(function() {
+ var SELECTORS = ['.sti-scroll', '.snap-fc-scroll', '#snap-agenda-timeline'];
+ var SLACK = 2; // px de tolerancia para "estás en el tope/fondo"
+
+ function _evaluate(scroller, wrap) {
+  try {
+   var st = scroller.scrollTop;
+   var sh = scroller.scrollHeight;
+   var ch = scroller.clientHeight;
+   var hasOverflow = (sh - ch) > SLACK;
+   var atTop = st <= SLACK;
+   var atBottom = st >= (sh - ch - SLACK);
+   wrap.classList.toggle('ss-top', hasOverflow && !atTop);
+   wrap.classList.toggle('ss-bottom', hasOverflow && !atBottom);
+  } catch(_) {}
+ }
+
+ function _bindScroller(scroller) {
+  if (!scroller || scroller.dataset.ssBound === '1') return;
+  // El scroller debe seguir siendo el que scrollea; el wrapper NO scrollea.
+  // Si el scroller ya tiene un padre .ss-wrap (re-entrada), reusarlo.
+  var wrap = scroller.parentElement;
+  if (!wrap || !wrap.classList.contains('ss-wrap')) {
+   // Crear wrapper y reparentar el scroller dentro.
+   wrap = document.createElement('div');
+   wrap.className = 'ss-wrap';
+   // Transferir el rol flex del scroller al wrapper para no romper layout
+   // de cajones que dependen de flex:1/min-height:0 (compras/rendimiento/fc/agenda).
+   var cs = null;
+   try { cs = getComputedStyle(scroller); } catch(_) {}
+   if (cs && cs.flex && cs.flex !== '0 1 auto' && cs.flexGrow !== '0') {
+    wrap.style.flex = '1';
+    wrap.style.minHeight = '0';
+   }
+   var parent = scroller.parentNode;
+   if (parent) {
+    parent.insertBefore(wrap, scroller);
+    wrap.appendChild(scroller);
+   }
+  }
+  scroller.dataset.ssBound = '1';
+
+  var _raf = null;
+  var _onScroll = function() {
+   if (_raf) return;
+   _raf = requestAnimationFrame(function(){ _raf = null; _evaluate(scroller, wrap); });
+  };
+  scroller.addEventListener('scroll', _onScroll, { passive: true });
+
+  // Re-evaluar cuando cambie el contenido (innerHTML del cajón en cada render).
+  try {
+   var _mo = new MutationObserver(function(){
+    if (_raf) return;
+    _raf = requestAnimationFrame(function(){ _raf = null; _evaluate(scroller, wrap); });
+   });
+   _mo.observe(scroller, { childList: true, subtree: false });
+  } catch(_) {}
+
+  // Evaluación inicial (doble rAF: tras layout estable).
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){ _evaluate(scroller, wrap); }); });
+ }
+
+ function _scanAndBind() {
+  try {
+   SELECTORS.forEach(function(sel){
+    document.querySelectorAll(sel).forEach(_bindScroller);
+   });
+  } catch(_) {}
+ }
+
+ // Escaneo inicial + reintentos (los cajones se montan tras el boot del dashboard).
+ var _scans = 0;
+ var _scanIv = setInterval(function(){
+  _scans++;
+  _scanAndBind();
+  if (_scans >= 8) clearInterval(_scanIv); // 8 × 500ms = 4s, cubre boot lento
+ }, 500);
+ _scanAndBind();
+
+ // Re-escanear al volver de background (por si el DOM cambió) y exponer manual.
+ document.addEventListener('visibilitychange', function(){
+  if (!document.hidden) setTimeout(_scanAndBind, 100);
+ });
+ try { window._DashweyScrollShadowsScan = _scanAndBind; } catch(_) {}
 })();
 </script>
 
