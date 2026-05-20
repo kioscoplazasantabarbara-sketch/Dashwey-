@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1731";
+ var CURRENT_CACHE = "dashwey-v1-3-1733";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1731</title>
+<title>Dashwey v1.3.1733</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22253,6 +22253,24 @@ const ui = (() => {
    }
   }
  } catch(_) {}
+ /* v1.3.1733 FIX RAÍZ — PANEL BLANCO FANTASMA sobre el navbar:
+    El drag-to-dismiss (touchmove) escribe box.style.transform = translateY(Npx) INLINE.
+    Si el cierre llega con un transform inline colgado (drag cancelado anómalamente,
+    closeFs externo por back/visibilitychange/navegación interna mientras había arrastre,
+    o _commitClose dejando translateY(boxH) inline), ese inline GANA sobre la regla CSS
+    de cierre (#fs-overlay:not(.open) #fs-box → translateY(100%)). Resultado: el #fs-box
+    (fondo blanco sólido, z-index 10100 > navbar 200) se queda plantado a media altura
+    tapando Almacén/Dashboard/FAB. innerHTML ya vaciado → panel BLANCO sin contenido.
+    SOLUCIÓN: neutralizar transform/transition/willChange inline al cerrar → el box vuelve
+    SIEMPRE a su estado CSS base (oculto abajo) pase lo que pase con el drag.
+    Solo si el fs NO se reabrió durante la animación (mismo guard de generación). */
+ try {
+  if (box && _myCloseGen === _fsCloseGen && !overlay.classList.contains('open')) {
+   box.style.transform = '';
+   box.style.transition = '';
+   box.style.willChange = '';
+  }
+ } catch(_) {}
  if (typeof App !== 'undefined' && App.alm?._sacCloseAll) App.alm._sacCloseAll();
  try { if (App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
  try { Utils.triggerHaptic('edgeRelease'); } catch(_) {}
@@ -22350,6 +22368,17 @@ const ui = (() => {
   var _mc = document.getElementById('modal-content');
   if (_mc) _mc.innerHTML = '';
  } catch(_) {}
+ /* v1.3.1733 FIX RAÍZ — PANEL BLANCO FANTASMA (mismo bug que closeFs): el drag del
+    #modal-sheet deja box.style.transform = translateY(Npx) inline. Si el cierre llega con
+    ese inline colgado, gana sobre el CSS de cierre y el sheet (blanco, z-index 10101 >
+    navbar 200) se queda plantado tapando la navbar. Neutralizar transform/transition inline
+    al cerrar → vuelve siempre a su estado base oculto. Solo si no se reabrió mientras tanto. */
+ try {
+  if (sheet && !overlay.classList.contains('open')) {
+   sheet.style.transform = '';
+   sheet.style.transition = '';
+  }
+ } catch(_) {}
  /* v1.3.1718: restaurar backdrop-filter del navbar/header SOLO si no queda otro
     modal/sheet abierto (evita reactivar el blur mientras un fs-overlay sigue abierto). */
  try {
@@ -22404,7 +22433,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1731';
+ const _APP_VERSION = 'v1.3.1733';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -59174,41 +59203,57 @@ _eaRecalc();
     +'<tbody>'+filas+'</tbody>'
     +'<tfoot><tr class="total-row"><td colspan="3">TOTAL (IVA inc.)</td><td style="text-align:right">'+feur(total)+'</td></tr></tfoot>'
     +'</table></body></html>';
-   /* v1.3.1729 FIX RAÍZ CRASH IMPRESIÓN: window.open('','_blank') en WebView Capacitor (APK)
-      lanza un intent de Android → muestra selector "Abrir con" (Chrome/Edge...). Si el usuario
-      no elige navegador, el WebView queda esperando una ventana que nunca abre → CONGELADO/crash.
-      Y aunque elija navegador, win.document no es accesible desde el contexto APK.
-      SOLUCIÓN: imprimir desde un IFRAME OCULTO inyectado en el propio documento. Funciona igual
-      en PWA y APK, sin abrir selector de navegador ni ventana nueva. El iframe se autodestruye. */
-   try {
-    var _oldIf = document.getElementById('_dashwey-print-frame');
-    if (_oldIf && _oldIf.parentNode) _oldIf.parentNode.removeChild(_oldIf);
-   } catch(_) {}
-   var ifr = document.createElement('iframe');
-   ifr.id = '_dashwey-print-frame';
-   ifr.setAttribute('aria-hidden', 'true');
-   ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
-   document.body.appendChild(ifr);
-   try {
-    var _doc = ifr.contentWindow.document;
-    _doc.open();
-    _doc.write(html);
-    _doc.close();
-    // Esperar a que el contenido pinte antes de imprimir
-    setTimeout(function(){
-     try {
-      ifr.contentWindow.focus();
-      ifr.contentWindow.print();
-     } catch(_) {
-      try { showToast('⚠️ No se pudo abrir la impresión'); } catch(__){}
+   /* v1.3.1731 FIX IMPRESIÓN APK: el iframe.print() tampoco funciona fiablemente en WebView
+      Android (el diálogo de impresión nativo no siempre se dispara desde un iframe). Enfoque
+      adaptativo por plataforma:
+        - APK (Capacitor): usar navigator.share con el texto del pedido → abre el menú nativo
+          de compartir de Android (el usuario puede guardar como PDF, enviar por WhatsApp, etc.).
+        - Web/PWA: iframe oculto + print() (funciona en navegador de escritorio y móvil web). */
+   var _esAPK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+   if (_esAPK) {
+    // Construir texto plano legible del pedido para compartir
+    var _txtLineas = (pedido.items||[]).map(function(o){
+     var pr=State.get.prod(o.prodId); var nom=(pr&&pr.nombre)||o.prodId||'Artículo';
+     var uds=(o.ncajas||1)*(o.udscaja||1); var tot=(o.ncajas||1)*(o.precio||0)*1.10;
+     return '• '+nom+' — '+(o.ncajas||1)+' bulto · '+uds+' uds · '+feur(tot);
+    }).join('\n');
+    var _txtShare = (prov.nombre||'Proveedor')+'\n'
+     +'Pedido: '+pedidoId+'\n'
+     +'Fecha: '+fmtD(pedido.fecha)+'\n\n'
+     +_txtLineas+'\n\n'
+     +'TOTAL (IVA inc.): '+feur(total);
+    try {
+     if (navigator.share) {
+      navigator.share({ title: 'Pedido '+(prov.nombre||''), text: _txtShare }).catch(function(){});
+     } else if (window.Capacitor?.Plugins?.Share) {
+      window.Capacitor.Plugins.Share.share({ title: 'Pedido', text: _txtShare });
+     } else {
+      try { showToast('⚠️ Compartir no disponible'); } catch(_){}
      }
-     // Limpiar el iframe tras dar tiempo al diálogo de impresión nativo
-     setTimeout(function(){ try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){} }, 1500);
-    }, 350);
-   } catch(e) {
-    try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){}
-    try { showToast('⚠️ No se pudo generar el documento'); } catch(__){}
-    console.error('[ALM] _imprimirPedido iframe:', e);
+    } catch(e) { try { showToast('⚠️ No se pudo compartir'); } catch(_){} console.error('[ALM] share:', e); }
+   } else {
+    // Web/PWA: iframe oculto + print
+    try {
+     var _oldIf = document.getElementById('_dashwey-print-frame');
+     if (_oldIf && _oldIf.parentNode) _oldIf.parentNode.removeChild(_oldIf);
+    } catch(_) {}
+    var ifr = document.createElement('iframe');
+    ifr.id = '_dashwey-print-frame';
+    ifr.setAttribute('aria-hidden', 'true');
+    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(ifr);
+    try {
+     var _doc = ifr.contentWindow.document;
+     _doc.open(); _doc.write(html); _doc.close();
+     setTimeout(function(){
+      try { ifr.contentWindow.focus(); ifr.contentWindow.print(); }
+      catch(_) { try { showToast('⚠️ No se pudo abrir la impresión'); } catch(__){} }
+      setTimeout(function(){ try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){} }, 1500);
+     }, 350);
+    } catch(e) {
+     try { if(ifr.parentNode) ifr.parentNode.removeChild(ifr); } catch(_){}
+     console.error('[ALM] _imprimirPedido iframe:', e);
+    }
    }
   } catch(e){console.error('[ALM] _imprimirPedido:',e);}
  }
@@ -63320,6 +63365,23 @@ window._DashweyDeviceId = (() => {
    }
    document.body.classList.remove('modal-bg-freeze');
    if (document.body.style.overflow === 'hidden') document.body.style.overflow = '';
+   /* v1.3.1733 RED DE SEGURIDAD — panel blanco fantasma: si al volver de background
+      el overlay está CERRADO pero su box conserva un transform inline residual (drag
+      interrumpido por el swipe a recientes del Pixel, que NO dispara visibilitychange
+      fiable), ese inline lo deja plantado encima del navbar. Limpiarlo aquí garantiza
+      que ningún sheet sobreviva oculto-pero-visible al cambio de foco. */
+   try {
+    var _fsO2 = document.getElementById('fs-overlay');
+    var _fsB2 = document.getElementById('fs-box');
+    if (_fsB2 && (!_fsO2 || !_fsO2.classList.contains('open'))) {
+     _fsB2.style.transform = ''; _fsB2.style.transition = ''; _fsB2.style.willChange = '';
+    }
+    var _mO2 = document.getElementById('modal-overlay');
+    var _mS2 = document.getElementById('modal-sheet');
+    if (_mS2 && (!_mO2 || !_mO2.classList.contains('open'))) {
+     _mS2.style.transform = ''; _mS2.style.transition = ''; _mS2.style.willChange = '';
+    }
+   } catch(_) {}
   } catch(_) {}
  }
  try { window._DashweyResumeCleanup = _DashweyResumeCleanup; } catch(_) {}
