@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1753</title>
+<title>Dashwey v1.3.1754</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10604,7 +10604,7 @@ html, body { background: var(--bg); }
  letter-spacing: -3px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
  white-space: nowrap;
 }
-.wrp-big-foot { font-size: 18px; color: rgba(255,255,255,0.7); margin: 22px 0 0; line-height: 1.4; font-weight: 500; }
+.wrp-big-foot { font-size: 18px; color: rgba(255,255,255,0.7); margin: 22px 0 0; line-height: 1.4; font-weight: 500; text-wrap: pretty; }
 
 /* Rank */
 .wrp-rank-label { font-size: 28px; color: #fff; margin: 0 0 2px; font-weight: 800; letter-spacing: -.8px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
@@ -10629,9 +10629,11 @@ html, body { background: var(--bg); }
  white-space: nowrap;
 }
 .wrp-final-foot { font-size: 18px; color: rgba(255,255,255,0.72); margin: 18px 0 0; line-height: 1.4; font-weight: 500; }
+.wrp-final-intro { font-size: 21px; color: rgba(255,255,255,0.85); margin: 0 0 26px; line-height: 1.4; font-weight: 600; text-wrap: balance; }
+.wrp-theme-light .wrp-final-intro { color: #333 !important; }
 /* Festivo — frase humana tipo titular */
 .wrp-festivo-tag { font-size: 17px; color: rgba(255,255,255,0.7); margin: 0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
-.wrp-festivo-frase { font-size: 40px; color: #fff; margin: 16px 0 0; font-weight: 800; line-height: 1.08; letter-spacing: -1px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+.wrp-festivo-frase { font-size: 40px; color: #fff; margin: 16px 0 0; font-weight: 800; line-height: 1.1; letter-spacing: -1px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; text-wrap: balance; }
 .wrp-theme-light .wrp-festivo-tag { color: #777 !important; }
 .wrp-theme-light .wrp-festivo-frase { color: #111 !important; }
 /* Ingresos vs Gastos */
@@ -22789,7 +22791,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1753';
+ const _APP_VERSION = 'v1.3.1754';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40621,12 +40623,13 @@ function _confirmBorrarCuenta(id) {
     d.menosComprados = _menosComprados(period);
 
     // Beneficio neto + margen
+    //   getBeneficioNeto devuelve { beneficio (=bruto), vta, costeVentas, ... }
+    //   No existe campo 'beneficioNeto' ni 'gastos' → usar los reales.
     var bn = KPI.getBeneficioNeto(period) || {};
     d.ingresos = (bn.vta!=null) ? bn.vta : d.ventasTotal;
-    d.beneficioNeto = (bn.beneficioNeto!=null) ? bn.beneficioNeto : (bn.neto!=null ? bn.neto : null);
-    // gastos = ingresos - beneficio si no hay campo directo
-    d.gastos = (bn.gastos!=null) ? bn.gastos
-             : (bn.costeVentas!=null && d.beneficioNeto!=null ? (d.ingresos - d.beneficioNeto) : null);
+    d.gastos = (bn.costeVentas!=null) ? bn.costeVentas : null;
+    d.beneficioNeto = (bn.beneficio!=null) ? bn.beneficio
+                    : (d.ingresos!=null && d.gastos!=null ? (d.ingresos - d.gastos) : null);
     d.centimosPorEuro = (d.ingresos>0 && d.beneficioNeto!=null) ? Math.round(d.beneficioNeto/d.ingresos*100) : null;
 
     // Comparativa vs periodo anterior
@@ -40718,6 +40721,15 @@ function _confirmBorrarCuenta(id) {
     return out.sort(function(a,b){ return b.importe - a.importe; }).slice(0,3);
    } catch(_){ return []; }
   }
+  // ¿La fecha 'M-D' cae en algún festivo? Devuelve el nombre o null.
+  function _esFestivo(md){
+   try {
+    for (var i=0;i<_FESTIVOS.length;i++){
+     if (_FESTIVOS[i].dias.indexOf(md) !== -1) return _FESTIVOS[i].nombre;
+    }
+    return null;
+   } catch(_){ return null; }
+  }
 
   // ── Definición de las tarjetas (orden narrativo) ──
   function _cards(d, period){
@@ -40730,21 +40742,29 @@ function _confirmBorrarCuenta(id) {
 
    var cards = [];
    var CRIMSON='#8B1A2F', NEGRO='#0A0A0A', BLANCO='#FAFAF7';
+   var periodoTxt = esAnual ? 'este año' : 'este mes';
    // 1 Portada — crimson
    cards.push({ bg:CRIMSON, theme:'crimson', kind:'cover', titulo:titulo, sub:periodoLabel });
-   // 2 Ventas — negro
-   cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:'Este periodo vendiste', num:d.ventasTotal, fmt:'eur',
-     foot: d.nTickets+' tickets · '+_eur(d.mediaDia)+' de media al día' });
+   // 2 Ventas — negro (frase humana)
+   cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:(esAnual?'Este año vendiste':'Este mes vendiste'), num:d.ventasTotal, fmt:'eur',
+     foot: 'en '+d.nTickets+' tickets · '+_eur(d.mediaDia)+' de media al día' });
    // 3 Top vendidos — blanco
    if (d.topVendidos && d.topVendidos.length)
     cards.push({ bg:BLANCO, theme:'light', kind:'rank', label:'Tus más vendidos', rows:d.topVendidos.map(function(x){return {n:x.nombre, v:_eur(x.total)};}), note:'según ventas detalladas' });
    // 4 Producto parado — negro
    if (d.productoParado && d.productoParado.length)
     cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Producto parado', sub:'quizá retirar o rebajar', rows:d.productoParado.map(function(x){return {n:x.nombre, v:x.uds+' uds'};}), note:'con stock · +30 días' });
-   // 5 Día récord — crimson
-   if (d.diaRecord)
+   // 5 Día récord — crimson (comprueba si fue festivo)
+   if (d.diaRecord){
+    var drFecha = _fmtFecha(d.diaRecord.fecha);
+    var drMD = (d.diaRecord.fecha.getMonth()+1)+'-'+d.diaRecord.fecha.getDate();
+    var drEsFestivo = _esFestivo(drMD);
+    var drFoot = drEsFestivo
+      ? (drFecha+' — '+drEsFestivo+' 🎉')
+      : ('Fue el '+drFecha+'… ¡y ni siquiera era festivo! 🔥');
     cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label:'Tu mejor día', num:d.diaRecord.importe, fmt:'eur',
-      foot: _fmtFecha(d.diaRecord.fecha) });
+      foot: drFoot });
+   }
    // 5b Festivos con ventas — frase humana (negro, alterna con crimson del día récord)
    if (d.festivos && d.festivos.length){
     d.festivos.forEach(function(fest, fi){
@@ -40752,8 +40772,9 @@ function _confirmBorrarCuenta(id) {
        nombre:fest.nombre, frase:fest.frase });
     });
    }
-   // 6 Compras — blanco
-   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:'Este periodo compraste', num:d.comprasTotal, fmt:'eur', foot:d.nPedidos+' pedidos' });
+   // 6 Compras — blanco (frase humana)
+   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:(esAnual?'Este año hiciste':'Este mes hiciste'), num:d.comprasTotal, fmt:'eur',
+     foot: 'en '+d.nPedidos+(d.nPedidos===1?' pedido a tus proveedores':' pedidos a tus proveedores') });
    // 7 Top proveedores — negro
    if (d.topProveedores && d.topProveedores.length)
     cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Tus proveedores top', rows:d.topProveedores.map(function(x){return {n:x.nombre, v:_eur(x.gasto)};}) });
@@ -40768,8 +40789,14 @@ function _confirmBorrarCuenta(id) {
    if (d.ingresos!=null && d.gastos!=null)
     cards.push({ bg:BLANCO, theme:'light', kind:'vs', label:'Ingresos vs Gastos',
       ingresos:d.ingresos, gastos:d.gastos });
-   // 10 Gran final — negro
-   cards.push({ bg:NEGRO, theme:'dark', kind:'final',
+   // 10 Gran final — negro (intro humano con ingresos/gastos)
+   var introFinal = '';
+   if (d.ingresos!=null && d.gastos!=null){
+    introFinal = 'Ingresaste '+_eur(d.ingresos)+' y gastaste '+_eur(d.gastos)+' '+periodoTxt+'.';
+   } else if (d.ingresos!=null){
+    introFinal = 'Ingresaste '+_eur(d.ingresos)+' '+periodoTxt+'.';
+   }
+   cards.push({ bg:NEGRO, theme:'dark', kind:'final', intro:introFinal,
      ingresos:d.ingresos, gastos:d.gastos, neto:d.beneficioNeto, centimos:d.centimosPorEuro });
 
    // REGLA DURA: nunca dos fondos iguales seguidos. Si se repite, rotar al siguiente tema.
@@ -40904,9 +40931,9 @@ function _confirmBorrarCuenta(id) {
       '<p class="wrp-festivo-tag wrp-aline">'+_esc(c.nombre)+'</p>'+
       '<p class="wrp-festivo-frase wrp-aline">'+_esc(c.frase)+'</p></div>';
    } else if (c.kind==='final'){
+    var netoTxt = (c.neto>=0?'+ ':'− ')+_eur(Math.abs(c.neto||0));
     inner = '<div class="wrp-final">'+
-      (c.ingresos!=null?'<div class="wrp-frow wrp-aline"><span>Ingresos</span><span>'+_eur(c.ingresos)+'</span></div>':'')+
-      (c.gastos!=null?'<div class="wrp-frow wrp-fborder wrp-aline"><span>Gastos</span><span>− '+_eur(c.gastos)+'</span></div>':'')+
+      '<p class="wrp-final-intro wrp-aline">'+_esc(c.intro)+'</p>'+
       '<p class="wrp-final-label wrp-aline">Tu ganancia neta</p>'+
       '<p class="wrp-final-num wrp-aline" id="wrpBigNum" data-target="'+(c.neto||0)+'" data-fmt="eursign">'+_eur(0)+'</p>'+
       (c.centimos!=null?'<p class="wrp-final-foot wrp-aline">De cada euro vendido, te quedaron '+c.centimos+' céntimos</p>':'')+
