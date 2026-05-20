@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1728";
+ var CURRENT_CACHE = "dashwey-v1-3-1729";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1728</title>
+<title>Dashwey v1.3.1729</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22373,7 +22373,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1728';
+ const _APP_VERSION = 'v1.3.1729';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -63258,6 +63258,59 @@ window._DashweyDeviceId = (() => {
  })();
 
 
+ // v1.3.1728 FIX RAÍZ DEFINITIVA — cleanup de overlays al volver de background.
+ //   PROBLEMA: el cleanup vivía DENTRO del handler de visibilitychange. Pero en APK,
+ //   el swipe a recientes de Android NO siempre dispara visibilitychange nativo (el WebView
+ //   solo dispara appStateChange de Capacitor). Resultado: al volver, el cleanup NUNCA corría
+ //   → el modal (historial, etc.) quedaba abierto y visible pero con los event handlers de
+ //   toque perdidos por el WebView → CONGELADO. El usuario podía navegar tocando fuera del
+ //   modal (DOM real) pero el modal no respondía. ESTE era el origen de "el modal se reabre
+ //   y se queda congelado tras swipe a recientes".
+ //   SOLUCIÓN: extraer el cleanup a una función llamada desde AMBOS: visibilitychange Y
+ //   appStateChange de Capacitor (que SÍ se dispara fiablemente en APK). Idempotente.
+ function _DashweyResumeCleanup(hiddenAtTs) {
+  try {
+   var _backMs = hiddenAtTs > 0 ? (Date.now() - hiddenAtTs) : 0;
+   // ¿El fs-box tiene un formulario con datos sin guardar? (importe escrito, nombre, etc.)
+   var _fsHasData = false;
+   try {
+    var _fsC = document.getElementById('fs-content');
+    if (_fsC) {
+     var _inps = _fsC.querySelectorAll('input, textarea');
+     for (var _ii = 0; _ii < _inps.length; _ii++) {
+      var _v = (_inps[_ii].value || '').trim();
+      if (_v && _v !== '0' && _v !== '0,00' && _v !== '0.00') { _fsHasData = true; break; }
+     }
+    }
+   } catch(_) {}
+   var _keepFs = _fsHasData && _backMs < 8000;
+
+   var _ephemeralOverlays = [
+    'prov-picker-sheet', 'dash-period-sheet', 'gs-overlay',
+    'order-selector-overlay', 'ns-overlay', 'check-modal-overlay'
+   ];
+   _ephemeralOverlays.forEach(function(id){
+    var el = document.getElementById(id);
+    if (el && el.classList.contains('open')) el.classList.remove('open');
+   });
+   try { if (App.alm && App.alm._closeProvPickerSheet) App.alm._closeProvPickerSheet(); } catch(_) {}
+
+   if (!_keepFs) {
+    var _fsO = document.getElementById('fs-overlay');
+    if (_fsO && _fsO.classList.contains('open')) {
+     try { if (App.ui && App.ui.closeFs) App.ui.closeFs(); else _fsO.classList.remove('open'); } catch(_) { _fsO.classList.remove('open'); }
+    }
+    var _mO = document.getElementById('modal-overlay');
+    if (_mO && _mO.classList.contains('open')) {
+     try { if (App.ui && App.ui.closeModal) App.ui.closeModal(); else _mO.classList.remove('open'); } catch(_) { _mO.classList.remove('open'); }
+    }
+   }
+   document.body.classList.remove('modal-bg-freeze');
+   if (document.body.style.overflow === 'hidden') document.body.style.overflow = '';
+  } catch(_) {}
+ }
+ try { window._DashweyResumeCleanup = _DashweyResumeCleanup; } catch(_) {}
+
  // v1.3.433: listener de resume robusto
  // Cubre: volver de recientes, salir de reposo, multitarea Android
  (function _initResumeListener() {
@@ -63302,57 +63355,9 @@ window._DashweyDeviceId = (() => {
  // 1. Restaurar overflow -- puede quedar bloqueado por un modal abierto al ir a recientes
  try { if (document.body.style.overflow === 'hidden') document.body.style.overflow = ''; } catch(_) {}
 
- /* v1.3.1724 FIX CRASH RAÍZ (universal): el problema NO era cada modal individual.
-    Era que CUALQUIER overlay con clase .open quedaba en estado intermedio si el usuario
-    hacía un gesto de Android (recientes/atrás) durante su animación. Al volver, el guard
-    `if (overlay.classList.contains('open')) return` bloqueaba la reapertura → modal corrupto
-    congelado. Esto se repetía en TODOS los modales (prov-picker, movimiento, vista global...).
-    SOLUCIÓN DE RAÍZ: al volver de background, cerrar TODOS los overlays efímeros de golpe
-    para garantizar estado coherente. Solo se conserva el fs-box SI contiene un formulario
-    con datos a medio escribir Y el usuario estuvo fuera poco tiempo (vistazo rápido <8s). */
- try {
-  var _backMs = _hiddenAt > 0 ? (Date.now() - _hiddenAt) : 0;
-  // ¿El fs-box tiene un formulario con datos sin guardar? (importe escrito, nombre, etc.)
-  var _fsHasData = false;
-  try {
-   var _fsC = document.getElementById('fs-content');
-   if (_fsC) {
-    var _inps = _fsC.querySelectorAll('input, textarea');
-    for (var _ii = 0; _ii < _inps.length; _ii++) {
-     var _v = (_inps[_ii].value || '').trim();
-     if (_v && _v !== '0' && _v !== '0,00' && _v !== '0.00') { _fsHasData = true; break; }
-    }
-   }
-  } catch(_) {}
-  // Conservar fs-box solo si hay datos Y fue un vistazo rápido (<8s)
-  var _keepFs = _fsHasData && _backMs < 8000;
-
-  // Overlays efímeros (pickers, selectores, vistas sin edición) → cerrar siempre
-  var _ephemeralOverlays = [
-   'prov-picker-sheet', 'dash-period-sheet', 'gs-overlay',
-   'order-selector-overlay', 'ns-overlay', 'check-modal-overlay'
-  ];
-  _ephemeralOverlays.forEach(function(id){
-   var el = document.getElementById(id);
-   if (el && el.classList.contains('open')) el.classList.remove('open');
-  });
-  try { if (App.alm && App.alm._closeProvPickerSheet) App.alm._closeProvPickerSheet(); } catch(_) {}
-
-  // fs-overlay y modal-overlay: cerrar SOLO si no hay datos a conservar
-  if (!_keepFs) {
-   var _fsO = document.getElementById('fs-overlay');
-   if (_fsO && _fsO.classList.contains('open')) {
-    try { if (App.ui && App.ui.closeFs) App.ui.closeFs(); else _fsO.classList.remove('open'); } catch(_) { _fsO.classList.remove('open'); }
-   }
-   var _mO = document.getElementById('modal-overlay');
-   if (_mO && _mO.classList.contains('open')) {
-    try { if (App.ui && App.ui.closeModal) App.ui.closeModal(); else _mO.classList.remove('open'); } catch(_) { _mO.classList.remove('open'); }
-   }
-  }
-  // Quitar freeze de backdrop-filter y restaurar scroll por si quedaron atascados
-  document.body.classList.remove('modal-bg-freeze');
-  if (document.body.style.overflow === 'hidden') document.body.style.overflow = '';
- } catch(_) {}
+ // v1.3.1728: cleanup de overlays extraído a función reutilizable (ver _DashweyResumeCleanup)
+ //   para poder llamarlo también desde appStateChange de Capacitor.
+ _DashweyResumeCleanup(_hiddenAt);
 
  // 2. Recalcular posicion del swipe-track
  // La orientacion puede haber cambiado en reposo -- _getTabWidth() devuelve valor obsoleto
@@ -63448,9 +63453,19 @@ window._DashweyDeviceId = (() => {
  if (_CapApp && _CapApp.addListener) {
  _CapApp.addListener('appStateChange', function(state) {
  if (!state.isActive) { _hiddenAt = Date.now(); return; }
- // Al volver activa: NO dispatch duplicado — confiamos en visibilitychange nativo
- // _hiddenAt ya estaba seteado al ir hidden → handler 3 calculará elapsed correctamente
- // cuando reciba el visibilitychange nativo del WebView.
+ /* v1.3.1728 FIX RAÍZ DEFINITIVA: al volver ACTIVA, ejecutar el cleanup directamente.
+    ANTES confiábamos en que el visibilitychange nativo del WebView lo hiciera, pero en
+    APK (Pixel) el swipe a recientes NO dispara visibilitychange fiablemente → el cleanup
+    no corría → modal congelado. Ahora appStateChange (que SÍ se dispara siempre en APK)
+    llama al cleanup. Es idempotente, así que si visibilitychange también se dispara, no
+    pasa nada (el segundo no encuentra overlays .open). Pequeño delay para dejar que el
+    WebView restaure el DOM antes de tocar clases. */
+ try {
+  var _hAt = _hiddenAt;
+  setTimeout(function(){
+   try { if (window._DashweyResumeCleanup) window._DashweyResumeCleanup(_hAt); } catch(_) {}
+  }, 60);
+ } catch(_) {}
  });
  }
  } catch(_) {}
