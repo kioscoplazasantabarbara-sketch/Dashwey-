@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1734";
+ var CURRENT_CACHE = "dashwey-v1-3-1735";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1734</title>
+<title>Dashwey v1.3.1735</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22460,7 +22460,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1734';
+ const _APP_VERSION = 'v1.3.1735';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30077,7 +30077,135 @@ const ui = (() => {
   }, 1000);
  })();
 
- // ── v1.3.1018: Revertir import BudgetBakers ────────────────────
+ /* ═══════════════════════════════════════════════════════════════════
+    v1.3.1734 · FASE 1 — SYNC SALDOS DERIVADOS (helpers de LECTURA pura)
+    ═══════════════════════════════════════════════════════════════════
+    OBJETIVO (plan ARQUITECTURA_SYNC_SALDOS.md): eliminar la divergencia
+    multi-device del saldo (~3€ Pixel vs A17 con mismos counts), causada por
+    14 escrituras incrementales de c.saldo que producen race conditions.
+    Modelo destino: saldo 100% DERIVADO (calculado, nunca persistido) como
+    BudgetBakers/YNAB.
+
+    ESTA FASE ES INERTE Y SEGURA:
+    - Solo AÑADE código nuevo de lectura. NO toca ninguna de las 14 escrituras.
+    - NO se llama desde ningún sitio de producción todavía.
+    - NO cambia nada visible. Cero riesgo de regresión (no altera control flow
+      de ninguna función que retorne importes — HARD RULE financiera respetada).
+    - _computeSaldoDerivado replica EXACTAMENTE la fórmula de _bbRecalcSaldos
+      (mismos filtros: pendientes, loyverse/tpv, cierre_caja_auto, origen=pedido,
+      saldoInicialFecha), pero para 1 cuenta y SIN escribir ni sanity check.
+
+    USO PREVISTO (futuras fases, NO ahora):
+    - Fase 2: toggle dev para comparar _computeSaldoDerivado vs c.saldo lado a lado.
+    - Fase 3+: sustituir lecturas de c.saldo por este helper, luego eliminar las
+      14 escrituras una a una, y finalmente el campo c.saldo del modelo.
+
+    Validación manual disponible desde ya en consola:
+      window._DashweyComputeSaldoDerivado('<cuentaId>')
+      window._DashweyAuditSaldosDerivados()  → compara todas las cuentas
+   ═══════════════════════════════════════════════════════════════════ */
+ (function _initSaldoDerivadoFase1() {
+  var _saldoCache = Object.create(null);   // { cuentaId: { val, ts } }
+  var _CACHE_TTL = 5000;                    // 5s — suficiente para evitar recálculo en ráfaga
+
+  function _toMs(v) {
+   if (!v) return 0;
+   if (typeof v === 'number') return v;
+   var d = new Date(v);
+   return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+
+  // Núcleo: misma fórmula que _bbRecalcSaldos pero para UNA cuenta, solo lectura.
+  function _computeRaw(cuentaId) {
+   var cuentas = (State.get.cuentas && State.get.cuentas()) || [];
+   var c = null;
+   for (var i = 0; i < cuentas.length; i++) { if (cuentas[i].id === cuentaId) { c = cuentas[i]; break; } }
+   if (!c) return null;
+
+   var gastos   = State.get.gastosOp        ? (State.get.gastosOp()||[])         : [];
+   var ingresos = State.get.ingresosFin     ? (State.get.ingresosFin()||[])      : [];
+   var ventas   = State.get.ventas          ? (State.get.ventas()||[])           : [];
+   var pedidos  = State.get.historialPedidos? (State.get.historialPedidos()||[]) : [];
+
+   var saldoCalc = parseFloat(c.saldoInicial) || 0;
+   var iniMs = _toMs(c.saldoInicialFecha);
+
+   // Ingresos manuales (mismos filtros que _bbRecalcSaldos)
+   ingresos.forEach(function(ig){
+    if (ig.cuentaId !== c.id) return;
+    if (ig.estado === 'pendiente') return;
+    if (ig.origen === 'loyverse' || ig.origen === 'tpv') return;
+    if (ig.origen === 'cierre_caja_auto') return;
+    if (_toMs(ig.fecha) < iniMs) return;
+    saldoCalc += (parseFloat(ig.importe)||0);
+   });
+   // Ventas (cuentaId vacío → cuenta primaria)
+   ventas.forEach(function(v){
+    var cid = v.cuentaId || (c.isPrimary ? c.id : null);
+    if (cid !== c.id) return;
+    if (_toMs(v.fecha) < iniMs) return;
+    saldoCalc += (parseFloat(v.total)||0);
+   });
+   // Gastos (excluir origen=pedido → contado vía pedidos)
+   gastos.forEach(function(g){
+    if (g.cuentaId !== c.id) return;
+    if (g.estado === 'pendiente') return;
+    if (g.origen === 'pedido') return;
+    if (_toMs(g.fecha) < iniMs) return;
+    saldoCalc -= (parseFloat(g.importe)||0);
+   });
+   // Pedidos con cuentaId explícito
+   pedidos.forEach(function(p){
+    if (!p.cuentaId || p.cuentaId !== c.id) return;
+    if (p.estado === 'pendiente' || p.estado === 'cancelado') return;
+    if (_toMs(p.fecha) < iniMs) return;
+    var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+    saldoCalc -= (parseFloat(coste)||0);
+   });
+   return Math.round(saldoCalc * 100) / 100;
+  }
+
+  function _computeSaldoDerivado(cuentaId) {
+   if (!cuentaId) return null;
+   var hit = _saldoCache[cuentaId];
+   var now = Date.now();
+   if (hit && (now - hit.ts) < _CACHE_TTL) return hit.val;
+   var val = _computeRaw(cuentaId);
+   _saldoCache[cuentaId] = { val: val, ts: now };
+   return val;
+  }
+
+  function _invalidateSaldoCache() { _saldoCache = Object.create(null); }
+
+  // Invalidar cache cuando cambie cualquier evento que afecte al saldo.
+  try {
+   if (window.DashweyBus && typeof window.DashweyBus.on === 'function') {
+    ['venta','gasto','ingreso','pedido','cuenta','cierre','merma','full'].forEach(function(ev){
+     window.DashweyBus.on(ev, _invalidateSaldoCache);
+    });
+   }
+  } catch(_) {}
+
+  // Auditoría de consola: compara el derivado vs el persistido (diagnóstico Fase 1→2).
+  function _auditSaldosDerivados() {
+   var cuentas = (State.get.cuentas && State.get.cuentas()) || [];
+   var out = cuentas.map(function(c){
+    var der = _computeSaldoDerivado(c.id);
+    var per = Math.round((parseFloat(c.saldo)||0)*100)/100;
+    return { cuenta: c.nombre, id: c.id, persistido: per, derivado: der, diff: (der==null?null:Math.round((der-per)*100)/100) };
+   });
+   try { console.table(out); } catch(_) { console.log(out); }
+   return out;
+  }
+
+  // Exposición SOLO para validación manual en consola — NO usado por producción.
+  try {
+   window._DashweyComputeSaldoDerivado = _computeSaldoDerivado;
+   window._DashweyInvalidateSaldoCache = _invalidateSaldoCache;
+   window._DashweyAuditSaldosDerivados = _auditSaldosDerivados;
+  } catch(_) {}
+ })();
+
  // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
  // NO toca productos, proveedores, ventas Loyverse.
  function _revertBudgetBakersImport() {
