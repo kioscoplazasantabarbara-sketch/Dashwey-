@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1725";
+ var CURRENT_CACHE = "dashwey-v1-3-1727";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1725</title>
+<title>Dashwey v1.3.1727</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8134,8 +8134,11 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  overflow-y: auto;
  flex: 1;
  -webkit-overflow-scrolling: touch;
-
  overscroll-behavior: contain;
+ /* v1.3.1725 FIX: user-select:none en el contenedor del fs — todo el contenido inyectado
+    con setFs() lo hereda de forma robusta (inputs/textarea lo re-habilitan vía regla global).
+    Soluciona la selección de texto que reaparecía al navegar el historial con setFs. */
+ -webkit-user-select: none; user-select: none;
 }
 #fs-content::-webkit-scrollbar { display: none; }
 
@@ -9984,13 +9987,17 @@ input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; disp
  border: 1.5px solid var(--border);
  margin-bottom: var(--sp-2);
  background: var(--surface);
- animation: staggerFadeIn 260ms var(--ease-decelerate) both;
- animation-delay: calc(var(--item-index, 0) * 45ms);
  cursor: pointer;
  touch-action: manipulation;
  -webkit-tap-highlight-color: transparent;
  transition: background var(--dur-micro), border-color var(--dur-micro);
-
+ /* v1.3.1725 FIX: user-select:none explícito. El contenido del historial se inyecta con
+    setFs() en un fs-box position:fixed; al reemplazar innerHTML, el WebView a veces pierde
+    el user-select:none heredado del body → el usuario podía seleccionar texto / abrir teclado
+    al tocar una fila. Forzarlo aquí lo garantiza independientemente de la herencia. */
+ -webkit-user-select: none; user-select: none;
+ -webkit-touch-callout: none;
+ /* animation única — antes estaba duplicada (bug cosmético) */
  animation: staggerFadeIn 260ms var(--ease-decelerate) both;
  animation-delay: calc(var(--item-index, 0) * 45ms);
 }
@@ -22354,7 +22361,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1725';
+ const _APP_VERSION = 'v1.3.1727';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -59214,7 +59221,8 @@ _eaRecalc();
  }
 
  // _histDeleteItem: borra pedido o factura
- var _histDeleteItem = function(tipo, itemId) {
+ // v1.3.1726: asignar a variable de módulo para que _bindHistDelegation (scope módulo) la alcance
+ _histDeleteItem = function(tipo, itemId) {
   // v1.3.1433 BUG-025 FIX: incluir info contextual en confirmación destructiva.
   //   Antes: "Se eliminará del historial. Esta acción no se puede deshacer."
   //   Ahora: muestra proveedor + importe + fecha → usuario confirma con conocimiento.
@@ -59248,7 +59256,8 @@ _eaRecalc();
   });
  };
  // _histOpenFactura: detalle solo lectura con datos fiscales
- var _histOpenFactura = function(fac) {
+ // v1.3.1726: variable de módulo (ver _histDeleteItem)
+ _histOpenFactura = function(fac) {
   var MON=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   var fmtD=function(iso){try{var d=new Date(iso);return String(d.getDate()).padStart(2,'0')+' '+MON[d.getMonth()]+' '+d.getFullYear();}catch(_){return '—';}};
   var lineas=(fac.items||[]).map(function(l){
@@ -59314,33 +59323,56 @@ _eaRecalc();
  '<h2 class="mhd-title">Historial de pedidos</h2>' +
  '<div class="mhd-sub">' + (provId ? (State.get.prov(provId)||{}).nombre||'' : '') + (provId ? ' · ' : '') + nPed + ' pedido' + (nPed!==1?'s':'') + ' · ' + nFac + ' factura' + (nFac!==1?'s':'') + '</div>' +
  '</div><button class="mhd-close" onclick="App.ui.closeFs()">×</button></div></div>' +
- '<div style="padding:var(--sp-3) 14px 24px;font-family:var(--font)" id="hist-list">' + rows + '</div>'
+ '<div style="padding:var(--sp-3) 14px 24px;font-family:var(--font)" id="hist-list" data-hist-mode="list">' + rows + '</div>'
  );
  ui.openFs('full');
- // Event delegation: tap = detalle, long press = borrar
- requestAnimationFrame(function(){
-  var _histList = document.getElementById('hist-list');
-  if(!_histList) return;
-  var _lpTimer = null;
-  var _histFindItem = function(el){
-   for(var i=0;i<6&&el;i++){ if(el.dataset&&el.dataset.hid) return el; el=el.parentElement; } return null;
-  };
-  _histList.addEventListener('touchstart', function(e){
-   var _el=_histFindItem(e.target); if(!_el) return;
-   _lpTimer=setTimeout(function(){
-    _lpTimer=null;
+ /* v1.3.1726 FIX RAÍZ — ciclo de vida del historial:
+    ANTES: los listeners (tap=detalle, longpress=borrar) se enganchaban a #hist-list.
+    Pero el historial navega a sus sub-vistas (detalle factura/pedido) reemplazando el
+    innerHTML del fs-box con setFs() → #hist-list se DESTRUYE. Al volver, se recreaba
+    #hist-list pero los listeners viejos quedaban huérfanos (leak) y a veces el nuevo nodo
+    no recibía handlers → taps sin respuesta → el "flickering como si un menú quisiera salir"
+    y los taps que caían en zona sin handler → comportamiento por defecto (selección/teclado).
+    AHORA: el listener se engancha UNA vez al #fs-content (contenedor ESTABLE que no se
+    destruye con setFs) y se guarda en _histDelegationBound para no duplicar. El handler
+    verifica que el contenido visible es la vista lista (data-hist-mode="list") via la fila
+    con data-hid. Esto sobrevive a cualquier navegación interna con setFs. */
+ _bindHistDelegation();
+ }
+
+ // Estado del long-press compartido por el delegation estable
+ var _histLpTimer = null;
+ var _histDelegationBound = false;
+ // v1.3.1726: handlers del historial expuestos a scope de módulo (asignados en cada
+ //   openHistorialPedidos) para que el delegation estable en #fs-content los alcance.
+ var _histDeleteItem = function(){};
+ var _histOpenFactura = function(){};
+ function _histFindItemEl(el){
+  for(var i=0;i<6&&el;i++){ if(el.dataset&&el.dataset.hid) return el; el=el.parentElement; } return null;
+ }
+ function _bindHistDelegation(){
+  // Engancha una sola vez al contenedor estable #fs-content
+  if (_histDelegationBound) return;
+  var _fsc = document.getElementById('fs-content');
+  if (!_fsc) return;
+  _histDelegationBound = true;
+
+  _fsc.addEventListener('touchstart', function(e){
+   var _el=_histFindItemEl(e.target); if(!_el) return;
+   _histLpTimer=setTimeout(function(){
+    _histLpTimer=null;
     try{Utils.triggerHaptic('warning');}catch(_){}
     _histDeleteItem(_el.dataset.htipo, _el.dataset.hid);
    },600);
   }, {passive:true});
-  _histList.addEventListener('touchend', function(e){
-   if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null;}
+  _fsc.addEventListener('touchend', function(){
+   if(_histLpTimer){clearTimeout(_histLpTimer);_histLpTimer=null;}
   });
-  _histList.addEventListener('touchmove', function(e){
-   if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null;}
+  _fsc.addEventListener('touchmove', function(){
+   if(_histLpTimer){clearTimeout(_histLpTimer);_histLpTimer=null;}
   }, {passive:true});
-  _histList.addEventListener('click', function(e){
-   var _el=_histFindItem(e.target); if(!_el) return;
+  _fsc.addEventListener('click', function(e){
+   var _el=_histFindItemEl(e.target); if(!_el) return;
    var _id=_el.dataset.hid; var _tipo=_el.dataset.htipo;
    if(_tipo==='factura'){
     var _fac=(State.get.facturas?State.get.facturas():[]).find(function(f){return f.id===_id;});
@@ -59349,7 +59381,6 @@ _eaRecalc();
     App.alm._reabrirPedidoHistorial(_id);
    }
   });
- });
  }
 
  function _reabrirPedidoHistorial(pedidoId) {
