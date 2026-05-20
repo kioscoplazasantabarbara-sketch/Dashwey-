@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1714";
+ var CURRENT_CACHE = "dashwey-v1-3-1715";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1714</title>
+<title>Dashwey v1.3.1715</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -7795,6 +7795,11 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  user-select: none;
  touch-action: pan-y;
  position: relative;
+ /* v1.3.1714 OPTIMIZACIÓN: contain aísla layout/paint de cada tarjeta — un cambio
+    en una tarjeta no fuerza reflow de las demás → scroll fluido + cascada visible
+    en WebView gama baja. NO usamos content-visibility aquí porque oculta items fuera
+    de viewport y eso rompería la animación en cascada de entrada (staggerFadeIn). */
+ contain: layout style paint;
 }
 .alm-cat-item:active { }
 .alm-cat-item.in-cart { border-color: var(--red); background: var(--red-s); }
@@ -8081,12 +8086,10 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  padding-top: env(safe-area-inset-top, 0px); /* notch / status bar Android */
  transform: translateY(100%);
  transition: transform var(--sheet-duration) var(--sheet-spring);
- /* v1.3.1712 FIX PARPADEO RAÍZ: will-change PERMANENTE en el sheet base.
-    Antes estaba condicionado a .open → el navegador promovía la capa GPU en el
-    instante de abrir y la destruía al cerrar → repaint visible = la "pulsación"
-    que se percibía al inicio de cada apertura/cierre. Con will-change permanente
-    la capa GPU ya existe antes de animar, la transición es 100% fluida sin promote/demote. */
- will-change: transform;
+ /* v1.3.1714: will-change PERMANENTE revertido — saturaba GPU en WebView gama media/baja
+    y degradaba TODAS las animaciones (cascada catálogo, scroll). Ahora se aplica
+    dinámicamente via JS solo durante la animación (openFs/closeFs) y se libera al
+    terminar — capa GPU solo cuando se necesita, sin parpadeo y sin coste permanente. */
 }
 /* v1.3.1712: will-change ya no condicional a .open (eliminada regla #fs-overlay.open #fs-box will-change) */
 /* Estado 1: 50% pantalla — añadir clase .sheet-half al abrir */
@@ -8166,8 +8169,7 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  display: flex; flex-direction: column; overflow: hidden;
  transform: translateY(100%) scale(0.97);
  transition: transform var(--sheet-duration) var(--sheet-spring);
- /* v1.3.1712 FIX PARPADEO RAÍZ: will-change permanente (ver explicación en #fs-box) */
- will-change: transform;
+ /* v1.3.1714: will-change permanente revertido (ver #fs-box) — ahora dinámico via JS */
 }
 #modal-overlay.open #modal-sheet { transform: translateY(0) scale(1); }
 #modal-sheet::before {
@@ -22209,6 +22211,10 @@ const ui = (() => {
   backdrop.classList.remove('open');
   // 2. Reflow forzado — el navegador compone el estado base AHORA
   void sheet.offsetHeight;
+  /* v1.3.1714: will-change DINÁMICO — capa GPU solo durante la animación, no permanente.
+     Esto da apertura fluida sin parpadeo Y sin saturar la GPU el resto del tiempo. */
+  sheet.style.willChange = 'transform';
+  backdrop.style.willChange = 'opacity';
   // 3. Restaurar transiciones (quitar override inline) y abrir en el mismo frame
   requestAnimationFrame(function() {
    overlay.style.transition = '';
@@ -22216,6 +22222,10 @@ const ui = (() => {
    sheet.style.transition = '';
    overlay.classList.add('open');
    backdrop.classList.add('open');
+   // Liberar la capa GPU cuando la animación de entrada termine (280ms + margen)
+   setTimeout(function(){
+    try { sheet.style.willChange = ''; backdrop.style.willChange = ''; } catch(_) {}
+   }, 340);
   });
  }
  const ab = document.getElementById('alm-accept-fixed');
@@ -22223,10 +22233,18 @@ const ui = (() => {
  } catch(e) { console.error('[Dashwey] openModal error:', e); }
  }
  function closeModal() {
- try { document.getElementById('modal-overlay').classList.remove('open');
- document.getElementById('modal-backdrop').classList.remove('open');
+ try {
+ const overlay = document.getElementById('modal-overlay');
+ const backdrop = document.getElementById('modal-backdrop');
+ const sheet = document.getElementById('modal-sheet');
+ /* v1.3.1714: will-change dinámico durante el cierre — capa GPU para la salida fluida */
+ if (sheet) sheet.style.willChange = 'transform';
+ if (backdrop) backdrop.style.willChange = 'opacity';
+ overlay.classList.remove('open');
+ backdrop.classList.remove('open');
  /* v1.3.1708 FIX UX-ANIM: alinear con --sheet-duration (280ms) */
  setTimeout(function() {
+ try { if (sheet) sheet.style.willChange = ''; if (backdrop) backdrop.style.willChange = ''; } catch(_) {}
  try { if (typeof App !== 'undefined' && App.alm?._updateAcceptBtn) App.alm._updateAcceptBtn(); } catch(_) {}
  }, 280);
  } catch(e) { console.error('[Dashwey] closeModal error:', e); }
@@ -22275,7 +22293,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1714';
+ const _APP_VERSION = 'v1.3.1715';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
