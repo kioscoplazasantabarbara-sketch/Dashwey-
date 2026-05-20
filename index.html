@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1719";
+ var CURRENT_CACHE = "dashwey-v1-3-1720";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1719</title>
+<title>Dashwey v1.3.1720</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8083,21 +8083,22 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  Easing unificado: --ease para slides, --spring para scale-in. */
 
 #fs-overlay {
- position: fixed; inset: 0; z-index: 9000;
+ position: fixed; inset: 0; z-index: 10100; /* encima del settings-drawer (9999) */
  display: flex; align-items: flex-end; justify-content: center;
  pointer-events: none;
- opacity: 0;
- transition: opacity var(--sheet-duration) var(--ease);
+ /* v1.3.1719 FIX PARPADEO: overlay transparente, z-index fijo (no salta 9000→10100 al abrir).
+    Antes: opacity animada redundante + 3 cambios de z-index durante la animación →
+    re-layering del compositor = parpadeo. Ahora solo el scrim + box animan. */
 }
-#fs-overlay.open { pointer-events: auto; opacity: 1; z-index: 10100; /* encima del settings-drawer (9999) */ }
+#fs-overlay.open { pointer-events: auto; }
 
 #fs-backdrop {
  position: fixed; inset: 0;
- background: var(--sheet-overlay); z-index: 8999; /* M3 scrim 32% */
+ background: var(--sheet-overlay); z-index: 10099; /* M3 scrim 32% — z fijo */
  opacity: 0; pointer-events: none;
  transition: opacity var(--sheet-duration) var(--ease);
 }
-#fs-backdrop.open { opacity: 1; pointer-events: auto; z-index: 10099; }
+#fs-backdrop.open { opacity: 1; pointer-events: auto; }
 #fs-box {
  /* M3: superficie sólida, sin glassmorphism — performance en WebView */
  background: var(--surface);
@@ -8170,13 +8171,18 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
 }
 
 #modal-overlay {
- position: fixed; inset: 0; z-index: 9001;
+ position: fixed; inset: 0; z-index: 10101;
  display: flex; align-items: flex-end;
  pointer-events: none;
- opacity: 0;
- transition: opacity var(--sheet-duration) var(--ease);
+ /* v1.3.1719 FIX PARPADEO RAÍZ: el overlay es TRANSPARENTE (solo aloja el sheet).
+    Antes animaba opacity:0→1 redundantemente Y cambiaba z-index 9001→10101 al abrir.
+    El cambio de z-index durante la animación forzaba un re-layering del compositor = flash.
+    El doble fade (overlay + backdrop, dos capas oscuras desincronizadas) = el parpadeo
+    que el usuario identificó correctamente como "el fondo oscuro".
+    AHORA: z-index FIJO (sin salto), overlay sin opacity (transparente, no necesita animar).
+    Solo el scrim (#modal-backdrop) y el sheet animan → una sola capa oscura, un solo fade. */
 }
-#modal-overlay.open { pointer-events: auto; opacity: 1; z-index: 10101; }
+#modal-overlay.open { pointer-events: auto; }
 #modal-backdrop {
  position: fixed; inset: 0;
  background: var(--sheet-overlay); z-index: 9000; /* M3 scrim 32% */
@@ -22332,7 +22338,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1719';
+ const _APP_VERSION = 'v1.3.1720';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -60840,10 +60846,26 @@ _eaRecalc();
  if (window._DASHWEY_FEATURES?.tpv) {
   try { if (document.body.dataset.tab === '0') tpv.render(); } catch(e) { console.warn('[Dashwey] tpv.render:', e); }
  }
- try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
- try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
- try { alm.updateProvBar?.(); } catch(e) {}
- try { alm.updateBadge?.(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
+ /* v1.3.1719 OPTIMIZACIÓN LAG INICIAL: el render de Almacén (catálogo, puede tener 100+
+    items) se difiere a requestIdleCallback. Al arrancar normalmente se ve Dashboard, así
+    que renderizar Almacén síncrono al boot bloqueaba el main thread sin necesidad → lag.
+    Con rIC, Dashboard (lo visible) se pinta primero y Almacén se prepara en tiempo idle,
+    antes de que el usuario pueda hacer swipe. Si el usuario arranca EN Almacén (tab 2),
+    se renderiza síncrono para no mostrar vacío. */
+ var _almSync = (document.body.dataset.tab === '2');
+ var _renderAlm = function() {
+  try { alm.renderOrden(); } catch(e) { console.warn('[Dashwey] alm.renderOrden:', e); }
+  try { alm.renderCatInline(); } catch(e) { console.warn('[Dashwey] alm.renderCatInline:', e); }
+  try { alm.updateProvBar?.(); } catch(e) {}
+  try { alm.updateBadge?.(); } catch(e) { console.warn('[Dashwey] alm.updateBadge:', e); }
+ };
+ if (_almSync) {
+  _renderAlm();
+ } else if (window.requestIdleCallback) {
+  requestIdleCallback(_renderAlm, { timeout: 800 });
+ } else {
+  setTimeout(_renderAlm, 60);
+ }
  }
 
  // ──────────────────────────────────────────────────────────────────
