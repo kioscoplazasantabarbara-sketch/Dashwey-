@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1711";
+ var CURRENT_CACHE = "dashwey-v1-3-1712";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1711</title>
+<title>Dashwey v1.3.1712</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22099,9 +22099,12 @@ const ui = (() => {
  box.style.transition = '';
  }
 
- // Doble rAF: frame N limpia, frame N+1 anima
+ /* v1.3.1711 FIX PARPADEO: reflow forzado fija el estado base en el compositor
+    ANTES de abrir, eliminando el frame fantasma del double rAF. */
+ box.style.transition = 'none';
+ void box.offsetHeight; // reflow síncrono — estado base compuesto AHORA
  requestAnimationFrame(() => {
- requestAnimationFrame(() => {
+ box.style.transition = '';
  overlay.classList.add('open');
  if (backdrop) backdrop.classList.add('open');
  // v1.2.13: bloquear scroll del body cuando sheet abierto
@@ -22110,7 +22113,6 @@ const ui = (() => {
  if (acceptBtn) acceptBtn.style.display = 'none';
  // Haptic: edgeSqueeze al finalizar apertura
  setTimeout(function() { try { Utils.triggerHaptic('edgeSqueeze'); } catch(_) {} }, 50);
- });
  });
  } catch(e) { console.error('[Dashwey] openFs error:', e); } }
  // ── ARQUITECTURA: closeFs ────────────────────────────────────────────
@@ -22175,21 +22177,39 @@ const ui = (() => {
  // REGLA: el botón de confirmación debe tener id único + addEventListener(once:true).
  function openModal(html) {
  try { const overlay = document.getElementById('modal-overlay');
+ const backdrop = document.getElementById('modal-backdrop');
+ const sheet = document.getElementById('modal-sheet');
  // GUARD: si ya hay un modal abierto, cerrarlo primero (nunca apilar)
  if (overlay && overlay.classList.contains('open')) {
  console.warn('[Dashwey] openModal: modal ya activo — cerrando antes de abrir nuevo');
  closeModal();
  }
+ /* v1.3.1711 FIX PARPADEO: la causa del flicker era el double rAF sobre un overlay
+    display:flex permanente — permitía pintar un frame intermedio del sheet en estado
+    a-medias. Solución robusta:
+    1. Forzar estado inicial cerrado SIN transición (transition:none) → sheet abajo, opacity 0
+    2. Reflow síncrono (offsetHeight) para fijar ese estado en el compositor
+    3. Restaurar transición y añadir .open en el MISMO frame
+    Resultado: la transición SIEMPRE arranca desde el estado base correcto, sin frame fantasma. */
  (document.getElementById('modal-content')||{}).innerHTML = html;
- /* v1.3.1710 FIX FLICKER: double rAF — frame N pinta contenido con opacity:0/translateY(100%),
-    frame N+1 añade .open → transición CSS correcta. Antes innerHTML + .add('open') en mismo
-    frame → flash de contenido visible antes de que la transición se registrara. */
- requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- document.getElementById('modal-overlay').classList.add('open');
- document.getElementById('modal-backdrop').classList.add('open');
- });
- });
+ if (overlay && sheet) {
+  // 1. Fijar estado base sin transición
+  overlay.style.transition = 'none';
+  backdrop.style.transition = 'none';
+  sheet.style.transition = 'none';
+  overlay.classList.remove('open');
+  backdrop.classList.remove('open');
+  // 2. Reflow forzado — el navegador compone el estado base AHORA
+  void sheet.offsetHeight;
+  // 3. Restaurar transiciones (quitar override inline) y abrir en el mismo frame
+  requestAnimationFrame(function() {
+   overlay.style.transition = '';
+   backdrop.style.transition = '';
+   sheet.style.transition = '';
+   overlay.classList.add('open');
+   backdrop.classList.add('open');
+  });
+ }
  const ab = document.getElementById('alm-accept-fixed');
  if (ab) ab.style.display = 'none';
  } catch(e) { console.error('[Dashwey] openModal error:', e); }
@@ -22247,7 +22267,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1711';
+ const _APP_VERSION = 'v1.3.1712';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
