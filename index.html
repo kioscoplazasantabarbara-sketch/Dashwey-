@@ -759,7 +759,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1737";
+ var CURRENT_CACHE = "dashwey-v1-3-1738";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1737</title>
+<title>Dashwey v1.3.1738</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22460,7 +22460,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1737';
+ const _APP_VERSION = 'v1.3.1738';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -25070,6 +25070,56 @@ const ui = (() => {
  }
 
  // v1.3.1146 CAPA 5 — Dashboard Salud Sync
+ /* v1.3.1738 TEMPORAL — Auditoría visual de saldos derivados (Fase 1 sync saldos).
+    Muestra en un sheet la tabla: cuenta · saldo guardado · saldo calculado · diferencia.
+    Permite a Hung validar SIN consola (el APK no la tiene). Si todas las diferencias
+    son ~0 → el cálculo derivado coincide con lo guardado. Si el Kiosco diverge ~3€ →
+    confirma el descuadre y que el derivado es la fuente correcta → luz verde Fase 2.
+    ELIMINAR tras validación (es una herramienta de diagnóstico puntual). */
+ function _openSaldoAuditSheet() {
+  try {
+   var rows = (typeof window._DashweyAuditSaldosDerivados === 'function')
+    ? window._DashweyAuditSaldosDerivados() : null;
+   if (!rows || !rows.length) {
+    try { showToast('⚠️ No se pudo calcular (¿datos aún sincronizando?)', 'warning'); } catch(_) {}
+    return;
+   }
+   var fmt = function(n){ return (n==null) ? '—' : (Math.round(n*100)/100).toFixed(2).replace('.',',')+' €'; };
+   var maxDiff = 0;
+   rows.forEach(function(r){ if (r.diff!=null && Math.abs(r.diff) > maxDiff) maxDiff = Math.abs(r.diff); });
+   var veredicto, veredictoColor;
+   if (maxDiff < 0.01) { veredicto = '✅ Coinciden — saldo guardado = calculado'; veredictoColor = '#16A34A'; }
+   else if (maxDiff < 5) { veredicto = '⚠️ Hay divergencia (' + fmt(maxDiff) + ') — el descuadre existe'; veredictoColor = '#D97706'; }
+   else { veredicto = '🔴 Divergencia grande (' + fmt(maxDiff) + ')'; veredictoColor = '#DC2626'; }
+
+   var filas = rows.map(function(r){
+    var dColor = (r.diff==null) ? 'var(--ink-soft)' : (Math.abs(r.diff) < 0.01 ? '#16A34A' : (Math.abs(r.diff) < 5 ? '#D97706' : '#DC2626'));
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2_5) 0;border-bottom:1px solid var(--border)">'
+     + '<div style="flex:1;min-width:0"><div style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(r.cuenta||'—') + '</div>'
+     + '<div style="font-size:var(--fs-2xs);color:var(--ink-soft);margin-top:2px">Guardado: ' + fmt(r.persistido) + ' · Calculado: ' + fmt(r.derivado) + '</div></div>'
+     + '<div style="text-align:right;flex-shrink:0;margin-left:var(--sp-2);font-size:var(--fs-md);font-weight:var(--fw-bold);color:' + dColor + '">' + (r.diff==null?'—':(r.diff>=0?'+':'')+fmt(r.diff).replace(' €','')) + '<span style="font-size:var(--fs-2xs);color:var(--ink-soft);font-weight:var(--fw-med)"> €</span></div>'
+     + '</div>';
+   }).join('');
+
+   var html = '<div style="display:flex;flex-direction:column;height:100%;overflow:hidden">'
+    + '<div style="flex-shrink:0;padding:var(--sp-4) 16px 12px;border-bottom:1px solid var(--border)">'
+    + '<div style="display:flex;align-items:flex-start;justify-content:space-between">'
+    + '<div><div style="font-size:var(--fs-xl);font-weight:var(--fw-xbold);color:var(--ink)">Auditoría de saldos</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">Saldo guardado vs calculado (Fase 1)</div></div>'
+    + '<button class="mhd-close" onclick="App.ui.closeFs()">×</button>'
+    + '</div>'
+    + '<div style="margin-top:var(--sp-3);padding:var(--sp-2_5) var(--sp-3);border-radius:var(--r-md);background:var(--bg);font-size:var(--fs-sm);font-weight:var(--fw-semi);color:' + veredictoColor + '">' + veredicto + '</div>'
+    + '</div>'
+    + '<div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 16px var(--sp-4)">' + filas + '</div>'
+    + '</div>';
+   App.ui.setFs(html);
+   App.ui.openFs('full');
+  } catch(e) {
+   console.error('[Dashwey] _openSaldoAuditSheet:', e);
+   try { showToast('⚠️ Error en auditoría', 'warning'); } catch(_) {}
+  }
+ }
+
  function _openHealthSheet() {
   var h = window._DashweyHealth || {};
   var tomb = window._DashweyLocalDeletedIds;
@@ -29386,6 +29436,11 @@ const ui = (() => {
    +     '<div class="sd-info"><div class="sd-title">Salud sync</div><div class="sd-sub">Diagnóstico sistema · auto-purga · métricas</div></div>'
    +     '<div class="sd-chev">›</div>'
    +   '</div>'
+   +   '<div class="sd-row" onclick="App.ui._openSaldoAuditSheet()">'
+   +     '<div class="sd-icon" style="background:#FEF9C3"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>'
+   +     '<div class="sd-info"><div class="sd-title">Auditoría de saldos</div><div class="sd-sub">Comparar guardado vs calculado (temporal)</div></div>'
+   +     '<div class="sd-chev">›</div>'
+   +   '</div>'
    +   '<div class="sd-row" onclick="App.ui._devLoyverseInspect()">'
    +     '<div class="sd-icon" style="background:#E0E7FF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>'
    +     '<div class="sd-info"><div class="sd-title">Inspeccionar ingresos</div><div class="sd-sub">Conteo y detalle en consola</div></div>'
@@ -31220,7 +31275,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactDatos, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
 })();
 
 // ══════════════════════════════════════════
