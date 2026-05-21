@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1765</title>
+<title>Dashwey v1.3.1766</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22806,7 +22806,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1765';
+ const _APP_VERSION = 'v1.3.1766';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35297,6 +35297,15 @@ function _toggleCardFromManager(id, btn) {
    });
   });
 
+  // Toggle tipo de gasto (proveedor / operativo)
+  _movSheet.querySelectorAll('.mov-type-btn[data-tipogasto]').forEach(function(btn) {
+   btn.addEventListener('click', function() {
+    _movSheet.querySelectorAll('.mov-type-btn[data-tipogasto]').forEach(function(b) {
+     b.classList.toggle('active', b.dataset.tipogasto === btn.dataset.tipogasto);
+    });
+   });
+  });
+
   // Tipo especial ingreso (normal/caja/reembolso_proveedor)
   var _movIngresoTipo = 'normal';
   _movSheet.querySelectorAll('.mov-type-btn[data-ingreso-tipo]').forEach(function(btn) {
@@ -35399,6 +35408,14 @@ function _openMovimientoFullscreenLegacy() {
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">' +
   '<input class="fi" id="mov-fecha" type="date" value="' + hoy + '">' +
   '<input class="fi" id="mov-concepto" placeholder="Concepto (opcional)">' +
+  '</div>' +
+  // Tipo de gasto (Proveedor / Operativo) — SOLO para gastos
+  '<div id="mov-fs-tipogasto-wrap" style="padding-top:var(--sp-1)">' +
+  '<div style="font-size:var(--label-fs);font-weight:var(--label-fw);letter-spacing:var(--label-ls);color:var(--ink-soft);text-transform:uppercase;margin-bottom:var(--sp-1_5);padding-left:2px">Tipo de gasto</div>' +
+  '<div style="display:flex;gap:var(--sp-2)">' +
+  '<button class="mov-type-btn active" id="mov-tg-prov" data-tipogasto="proveedor" style="flex:1;height:36px;font-size:var(--fs-sm)">Proveedor</button>' +
+  '<button class="mov-type-btn" id="mov-tg-oper" data-tipogasto="operativo" style="flex:1;height:36px;font-size:var(--fs-sm)">Operativo</button>' +
+  '</div>' +
   '</div>' +
   // Frecuencia
   '<div id="mov-fs-subtipo-wrap" style="padding-top:var(--sp-1)">' +
@@ -35522,6 +35539,9 @@ function _openMovimientoFullscreenLegacy() {
     }
     if (_sgEl)  _sgEl.style.display  = tipo === 'gasto'    ? 'flex' : 'none';
     if (_siEl)  _siEl.style.display  = tipo === 'ingreso'  ? 'flex' : 'none';
+    // Tipo de gasto (proveedor/operativo) solo visible en gastos
+    var _tgWrap = document.getElementById('mov-fs-tipogasto-wrap');
+    if (_tgWrap) _tgWrap.style.display = tipo === 'gasto' ? '' : 'none';
     // v1.3.1489: subtipo-transfer (Único/Recurrente) visible en transferencia
     var _stEl = document.getElementById('mov-fs-subtipo-transfer');
     if (_stEl)  _stEl.style.display  = tipo === 'transferencia' ? 'flex' : 'none';
@@ -36772,6 +36792,9 @@ function _openEditMovimientoSheet(id, src) {
   try { _scopeMov = State.get.settings().activeScope || 'negocio'; } catch(_) {}
 
   if (_movTipo === 'gasto') {
+   // Tipo de gasto: proveedor / operativo (selector pills). Default operativo.
+   var _tgBtn = _movSheet ? _movSheet.querySelector('.mov-type-btn[data-tipogasto].active') : document.querySelector('.mov-type-btn[data-tipogasto].active');
+   var _tipoGasto = (_tgBtn && _tgBtn.dataset.tipogasto) || 'operativo';
    // v1.3.1001 Fase 3: pendientes NO mutan saldo — se aplicará al confirmar
    if (cuentaA && !_esPendiente) {
     var cA = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
@@ -36783,6 +36806,7 @@ function _openEditMovimientoSheet(id, src) {
      id: 'g' + Date.now(),
      nombre: concepto || 'Gasto',
      categoria: 'Otros',
+     tipoGasto: _tipoGasto,
      importe: importe,
      mensualEq: mensualEq,
      fecha: new Date(fecha + 'T' + _horaStr + ':00').toISOString(),
@@ -40694,21 +40718,32 @@ function _confirmBorrarCuenta(id) {
     try {
      var _rng = KPI.getRange ? KPI.getRange(period) : null;
      var _vis = window._isKpiVisible || function(){return true;};
-     var _esProveedor = { 'pedido':1, 'cierre_caja_auto':1, 'auto_directo':1, 'auto_promovido':1 };
+     var _esProveedorOrig = { 'pedido':1, 'cierre_caja_auto':1, 'auto_directo':1, 'auto_promovido':1 };
      var _opPorConcepto = {};   // concepto → suma € (para top 5)
      (State.get.gastosOp() || []).forEach(function(g){
       if (!g || !_vis(g)) return;                    // excluye transfer/pendiente/ajuste
-      if (g.origen && _esProveedor[g.origen]) return; // ya contado en proveedores
-      if (g.provId || g.proveedorId) return;          // tiene proveedor vinculado → es compra, no operativo
-      if (g.categoria === 'Compras') return;          // categoría compra → proveedor, no operativo
       if (_rng){
        var f = new Date(g.fecha || 0);
        if (!(f >= _rng.start && f < _rng.end)) return;
       }
+      // ── Clasificación: tipoGasto es la FUENTE DE VERDAD (tag explícito del usuario) ──
+      var esOperativo;
+      if (g.tipoGasto === 'operativo') {
+       esOperativo = true;                            // tag explícito
+      } else if (g.tipoGasto === 'proveedor') {
+       esOperativo = false;                           // tag explícito
+      } else {
+       // Sin tag (gastos viejos): fallback heurístico
+       if (g.origen && _esProveedorOrig[g.origen]) esOperativo = false;
+       else if (g.provId || g.proveedorId) esOperativo = false;
+       else if (g.categoria === 'Compras') esOperativo = false;
+       else esOperativo = true;
+      }
+      if (!esOperativo) return;                        // es proveedor → ya contado aparte
       var imp = (g.importe || 0);
       d.operativos += imp;
-      // Agrupar por concepto para el desglose
-      var cpt = (g.concepto || g.descripcion || 'Otros').trim() || 'Otros';
+      // Agrupar por nombre/concepto para el desglose top 5
+      var cpt = (g.nombre || g.concepto || g.descripcion || 'Otros').trim() || 'Otros';
       _opPorConcepto[cpt] = (_opPorConcepto[cpt] || 0) + imp;
      });
      // Top 5 operativos por concepto
