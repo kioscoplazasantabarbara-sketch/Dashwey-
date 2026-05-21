@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1789</title>
+<title>Dashwey v1.3.1790</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22979,7 +22979,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1789';
+ const _APP_VERSION = 'v1.3.1790';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -64107,6 +64107,24 @@ _eaRecalc();
       var _primerR = items[0]?.id, _ultimoR = items[items.length-1]?.id;
       var _primerL = localArr[0]?.id, _ultimoL = localArr[localArr.length-1]?.id;
       if (_primerR === _primerL && _ultimoR === _ultimoL) {
+       // v1.3.1790 BUG-N3 FIX: ANTES de saltar, poblar el baseline. Cuando local==remoto
+       //   (counts + bordes iguales) tenemos la CERTEZA de que están sincronizados → es el
+       //   momento perfecto para registrar el baseline. Sin esto, el baseline quedaba VACÍO
+       //   permanentemente (este SKIP retornaba antes de poblarlo en L64251) → hasBaseline=false
+       //   → el guard anti-cascada bloqueaba TODOS los borrados puntuales en datasets >10 items.
+       //   Caso real: ingreso borrado en Pixel no se propagaba al Samsung (29 ingresos, baseline 0).
+       //   Solo poblamos (lectura→escritura de baseline), NO tocamos el guard ni el merge.
+       try {
+        if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
+        if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
+        var _snapBL = window._DashweyLastSyncedSnap[stateKey];
+        // Poblar solo si está vacío o desfasado (evita trabajo redundante en cada snapshot idéntico)
+        if (Object.keys(_snapBL).length !== items.length) {
+         var _newBL = {};
+         items.forEach(function(_rit){ if (_rit?.id) { try { _newBL[_rit.id] = JSON.stringify(_rit); } catch(_) {} } });
+         window._DashweyLastSyncedSnap[stateKey] = _newBL;
+        }
+       } catch(_) {}
        // Probablemente idéntico — verificación más profunda sería O(n)
        // con este check O(1) cubrimos >99% casos
        return;
@@ -64166,7 +64184,14 @@ _eaRecalc();
      const delta = localCount - remoteCount;
      const safeToDeleteTiny = (localCount <= 10);
      const safeToDeleteIncremental = hasBaseline && (delta <= 20 || delta <= localCount * 0.05);
-     const canDelete = safeToDeleteTiny || safeToDeleteIncremental;
+     // v1.3.1790 BUG-N3 FIX: borrado PUNTUAL seguro aunque NO haya baseline aún.
+     //   Un delta de 1-2 items con remoto sano (remoteCount alto, no colapso a vacío) es
+     //   SIEMPRE un borrado manual legítimo, NUNCA una cascada (las cascadas pierden MUCHOS
+     //   items por datos parciales en cold-start). Esto cubre el caso límite donde el primer
+     //   snapshot tras desplegar es justo el del borrado y el baseline aún no se pobló.
+     //   Condición estricta: delta 1-2 Y remoto >= 80% del local (descarta colapsos parciales).
+     const safeToDeleteSinglePuntual = (delta >= 1 && delta <= 2 && remoteCount > 0 && remoteCount >= localCount * 0.8);
+     const canDelete = safeToDeleteTiny || safeToDeleteIncremental || safeToDeleteSinglePuntual;
      if (canDelete) {
       const _now = Date.now();
       (localArr || []).forEach(lit => {
