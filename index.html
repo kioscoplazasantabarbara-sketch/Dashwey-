@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1767</title>
+<title>Dashwey v1.3.1768</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22806,7 +22806,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1767';
+ const _APP_VERSION = 'v1.3.1768';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -49542,6 +49542,92 @@ function _confirmBorrarCuenta(id) {
  }
 
 
+ function _openPagosRecurrentesSheet() {
+  // Todos los gastos recurrentes (de todas las cuentas), excluyendo transfer/pendiente borrados
+  var recurrentes = (State.get.gastosOp() || []).filter(function(g){
+   return g && g.recurrente && !g.deleted && !window._isTransfer?.(g);
+  });
+  // Ordenar por importe mensual equivalente desc
+  recurrentes.sort(function(a,b){
+   var ma = (a.mensualEq != null ? a.mensualEq : a.importe) || 0;
+   var mb = (b.mensualEq != null ? b.mensualEq : b.importe) || 0;
+   return mb - ma;
+  });
+
+  var cuentas = State.get.cuentas() || [];
+  var _nomCuenta = function(cid){ var c = cuentas.find(function(x){ return x.id===cid; }); return c ? c.nombre : ''; };
+  var _frecTxt = function(g){
+   var f = g.frecuencia || 'unico';
+   if (f === 'unico' || !f) return 'mensual';
+   var parts = String(f).split('_');
+   var n = parseInt(parts[0],10) || 1;
+   var unit = parts[1] || 'month';
+   var unidades = { day:'día', week:'semana', month:'mes', year:'año' };
+   var u = unidades[unit] || 'mes';
+   return n === 1 ? ('cada ' + u) : ('cada ' + n + ' ' + u + 's');
+  };
+
+  // Total mensual estimado
+  var totalMensual = recurrentes.reduce(function(s,g){ return s + ((g.mensualEq != null ? g.mensualEq : g.importe) || 0); }, 0);
+
+  var sheet = document.createElement('div');
+  sheet.className = 'mov-sheet-overlay';
+  sheet.id = 'pagos-recur-sheet';
+
+  var filas = recurrentes.length
+   ? recurrentes.map(function(g){
+      var mensual = (g.mensualEq != null ? g.mensualEq : g.importe) || 0;
+      return '<button class="pr-row" data-recur-id="' + g.id + '" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);padding:var(--sp-3) 16px;border:none;border-bottom:1px solid var(--border);background:none;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-family:var(--font);text-align:left">'
+       + '<div style="min-width:0;flex:1">'
+       +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-bold);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(g.nombre || 'Gasto') + '</div>'
+       +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">' + esc(_frecTxt(g)) + (_nomCuenta(g.cuentaId) ? ' · ' + esc(_nomCuenta(g.cuentaId)) : '') + '</div>'
+       + '</div>'
+       + '<div style="text-align:right;flex-shrink:0">'
+       +  '<div style="font-size:var(--fs-sm);font-weight:var(--fw-xbold);color:var(--red)">' + _feur(g.importe||0) + '</div>'
+       +  '<div style="font-size:var(--fs-xs);color:var(--ink-soft)">' + _feur(mensual) + '/mes</div>'
+       + '</div>'
+       + '</button>';
+     }).join('')
+   : '<div style="padding:var(--sp-6) 16px;text-align:center;color:var(--ink-soft);font-size:var(--fs-sm)">No tienes pagos recurrentes registrados.</div>';
+
+  sheet.innerHTML =
+   '<div class="mov-sheet-panel">' +
+   '<div class="mov-sheet-handle"></div>' +
+   '<div style="padding:var(--sp-2) 16px;display:flex;align-items:center;justify-content:space-between">' +
+   '<div style="font-size:var(--fs-h3);font-weight:var(--fw-bold);color:var(--ink);font-family:var(--font)">Pagos recurrentes</div>' +
+   '<button id="pr-close" class="form-btn-x" aria-label="Cerrar">' +
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+   '</button>' +
+   '</div>' +
+   (recurrentes.length ? ('<div style="padding:0 16px var(--sp-2);font-size:var(--fs-sm);color:var(--ink-soft)">' + recurrentes.length + (recurrentes.length===1?' pago':' pagos') + ' · <b style="color:var(--ink)">' + _feur(totalMensual) + '/mes</b> estimado</div>') : '') +
+   '<div style="max-height:60vh;overflow-y:auto;border-top:1px solid var(--border)">' + filas + '</div>' +
+   '<div style="height:calc(16px + env(safe-area-inset-bottom))"></div>' +
+   '</div>';
+
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function(){ sheet.classList.add('open'); });
+
+  var _close = function(){
+   sheet.classList.remove('open');
+   setTimeout(function(){ if (sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 400);
+  };
+  var closeEl = sheet.querySelector('#pr-close');
+  if (closeEl) closeEl.addEventListener('click', _close);
+  sheet.addEventListener('click', function(e){ if (e.target === sheet) _close(); });
+
+  // Tap en una fila → editar ese gasto
+  sheet.querySelectorAll('.pr-row').forEach(function(row){
+   row.addEventListener('click', function(){
+    var gid = row.getAttribute('data-recur-id');
+    if (!gid) return;
+    _close();
+    setTimeout(function(){
+     try { _openEditMovimientoSheet(gid, 'gasto'); } catch(e){ try { console.warn('[recur edit]', e); } catch(_){} }
+    }, 200);
+   });
+  });
+ }
+
  function _openDetalleCuenta(cuentaId) {
   var c = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
   if (!c) return;
@@ -49972,9 +50058,16 @@ function _confirmBorrarCuenta(id) {
     + '<button id="dc-set-primary" style="width:100%;height:40px;border-radius:var(--r-md);border:1.5px solid var(--blue);background:none;color:var(--blue);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Establecer como cuenta principal</button>'
     + '</div>';
 
+   var _contRecurrentes =
+    '<div style="padding:0 16px 16px">'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:var(--sp-2)">Lista de todos tus pagos recurrentes. Toca uno para editarlo.</div>'
+    + '<button id="dc-ver-recurrentes" style="width:100%;height:40px;border-radius:var(--r-md);border:1.5px solid var(--ink);background:none;color:var(--ink);font-size:var(--fs-sm);font-weight:var(--fw-bold);font-family:var(--font);cursor:pointer;touch-action:manipulation">Ver pagos recurrentes</button>'
+    + '</div>';
+
    var menuLlave =
     '<div id="dc-menu-llave" style="display:none;position:absolute;right:56px;top:14px;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:0 8px 32px rgba(0,0,0,0.14);min-width:280px;overflow:hidden">'
     + _seccion('dc-sec-datos', '\u270F\uFE0F Datos de la cuenta', _contDatos)
+    + _seccion('dc-sec-recur', '\uD83D\uDD01 Pagos recurrentes', _contRecurrentes)
     + _seccion('dc-sec-ajuste', '\u2696\uFE0F Ajustar saldo', _contAjuste)
     + (!cuenta.isPrimary ? _seccion('dc-sec-primary', '\u2B50 Establecer como principal', _contPrimary) : '')
     + _seccion('dc-sec-eliminar', '\uD83D\uDDD1\uFE0F Eliminar cuenta', _contEliminar)
@@ -50139,6 +50232,15 @@ function _confirmBorrarCuenta(id) {
       try { _openAjusteSaldoChooser(cuentaId); } catch(_) {
        try { _openAjusteSaldoSheet(); } catch(__) {}
       }
+     }, 120);
+    }, { once: true });
+
+    // ── Pagos recurrentes ──
+    var recurEl = document.getElementById('dc-ver-recurrentes');
+    if (recurEl) recurEl.addEventListener('click', function() {
+     try { var ml = document.getElementById('dc-menu-llave'); if (ml) ml.style.display='none'; } catch(_) {}
+     setTimeout(function() {
+      try { _openPagosRecurrentesSheet(); } catch(e) { try { console.warn('[recurrentes]', e); } catch(_){} }
      }, 120);
     }, { once: true });
 
