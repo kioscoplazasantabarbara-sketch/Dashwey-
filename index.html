@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1779</title>
+<title>Dashwey v1.3.1780</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -1613,10 +1613,11 @@ select:disabled {
  from { opacity: 0; }
  to { opacity: 1; }
 }
-#app {
- /* forwards evita que WebView re-ejecute animación al recompositar (causa del destello blanco) */
- animation: appFadeIn var(--dur-enter) ease-out forwards;
-}
+/* v1.3.1780 FIX arranque · ELIMINADA la animation appFadeIn del #app (el keyframe
+   se conserva porque lo usa .aceptar-popup-overlay). En #app causaba conflicto:
+   competía con data-app-ready (que también controla opacity) y arrancaba el fade
+   ANTES de que la app estuviera lista → app asomaba a medio montar = flicker.
+   El fade-in del #app lo gestiona ahora solo body[data-app-ready="true"] #app. */
 
 /* ── Enlaces con estilo diferenciado ─────────────────────────── */
 a, [role="link"] {
@@ -3009,7 +3010,13 @@ body.settings-open .alm-page-header {
 /* ── § 5. SWIPE / TABS ── */
 
 #swipe-wrap { flex: 1; overflow: hidden; position: relative; min-height: 0; touch-action: pan-y; background: var(--bg); }
-#swipe-track { display: flex; width: 300%; height: 100%; transition: transform var(--dur-tab) var(--ease-decelerate); transform: translateZ(0); backface-visibility: hidden; }
+/* v1.3.1780 FIX arranque · El track arranca YA en Dashboard (físico 2 = -200%) y
+   SIN transición, desde el primer paint. ANTES arrancaba en translateX(0) = TPV y
+   el JS lo movía tarde → se veía el TPV un instante al arrancar. La transición se
+   re-activa por JS (_initTrack) tras posicionar. Para modos pos/alm, _initTrack
+   corrige la posición (también sin animación). Caso normal (hub/cfo) = dashboard. */
+#swipe-track { display: flex; width: 300%; height: 100%; transform: translateX(-200%) translateZ(0); backface-visibility: hidden; }
+#swipe-track.tab-anim-ready { transition: transform var(--dur-tab) var(--ease-decelerate); }
 .tab-page { overscroll-behavior: contain; }
 .tab-page {
  width: calc(100%/3); height: 100%;
@@ -22509,16 +22516,14 @@ function _hideSplash() {
  //   GitHub: splash nativo → fade directo a la app, sin segundo splash.
  try {
   if (document.documentElement.classList.contains('is-apk')) {
-   // v1.3.1779 FIX flickering APK · El splash nativo debe taparlo TODO hasta que
-   //   la app esté pintada Y estable (tras el reflow inicial del dashboard:
-   //   _snapMeasureArea + render). ANTES se ocultaba al resolver auth, pero la app
-   //   aún estaba recolocándose → el usuario veía "pantallas colocándose" + blanco.
-   //   AHORA: marcamos app-ready, esperamos 2 frames de pintado (doble rAF) + un
-   //   margen para que el dashboard termine su layout, y SOLO ENTONCES ocultamos
-   //   el splash nativo con fade. El logo tapa todo el reflow → arranque limpio.
+   // v1.3.1780 FIX arranque premium · El splash nativo NO se va por timer ciego.
+   //   Espera a que el dashboard haya hecho su primer render REAL (bandera
+   //   window._DashweyFirstRenderDone, que se marca tras _renderAll en el boot).
+   //   Así el splash tapa TODO el montaje (header, slider, render por fases) y
+   //   solo se desvanece cuando la app ya está pintada y estable → cero flicker.
    document.body.setAttribute('data-app-ready', 'true');
    splash.classList.add('hidden'); // HTML ya invisible vía CSS (idempotente)
-   var _hideNative = function() {
+   var _hideNativeNow = function() {
     try {
      if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
       window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 300 });
@@ -22526,13 +22531,21 @@ function _hideSplash() {
     } catch(_) {}
     try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
-   // Doble rAF = garantiza que el navegador pintó al menos 1 frame del #app.
-   //   +220ms de margen para el reflow del dashboard (snap measure + render).
-   requestAnimationFrame(function() {
-    requestAnimationFrame(function() {
-     setTimeout(_hideNative, 220);
-    });
-   });
+   var _waitFirstRender = function() {
+    // Si el primer render ya ocurrió → ocultar tras 2 frames de pintado.
+    if (window._DashweyFirstRenderDone) {
+     requestAnimationFrame(function(){ requestAnimationFrame(_hideNativeNow); });
+     return;
+    }
+    // Aún no: escuchar el evento de primer render (se emite tras _renderAll).
+    window.addEventListener('dashwey:first-render', function _onFR() {
+     window.removeEventListener('dashwey:first-render', _onFR);
+     requestAnimationFrame(function(){ requestAnimationFrame(_hideNativeNow); });
+    }, { once: true });
+    // Fallback duro: si el evento no llega en 2.5s, ocultar igual (no colgar).
+    setTimeout(_hideNativeNow, 2500);
+   };
+   _waitFirstRender();
    return;
   }
  } catch(_) {}
@@ -22939,7 +22952,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1779';
+ const _APP_VERSION = 'v1.3.1780';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -62512,6 +62525,8 @@ _eaRecalc();
 
  // Posiciona el swipe-track sin animación inicial (evita flash)
  // v1.3.385: respetar el modo de app — no hardcodear tab 1 (Dashboard)
+ // v1.3.1780: el track ya arranca en Dashboard (-200%) vía CSS. Aquí solo
+ //   corregimos para modos pos/alm y activamos la transición tras posicionar.
  (function _initTrack() {
  const vw = _getTabWidth();
  if (vw < 100) { requestAnimationFrame(_initTrack); return; }
@@ -62521,10 +62536,17 @@ _eaRecalc();
  ? _modeTabIdx[window._DASHWEY_MODE] : 1;
  // v1.3.1217: usar _logicalToPhysical — track DOM = [TPV|Almacén|Dashboard]
  var _physStartIdx = (_startIdx === 1) ? 2 : (_startIdx === 2) ? 1 : _startIdx;
- _DOM.track.style.transition = 'none';
- _DOM.track.style.transform = 'translateX(' + (-_physStartIdx * vw) + 'px)';
+ // Solo reposicionar si el modo NO es dashboard (el CSS ya dejó -200% = dashboard)
+ if (_physStartIdx !== 2) {
+  _DOM.track.style.transform = 'translateX(' + (-_physStartIdx * vw) + 'px)';
+ } else {
+  // Convertir el -200% del CSS a px exactos para que el swipe siga preciso
+  _DOM.track.style.transform = 'translateX(' + (-2 * vw) + 'px)';
+ }
+ // Activar la transición DESPUÉS de posicionar (siguiente frame) para que el
+ //   posicionamiento inicial nunca anime.
  requestAnimationFrame(() => {
- if (_DOM.track) _DOM.track.style.transition = 'transform var(--dur-tab) cubic-bezier(.4,0,.2,1)';
+ if (_DOM.track) _DOM.track.classList.add('tab-anim-ready');
  });
  }
  })();
@@ -62584,6 +62606,12 @@ _eaRecalc();
  try { if (window._DashweyPerfMark) window._DashweyPerfMark('render_all_start'); } catch(_) {}
  try { _renderAll(); } catch(e) { console.warn('[Dashwey] init render:', e); }
  try { if (window._DashweyPerfMark) window._DashweyPerfMark('render_all_done'); } catch(_) {}
+ // v1.3.1780 FIX arranque · señal de "primer render hecho" para que el splash
+ //   nativo (APK) se desvanezca SOLO ahora, tapando todo el montaje previo.
+ try {
+  window._DashweyFirstRenderDone = true;
+  window.dispatchEvent(new CustomEvent('dashwey:first-render'));
+ } catch(_) {}
 
  // v1.3.1567 LOTE TELEMETRY · primer touch real del usuario.
  //   Indica "tiempo hasta que el usuario interactúa" — métrica clave UX boot.
