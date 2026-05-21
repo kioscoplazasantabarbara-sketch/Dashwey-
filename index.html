@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1771</title>
+<title>Dashwey v1.3.1772</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22816,7 +22816,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1771';
+ const _APP_VERSION = 'v1.3.1772';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35819,6 +35819,10 @@ function _openMovimientoFullscreen(opts) {
    '<span id="mov-fs-hist-lbl">Historial</span>' +
    '<button id="mov-pend-toggle" aria-pressed="false"></button>' +
    '<span id="mov-pend-knob"></span>' +
+   // v1.3.1772: pills ocultos tipo de gasto. El sheet Detalles los sincroniza;
+   //   _confirmarMovimiento lee el .active. Default proveedor.
+   '<button class="mov-tg-hidden active" data-tipogasto="proveedor"></button>' +
+   '<button class="mov-tg-hidden" data-tipogasto="operativo"></button>' +
    // v1.3.1532: botón legacy preservado oculto para mantener compat con _setTipo('cuenta')
    //   (rama _isCuentaMode no se dispara visualmente porque no hay botón visible
    //   que la active, pero queda accesible programáticamente si fuera necesario).
@@ -35897,6 +35901,11 @@ function _openMovimientoFullscreen(opts) {
     var itMap = { normal:'', caja:'Caja', reembolso_proveedor:'Reembolso' };
     var it = itMap[window._movFsIngresoTipo || 'normal'];
     if (it) parts.push(it);
+   }
+   // v1.3.1772: Tipo de gasto (solo si gasto) — visible en el resumen para verlo
+   //   sin abrir Detalles.
+   if (_movTipo === 'gasto') {
+    parts.push((window._movFsTipoGasto || 'proveedor') === 'operativo' ? 'Operativo' : 'Proveedor');
    }
    // Pendiente
    var pBtn = document.getElementById('mov-pend-toggle');
@@ -36012,6 +36021,7 @@ function _openMovimientoFullscreen(opts) {
       window._movFsSubtipo = 'unico';
       window._movFsIngresoTipo = 'normal';
       window._movFsHistorial = true;
+      window._movFsTipoGasto = 'proveedor'; // v1.3.1772: reset para próximo mov
       App.ui.closeFs();
      }
     } finally {
@@ -36022,6 +36032,11 @@ function _openMovimientoFullscreen(opts) {
   }
 
   // Estado inicial
+  // v1.3.1772: tipoGasto arranca en 'proveedor'. Sincroniza pills ocultos.
+  window._movFsTipoGasto = 'proveedor';
+  document.querySelectorAll('.mov-tg-hidden[data-tipogasto]').forEach(function(h){
+   h.classList.toggle('active', h.dataset.tipogasto === 'proveedor');
+  });
   _setTipo('gasto');
  });
 }
@@ -36055,6 +36070,12 @@ function _DashweyMovDetallesSheet(onClose) {
   pendiente: (function(){
    var p = document.getElementById('mov-pend-toggle');
    return !!(p && p.getAttribute('aria-pressed') === 'true');
+  })(),
+  // v1.3.1772: tipo de gasto (proveedor/operativo). Fuente: pill oculto del modal
+  //   o variable global. Default 'proveedor' (lo más frecuente en kiosco).
+  tipoGasto: (function(){
+   var b = document.querySelector('.mov-tg-hidden[data-tipogasto].active');
+   return (b && b.dataset.tipogasto) || window._movFsTipoGasto || 'proveedor';
   })(),
  };
 
@@ -36092,6 +36113,19 @@ function _DashweyMovDetallesSheet(onClose) {
      '<button class="mds-freq-btn ' + (snapshot.subtipo === 'recurrente' ? 'active' : '') + '" data-mds-freq="recurrente">Recurrente</button>' +
     '</div>' +
    '</div>' +
+
+   // v1.3.1772: Tipo de gasto (solo si gasto) — proveedor/operativo, debajo de
+   //   Único/Recurrente. El Wrapped lo usa como fuente de verdad para separar
+   //   gasto a proveedor vs coste operativo (luz, autónomos…).
+   (_movTipo === 'gasto'
+    ? '<div class="mds-section">' +
+       '<div class="mds-section-label">Tipo de gasto</div>' +
+       '<div class="mds-freq-row">' +
+        '<button class="mds-freq-btn ' + (snapshot.tipoGasto === 'proveedor' ? 'active' : '') + '" data-mds-tg="proveedor">Proveedor</button>' +
+        '<button class="mds-freq-btn ' + (snapshot.tipoGasto === 'operativo' ? 'active' : '') + '" data-mds-tg="operativo">Operativo</button>' +
+       '</div>' +
+      '</div>'
+    : '') +
 
    // Concepto
    '<div class="mds-section">' +
@@ -36297,6 +36331,11 @@ function _DashweyMovDetallesSheet(onClose) {
   window._movFsSubtipo = snapshot.subtipo;
   window._movFsIngresoTipo = snapshot.ingresoTipo;
   window._movFsHistorial = snapshot.historial;
+  // v1.3.1772: restaurar tipoGasto (variable + pill oculto)
+  window._movFsTipoGasto = snapshot.tipoGasto;
+  document.querySelectorAll('.mov-tg-hidden[data-tipogasto]').forEach(function(h){
+   h.classList.toggle('active', h.dataset.tipogasto === snapshot.tipoGasto);
+  });
   var f = document.getElementById('mov-fecha');     if (f) f.value = snapshot.fecha;
   // v1.3.1601: restaurar hora también
   var fh = document.getElementById('mov-hora');     if (fh) fh.value = snapshot.hora;
@@ -36322,6 +36361,19 @@ function _DashweyMovDetallesSheet(onClose) {
    // Colapsar/expandir bloque recurrente
    var rb = document.getElementById('mds-recur-block');
    if (rb) rb.classList.toggle('collapsed', window._movFsSubtipo !== 'recurrente');
+  });
+ });
+
+ // v1.3.1772: Tipo de gasto (solo si gasto) → window._movFsTipoGasto + pill oculto
+ sheet.querySelectorAll('[data-mds-tg]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+   sheet.querySelectorAll('[data-mds-tg]').forEach(function(b){ b.classList.remove('active'); });
+   btn.classList.add('active');
+   var val = btn.dataset.mdsTg;
+   window._movFsTipoGasto = val;
+   document.querySelectorAll('.mov-tg-hidden[data-tipogasto]').forEach(function(h){
+    h.classList.toggle('active', h.dataset.tipogasto === val);
+   });
   });
  });
 
@@ -36883,9 +36935,12 @@ function _openEditMovimientoSheet(id, src) {
   try { _scopeMov = State.get.settings().activeScope || 'negocio'; } catch(_) {}
 
   if (_movTipo === 'gasto') {
-   // Tipo de gasto: proveedor / operativo (selector pills). Default operativo.
-   var _tgBtn = _movSheet ? _movSheet.querySelector('.mov-type-btn[data-tipogasto].active') : document.querySelector('.mov-type-btn[data-tipogasto].active');
-   var _tipoGasto = (_tgBtn && _tgBtn.dataset.tipogasto) || 'operativo';
+   // Tipo de gasto: proveedor / operativo. Default proveedor (lo más frecuente).
+   // v1.3.1772: el modal slim usa .mov-tg-hidden (sincronizado desde Detalles);
+   //   el form fullscreen/sheet legacy usan .mov-type-btn[data-tipogasto].
+   var _tgBtn = document.querySelector('.mov-tg-hidden[data-tipogasto].active')
+             || (_movSheet ? _movSheet.querySelector('.mov-type-btn[data-tipogasto].active') : document.querySelector('.mov-type-btn[data-tipogasto].active'));
+   var _tipoGasto = (_tgBtn && _tgBtn.dataset.tipogasto) || window._movFsTipoGasto || 'proveedor';
    // v1.3.1001 Fase 3: pendientes NO mutan saldo — se aplicará al confirmar
    if (cuentaA && !_esPendiente) {
     var cA = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
