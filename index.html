@@ -77,7 +77,27 @@
    mantiene encima (launchAutoHide:false) hasta que _hideSplash() lo oculta, justo
    cuando la app está lista y pintada. Resultado: splash nativo → fade directo a
    app pintada, sin blanco intermedio. El fondo --bg evita cualquier flash. */
-html.is-apk #app-splash { display: none !important; }
+/* v1.3.1782 ESTRATEGIA B (Opción 2) · El splash HTML es el ÚNICO branding visible
+   en APK, con el logo Dashwey REAL (grid 2x2 cuadrado) + animación fade&scale. El
+   splash NATIVO de Android se configura como flash de color crema SIN logo (ver
+   guía Android), por lo que es imperceptible y no se ve el icono circular recortado.
+   ANTES (Estrategia A) ocultábamos el splash HTML en APK con .is-apk; ahora lo
+   mostramos. SEGURIDAD: el doble splash de marzo venía de launchAutoHide:true (el
+   nativo se iba solo antes que el HTML). Ahora launchAutoHide:false → el nativo
+   (invisible) y el HTML coexisten sin hueco. */
+#app-splash.dwy-anim .splash-icon-wrap { animation: splashIconScale 560ms cubic-bezier(.34,1.4,.5,1) both; }
+#app-splash.dwy-anim .splash-wordmark { animation: splashFadeUp 460ms cubic-bezier(.4,0,.2,1) 120ms both; }
+#app-splash.dwy-anim .splash-rule { animation: splashFadeUp 460ms cubic-bezier(.4,0,.2,1) 180ms both; }
+#app-splash.dwy-anim .splash-tagline { animation: splashFadeUp 460ms cubic-bezier(.4,0,.2,1) 240ms both; }
+@keyframes splashIconScale {
+ from { opacity: 0; transform: scale(0.78); }
+ 60%  { opacity: 1; }
+ to   { opacity: 1; transform: scale(1); }
+}
+@keyframes splashFadeUp {
+ from { opacity: 0; transform: translateY(8px); }
+ to   { opacity: 1; transform: translateY(0); }
+}
 #app {
  opacity: 0;
  visibility: hidden;
@@ -807,7 +827,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1781</title>
+<title>Dashwey v1.3.1782</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -11929,7 +11949,7 @@ body[data-app-ready="true"] #app {
  v1.3.1578 FIX C5 · wrapper #app-splash-content posicionado absoluto con
  transform — eliminado bug "logo tiembla y sube" reportado APK Hung 14may.
  ──────────────────────────────────────────────────────────────── -->
-<div id="app-splash">
+<div id="app-splash" class="dwy-anim">
  <div id="app-splash-content">
   <div class="splash-icon-wrap">
    <svg viewBox="0 0 58 58" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -22516,45 +22536,44 @@ function _hideSplash() {
  //   GitHub: splash nativo → fade directo a la app, sin segundo splash.
  try {
   if (document.documentElement.classList.contains('is-apk')) {
-   // v1.3.1780 FIX arranque premium · El splash nativo NO se va por timer ciego.
-   //   Espera a que el dashboard haya hecho su primer render REAL (bandera
-   //   window._DashweyFirstRenderDone, que se marca tras _renderAll en el boot).
-   //   Así el splash tapa TODO el montaje (header, slider, render por fases) y
-   //   solo se desvanece cuando la app ya está pintada y estable → cero flicker.
-   // v1.3.1781: el #app permanece oculto (opacity:0) hasta el momento de revelar,
-   //   y entonces hace su fade-in SINCRONIZADO con el fade-out del splash nativo
-   //   → fade-in premium en vez de aparición seca.
-   splash.classList.add('hidden'); // HTML ya invisible vía CSS (idempotente)
-   var _hideNativeNow = function() {
-    // 1) Revelar la app con fade-in (transition opacity 0.40s vía data-app-ready)
-    document.body.setAttribute('data-app-ready', 'true');
-    // 2) A la vez, desvanecer el splash nativo → crossfade premium.
+   // v1.3.1782 ESTRATEGIA B · El splash HTML (logo cuadrado real + animación) es
+   //   el ÚNICO branding visible. Espera al primer render REAL del dashboard, y
+   //   entonces: (1) revela la app con fade-in, (2) hace fade-out del splash HTML
+   //   (su transition CSS), (3) oculta el nativo invisible (ya es solo color crema).
+   //   El splash HTML tapa TODO el montaje → cero flicker, branding premium.
+   //   v1.3.1782: el nativo invisible se oculta primero (no aporta nada visual),
+   //   el HTML hace el fade-out elegante encima de la app que aparece.
+   var _revealApp = function() {
+    // 1) Ocultar el splash nativo invisible (color crema) — ya no aporta nada.
     try {
      if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
-      window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 400 });
+      window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 0 });
      }
     } catch(_) {}
+    // 2) Revelar la app con su fade-in (transition opacity 0.40s vía data-app-ready)
+    document.body.setAttribute('data-app-ready', 'true');
+    // 3) Fade-out del splash HTML ENCIMA de la app → crossfade premium.
+    if (splash) {
+     splash.classList.add('fade-out');
+     setTimeout(function(){ if (splash) splash.classList.add('hidden'); }, 450);
+    }
     try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
    var _waitFirstRender = function() {
-    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen StatusBar.
     if (window._DashweyFirstRenderDone) {
      requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      // +120ms: da tiempo a que StatusBar/NavigationBar nativas pinten su color
-      //   (setBackgroundColor tarda ~1 frame en aplicarse) → sin barras negras.
-      setTimeout(_hideNativeNow, 120);
+      setTimeout(_revealApp, 120);
      }); });
      return;
     }
-    // Aún no: escuchar el evento de primer render (se emite tras _renderAll).
     window.addEventListener('dashwey:first-render', function _onFR() {
      window.removeEventListener('dashwey:first-render', _onFR);
      requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      setTimeout(_hideNativeNow, 120);
+      setTimeout(_revealApp, 120);
      }); });
     }, { once: true });
-    // Fallback duro: si el evento no llega en 2.5s, ocultar igual (no colgar).
-    setTimeout(_hideNativeNow, 2500);
+    // Fallback duro: si el evento no llega en 2.5s, revelar igual (no colgar).
+    setTimeout(_revealApp, 2500);
    };
    _waitFirstRender();
    return;
@@ -22963,7 +22982,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1781';
+ const _APP_VERSION = 'v1.3.1782';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
