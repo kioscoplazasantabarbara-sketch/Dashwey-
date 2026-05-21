@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1787</title>
+<title>Dashwey v1.3.1788</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22979,7 +22979,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1787';
+ const _APP_VERSION = 'v1.3.1788';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31600,7 +31600,13 @@ const ui = (() => {
         nombre: (prod && prod.nombre) || itName || 'Item',
         qty: qty,
         pvp: pvp,
-        coste: (prod && prod.precioCompra && prod.udscaja) ? (prod.precioCompra / prod.udscaja) * qty : 0,
+        /* v1.3.1788 BUG-KPI-3 FIX: i.coste debe ser UNITARIO (toda la app lo lee como
+           coste/ud y multiplica por qty: ventaCoste L19816, snapshot L20617, sheet Margen
+           L38088). Antes guardaba (precioCompra/udscaja) * qty = coste TOTAL de línea →
+           ventaCoste volvía a multiplicar por qty → qty AL CUADRADO. Caso real: Estuche
+           World Cup 50uds, coste/ud 1€, guardaba 50€ → ventaCoste daba 50×50=2509€.
+           Ahora guarda solo el coste UNITARIO prorrateado. */
+        coste: (prod && prod.precioCompra && prod.udscaja) ? (prod.precioCompra / prod.udscaja) : 0,
         margen: 0
        };
        if (grupoId) it.grupoId = grupoId;
@@ -63259,6 +63265,98 @@ _eaRecalc();
  // Una vez migrado, futuras importaciones LV refrescarán sourceName con
  // el c.name real, corrigiendo cualquier "mal" inicial.
  // ──────────────────────────────────────────────────────────────────
+
+ /* ══════════════════════════════════════════════════════════════════
+    v1.3.1788 · MIGRACIÓN RUNTIME — BUG-KPI-3: coste de item × qty al cuadrado
+    ══════════════════════════════════════════════════════════════════
+    _lvCommitReceipts guardaba i.coste = (precioCompra/udscaja) * qty = coste
+    TOTAL de línea. Toda la app lee i.coste como UNITARIO y multiplica por qty
+    → qty AL CUADRADO. Las ventas LV son idempotentes (dedup v_lv_*), así que
+    reimportar NO las regraba: hay que reparar las ya guardadas.
+
+    DETECCIÓN SEGURA (cero falsos positivos):
+    - Solo ventas con items y origen Loyverse/import.
+    - Para cada item: si el producto tiene precioCompra+udscaja, el coste UNITARIO
+      correcto es cu = precioCompra/udscaja. Si el i.coste guardado ≈ cu*qty (con
+      qty>1 y tolerancia 1%), está inflado → corregir a cu. Si i.coste ya ≈ cu
+      (unitario correcto) o qty<=1 (sin ambigüedad), NO tocar.
+    - NUNCA inventa coste: si no hay precioCompra/udscaja, deja el item intacto.
+
+    Idempotente: tras corregir, i.coste ≈ cu → el check de "inflado" ya no entra.
+    Fire-and-forget en idle, igual que _DashweyMigrateLVSourceNames.
+    ══════════════════════════════════════════════════════════════════ */
+ window._DashweyMigrateLVItemCoste = function(opts) {
+  opts = opts || {};
+  var dryRun = !!opts.dryRun;
+  try {
+   var App = window.App;
+   if (!App || !App.State) return { ok: false, reason: 'no-state' };
+   var raw = (App.State.raw && App.State.raw.ventas) ? App.State.raw.ventas() : (App.State.get.ventas() || []);
+   if (!Array.isArray(raw)) return { ok: false, reason: 'not-array' };
+   var prods = App.State.get.productos ? (App.State.get.productos() || []) : [];
+   var prodMap = {};
+   prods.forEach(function(p){ if (p && p.id) prodMap[p.id] = p; });
+
+   var ventasTocadas = 0, itemsCorregidos = 0;
+   var ejemplos = [];
+   var ctrl = window._DashweySavingCtrl;
+   var prevSaving = ctrl && ctrl.isSaving;
+   if (!dryRun) {
+    window._DashweyApplyingAcquire();
+    if (ctrl) ctrl.isSaving = true;
+   }
+   try {
+    raw.forEach(function(v) {
+     if (!v || v.deleted) return;
+     if (!v.items || !v.items.length) return;
+     // Solo ventas que vienen de Loyverse (las que pasan por _lvCommitReceipts)
+     if (v.origen !== 'loyverse' && v.origen !== 'import_loyverse') return;
+     var cambiado = false;
+     v.items.forEach(function(it) {
+      if (!it) return;
+      var qty = +it.qty || 0;
+      if (qty <= 1) return; // sin qty>1 no hay ambigüedad cuadrática
+      var p = prodMap[it.prodId];
+      if (!p || !(p.precioCompra > 0) || !(p.udscaja > 0)) return; // sin base fiable → no tocar
+      var cu = p.precioCompra / p.udscaja;       // coste unitario correcto
+      if (!(cu > 0)) return;
+      var actual = +it.coste || 0;
+      if (actual <= 0) return;
+      var inflado = cu * qty;                     // lo que guardaba el bug
+      // ¿el coste guardado es ≈ el inflado (total de línea)? tolerancia 1%
+      var tol = Math.max(0.01, inflado * 0.01);
+      if (Math.abs(actual - inflado) <= tol && Math.abs(actual - cu) > tol) {
+       if (ejemplos.length < 8) ejemplos.push({ nombre: it.nombre || it.prodId, qty: qty, costeAntes: actual, costeDespues: +cu.toFixed(4) });
+       if (!dryRun) it.coste = +cu.toFixed(4);
+       itemsCorregidos++;
+       cambiado = true;
+      }
+     });
+     if (cambiado) {
+      ventasTocadas++;
+      if (!dryRun) { try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {} }
+     }
+    });
+   } finally {
+    if (!dryRun) {
+     if (ctrl) ctrl.isSaving = prevSaving || false;
+     window._DashweyApplyingRelease();
+    }
+   }
+   if (itemsCorregidos > 0) {
+    console.info('[Dashwey/MigrateLVCoste] ' + (dryRun ? '(dry-run) ' : '') + itemsCorregidos + ' items corregidos en ' + ventasTocadas + ' ventas LV', ejemplos);
+    if (!dryRun) {
+     try { App.State.set.ventas(raw); } catch(_) {} // persiste array completo + recalcula dirty + save
+     try { window.DashweyBus && window.DashweyBus.emit('venta'); } catch(_) {}
+    }
+   }
+   return { ok: true, ventasTocadas: ventasTocadas, itemsCorregidos: itemsCorregidos, ejemplos: ejemplos, dryRun: dryRun };
+  } catch(e) {
+   console.warn('[Dashwey/MigrateLVCoste] error:', e && e.message);
+   return { ok: false, reason: 'exception', error: String(e && e.message || e) };
+  }
+ };
+
  window._DashweyMigrateLVSourceNames = function() {
   try {
    var App = window.App;
@@ -63628,6 +63726,10 @@ _eaRecalc();
  //   no hay idle, ejecutar igualmente.
  var _migrateSourceNamesDeferred = function() {
   try { window._DashweyMigrateLVSourceNames && window._DashweyMigrateLVSourceNames(); } catch(_) {}
+  /* v1.3.1788 BUG-KPI-3: reparar costes de item LV inflados (× qty al cuadrado).
+     Idempotente: tras corregir, el detector ya no entra. Solo toca ventas LV con
+     coste guardado ≈ unitario*qty y producto con precioCompra+udscaja fiables. */
+  try { window._DashweyMigrateLVItemCoste && window._DashweyMigrateLVItemCoste(); } catch(_) {}
  };
  if (typeof window.requestIdleCallback === 'function') {
   window.requestIdleCallback(_migrateSourceNamesDeferred, { timeout: 3000 });
