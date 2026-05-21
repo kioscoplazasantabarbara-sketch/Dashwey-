@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1785</title>
+<title>Dashwey v1.3.1786</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22963,7 +22963,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1785';
+ const _APP_VERSION = 'v1.3.1786';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30794,6 +30794,37 @@ const ui = (() => {
    window._DashweyInvalidateSaldoCache = _invalidateSaldoCache;
    window._DashweyAuditSaldosDerivados = _auditSaldosDerivados;
   } catch(_) {}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     v1.3.1786 · FASE 3 — SALDO 100% DERIVADO (flag reversible)
+     ═══════════════════════════════════════════════════════════════════
+     Las 12 escrituras incrementales `c.saldo ± importe` son REDUNDANTES:
+     cada movimiento emite su evento al Bus → _recalcSaldosListener →
+     _bbRecalcSaldos() rederiva el saldo COMPLETO en el mismo tick (RAF),
+     pisando el incremental. El incremental solo existe en la ventana de
+     ms antes del recalc, y es justo lo que sube a Firestore una deriva
+     ~3€ entre dispositivos.
+
+     Test (node) demostró: con/sin las incrementales el saldo final es
+     idéntico, y el recalc derivado corrige una deriva preexistente.
+
+     Con el flag en true, las 12 escrituras quedan neutralizadas y el
+     saldo lo gobierna SOLO _bbRecalcSaldos (la fuente de verdad ya
+     validada en verde por Hung, Fase 1).
+
+     ROLLBACK INSTANTÁNEO (sin redeploy): en consola/DevTools
+        window._DashweyUseDerivedSaldo = false;
+     → vuelven las escrituras incrementales del comportamiento anterior.
+
+     NO toca _bbRecalcSaldos (HARD RULE financiera intacta — cero cambio
+     en control flow de funciones de montos). Solo evita escrituras que
+     el recalc pisa igualmente.
+     ═══════════════════════════════════════════════════════════════════ */
+  try {
+   if (typeof window._DashweyUseDerivedSaldo === 'undefined') {
+    window._DashweyUseDerivedSaldo = true;
+   }
+  } catch(_) {}
  })();
 
  // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
@@ -36929,7 +36960,7 @@ function _openEditMovimientoSheet(id, src) {
       var cId = registro.cuentaId;
       if (cId) {
        var c = State.get.cuentas().find(function(x){ return x.id === cId; });
-       if (c) State.set.updateCuenta(cId, { saldo: (c.saldo||0) - importe });
+       if (c && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cId, { saldo: (c.saldo||0) - importe }); /* v1.3.1786 FASE 3: saldo derivado — recalc del Bus pisa esto igualmente */
       }
       DashweyBus.emit('gasto');
      } else if (src === 'ingreso') {
@@ -36941,7 +36972,7 @@ function _openEditMovimientoSheet(id, src) {
       var cId2 = registro.cuentaId;
       if (cId2) {
        var c2 = State.get.cuentas().find(function(x){ return x.id === cId2; });
-       if (c2) State.set.updateCuenta(cId2, { saldo: (c2.saldo||0) + importe });
+       if (c2 && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cId2, { saldo: (c2.saldo||0) + importe }); /* v1.3.1786 FASE 3: saldo derivado */
       }
       DashweyBus.emit('ingreso');
      }
@@ -37091,7 +37122,7 @@ function _openEditMovimientoSheet(id, src) {
    // v1.3.1001 Fase 3: pendientes NO mutan saldo — se aplicará al confirmar
    if (cuentaA && !_esPendiente) {
     var cA = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
-    if (cA) State.set.updateCuenta(cuentaA, { saldo: (cA.saldo||0) - importe });
+    if (cA && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaA, { saldo: (cA.saldo||0) - importe }); /* v1.3.1786 FASE 3: saldo derivado */
    }
    // Solo registrar en historial si toggle activo
    if (_registrarHistorial) {
@@ -37119,7 +37150,7 @@ function _openEditMovimientoSheet(id, src) {
    // v1.3.1001 Fase 3: pendientes NO mutan saldo
    if (cuentaA && _mIT !== 'caja' && !_esPendiente) {
     var cI = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
-    if (cI) State.set.updateCuenta(cuentaA, { saldo: (cI.saldo||0) + importe });
+    if (cI && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaA, { saldo: (cI.saldo||0) + importe }); /* v1.3.1786 FASE 3: saldo derivado */
    }
    if (_registrarHistorial) {
     if (_mIT === 'caja') {
@@ -37159,8 +37190,8 @@ function _openEditMovimientoSheet(id, src) {
    if (!cuentaB || cuentaA === cuentaB) { showToast('⚠️ Selecciona dos cuentas distintas', 'warning'); return; }
    var cFrom = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
    var cTo   = State.get.cuentas().find(function(x){ return x.id === cuentaB; });
-   if (cFrom) State.set.updateCuenta(cuentaA, { saldo: (cFrom.saldo||0) - importe });
-   if (cTo)   State.set.updateCuenta(cuentaB, { saldo: (cTo.saldo||0)   + importe });
+   if (cFrom && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaA, { saldo: (cFrom.saldo||0) - importe }); /* v1.3.1786 FASE 3: saldo derivado */
+   if (cTo && !window._DashweyUseDerivedSaldo)   State.set.updateCuenta(cuentaB, { saldo: (cTo.saldo||0)   + importe }); /* v1.3.1786 FASE 3: saldo derivado */
    // v1.3.996: Fase 1B — transferencia balanceada con metaTipo + transferId compartido
    // El motor reconoce la pareja vía transferId → cascade save/delete + exclusión KPIs.
    // tipo:'transferencia' conservado por retrocompat (detección dual _isTransfer).
@@ -37260,8 +37291,7 @@ function _openEditMovimientoSheet(id, src) {
    if (!c) { showToast('⚠️ Cuenta no encontrada', 'warning'); return; }
    var diff = nuevoSaldo - (c.saldo||0);
    if (diff === 0) { showToast('ℹ️ El saldo no ha cambiado'); return; }
-   State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo });
-   // Registrar en historial como ajuste (gasto si saldo baja, ingreso si sube)
+   if (!window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo }); /* v1.3.1786 FASE 3: saldo derivado — el movimiento de ajuste (diff) abajo lo recoge el recalc */
    var ajusteConcepto = nota || ('Ajuste de saldo: ' + _feur(c.saldo||0) + ' → ' + _feur(nuevoSaldo));
    if (diff > 0) {
     State.set.addIngreso({
@@ -39707,8 +39737,8 @@ function _confirmBorrarCuenta(id) {
  const _esPendienteAuto = !!(window._DashweyIsFechaFutura && window._DashweyIsFechaFutura(_fechaInp || _fechaISO));
  const _estadoMov = _esPendienteAuto ? 'pendiente' : 'confirmado';
  // Sumar saldo solo si NO es pendiente (consistente con _bbRecalcSaldos)
- if (!_esPendienteAuto) {
- State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
+ if (!_esPendienteAuto && !window._DashweyUseDerivedSaldo) {
+ State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe }); /* v1.3.1786 FASE 3: saldo derivado */
  }
  State.set.addIngreso({
   id: 'ing' + Date.now(), fecha: _fechaISO,
@@ -39946,8 +39976,8 @@ function _confirmBorrarCuenta(id) {
  // Descontar de la cuenta si está asignada Y NO es pendiente
  if (cuentaId && !_esPendienteAuto) {
  const c = State.get.cuentas().find(x => x.id === cuentaId);
- if (c) {
- State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) - importe });
+ if (c && !window._DashweyUseDerivedSaldo) {
+ State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) - importe }); /* v1.3.1786 FASE 3: saldo derivado */
  }
  }
 
@@ -40147,7 +40177,7 @@ function _confirmBorrarCuenta(id) {
  // Sumar a la cuenta si está asignada Y NO es pendiente
  if (cuentaId && !_esPendienteAuto) {
  var c = State.get.cuentas().find(function(x){ return x.id === cuentaId; });
- if (c) State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe });
+ if (c && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe }); /* v1.3.1786 FASE 3: saldo derivado */
  }
 
  // Tipo Caja: registrar como venta
@@ -49155,7 +49185,7 @@ function _confirmBorrarCuenta(id) {
   var saldoAnterior = c.saldo || 0;
   var diff = nuevoSaldo - saldoAnterior;
   // Actualizar saldo
-  State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo });
+  if (!window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaId, { saldo: nuevoSaldo }); /* v1.3.1786 FASE 3: saldo derivado — el movimiento de ajuste (diff) abajo lo recoge el recalc */
   // Registrar en historial si el toggle está activado
   if (conRegistro && diff !== 0) {
    /* v1.3.1705 BUG-17: si diff<0 → registrar como GASTO (no ingreso negativo).
@@ -58166,8 +58196,8 @@ const nPending = (State.get.pendingOrders() || [])
      tipo: 'merma',
      mermaId: _mermaId
     });
-    if (_cuentaId_m && _pri_m) {
-     State.set.updateCuenta(_cuentaId_m, { saldo: (_pri_m.saldo || 0) - _coste });
+    if (_cuentaId_m && _pri_m && !window._DashweyUseDerivedSaldo) {
+     State.set.updateCuenta(_cuentaId_m, { saldo: (_pri_m.saldo || 0) - _coste }); /* v1.3.1786 FASE 3: saldo derivado — el gasto g_merma_* arriba lo recoge el recalc (además cierra el doble-descuento de merma) */
     }
    } catch(_em) { console.warn('[MERMA] gasto/cuenta falló:', _em?.message); }
   }
