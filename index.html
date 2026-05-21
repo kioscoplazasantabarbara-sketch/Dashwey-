@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1788</title>
+<title>Dashwey v1.3.1789</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22979,7 +22979,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1788';
+ const _APP_VERSION = 'v1.3.1789';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40587,7 +40587,7 @@ function _confirmBorrarCuenta(id) {
    var S=_S();
    var hoy=_hoy0();
    var manana=new Date(hoy); manana.setDate(manana.getDate()+1);
-   var horizonte=new Date(hoy); horizonte.setDate(horizonte.getDate()+7); // próximos 7 días
+   var horizonte=new Date(hoy); horizonte.setDate(horizonte.getDate()+14); // v1.3.1789: 7→14 días (grupo "Próximo" = 8-14d)
    var items=[]; // {ev, key, kind, accion, titulo, sub, fecha, urg, atrasado}
 
    // ── 1) PEDIDOS PENDIENTES (no recibidos) — realizar/entrega/atrasado ──
@@ -40607,14 +40607,14 @@ function _confirmBorrarCuenta(id) {
      if (_esSameDay(p.provId, fp)){
       items.push({ ev:{tipo:'pedido_entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
        kind:'pedido_entrega', accion:'recibir:'+p.id, titulo:'Pedido y entrega de '+nombre,
-       sub: atras>0 ? ('Vencido hace '+atras+'d · comprobar') : 'Comprobar pedido · llega hoy',
+       sub: atras>0 ? ('Vencido hace '+atras+'d · comprobar') : ('Comprobar pedido · llega '+_fmtDiaCorto(feMid)),
        fecha: atras>0 ? feMid : hoy, atrasado: atras>0 });
       return;
      }
      // entrega pendiente (pedido ya hecho, esperando recepción) → abrir para comprobar/recibir
      items.push({ ev:{tipo:'entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
       kind:'entrega', accion:'recibir:'+p.id, titulo:'Recibir pedido de '+nombre,
-      sub: atras>0 ? ('Vencida hace '+atras+'d · '+((p.items||[]).length)+' artículos') : ('Llega pronto · '+((p.items||[]).length)+' artículos · comprobar'),
+      sub: atras>0 ? ('Vencida hace '+atras+'d · '+((p.items||[]).length)+' artículos') : ('Llega '+_fmtDiaCorto(feMid)+' · '+((p.items||[]).length)+' artículos · comprobar'),
       fecha: atras>0 ? feMid : feMid, atrasado: atras>0 });
     });
    } catch(_){}
@@ -40636,10 +40636,16 @@ function _confirmBorrarCuenta(id) {
      var nombre=p.nombre||p.id;
      var same=_esSameDay(p.id, fped);
      var diaEntStr = _fmtDiaCorto(fent);
+     var diaPedStr = _fmtDiaCorto(fped);
+     /* v1.3.1789 FIX coherencia: el subtítulo debe reflejar el DÍA REAL del evento,
+        no decir "Hoy" cuando la tarjeta cae en Próximo. Capitaliza el día (inicio de frase). */
+     var diaPedCap = diaPedStr.charAt(0).toUpperCase() + diaPedStr.slice(1);
      items.push({ ev:{tipo: same?'pedido_entrega':'pedido', pedido:{id:'_predicho_'+p.id+'_p0', provId:p.id, fecha:fped.toISOString()}},
       kind: same?'pedido_entrega':'pedido', accion:'pedido:'+p.id,
       titulo: (same?'Pedido y entrega de ':'Realizar pedido de ')+nombre,
-      sub: same ? 'Hoy haces el pedido y llega el mismo día' : ('Día de pedido · entrega '+diaEntStr),
+      sub: same
+        ? (diaPedCap + ' pides y llega el mismo día')
+        : ('Pides ' + diaPedStr + ' · entrega ' + diaEntStr),
       fecha: fpedMid, atrasado:false });
     });
    } catch(_){}
@@ -40655,7 +40661,7 @@ function _confirmBorrarCuenta(id) {
      items.push({ ev:{tipo:'recordatorio', recordatorio:r},
       kind:'recordatorio', accion:'recordatorio',
       titulo: r.titulo || 'Recordatorio',
-      sub: frMid<hoy ? 'Pendiente' : 'Recordatorio',
+      sub: frMid<hoy ? 'Pendiente' : ('Recordatorio · '+_fmtDiaCorto(frMid)),
       fecha: frMid, atrasado: frMid<hoy });
     });
    } catch(_){}
@@ -40688,17 +40694,24 @@ function _confirmBorrarCuenta(id) {
    } catch(_){}
 
    // ── Filtrar completados (motor compartido con Agenda) + clasificar ──
-   var vencidos=[], grpHoy=[], proximo=[];
+   // v1.3.1789 · 5 grupos coherentes con los badges de la tarjeta Agenda:
+   //   Vencido (atrasado) · Hoy (d0) · Mañana (d1) · Semana (d2-7) · Próximo (d8+)
+   //   Mismos cortes que renderAgenda (esHoy/Mañana/soon). El horizonte se amplió a
+   //   14 días (antes 7) para que "Próximo" tenga contenido real (8-14d).
+   var vencidos=[], grpHoy=[], grpManana=[], grpSemana=[], proximo=[];
    items.forEach(function(it){
     if (_isDone(it.ev)) return; // ya marcado hecho en campana o agenda → no mostrar
     var f=it.fecha; var fMid=new Date(f); fMid.setHours(0,0,0,0);
-    if (it.atrasado) { vencidos.push(it); }
-    else if (fMid.getTime()===hoy.getTime()) { grpHoy.push(it); }
+    var dias=Math.round((fMid-hoy)/MS_DAY);
+    if (it.atrasado || dias<0) { vencidos.push(it); }
+    else if (dias===0) { grpHoy.push(it); }
+    else if (dias===1) { grpManana.push(it); }
+    else if (dias<=7) { grpSemana.push(it); }
     else { proximo.push(it); }
    });
 
    var byFecha=function(a,b){ return a.fecha-b.fecha; };
-   vencidos.sort(byFecha); grpHoy.sort(byFecha); proximo.sort(byFecha);
+   vencidos.sort(byFecha); grpHoy.sort(byFecha); grpManana.sort(byFecha); grpSemana.sort(byFecha); proximo.sort(byFecha);
 
    // ── Sistema (no cuenta para badge, acción directa) ──
    var sistema=[];
@@ -40724,14 +40737,17 @@ function _confirmBorrarCuenta(id) {
    }
 
    var badge = vencidos.length + grpHoy.length; // solo lo accionable HOY
-   return { vencidos:vencidos, hoy:grpHoy, proximo:proximo, sistema:sistema, badge:badge };
+   return { vencidos:vencidos, hoy:grpHoy, manana:grpManana, semana:grpSemana, proximo:proximo, sistema:sistema, badge:badge };
   }
 
   function _fmtDiaCorto(d){
    var D=['dom','lun','mar','mié','jue','vie','sáb'];
+   var M=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
    var hoy=_hoy0(); var dMid=new Date(d); dMid.setHours(0,0,0,0);
    var diff=Math.round((dMid-hoy)/MS_DAY);
    if (diff===0) return 'hoy'; if (diff===1) return 'mañana';
+   /* v1.3.1789: a 8+ días, "el lun" sería ambiguo (este vs siguiente). Mostrar fecha. */
+   if (diff>=7) return 'el '+d.getDate()+' '+M[d.getMonth()];
    return 'el '+D[d.getDay()];
   }
 
@@ -40770,7 +40786,7 @@ function _confirmBorrarCuenta(id) {
   function open(){
    try { if (typeof Utils!=='undefined' && Utils.triggerHaptic) Utils.triggerHaptic('light'); } catch(_){}
    var data=_build(true); _curData=data;
-   var allItems=[].concat(data.vencidos, data.hoy, data.proximo);
+   var allItems=[].concat(data.vencidos, data.hoy, data.manana, data.semana, data.proximo);
    var html='<div class="cmp-sheet">'+
      '<div class="cmp-head"><span class="cmp-head-title">Notificaciones</span>'+
        '<button class="cmp-close" aria-label="Cerrar">'+
@@ -40793,6 +40809,14 @@ function _confirmBorrarCuenta(id) {
     if (data.hoy.length){
      html+='<div class="cmp-grp">Hoy</div>';
      data.hoy.forEach(function(it){ html+=_renderItem(it, off++); });
+    }
+    if (data.manana.length){
+     html+='<div class="cmp-grp">Mañana</div>';
+     data.manana.forEach(function(it){ html+=_renderItem(it, off++); });
+    }
+    if (data.semana.length){
+     html+='<div class="cmp-grp">Esta semana</div>';
+     data.semana.forEach(function(it){ html+=_renderItem(it, off++); });
     }
     if (data.proximo.length){
      html+='<div class="cmp-grp">Próximo</div>';
