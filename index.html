@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1762</title>
+<title>Dashwey v1.3.1764</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10593,6 +10593,7 @@ html, body { background: var(--bg); }
 
 /* Cover */
 .wrp-cover-sub { font-size: 16px; color: rgba(255,255,255,0.6); margin: 0; font-weight: 500; letter-spacing: .3px; }
+.wrp-cover-mes { font-size: clamp(48px, 15vw, 76px); color: #fff; margin: 14px 0 0; font-weight: 800; line-height: 1.0; letter-spacing: -2px; text-transform: capitalize; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .wrp-cover-t { font-size: 54px; color: #fff; margin: 16px 0 0; font-weight: 800; line-height: 1.0; letter-spacing: -2px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .wrp-cover-p { font-size: 19px; color: rgba(255,255,255,0.85); margin: 16px 0 0; font-weight: 500; }
 .wrp-hint { font-size: 14px; color: rgba(255,255,255,0.45); margin: 36px 0 0; }
@@ -10641,8 +10642,14 @@ html, body { background: var(--bg); }
 /* Festivo — frase humana tipo titular */
 .wrp-festivo-tag { font-size: 17px; color: rgba(255,255,255,0.7); margin: 0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
 .wrp-festivo-frase { font-size: 40px; color: #fff; margin: 16px 0 0; font-weight: 800; line-height: 1.1; letter-spacing: -1px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; text-wrap: balance; }
+.wrp-festivo-num { font-size: clamp(48px, 16vw, 88px); color: #fff; margin: 12px 0 4px; font-weight: 800; line-height: 1.0; letter-spacing: -2px; white-space: nowrap; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+.wrp-festivo-desg { margin: 22px 0 0; }
+.wrp-festivo-row { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 10px; font-size: 17px; }
+.wrp-festivo-dia { color: rgba(255,255,255,0.7); font-weight: 600; }
+.wrp-festivo-imp { color: #fff; font-weight: 800; }
 .wrp-theme-light .wrp-festivo-tag { color: #777 !important; }
-.wrp-theme-light .wrp-festivo-frase { color: #111 !important; }
+.wrp-theme-light .wrp-festivo-frase, .wrp-theme-light .wrp-festivo-num, .wrp-theme-light .wrp-festivo-imp { color: #111 !important; }
+.wrp-theme-light .wrp-festivo-dia { color: #777 !important; }
 /* Ingresos vs Gastos */
 .wrp-vs-label { font-size: 28px; color: #fff; margin: 0 0 28px; font-weight: 800; letter-spacing: -.8px; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .wrp-vs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
@@ -22799,7 +22806,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1762';
+ const _APP_VERSION = 'v1.3.1764';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40609,9 +40616,38 @@ function _confirmBorrarCuenta(id) {
     d.festivos = _festivosConVentas(porDia);
 
     // Top 5 vendidos (canónico)
-    d.topVendidos = (KPI.getTopVentas(period) || []).map(function(x){
-     return { nombre: (x.prod && x.prod.nombre) || '—', total: x.total, uds: x.uds };
-    });
+    // Top ventas agrupadas por NOMBRE (respeta GruposVenta del Almacén; si no, por nombre de producto).
+    //   FIX: en Loyverse/TPV un mismo producto ("Chicles") puede tener varias entradas
+    //   con distinto prodId → se mostraban duplicadas. Si el artículo está en un GrupoVenta,
+    //   usamos el nombre del grupo (agrupación que el usuario hizo en Almacén); si no, el nombre del producto.
+    var _ventasPorNombre = {};
+    var _GV = (typeof GruposVenta !== 'undefined') ? GruposVenta : (window.App && window.App.GruposVenta);
+    try {
+     (KPI.ventasEnPeriodo(period) || []).filter(visible).forEach(function(v){
+      var items = (v.items && v.items.length) ? v.items : (v.prodId ? [v] : []);
+      items.forEach(function(it){
+       var pid = it.prodId; if (!pid) return;
+       var prod = State.get.prod(pid);
+       var nom = (prod && prod.nombre) || '—';
+       // Si el artículo pertenece a un grupo de venta, usar el nombre del grupo
+       try {
+        if (_GV && _GV.grupoDeArticulo){
+         var grp = _GV.grupoDeArticulo(pid);
+         if (grp && grp.nombre) nom = grp.nombre;
+        }
+       } catch(_){}
+       var key = nom.trim().toLowerCase();
+       if (!_ventasPorNombre[key]) _ventasPorNombre[key] = { nombre: nom, total: 0, uds: 0 };
+       _ventasPorNombre[key].total += (it.pvp || 0) * (it.qty || 0);
+       _ventasPorNombre[key].uds   += (it.qty || 0);
+      });
+     });
+    } catch(_){}
+    var _ventasArr = Object.keys(_ventasPorNombre).map(function(k){ return _ventasPorNombre[k]; });
+    // Tarjeta 3: por dinero recaudado
+    d.topVendidos = _ventasArr.slice().sort(function(a,b){ return b.total - a.total; }).slice(0,5);
+    // Tarjeta 4: por unidades vendidas
+    d.topUnidades = _ventasArr.filter(function(x){ return x.uds > 0; }).sort(function(a,b){ return b.uds - a.uds; }).slice(0,5);
 
     // Menos vendidos (producto parado): stock activo + alta ≥30d + con venta detallada
     d.productoParado = _menosVendidos(period);
@@ -40663,6 +40699,8 @@ function _confirmBorrarCuenta(id) {
      (State.get.gastosOp() || []).forEach(function(g){
       if (!g || !_vis(g)) return;                    // excluye transfer/pendiente/ajuste
       if (g.origen && _esProveedor[g.origen]) return; // ya contado en proveedores
+      if (g.provId || g.proveedorId) return;          // tiene proveedor vinculado → es compra, no operativo
+      if (g.categoria === 'Compras') return;          // categoría compra → proveedor, no operativo
       if (_rng){
        var f = new Date(g.fecha || 0);
        if (!(f >= _rng.start && f < _rng.end)) return;
@@ -40763,9 +40801,18 @@ function _confirmBorrarCuenta(id) {
     var out = [];
     _FESTIVOS.forEach(function(fest){
      var total = 0;
-     fest.dias.forEach(function(md){ total += (porMD[md]||0); });
+     var desglose = [];
+     fest.dias.forEach(function(md){
+      var imp = (porMD[md]||0);
+      total += imp;
+      if (imp > 0){
+       var mdp = md.split('-');
+       desglose.push({ dia: parseInt(mdp[1],10), mes: parseInt(mdp[0],10), importe: imp });
+      }
+     });
      if (total > 0){
-      out.push({ nombre:fest.nombre, importe:total, frase:fest.frase.replace('{v}', _eur(total)) });
+      desglose.sort(function(a,b){ return b.importe - a.importe; });
+      out.push({ nombre:fest.nombre, importe:total, frase:fest.frase.replace('{v}', _eur(total)), desglose:desglose });
      }
     });
     // ordenar por importe desc, máximo 3 festivos
@@ -40801,14 +40848,14 @@ function _confirmBorrarCuenta(id) {
    // 1 Portada — crimson
    cards.push({ bg:CRIMSON, theme:'crimson', kind:'cover', titulo:titulo, sub:periodoLabel });
    // 2 Ventas — negro (cifra gigante + frase de apoyo)
-   cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:(esAnual?'Este año vendiste':'Este mes vendiste'), num:d.ventasTotal, fmt:'eur',
+   cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:(esAnual?'Tus ventas del año':'Tus ventas del mes'), num:d.ventasTotal, fmt:'eur',
      foot: 'en '+d.nTickets+' tickets, una media de '+_eur(d.mediaDia)+' al día' });
    // 3 Los más vendidos — blanco
    if (d.topVendidos && d.topVendidos.length)
-    cards.push({ bg:BLANCO, theme:'light', kind:'rank', label:'Tus más vendidos', rows:d.topVendidos.map(function(x){return {n:x.nombre, v:_eur(x.total)};}), note:'según ventas detalladas' });
-   // 4 Los más rentables — negro (los que más ganancia real dejaron en el mes)
-   if (d.topRentables && d.topRentables.length)
-    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Los que más te hicieron ganar', rows:d.topRentables.map(function(x){return {n:x.nombre, v:'+'+_eur(x.gain)};}), note:'ganancia real '+periodoTxt });
+    cards.push({ bg:BLANCO, theme:'light', kind:'rank', label:'Tus más vendidos', rows:d.topVendidos.map(function(x){return {n:x.nombre, v:_eur(x.total)};}), note:'Según ventas detalladas' });
+   // 4 Los más vendidos por UNIDADES — negro (complementa la 3 que es por dinero)
+   if (d.topUnidades && d.topUnidades.length)
+    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Los que más salen', rows:d.topUnidades.map(function(x){return {n:x.nombre, v:x.uds+' uds'};}), note:'por unidades vendidas' });
    // 5 Tu mejor día — crimson (comprueba si fue festivo; si lo fue, no se repite luego)
    var diaRecordFestivo = null;
    if (d.diaRecord){
@@ -40821,16 +40868,16 @@ function _confirmBorrarCuenta(id) {
     cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label:'Tu mejor día', num:d.diaRecord.importe, fmt:'eur',
       foot: drFoot });
    }
-   // 5b Festivos con ventas — frase humana. Excluir el que ya salió como día récord.
+   // 5b Festivos con ventas — título + cifra grande + desglose por día. Excluir el del día récord.
    if (d.festivos && d.festivos.length){
     var festivosMostrar = d.festivos.filter(function(f){ return f.nombre !== diaRecordFestivo; });
     festivosMostrar.forEach(function(fest, fi){
      cards.push({ bg: (fi%2===0?NEGRO:CRIMSON), theme:(fi%2===0?'dark':'crimson'), kind:'festivo',
-       nombre:fest.nombre, frase:fest.frase });
+       nombre:fest.nombre, importe:fest.importe, desglose:fest.desglose });
     });
    }
    // 6 Pedidos a proveedores — blanco (cifra gigante)
-   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:(esAnual?'Este año pediste a proveedores':'Este mes pediste a proveedores'), num:d.proveedores, fmt:'eur',
+   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:'Gasto en proveedores', num:d.proveedores, fmt:'eur',
      foot: 'en '+d.nPedidos+(d.nPedidos===1?' pedido':' pedidos') });
    // 7 Proveedores top — negro
    if (d.topProveedores && d.topProveedores.length)
@@ -40948,8 +40995,8 @@ function _confirmBorrarCuenta(id) {
    if (c.kind==='cover'){
     inner = '<div class="wrp-cover">'+
       '<p class="wrp-cover-sub wrp-aline">'+_esc(_negocio())+'</p>'+
-      '<p class="wrp-cover-t wrp-aline">'+_esc(c.titulo)+'</p>'+
-      '<p class="wrp-cover-p wrp-aline">'+_esc(c.sub)+'</p>'+
+      '<p class="wrp-cover-mes wrp-aline">'+_esc(c.sub)+'</p>'+
+      '<p class="wrp-cover-p wrp-aline">'+_esc(c.titulo)+'</p>'+
       '<p class="wrp-hint wrp-aline">Toca para avanzar →</p></div>';
    } else if (c.kind==='big'){
     inner = '<div class="wrp-big">'+
@@ -40974,9 +41021,11 @@ function _confirmBorrarCuenta(id) {
    } else if (c.kind==='vs'){
     var balance = c.ingresos - c.gastos;
     var ptxt = c.periodoTxt || 'este mes';
-    var balLabel = (balance>=0) ? 'A favor cerraste' : 'Cerraste en rojo';
-    var balSign = (balance>=0?'+ ':'− ')+_eur(Math.abs(balance));
-    var apoyo = 'Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b>';
+    var ptxtVs = c.periodoTxt || 'este mes';
+    var balLabel = 'Cerraste '+ptxtVs+' con';
+    var apoyo = (balance>=0)
+      ? 'Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b> 💪'
+      : 'Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b>';
     inner = '<div class="wrp-big">'+
       '<p class="wrp-big-label wrp-aline">'+balLabel+'</p>'+
       '<p class="wrp-big-num wrp-aline" id="wrpBigNum" data-target="'+balance+'" data-fmt="eursign">'+_eur(0)+'</p>'+
@@ -40984,9 +41033,17 @@ function _confirmBorrarCuenta(id) {
    } else if (c.kind==='frase'){
     inner = '<div class="wrp-frase-box"><p class="wrp-frase wrp-aline">'+c.frase+'</p></div>';
    } else if (c.kind==='festivo'){
+    var MESES_C=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    var desgHtml = '';
+    if (c.desglose && c.desglose.length){
+     desgHtml = '<div class="wrp-festivo-desg">' + c.desglose.map(function(dd){
+      return '<p class="wrp-festivo-row wrp-aline"><span class="wrp-festivo-dia">'+dd.dia+' '+(MESES_C[(dd.mes-1+12)%12]||'')+'</span><span class="wrp-festivo-imp">'+_eur(dd.importe)+'</span></p>';
+     }).join('') + '</div>';
+    }
     inner = '<div class="wrp-festivo">'+
-      '<p class="wrp-festivo-tag wrp-aline">'+_esc(c.nombre)+'</p>'+
-      '<p class="wrp-festivo-frase wrp-aline">'+_esc(c.frase)+'</p></div>';
+      '<p class="wrp-festivo-tag wrp-aline">'+_esc(c.nombre)+' 🎆</p>'+
+      '<p class="wrp-festivo-num wrp-aline" id="wrpBigNum" data-target="'+(c.importe||0)+'" data-fmt="eur">'+_eur(0)+'</p>'+
+      desgHtml + '</div>';
    } else if (c.kind==='final'){
     var netoSign = (c.neto>=0?'+ ':'− ')+_eur(Math.abs(c.neto||0));
     var ptxtF = c.periodoTxt || 'este mes';
@@ -41008,7 +41065,7 @@ function _confirmBorrarCuenta(id) {
    });
 
    // Animaciones de entrada (tras el stagger del texto para que no choquen)
-   if (c.kind==='big' || c.kind==='final' || c.kind==='vs'){
+   if (c.kind==='big' || c.kind==='final' || c.kind==='vs' || c.kind==='festivo'){
     setTimeout(function(){ _countUp(document.getElementById('wrpBigNum')); }, 380);
    }
    if (c.kind==='rank'){
