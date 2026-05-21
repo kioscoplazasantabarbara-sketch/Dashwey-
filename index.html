@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1761</title>
+<title>Dashwey v1.3.1762</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10659,8 +10659,8 @@ html, body { background: var(--bg); }
 .wrp-theme-light .wrp-vs-track { background: rgba(0,0,0,0.07); }
 .wrp-theme-light .wrp-vs-val { color: #111; }
 .wrp-theme-light .wrp-vs-bal { color: #333; }
-.wrp-share { margin-top: 56px; width: 100%; padding: 15px; border-radius: 14px; border: none; background: rgba(255,255,255,0.92); color: #111; font-size: 16px; font-weight: 700; cursor: pointer; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
-.wrp-theme-light .wrp-share { background: #111; color: #fff; }
+.wrp-share { position: relative; z-index: 30; margin-top: 64px; width: auto; align-self: flex-start; padding: 11px 22px; border-radius: 999px; border: none; background: rgba(255,255,255,0.14); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+.wrp-theme-light .wrp-share { background: rgba(0,0,0,0.08); color: #333; }
 .wrp-share:active { transform: scale(0.98); }
 
 /* Confeti */
@@ -22799,7 +22799,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1761';
+ const _APP_VERSION = 'v1.3.1762';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40644,7 +40644,7 @@ function _confirmBorrarCuenta(id) {
     //   Modelo:
     //   Ingresos    = ventas del periodo (cierres Kiosco)
     //   Proveedores = pedidos del módulo Almacén (origen:'pedido')
-    //   Operativos  = resto de gastos agregables del periodo (luz, autónomos, alquiler…)
+    //   Operativos  = resto de gastos agregables del periodo (luz, autónomos…)
     //                 EXCLUYENDO proveedores (para no duplicar con el CSV que ya los trae)
     //   Total gastos = proveedores + operativos
     //   Ganancia neta = ingresos − total gastos
@@ -40659,6 +40659,7 @@ function _confirmBorrarCuenta(id) {
      var _rng = KPI.getRange ? KPI.getRange(period) : null;
      var _vis = window._isKpiVisible || function(){return true;};
      var _esProveedor = { 'pedido':1, 'cierre_caja_auto':1, 'auto_directo':1, 'auto_promovido':1 };
+     var _opPorConcepto = {};   // concepto → suma € (para top 5)
      (State.get.gastosOp() || []).forEach(function(g){
       if (!g || !_vis(g)) return;                    // excluye transfer/pendiente/ajuste
       if (g.origen && _esProveedor[g.origen]) return; // ya contado en proveedores
@@ -40666,8 +40667,17 @@ function _confirmBorrarCuenta(id) {
        var f = new Date(g.fecha || 0);
        if (!(f >= _rng.start && f < _rng.end)) return;
       }
-      d.operativos += (g.importe || 0);
+      var imp = (g.importe || 0);
+      d.operativos += imp;
+      // Agrupar por concepto para el desglose
+      var cpt = (g.concepto || g.descripcion || 'Otros').trim() || 'Otros';
+      _opPorConcepto[cpt] = (_opPorConcepto[cpt] || 0) + imp;
      });
+     // Top 5 operativos por concepto
+     d.topOperativos = Object.keys(_opPorConcepto)
+      .map(function(k){ return { nombre:k, gasto:_opPorConcepto[k] }; })
+      .sort(function(a,b){ return b.gasto - a.gasto; })
+      .slice(0,5);
     } catch(_){ d.operativos = 0; }
     d.gastos = d.proveedores + d.operativos;        // total gastos
     d.beneficioNeto = d.ingresos - d.gastos;        // ganancia neta real
@@ -40825,10 +40835,15 @@ function _confirmBorrarCuenta(id) {
    // 7 Proveedores top — negro
    if (d.topProveedores && d.topProveedores.length)
     cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Tus proveedores top', rows:d.topProveedores.map(function(x){return {n:x.nombre, v:_eur(x.gasto)};}), note:'por gasto '+periodoTxt });
-   // 8 Costes operativos — crimson (luz, autónomos, alquiler…). Solo si hay.
-   if (d.operativos > 0)
-    cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label:'En costes operativos', num:d.operativos, fmt:'eur',
-      foot: 'luz, autónomos, alquiler y demás' });
+   // 8 Costes operativos — crimson. Top 5 por concepto si hay desglose; si no, cifra simple.
+   if (d.operativos > 0){
+    if (d.topOperativos && d.topOperativos.length > 1){
+     cards.push({ bg:CRIMSON, theme:'crimson', kind:'rank', label:'Tus costes operativos', rows:d.topOperativos.map(function(x){return {n:x.nombre, v:_eur(x.gasto)};}), note:'luz, autónomos y demás' });
+    } else {
+     cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label:'En costes operativos', num:d.operativos, fmt:'eur',
+       foot: 'luz, autónomos y demás' });
+    }
+   }
    // 9 Total en gastos — negro (proveedores + operativos)
    cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:'En total gastaste', num:d.gastos, fmt:'eur',
      foot: _eur(d.proveedores)+' en proveedores + '+_eur(d.operativos)+' en operativos' });
@@ -40877,6 +40892,7 @@ function _confirmBorrarCuenta(id) {
    var d = _buildData(period);
    if (!d.ok){ try { Utils.showToast && Utils.showToast('No se pudo generar el resumen','warning'); } catch(_){} return; }
    _state.cards = _cards(d, period);
+   _state.data = d;
    _state.idx = 0;
 
    // Overlay PROPIO full screen (no el modal compartido → sin lag ni primer-toque-fallido)
@@ -40958,12 +40974,13 @@ function _confirmBorrarCuenta(id) {
    } else if (c.kind==='vs'){
     var balance = c.ingresos - c.gastos;
     var ptxt = c.periodoTxt || 'este mes';
-    var cierre = (balance>=0)
-      ? ('cerrando '+ptxt+' con <b class="wrp-nb">'+_eur(Math.abs(balance))+'</b> a favor 💪')
-      : ('cerrando '+ptxt+' con <b class="wrp-nb">'+_eur(Math.abs(balance))+'</b> en números rojos');
-    inner = '<div class="wrp-vs">'+
-      '<p class="wrp-vs-label wrp-aline">'+_esc(c.label)+'</p>'+
-      '<p class="wrp-vs-bal wrp-aline">Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b>, '+cierre+'</p></div>';
+    var balLabel = (balance>=0) ? 'A favor cerraste' : 'Cerraste en rojo';
+    var balSign = (balance>=0?'+ ':'− ')+_eur(Math.abs(balance));
+    var apoyo = 'Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b>';
+    inner = '<div class="wrp-big">'+
+      '<p class="wrp-big-label wrp-aline">'+balLabel+'</p>'+
+      '<p class="wrp-big-num wrp-aline" id="wrpBigNum" data-target="'+balance+'" data-fmt="eursign">'+_eur(0)+'</p>'+
+      '<p class="wrp-big-foot wrp-aline">'+apoyo+'</p></div>';
    } else if (c.kind==='frase'){
     inner = '<div class="wrp-frase-box"><p class="wrp-frase wrp-aline">'+c.frase+'</p></div>';
    } else if (c.kind==='festivo'){
@@ -40991,14 +41008,11 @@ function _confirmBorrarCuenta(id) {
    });
 
    // Animaciones de entrada (tras el stagger del texto para que no choquen)
-   if (c.kind==='big' || c.kind==='final'){
+   if (c.kind==='big' || c.kind==='final' || c.kind==='vs'){
     setTimeout(function(){ _countUp(document.getElementById('wrpBigNum')); }, 380);
    }
    if (c.kind==='rank'){
     setTimeout(function(){ _cascade(); }, 320);
-   }
-   if (c.kind==='vs'){
-    setTimeout(function(){ _hap('selection'); }, 450);
    }
    if (c.kind==='final'){
     setTimeout(function(){ _confetti(stage); }, 1100);
@@ -41058,10 +41072,23 @@ function _confirmBorrarCuenta(id) {
 
   function _share(){
    try {
-    var d = _state.cards;
-    var txt = 'Mi resumen en Dashwey 📊';
-    if (navigator.share){ navigator.share({ title:'Dashwey Wrapped', text:txt }).catch(function(){}); }
-    else { Utils.showToast && Utils.showToast('Resumen listo','success'); }
+    var d = _state.data || {};
+    var txt = 'Mi resumen del mes en Dashwey';
+    try {
+     if (d.ventasTotal!=null) txt = 'Este mes vendi '+_eur(d.ventasTotal)+' y mi ganancia neta fue de '+_eur(d.beneficioNeto||0)+'. Dashwey';
+    } catch(_){}
+    try {
+     var CapShare = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share) ? window.Capacitor.Plugins.Share : null;
+     if (CapShare && CapShare.share){ CapShare.share({ title:'Dashwey Wrapped', text:txt }).catch(function(){}); return; }
+    } catch(_){}
+    if (navigator.share){ navigator.share({ title:'Dashwey Wrapped', text:txt }).catch(function(){}); return; }
+    try {
+     if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ Utils.showToast && Utils.showToast('Resumen copiado','success'); }).catch(function(){ Utils.showToast && Utils.showToast('Resumen listo','success'); });
+      return;
+     }
+    } catch(_){}
+    Utils.showToast && Utils.showToast('Resumen listo','success');
    } catch(_){}
   }
 
@@ -41086,9 +41113,12 @@ function _confirmBorrarCuenta(id) {
   function starTap(starEl){
    // Haptic 1: el toque
    _hap('medium');
-   // Periodo coherente con la lógica de aparición (último día → este mes; día 1 → anterior; 1 ene → anual)
+   // Periodo coherente con la lógica de aparición. Si estamos en ventana real
+   //   (último día / día 1 / 1 ene), usa ese periodo. Fuera de ventana (test forzado
+   //   un día cualquiera), muestra el MES ACTUAL — igual que el test "Wrapped del mes",
+   //   para que estrella y test SIEMPRE muestren lo mismo.
    var info = _periodoAResumir();
-   var period = info ? info.period : ((new Date()).getMonth()===0 ? {type:'year',offset:-1} : {type:'month',offset:-1});
+   var period = info ? info.period : ((new Date()).getMonth()===0 ? {type:'year',offset:0} : {type:'month',offset:0});
    _flyAndOpen(starEl, period);
    _markWrappedSeen();
   }
