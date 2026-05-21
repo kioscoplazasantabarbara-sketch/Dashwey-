@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1759</title>
+<title>Dashwey v1.3.1760</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10652,7 +10652,7 @@ html, body { background: var(--bg); }
 .wrp-vs-in { background: linear-gradient(90deg, #1FA971, #25C585); }
 .wrp-vs-out { background: linear-gradient(90deg, #D4344F, #E0455F); }
 .wrp-vs-val { font-size: 15px; color: #fff; font-weight: 700; width: 78px; text-align: right; flex-shrink: 0; }
-.wrp-vs-bal { font-size: clamp(24px, 6.5vw, 32px); color: #fff; margin: 32px 0 0; font-weight: 700; line-height: 1.3; text-wrap: balance; }
+.wrp-vs-bal { font-size: clamp(28px, 7.5vw, 38px); color: #fff; margin: 24px 0 0; font-weight: 800; line-height: 1.22; letter-spacing: -.5px; text-wrap: balance; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .wrp-vs-bal b { font-weight: 800; }
 .wrp-theme-light .wrp-vs-label { color: #111 !important; }
 .wrp-theme-light .wrp-vs-tag { color: #666; }
@@ -22799,7 +22799,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1759';
+ const _APP_VERSION = 'v1.3.1760';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40636,15 +40636,34 @@ function _confirmBorrarCuenta(id) {
      .slice(0,5)
      .map(function(x){ return { nombre: x.prod.nombre || '—', gain: x.gain, roi: x.roi }; });
 
-    // Beneficio neto + margen
-    //   getBeneficioNeto devuelve { beneficio (=bruto), vta, costeVentas, ... }
-    //   No existe campo 'beneficioNeto' ni 'gastos' → usar los reales.
+    // ── Modelo financiero del Wrapped (acordado con Hung v1.3.1760) ──
+    //   Ingresos = ventas del periodo
+    //   Pedidos a proveedores = comprasTotal (KPI.inv)
+    //   Costes operativos = gastosOp del periodo que NO son origen:'pedido' (luz, autónomos…)
+    //   Total gastos = proveedores + operativos
+    //   Ganancia neta = ingresos − total gastos
     var bn = KPI.getBeneficioNeto(period) || {};
     d.ingresos = (bn.vta!=null) ? bn.vta : d.ventasTotal;
-    d.gastos = (bn.costeVentas!=null) ? bn.costeVentas : null;
-    d.beneficioNeto = (bn.beneficio!=null) ? bn.beneficio
-                    : (d.ingresos!=null && d.gastos!=null ? (d.ingresos - d.gastos) : null);
-    d.centimosPorEuro = (d.ingresos>0 && d.beneficioNeto!=null) ? Math.round(d.beneficioNeto/d.ingresos*100) : null;
+    d.proveedores = d.comprasTotal || 0;
+    // Operativos: gastos del periodo no-pedido, no-transfer, no-ajuste
+    d.operativos = 0;
+    try {
+     var _rng = KPI.getRange ? KPI.getRange(period) : null;
+     var _vis = window._isKpiVisible || function(){return true;};
+     (State.get.gastosOp() || []).forEach(function(g){
+      if (!g || !_vis(g)) return;
+      if (g.origen === 'pedido') return;            // ya contado en proveedores
+      if (g.metaTipo === 'transfer' || g.metaTipo === 'ajuste') return;
+      if (_rng){
+       var f = new Date(g.fecha || 0);
+       if (!(f >= _rng.start && f < _rng.end)) return;
+      }
+      d.operativos += (g.importe || 0);
+     });
+    } catch(_){ d.operativos = 0; }
+    d.gastos = d.proveedores + d.operativos;        // total gastos
+    d.beneficioNeto = d.ingresos - d.gastos;        // ganancia neta real
+    d.centimosPorEuro = (d.ingresos>0) ? Math.round(d.beneficioNeto/d.ingresos*100) : null;
 
     // Comparativa vs periodo anterior
     try {
@@ -40766,18 +40785,18 @@ function _confirmBorrarCuenta(id) {
    // 2 Ventas — negro (cifra gigante + frase de apoyo)
    cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:(esAnual?'Este año vendiste':'Este mes vendiste'), num:d.ventasTotal, fmt:'eur',
      foot: 'en '+d.nTickets+' tickets, una media de '+_eur(d.mediaDia)+' al día' });
-   // 3 Top vendidos — blanco
+   // 3 Los más vendidos — blanco
    if (d.topVendidos && d.topVendidos.length)
     cards.push({ bg:BLANCO, theme:'light', kind:'rank', label:'Tus más vendidos', rows:d.topVendidos.map(function(x){return {n:x.nombre, v:_eur(x.total)};}), note:'según ventas detalladas' });
-   // 4 Producto parado — negro
-   if (d.productoParado && d.productoParado.length)
-    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Producto parado', sub:'quizá retirar o rebajar', rows:d.productoParado.map(function(x){return {n:x.nombre, v:x.uds+' uds'};}), note:'con stock · +30 días' });
-   // 5 Día récord — crimson (comprueba si fue festivo). Si lo fue, ese festivo NO se repite luego.
+   // 4 Los más rentables — negro (los que más ganancia real dejaron en el mes)
+   if (d.topRentables && d.topRentables.length)
+    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Los que más te hicieron ganar', rows:d.topRentables.map(function(x){return {n:x.nombre, v:'+'+_eur(x.gain)};}), note:'ganancia real '+periodoTxt });
+   // 5 Tu mejor día — crimson (comprueba si fue festivo; si lo fue, no se repite luego)
    var diaRecordFestivo = null;
    if (d.diaRecord){
     var drFecha = _fmtFecha(d.diaRecord.fecha);
     var drMD = (d.diaRecord.fecha.getMonth()+1)+'-'+d.diaRecord.fecha.getDate();
-    diaRecordFestivo = _esFestivo(drMD); // recordar para no repetir
+    diaRecordFestivo = _esFestivo(drMD);
     var drFoot = diaRecordFestivo
       ? (drFecha+' — '+diaRecordFestivo+' 🎉')
       : ('Fue el '+drFecha+'… ¡y ni siquiera era festivo! 🔥');
@@ -40792,24 +40811,28 @@ function _confirmBorrarCuenta(id) {
        nombre:fest.nombre, frase:fest.frase });
     });
    }
-   // 6 Compras — blanco (cifra gigante + frase de apoyo)
-   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:(esAnual?'Este año gastaste':'Este mes gastaste'), num:d.comprasTotal, fmt:'eur',
-     foot: 'en '+d.nPedidos+(d.nPedidos===1?' pedido':' pedidos')+' a tus proveedores' });
-   // 7 Top proveedores — negro
+   // 6 Pedidos a proveedores — blanco (cifra gigante)
+   cards.push({ bg:BLANCO, theme:'light', kind:'big', label:(esAnual?'Este año pediste a proveedores':'Este mes pediste a proveedores'), num:d.proveedores, fmt:'eur',
+     foot: 'en '+d.nPedidos+(d.nPedidos===1?' pedido':' pedidos') });
+   // 7 Proveedores top — negro
    if (d.topProveedores && d.topProveedores.length)
-    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Tus proveedores top', rows:d.topProveedores.map(function(x){return {n:x.nombre, v:_eur(x.gasto)};}) });
-   // 8 Más rentables — blanco (artículos que más ganancia real dejan)
-   if (d.topRentables && d.topRentables.length)
-    cards.push({ bg:BLANCO, theme:'light', kind:'rank', label:'Tus más rentables', rows:d.topRentables.map(function(x){return {n:x.nombre, v:'+'+_eur(x.gain)};}), note:'ganancia real por artículo' });
-   // 9 Comparativa — crimson
+    cards.push({ bg:NEGRO, theme:'dark', kind:'rank', label:'Tus proveedores top', rows:d.topProveedores.map(function(x){return {n:x.nombre, v:_eur(x.gasto)};}), note:'por gasto '+periodoTxt });
+   // 8 Costes operativos — crimson (luz, autónomos, alquiler…). Solo si hay.
+   if (d.operativos > 0)
+    cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label:'En costes operativos', num:d.operativos, fmt:'eur',
+      foot: 'luz, autónomos, alquiler y demás' });
+   // 9 Total en gastos — negro (proveedores + operativos)
+   cards.push({ bg:NEGRO, theme:'dark', kind:'big', label:'En total gastaste', num:d.gastos, fmt:'eur',
+     foot: _eur(d.proveedores)+' en proveedores + '+_eur(d.operativos)+' en operativos' });
+   // 10 Comparativa — crimson
    if (d.deltaPct!=null)
     cards.push({ bg:CRIMSON, theme:'crimson', kind:'big', label: (d.deltaPct>=0?'Creciste un':'Bajaste un'), num:Math.abs(d.deltaPct), fmt:'pct',
-      foot: (esAnual?'respecto al año anterior':'respecto al mes anterior') });
-   // 10 Ingresos vs Gastos — blanco (barras + frase humana). ÚNICA card que muestra esta info.
+      foot: (esAnual?'en ventas, respecto al año anterior':'en ventas, respecto al mes anterior') });
+   // 11 Ingresos vs Gastos — blanco (SIN barras, solo frase grande)
    if (d.ingresos!=null && d.gastos!=null)
     cards.push({ bg:BLANCO, theme:'light', kind:'vs', label:'Ingresos vs Gastos',
       ingresos:d.ingresos, gastos:d.gastos, periodoTxt:periodoTxt });
-   // 11 Gran final — negro. Solo ganancia neta (NO repite ingresos/gastos, ya están en la card vs).
+   // 12 Ganancia neta del mes — negro
    cards.push({ bg:NEGRO, theme:'dark', kind:'final',
      neto:d.beneficioNeto, centimos:d.centimosPorEuro, periodoTxt:periodoTxt });
 
@@ -40925,8 +40948,6 @@ function _confirmBorrarCuenta(id) {
       '<div class="wrp-rrows">'+rowsH+'</div>'+
       (c.note?'<p class="wrp-rank-note wrp-aline">'+_esc(c.note)+'</p>':'')+'</div>';
    } else if (c.kind==='vs'){
-    var maxV = Math.max(c.ingresos, c.gastos, 1);
-    var wI = Math.round(c.ingresos/maxV*100), wG = Math.round(c.gastos/maxV*100);
     var balance = c.ingresos - c.gastos;
     var ptxt = c.periodoTxt || 'este mes';
     var cierre = (balance>=0)
@@ -40934,10 +40955,6 @@ function _confirmBorrarCuenta(id) {
       : ('cerrando '+ptxt+' con <b class="wrp-nb">'+_eur(Math.abs(balance))+'</b> en números rojos');
     inner = '<div class="wrp-vs">'+
       '<p class="wrp-vs-label wrp-aline">'+_esc(c.label)+'</p>'+
-      '<div class="wrp-vs-row wrp-aline"><span class="wrp-vs-tag">Ingresos</span>'+
-        '<div class="wrp-vs-track"><div class="wrp-vs-fill wrp-vs-in" data-w="'+wI+'"></div></div></div>'+
-      '<div class="wrp-vs-row wrp-aline"><span class="wrp-vs-tag">Gastos</span>'+
-        '<div class="wrp-vs-track"><div class="wrp-vs-fill wrp-vs-out" data-w="'+wG+'"></div></div></div>'+
       '<p class="wrp-vs-bal wrp-aline">Ingresaste <b class="wrp-nb">'+_eur(c.ingresos)+'</b> y gastaste <b class="wrp-nb">'+_eur(c.gastos)+'</b>, '+cierre+'</p></div>';
    } else if (c.kind==='frase'){
     inner = '<div class="wrp-frase-box"><p class="wrp-frase wrp-aline">'+c.frase+'</p></div>';
@@ -40973,10 +40990,7 @@ function _confirmBorrarCuenta(id) {
     setTimeout(function(){ _cascade(); }, 320);
    }
    if (c.kind==='vs'){
-    setTimeout(function(){
-     stage.querySelectorAll('.wrp-vs-fill').forEach(function(f){ f.style.width = f.getAttribute('data-w')+'%'; });
-     _hap('selection');
-    }, 450);
+    setTimeout(function(){ _hap('selection'); }, 450);
    }
    if (c.kind==='final'){
     setTimeout(function(){ _confetti(stage); }, 1100);
