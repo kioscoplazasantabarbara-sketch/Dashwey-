@@ -778,7 +778,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1766</title>
+<title>Dashwey v1.3.1767</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22806,7 +22806,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1766';
+ const _APP_VERSION = 'v1.3.1767';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -36420,6 +36420,16 @@ function _openEditMovimientoSheet(id, src) {
   var _origen = registro.origen || '';
   var _isExtBlocked = !!(_origen && (_origen === 'loyverse' || _origen === 'budgetbakers'));
 
+  // Tipo de gasto actual: tag explícito si existe; si no, heurística para precargar el pill
+  var _edTipoGasto;
+  if (registro.tipoGasto === 'operativo' || registro.tipoGasto === 'proveedor') {
+   _edTipoGasto = registro.tipoGasto;
+  } else {
+   var _esProvOrig = { 'pedido':1, 'cierre_caja_auto':1, 'auto_directo':1, 'auto_promovido':1 };
+   if ((_origen && _esProvOrig[_origen]) || registro.provId || registro.proveedorId || registro.categoria === 'Compras') _edTipoGasto = 'proveedor';
+   else _edTipoGasto = 'operativo';
+  }
+
   var sheet = document.createElement('div');
   sheet.className = 'mov-sheet-overlay';
   // v1.3.1601: convertir fecha registro a datetime-local format (YYYY-MM-DDTHH:MM)
@@ -36455,6 +36465,15 @@ function _openEditMovimientoSheet(id, src) {
    //   fecha + hora en un solo input. Schema gastos/ingresos ya guarda ISO completo.
    '<input class="fi" id="edit-mov-fecha" type="datetime-local" value="' + _fechaDT + '">' +
    '</div>' +
+   // Tipo de gasto (Proveedor / Operativo) — SOLO para gastos
+   (src === 'gasto'
+    ? ('<div style="padding:var(--sp-2) 16px 0">' +
+       '<div style="font-size:var(--label-fs);font-weight:var(--label-fw);letter-spacing:var(--label-ls);color:var(--ink-soft);text-transform:uppercase;margin-bottom:var(--sp-1_5);padding-left:2px">Tipo de gasto</div>' +
+       '<div style="display:flex;gap:var(--sp-2)">' +
+       '<button class="mov-type-btn ' + (_edTipoGasto==='proveedor'?'active':'') + '" id="edit-mov-tg-prov" data-tipogasto="proveedor" style="flex:1;height:38px;font-size:var(--fs-sm)">Proveedor</button>' +
+       '<button class="mov-type-btn ' + (_edTipoGasto==='operativo'?'active':'') + '" id="edit-mov-tg-oper" data-tipogasto="operativo" style="flex:1;height:38px;font-size:var(--fs-sm)">Operativo</button>' +
+       '</div></div>')
+    : '') +
    '<div style="display:flex;flex-direction:column;gap:var(--sp-2);padding:var(--sp-2) 16px 0">' +
    // v1.3.1601: ambos botones flex:1 (mismo ancho) + misma altura via clase consistente.
    //   Antes: flex:2 vs flex:1 -> 2:1 desigual visual. Cambio a equitativo.
@@ -36514,6 +36533,14 @@ function _openEditMovimientoSheet(id, src) {
   // Guardar — v1.3.982 cascade: si transferId existe, sincroniza importe+fecha al gemelo
   // v1.3.1165: añade persistencia de `notas` (concepto extra opcional)
   var _saveBtn = document.getElementById('edit-mov-save');
+  // Toggle pills tipo de gasto (proveedor/operativo) en el editor
+  sheet.querySelectorAll('.mov-type-btn[data-tipogasto]').forEach(function(btn){
+   btn.addEventListener('click', function(){
+    sheet.querySelectorAll('.mov-type-btn[data-tipogasto]').forEach(function(b){
+     b.classList.toggle('active', b.dataset.tipogasto === btn.dataset.tipogasto);
+    });
+   });
+  });
   if (_saveBtn) _saveBtn.addEventListener('click', function() {
    var nuevoImporte = parseFloat((document.getElementById('edit-mov-input').value||'').replace(',','.')) || 0;
    var nuevoNombre = document.getElementById('edit-mov-nombre').value.trim();
@@ -36554,11 +36581,14 @@ function _openEditMovimientoSheet(id, src) {
    var _nowEMiso = new Date(_nowEM).toISOString();
 
    if (src === 'gasto') {
+    // Tipo de gasto: leer pill activo (proveedor/operativo)
+    var _edTgBtn = sheet.querySelector('.mov-type-btn[data-tipogasto].active');
+    var _edTgVal = (_edTgBtn && _edTgBtn.dataset.tipogasto) || _edTipoGasto || 'operativo';
     var gastos = State.get.gastosOp().map(function(g) {
      if (g.id !== id) return g;
      // v1.3.1601: fechaPago siempre YYYY-MM-DD (compat con código legacy que la lee así)
      // v1.3.1704 LOTE B: sellar _updatedAt + updatedAt para LWW multi-device
-     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha.slice(0,10), notas: nuevasNotas, estado: _estadoEdit, _updatedAt: _nowEM, updatedAt: _nowEMiso });
+     return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha.slice(0,10), notas: nuevasNotas, tipoGasto: _edTgVal, estado: _estadoEdit, _updatedAt: _nowEM, updatedAt: _nowEMiso });
     });
     State.set.setGastos(gastos);
     // Cascade: gemelo en ingresosFin con mismo transferId (importe + fecha + notas)
