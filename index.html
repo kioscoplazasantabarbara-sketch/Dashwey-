@@ -788,7 +788,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1817";
+ var CURRENT_CACHE = "dashwey-v1-3-1818";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1817</title>
+<title>Dashwey v1.3.1818</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23111,7 +23111,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1817';
+ const _APP_VERSION = 'v1.3.1818';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30981,19 +30981,49 @@ const ui = (() => {
 
   // Ingresos/gastos del periodo para una cuenta (cuentaId=null → global/todas).
   // Filtros IDÉNTICOS a _bbRecalcSaldos, acotados al rango.
+  // v1.3.1818 — ALINEACIÓN CON DASHBOARD (BUG WIDGET-GASTOS).
+  //   El widget mostraba gastos ~3.290€ más altos que la tarjeta Flujo de Caja
+  //   porque reinventaba la suma de gastos en vez de usar el motor financiero.
+  //   Diferencias que inflaban: (1) no aplicaba _isKpiVisible, (2) contaba los
+  //   gastos recurrentes ENTEROS en vez de prorratearlos al periodo, (3) no
+  //   restaba reembolsos de proveedor en las compras.
+  //   FIX: la VISTA GLOBAL (cuentaId===null) usa exactamente las mismas funciones
+  //   que el Dashboard — FinEngine.revenue(range) + FinEngine.gastoGlobalPeriodo(range)
+  //   → coincidencia al céntimo garantizada. Las cuentas individuales replican los
+  //   mismos 3 filtros con scope de cuenta. Fallback al cálculo antiguo si FinEngine
+  //   no estuviera disponible (el widget nunca rompe).
   function _wPeriodFlows(cuentaId, range) {
+   var r2 = function(n) { return Math.round((parseFloat(n) || 0) * 100) / 100; };
+   var _hasFin = (typeof FinEngine !== 'undefined' && FinEngine);
+
+   // ── VISTA GLOBAL: misma verdad que la tarjeta Flujo de Caja del Dashboard ──
+   if (cuentaId === null && _hasFin && typeof FinEngine.revenue === 'function' && typeof FinEngine.gastoGlobalPeriodo === 'function') {
+    var ingG = 0, gasG = 0;
+    try { ingG = FinEngine.revenue(range) || 0; } catch(_) {}
+    try { gasG = FinEngine.gastoGlobalPeriodo(range) || 0; } catch(_) {}
+    return { ingresos: r2(ingG), gastos: r2(gasG), balance: r2(ingG - gasG) };
+   }
+
+   // ── POR CUENTA: replicar criterios del motor con scope de cuenta ──
    var startMs = range.start.getTime(), endMs = range.end.getTime();
    var cs  = (State.get.cuentas && State.get.cuentas()) || [];
    var ven = (State.get.ventas && State.get.ventas()) || [];
    var gas = (State.get.gastosOp && State.get.gastosOp()) || [];
    var ing = (State.get.ingresosFin && State.get.ingresosFin()) || [];
    var ped = (State.get.historialPedidos && State.get.historialPedidos()) || [];
+   var mer = (State.get.mermas && State.get.mermas()) || [];
    var primaryId = null;
    for (var k = 0; k < cs.length; k++) { if (cs[k].isPrimary) { primaryId = cs[k].id; break; } }
    var ingresos = 0, gastos = 0;
    var inRange = function(f) { var t = _toMs(f); return t >= startMs && t < endMs; };
-   var match = function(cid) { return cuentaId === null ? true : (cid === cuentaId); };
+   var match = function(cid) { return cid === cuentaId; };
+   var _vis = function(x){ try { return (typeof window._isKpiVisible === 'function') ? window._isKpiVisible(x) : true; } catch(_) { return true; } };
 
+   // Fracción del periodo respecto al mes (para prorratear recurrentes, igual que gastoGlobalPeriodo)
+   var _daysInRef = new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate();
+   var _frac = Math.max(0, (endMs - startMs)) / (_daysInRef * 86400000);
+
+   // INGRESOS — ventas + ingresos manuales (igual que antes, asimetría no existía)
    ing.forEach(function(i) {
     if (i.estado === 'pendiente') return;
     if (i.origen === 'loyverse' || i.origen === 'tpv') return;
@@ -31008,22 +31038,42 @@ const ui = (() => {
     if (!match(cid)) return;
     ingresos += (parseFloat(v.total) || 0);
    });
+
+   // GASTOS — mismos criterios que FinEngine.gastoGlobalPeriodo, con scope de cuenta:
+   //   recurrentes prorrateados + puntuales por fecha + compras (con reembolsos) + mermas
    gas.forEach(function(g) {
-    if (g.estado === 'pendiente') return;
-    if (g.origen === 'pedido') return;
-    if (!inRange(g.fecha)) return;
+    if (!_vis(g)) return;
+    if (g.origen === 'pedido') return; // los pedidos se cuentan abajo vía pedidoCoste
     if (!match(g.cuentaId)) return;
-    gastos += (parseFloat(g.importe) || 0);
+    if (g.recurrente) {
+     var mEq = (g.mensualEq !== undefined) ? g.mensualEq : (g.importe || 0);
+     gastos += (parseFloat(mEq) || 0) * _frac;
+    } else {
+     if (!inRange(g.fecha)) return;
+     gastos += (parseFloat(g.importe) || 0);
+    }
    });
+   // Compras (pedidos) − reembolsos de proveedor, clamp a ≥0 (igual que comprasPeriodo)
+   var costePed = 0;
    ped.forEach(function(p) {
     if (!p.cuentaId) return;
     if (p.estado === 'pendiente' || p.estado === 'cancelado') return;
     if (!inRange(p.fecha)) return;
     if (!match(p.cuentaId)) return;
-    var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
-    gastos += (parseFloat(coste) || 0);
+    var coste = (_hasFin && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+    costePed += (parseFloat(coste) || 0);
    });
-   var r2 = function(n) { return Math.round(n * 100) / 100; };
+   var reemb = 0;
+   ing.forEach(function(i) {
+    if (i.tipo !== 'reembolso_proveedor') return;
+    if (!inRange(i.fecha)) return;
+    if (!match(i.cuentaId)) return;
+    reemb += (parseFloat(i.importe) || 0);
+   });
+   gastos += Math.max(0, costePed - reemb);
+   // Mermas del periodo (la cuenta no aplica a mermas → solo en global, pero por
+   // coherencia se omiten aquí; el global ya las incluye vía gastoGlobalPeriodo)
+
    return { ingresos: r2(ingresos), gastos: r2(gastos), balance: r2(ingresos - gastos) };
   }
 
