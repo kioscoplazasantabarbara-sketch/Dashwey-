@@ -788,7 +788,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1805";
+ var CURRENT_CACHE = "dashwey-v1-3-1806";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -807,7 +807,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1805</title>
+<title>Dashwey v1.3.1806</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23088,7 +23088,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1805';
+ const _APP_VERSION = 'v1.3.1806';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30907,6 +30907,171 @@ const ui = (() => {
     window._DashweyUseDerivedSaldo = true;
    }
   } catch(_) {}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     v1.3.1806 · WIDGET ANDROID — SNAPSHOT JSON (bridge JS→nativo)
+     ═══════════════════════════════════════════════════════════════════
+     Contrato de datos v2 (ver WIDGET_ARQUITECTURA.md §3). La app empuja
+     este JSON mínimo a SharedPreferences nativo vía el plugin Capacitor
+     DashweyWidgetBridge; el widget Glance solo LEE de ahí.
+
+     · SOLO LECTURA. No escribe State, no toca _bbRecalcSaldos, no toca
+       Firebase. HARD RULE financiera intacta (cero cambio de control flow
+       en funciones de montos).
+     · En PWA/PC no hace nada (guard isNativePlatform).
+     · Ingresos/gastos del periodo = MISMOS flujos que mueven el saldo
+       (filtros idénticos a _bbRecalcSaldos), acotados al rango del periodo.
+       Garantía: balance del periodo == cambio de saldo en el periodo →
+       cero contradicción con otras pantallas.
+     · Saldo = derivado (_computeSaldoDerivado), misma fuente que el toggle
+       "Calculado" ya validado en verde.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  // periodRange replicado localmente (mismo cálculo que KPI.getRange; este
+  // IIFE no comparte el closure de KPI aunque esté en el mismo <script>).
+  function _wPeriodRange(period) {
+   var now = new Date();
+   var off = period.offset || 0;
+   var start, end;
+   if (period.type === 'today') {
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off);
+    end = new Date(start.getTime() + 86400000);
+   } else if (period.type === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth() + off, 1);
+    end = new Date(now.getFullYear(), now.getMonth() + off + 1, 1);
+   } else if (period.type === 'year') {
+    start = new Date(now.getFullYear() + off, 0, 1);
+    end = new Date(now.getFullYear() + off + 1, 0, 1);
+   } else {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+   }
+   return { start: start, end: end };
+  }
+
+  // Ingresos/gastos del periodo para una cuenta (cuentaId=null → global/todas).
+  // Filtros IDÉNTICOS a _bbRecalcSaldos, acotados al rango.
+  function _wPeriodFlows(cuentaId, range) {
+   var startMs = range.start.getTime(), endMs = range.end.getTime();
+   var cs  = (State.get.cuentas && State.get.cuentas()) || [];
+   var ven = (State.get.ventas && State.get.ventas()) || [];
+   var gas = (State.get.gastosOp && State.get.gastosOp()) || [];
+   var ing = (State.get.ingresosFin && State.get.ingresosFin()) || [];
+   var ped = (State.get.historialPedidos && State.get.historialPedidos()) || [];
+   var primaryId = null;
+   for (var k = 0; k < cs.length; k++) { if (cs[k].isPrimary) { primaryId = cs[k].id; break; } }
+   var ingresos = 0, gastos = 0;
+   var inRange = function(f) { var t = _toMs(f); return t >= startMs && t < endMs; };
+   var match = function(cid) { return cuentaId === null ? true : (cid === cuentaId); };
+
+   ing.forEach(function(i) {
+    if (i.estado === 'pendiente') return;
+    if (i.origen === 'loyverse' || i.origen === 'tpv') return;
+    if (i.origen === 'cierre_caja_auto') return;
+    if (!inRange(i.fecha)) return;
+    if (!match(i.cuentaId)) return;
+    ingresos += (parseFloat(i.importe) || 0);
+   });
+   ven.forEach(function(v) {
+    var cid = v.cuentaId || primaryId || null;
+    if (!inRange(v.fecha)) return;
+    if (!match(cid)) return;
+    ingresos += (parseFloat(v.total) || 0);
+   });
+   gas.forEach(function(g) {
+    if (g.estado === 'pendiente') return;
+    if (g.origen === 'pedido') return;
+    if (!inRange(g.fecha)) return;
+    if (!match(g.cuentaId)) return;
+    gastos += (parseFloat(g.importe) || 0);
+   });
+   ped.forEach(function(p) {
+    if (!p.cuentaId) return;
+    if (p.estado === 'pendiente' || p.estado === 'cancelado') return;
+    if (!inRange(p.fecha)) return;
+    if (!match(p.cuentaId)) return;
+    var coste = (typeof FinEngine !== 'undefined' && FinEngine.pedidoCoste) ? FinEngine.pedidoCoste(p) : 0;
+    gastos += (parseFloat(coste) || 0);
+   });
+   var r2 = function(n) { return Math.round(n * 100) / 100; };
+   return { ingresos: r2(ingresos), gastos: r2(gastos), balance: r2(ingresos - gastos) };
+  }
+
+  // Etiquetas de periodo (mes/año) en es-ES, p.ej. "MAY 2026", "2026".
+  function _wPeriodLabels() {
+   var now = new Date();
+   var meses = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+   return {
+    mes: meses[now.getMonth()] + ' ' + now.getFullYear(),
+    ano: String(now.getFullYear())
+   };
+  }
+
+  // Construye el contrato JSON v2 (objeto, no string).
+  function _buildWidgetSnapshot() {
+   var cuentas = (State.get.cuentas && State.get.cuentas()) || [];
+   // Solo cuentas vivas (no borradas) del scope negocio.
+   cuentas = cuentas.filter(function(c) { return c && !c.deleted; });
+   var rDia = _wPeriodRange({ type: 'today' });
+   var rMes = _wPeriodRange({ type: 'month' });
+   var rAno = _wPeriodRange({ type: 'year' });
+   var labels = _wPeriodLabels();
+
+   var saldoTotal = 0;
+   var arr = cuentas.map(function(c) {
+    var saldo = (typeof _computeSaldoDerivado === 'function')
+     ? _computeSaldoDerivado(c.id)
+     : (Math.round((parseFloat(c.saldo) || 0) * 100) / 100);
+    if (saldo == null) saldo = Math.round((parseFloat(c.saldo) || 0) * 100) / 100;
+    saldoTotal += saldo;
+    return {
+     id: c.id,
+     nombre: c.nombre || 'Cuenta',
+     banco: c.banco || '',
+     saldo: saldo,
+     color: c.color || '#2563EB',
+     isPrimary: !!c.isPrimary,
+     dia: _wPeriodFlows(c.id, rDia),
+     mes: _wPeriodFlows(c.id, rMes),
+     ano: _wPeriodFlows(c.id, rAno)
+    };
+   });
+   var gDia = _wPeriodFlows(null, rDia);
+   var gMes = _wPeriodFlows(null, rMes); gMes.label = labels.mes;
+   var gAno = _wPeriodFlows(null, rAno); gAno.label = labels.ano;
+
+   return {
+    v: 2,
+    ts: Date.now(),
+    saldoTotal: Math.round(saldoTotal * 100) / 100,
+    global: { dia: gDia, mes: gMes, ano: gAno },
+    cuentas: arr
+   };
+  }
+
+  // Push al plugin nativo (solo APK). Throttle 30s. Wrapper no-invasivo.
+  var _widgetLastPush = 0;
+  function _pushWidgetSnapshot(force) {
+   try {
+    if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) return;
+    var br = window.Capacitor.Plugins && window.Capacitor.Plugins.DashweyWidgetBridge;
+    if (!br || typeof br.setData !== 'function') return; // plugin aún no instalado (pre-recompilación)
+    var now = Date.now();
+    if (!force && (now - _widgetLastPush) < 30000) return; // throttle 30s
+    // No empujar antes de tener datos reales sincronizados.
+    if (window._DashweyInitialSyncDone !== true) return;
+    var payload = JSON.stringify(_buildWidgetSnapshot());
+    br.setData({ json: payload });
+    _widgetLastPush = now;
+   } catch (_) {}
+  }
+
+  // Exposición: el push se llama desde el listener de recalc (abajo en INIT,
+  // ya dentro de este mismo <script>) y desde focus/resync.
+  try {
+   window._DashweyBuildWidgetSnapshot = _buildWidgetSnapshot; // diagnóstico consola
+   window._DashweyPushWidget = _pushWidgetSnapshot;            // trigger manual / desde recalc
+  } catch (_) {}
  })();
 
  // Borra solo movimientos con origen='budgetbakers' + resetea saldos cuentas a 0.
@@ -65974,6 +66139,9 @@ window._DashweyDeviceId = (() => {
   _recalcRafId = requestAnimationFrame(() => {
    _recalcRafId = null;
    try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(e) {}
+   // v1.3.1806: tras recalcular saldos, empujar snapshot al widget Android.
+   //   Throttled 30s + solo APK + no-op si el plugin no está instalado (pre-recompilación).
+   try { window._DashweyPushWidget && window._DashweyPushWidget(false); } catch(e) {}
   });
  };
  // v1.3.1082: NO escuchar 'cuenta' — causa loop con save() que emite 'cuenta' tras recalc.
@@ -70919,6 +71087,8 @@ document.addEventListener('keydown', function(e) {
      window._recalcSaldosCuentas();
     }
    } catch(e) { console.warn('[v1513 resync] recalc error:', e && e.message); }
+   // v1.3.1806: al volver a la app, refrescar el widget con datos frescos (force = salta throttle).
+   try { window._DashweyPushWidget && window._DashweyPushWidget(true); } catch(_) {}
    console.info('[v1513 resync] ✓ done');
   } catch (e) {
    console.warn('[v1513 resync] error:', e && e.message);
