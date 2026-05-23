@@ -89,6 +89,21 @@ body[data-app-ready="true"] #app {
  visibility: visible;
  transition: opacity 0.40s cubic-bezier(.4,0,.2,1), visibility 0s linear 0s;
 }
+/* v1.3.1825 ARRANQUE PREMIUM APK · En APK NO hay crossfade simultáneo (causaba blanco:
+   el #app hacía fade-in 0→1 a la vez que el splash nativo se desvanecía → durante el cruce
+   ambas capas semi-transparentes dejaban ver el fondo blanco del WebView). NUEVO modelo:
+   el #app se revela SÓLIDO al instante (sin fade) PERO tapado por el splash nativo opaco;
+   el ÚNICO fundido es el del splash nativo (SplashScreen.hide), que destapa una app ya
+   100% pintada → splash → fade directo a dashboard, imposible ver blanco. Solo APK; en
+   PWA/PC se mantiene el crossfade HTML de siempre. */
+html.is-apk body[data-app-ready="true"] #app,
+html.is-apk #app[data-app-ready] {
+ transition: none !important;
+}
+html.is-apk body[data-app-ready="true"] #app {
+ opacity: 1;
+ visibility: visible;
+}
 /* v1.3.1823 FIX FLICKER BOOT DARK · El <html> (L2), el splash crítico y el #app base
    arrancan en crema (#F7F2F2) hardcodeado, pero en tema oscuro el fondo real es negro
    (#0C0C0E). El script de tema (~L601) no corre hasta después del primer frame, así que
@@ -810,7 +825,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1824";
+ var CURRENT_CACHE = "dashwey-v1-3-1825";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -829,7 +844,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1824</title>
+<title>Dashwey v1.3.1825</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22703,27 +22718,35 @@ function _hideSplash() {
    //   → fade-in premium en vez de aparición seca.
    splash.classList.add('hidden'); // HTML ya invisible vía CSS (idempotente)
    var _hideNativeNow = function() {
-    // 1) Revelar la app con fade-in (transition opacity 0.40s vía data-app-ready)
+    // v1.3.1825 ARRANQUE PREMIUM · NUEVO orden anti-blanco. ANTES: revelar app con
+    //   fade-in 0→1 + desvanecer splash A LA VEZ → durante el cruce las dos capas
+    //   semi-transparentes dejaban ver el fondo blanco del WebView. AHORA en 2 tiempos:
+    //   1) Revelar el #app SÓLIDO al instante (en APK no hay fade, vía CSS .is-apk) →
+    //      el dashboard ya está a opacity 1, totalmente pintado, PERO tapado por el
+    //      splash nativo que aún es opaco.
     document.body.setAttribute('data-app-ready', 'true');
-    // 2) A la vez, desvanecer el splash nativo → crossfade premium.
-    try {
-     if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
-      window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 550 });
-     }
-    } catch(_) {}
+    //   2) Esperar 2 frames a que el WebView componga la app pintada bajo el splash,
+    //      y SOLO ENTONCES desvanecer el splash nativo → destapa una app ya completa.
+    //      El splash es opaco hasta que arranca su fade, y debajo hay app sólida (no
+    //      blanco) → fundido splash → dashboard directo, imposible ver blanco.
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){
+     try {
+      if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
+       window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 450 });
+      }
+     } catch(_) {}
+    }); });
     try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
    var _waitFirstRender = function() {
-    // v1.3.1824 FIX FLICKER BARRAS · ANTES el splash se iba 120ms tras el primer
-    //   render local. Pero en boot hay un SEGUNDO render (datos Loyverse frescos vía
-    //   RENDER_DEFER ~300ms) que re-pinta el SVG de las gráficas → las barras se
-    //   reiniciaban a scaleY(0) DESPUÉS de que el splash ya se había ido → flash
-    //   "barras → vacío → barras". FIX: ampliar el margen a 700ms para que el doble
-    //   render ocurra DETRÁS del splash; cuando el splash funde, la gráfica ya está
-    //   en su animación final limpia, una sola vez. Premium: splash → fade → dashboard
-    //   estable, sin pantallazos. El fallback duro de 2.5s sigue protegiendo.
-    var _GRACE = 700;
-    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen de gracia.
+    // v1.3.1825 · El splash nativo tapa TODO hasta que el dashboard está pintado.
+    //   Margen corto (300ms) tras el primer render: solo asegura que el primer
+    //   _renderAll terminó de pintar. NO necesita esperar al render de Loyverse —
+    //   el guard anti-reanimación de las barras (v1824) ya impide que el segundo
+    //   render parpadee, ocurra cuando ocurra. Así el splash dura lo justo (corto)
+    //   y el fundido destapa una app limpia. Fallback duro 2.5s sigue protegiendo.
+    var _GRACE = 300;
+    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen corto.
     if (window._DashweyFirstRenderDone) {
      requestAnimationFrame(function(){ requestAnimationFrame(function(){
       setTimeout(_hideNativeNow, _GRACE);
@@ -23155,7 +23178,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1824';
+ const _APP_VERSION = 'v1.3.1825';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
