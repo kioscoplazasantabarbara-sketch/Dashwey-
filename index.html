@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1825";
+ var CURRENT_CACHE = "dashwey-v1-3-1826";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1825</title>
+<title>Dashwey v1.3.1826</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22735,6 +22735,17 @@ function _hideSplash() {
        window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 450 });
       }
      } catch(_) {}
+     // v1.3.1826 · El splash empieza a desvanecerse AHORA → el dashboard se va viendo.
+     //   Activamos la animación de barras y forzamos UN re-render de las gráficas para
+     //   que la cascada se reproduzca UNA sola vez, completa, ya visible para el usuario
+     //   (durante el boot estuvieron crecidas sin animar). Pequeño margen (200ms) para
+     //   que coincida con el fundido del splash → la cascada "entra" con el dashboard.
+     setTimeout(function(){
+      try {
+       window._DashweyBootAnimReady = true;
+       if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+      } catch(_) {}
+     }, 200);
     }); });
     try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
@@ -22788,6 +22799,15 @@ function _hideSplash() {
   // Activar fade-in del app SIMULTÁNEO al fade-out del splash → crossfade
   document.body.setAttribute('data-app-ready', 'true');
   splash.classList.add('fade-out');
+  // v1.3.1826 · Activar animación de barras en PWA cuando el splash se va (mismo
+  //   criterio que APK). Sin esto el flag solo se ponía en APK y en PWA las barras
+  //   nunca animaban. Re-render para reproducir la cascada una vez, ya visible.
+  setTimeout(function(){
+   try {
+    window._DashweyBootAnimReady = true;
+    if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+   } catch(_) {}
+  }, 200);
   // v1.3.1577 FIX C3 · coordinar con splash nativo Capacitor.
   //   Si launchAutoHide:false está configurado (Fix B sesión APK), el splash
   //   nativo Android espera a esta llamada para hacer fade-out. Si Capacitor
@@ -22807,6 +22827,18 @@ function _hideSplash() {
 }
 // Registrar tiempo de inicio del splash
 window._splashStartTime = Date.now();
+// v1.3.1826 · Red de seguridad GLOBAL para la animación de barras. Los paths de
+//   _hideSplash (APK y PWA) activan _DashweyBootAnimReady al desvanecer el splash.
+//   Pero si algún path no llega (error, modo raro), este fallback lo activa a los 3.5s
+//   pase lo que pase → las barras nunca quedan permanentemente sin animar. Idempotente.
+setTimeout(function(){
+ try {
+  if (window._DashweyBootAnimReady !== true) {
+   window._DashweyBootAnimReady = true;
+   if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+  }
+ } catch(_) {}
+}, 3500);
 // Sobrescribir stub del HEAD con la función real
 window._hideSplash = _hideSplash;
 
@@ -23178,7 +23210,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1825';
+ const _APP_VERSION = 'v1.3.1826';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -47479,17 +47511,28 @@ function _confirmBorrarCuenta(id) {
  //   (sin transición) en vez de reanimar. Así la animación de cascada se ve UNA vez, limpia,
  //   y el doble render no parpadea — sea cual sea el timing del splash. Tras el boot
  //   (body.data-app-ready + render del usuario), cada render anima normal como siempre.
+ // v1.3.1826 FIX DOBLE ANIMACIÓN BARRAS · El guard v1824 usaba data-app-ready como
+ //   "boot estable", pero en el orden v1825 ese flag se pone ANTES de que termine el
+ //   boot (revelar app bajo splash) y el render de Loyverse ocurre DESPUÉS → se animaba
+ //   2 veces (una cortada bajo el splash + otra en el dashboard). NUEVO modelo por ventana
+ //   de tiempo, sin depender de data-app-ready:
+ //   · Durante la ventana de boot (primeros 3s desde el arranque) los renders pintan las
+ //     barras YA crecidas SIN animar → el doble render (local + Loyverse) no parpadea y no
+ //     se ve ninguna cascada cortada bajo el splash.
+ //   · Cuando el arranque está estable (flag window._DashweyBootAnimReady, puesto ~250ms
+ //     tras desvanecer el splash), el PRIMER render que ocurra anima la cascada UNA vez,
+ //     completa, con el dashboard ya visible. Renders posteriores del usuario animan normal.
  try {
-  var _bootStable = (document.body && document.body.getAttribute('data-app-ready') === 'true');
-  var _alreadyAnimated = svg.getAttribute('data-anim-once') === '1';
-  if (!_bootStable && _alreadyAnimated) {
-   // Re-render durante boot y ya animó: pintar crecidas SIN reanimar (cero flash).
+  var _animReady = (window._DashweyBootAnimReady === true);
+  if (!_animReady) {
+   // Boot: barras crecidas al instante, sin animar (tapadas por splash / sin flash).
    svg.querySelectorAll('.snap-bar').forEach(function(bar){
     bar.style.transition = 'none';
     bar.classList.add('snap-bar-grown');
    });
   } else {
-   // Primer pintado (o ya estable): animación de cascada normal.
+   // Arranque estable o uso normal: animación de cascada completa.
+   svg.querySelectorAll('.snap-bar').forEach(function(bar){ bar.style.transition = ''; });
    requestAnimationFrame(function(){
     requestAnimationFrame(function(){
      svg.querySelectorAll('.snap-bar').forEach(function(bar, idx){
@@ -47499,7 +47542,6 @@ function _confirmBorrarCuenta(id) {
      });
     });
    });
-   try { svg.setAttribute('data-anim-once', '1'); } catch(_) {}
   }
  } catch(_) {}
 
