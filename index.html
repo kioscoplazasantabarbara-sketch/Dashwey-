@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1830";
+ var CURRENT_CACHE = "dashwey-v1-3-1831";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1830</title>
+<title>Dashwey v1.3.1831</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23208,7 +23208,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1830';
+ const _APP_VERSION = 'v1.3.1831';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -44643,6 +44643,155 @@ function _confirmBorrarCuenta(id) {
   } catch(_) {}
   return 'hoy'; // default premium: arrancar mostrando lo de hoy
  })();
+
+ // ════════════════════════════════════════════════════════════════════════════
+ // v1.3.1831 — MOTOR DE CICLOS DE REPARTO (FASE 1 · INERTE)
+ //   Modelo nuevo: prov.ciclosReparto = [{ id, fechaAncla, cadaDias, offsetEntrega, hora }]
+ //   "Los días exactos mandan": cadaDias en días reales; el día de semana rota solo.
+ //   offsetEntrega = días entre pedido y entrega (0=mismo día, 1=siguiente…).
+ //   Cubre TODOS los escenarios (semanal, quincenal, multi-pareja Praviana, mixto).
+ //   Spec completo → AGENDA_CICLOS_SPEC.md. Validado en test_ciclos2.js.
+ //   ⚠️ FASE 1: nadie lo llama todavía. La Agenda sigue con el motor viejo.
+ // ────────────────────────────────────────────────────────────────────────────
+
+ var _CICLO_MS = 86400000;
+
+ // _provCiclos(prov) → array de ciclos del proveedor.
+ //   Si tiene ciclosReparto[] → lo devuelve. Si no → deriva al vuelo del modelo
+ //   viejo (diasPedido/diasEntrega/reparto) para compatibilidad total durante la
+ //   transición. Lectura pura, no escribe nada.
+ function _provCiclos(prov) {
+  if (!prov) return [];
+  if (Array.isArray(prov.ciclosReparto) && prov.ciclosReparto.length) {
+   return prov.ciclosReparto;
+  }
+  // Derivación al vuelo desde modelo viejo (no persiste).
+  return _derivarCiclosLegacy(prov);
+ }
+
+ // _derivarCiclosLegacy(prov) → genera ciclos a partir de diasPedido/diasEntrega/reparto.
+ //   cadaDias desde reparto.periodicidad (week×n→7n, day→n, month→30n; default 7).
+ //   offsetEntrega = días entre el i-ésimo diaPedido y su entrega emparejada.
+ //   fechaAncla = próxima ocurrencia de ese día de semana desde hoy.
+ function _derivarCiclosLegacy(prov) {
+  var dp = Array.isArray(prov.diasPedido) ? prov.diasPedido : [];
+  if (!dp.length) return [];
+  var de = Array.isArray(prov.diasEntrega) ? prov.diasEntrega : [];
+  var per = (prov.reparto && prov.reparto.periodicidad) || null;
+  var cadaDias = 7;
+  if (per && per.n > 0) {
+   if (per.unit === 'day') cadaDias = per.n;
+   else if (per.unit === 'month') cadaDias = per.n * 30;
+   else cadaDias = per.n * 7; // week (default)
+  }
+  var hora = (prov.reparto && prov.reparto.hora) || '10:00';
+  var hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  var out = [];
+  for (var i = 0; i < dp.length; i++) {
+   var diaPed = dp[i];
+   // próxima ocurrencia de ese día de semana (0=Lu..6=Do) desde hoy
+   var ancla = new Date(hoy);
+   for (var k = 0; k < 7; k++) {
+    var dow = ancla.getDay() === 0 ? 6 : ancla.getDay() - 1;
+    if (dow === diaPed) break;
+    ancla.setDate(ancla.getDate() + 1);
+   }
+   // entrega emparejada: i-ésimo diaEntrega, o "primera tras pedido"
+   var offset = 1;
+   if (de.length) {
+    var diaEnt = (i < de.length) ? de[i] : de[0];
+    // distancia en días desde diaPed hasta diaEnt (mismo día=0, siguiente=1…)
+    offset = (diaEnt - diaPed + 7) % 7;
+   }
+   out.push({
+    id: 'cic_legacy_' + diaPed + '_' + i,
+    fechaAncla: ancla.toISOString().slice(0, 10),
+    cadaDias: cadaDias,
+    offsetEntrega: offset,
+    hora: hora
+   });
+  }
+  return out;
+ }
+
+ // _proyectarUnCiclo(ciclo, fromDate, horizonDays) → [{pedido:Date, entrega:Date, cicloId}]
+ //   Núcleo matemático. "Días exactos": suma cadaDias desde fechaAncla.
+ function _proyectarUnCiclo(ciclo, fromDate, horizonDays) {
+  if (!ciclo || !ciclo.fechaAncla || !(ciclo.cadaDias > 0)) return [];
+  var from = new Date(fromDate); from.setHours(0, 0, 0, 0);
+  var ancla = new Date(ciclo.fechaAncla); if (isNaN(ancla.getTime())) return [];
+  ancla.setHours(9, 0, 0, 0);
+  var off = (typeof ciclo.offsetEntrega === 'number') ? ciclo.offsetEntrega : 0;
+  var diff = Math.round((from.getTime() - ancla.getTime()) / _CICLO_MS);
+  var n = Math.ceil(diff / ciclo.cadaDias);
+  if (n < 0) n = 0;
+  var d = new Date(ancla.getTime() + n * ciclo.cadaDias * _CICLO_MS);
+  var out = [];
+  var guard = 0;
+  while (((d.getTime() - from.getTime()) / _CICLO_MS) <= horizonDays && guard < 400) {
+   guard++;
+   if (d.getTime() >= from.getTime() - _CICLO_MS) { // tolerancia 1 día por horas
+    var ent = new Date(d.getTime() + off * _CICLO_MS);
+    out.push({ pedido: new Date(d), entrega: ent, cicloId: ciclo.id || null });
+   }
+   d = new Date(d.getTime() + ciclo.cadaDias * _CICLO_MS);
+  }
+  return out;
+ }
+
+ // _proyectarCiclos(prov, fromDate, horizonDays) → todas las parejas de TODOS los
+ //   ciclos del proveedor, ordenadas por fecha de pedido asc.
+ function _proyectarCiclos(prov, fromDate, horizonDays) {
+  var ciclos = _provCiclos(prov);
+  if (!ciclos.length) return [];
+  var hd = horizonDays || 14;
+  var all = [];
+  for (var i = 0; i < ciclos.length; i++) {
+   var r = _proyectarUnCiclo(ciclos[i], fromDate, hd);
+   for (var j = 0; j < r.length; j++) all.push(r[j]);
+  }
+  all.sort(function(a, b){ return a.pedido.getTime() - b.pedido.getTime(); });
+  return all;
+ }
+
+ // _DashweyMigrarCiclos(opts) → migra proveedores del modelo viejo a ciclosReparto[].
+ //   Idempotente (marca _ciclosMigrados). NO borra arrays viejos (compatibilidad).
+ //   opts.dryRun=true → no escribe, solo devuelve qué generaría.
+ //   ⚠️ FASE 1: definida pero NO se dispara en boot todavía.
+ function _DashweyMigrarCiclos(opts) {
+  opts = opts || {};
+  var dryRun = !!opts.dryRun;
+  var provs = (State.get.proveedores && State.get.proveedores()) || [];
+  var cambios = [];
+  for (var i = 0; i < provs.length; i++) {
+   var p = provs[i];
+   if (!p || p._ciclosMigrados) continue;
+   if (Array.isArray(p.ciclosReparto) && p.ciclosReparto.length) continue;
+   var ciclos = _derivarCiclosLegacy(p);
+   cambios.push({ provId: p.id, nombre: p.nombre, ciclos: ciclos });
+  }
+  if (dryRun) {
+   try { console.info('[MigrarCiclos dryRun]', cambios.length, 'provs', cambios); } catch(_){}
+   return cambios;
+  }
+  // Escritura real (Fase futura). En Fase 1 solo se llama con dryRun.
+  for (var k = 0; k < cambios.length; k++) {
+   try {
+    State.set.updateProv(cambios[k].provId, {
+     ciclosReparto: cambios[k].ciclos,
+     _ciclosMigrados: true
+    });
+   } catch(_){}
+  }
+  return cambios;
+ }
+
+ // Exposición para diagnóstico/tests en consola (no afecta a producción).
+ try {
+  window._DashweyProyectarCiclos = _proyectarCiclos;
+  window._DashweyProvCiclos = _provCiclos;
+  window._DashweyMigrarCiclos = _DashweyMigrarCiclos;
+ } catch(_) {}
 
  // v1.3.991 — LOTE B: helpers puros de recurrencia Próximo Pedido
  //
