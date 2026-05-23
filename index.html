@@ -89,6 +89,20 @@ body[data-app-ready="true"] #app {
  visibility: visible;
  transition: opacity 0.40s cubic-bezier(.4,0,.2,1), visibility 0s linear 0s;
 }
+/* v1.3.1823 FIX FLICKER BOOT DARK · El <html> (L2), el splash crítico y el #app base
+   arrancan en crema (#F7F2F2) hardcodeado, pero en tema oscuro el fondo real es negro
+   (#0C0C0E). El script de tema (~L601) no corre hasta después del primer frame, así que
+   durante el gap splash→app se veía un flash crema + navbar/headbar negras encima.
+   FIX: este @media lo evalúa el NAVEGADOR en el primer frame (sin esperar a JS) → cuando
+   el SISTEMA está en oscuro, todas las capas de fondo del boot ya nacen negras → crossfade
+   limpio sin flash. Cubre el caso normal (tema del sistema). Si el usuario fuerza 'oscuro'
+   manual con el sistema en claro, el script de tema (L601) corrige el fondo igualmente unos
+   ms después; este @media solo elimina el flash del caso mayoritario. Cero JS, cero datos. */
+@media (prefers-color-scheme: dark) {
+ html { background: #0C0C0E !important; }
+ #app-splash { background: #0C0C0E; }
+ #app-splash .splash-tagline { color: rgba(255,255,255,0.38); }
+}
 </style>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><!-- v1.1.8-dev -->
@@ -598,14 +612,14 @@ body[data-app-ready="true"] #app {
  }
  if (isDark) {
  document.documentElement.setAttribute('data-theme', 'dark');
- document.documentElement.style.background = '#0C0C0E';
+ document.documentElement.style.setProperty('background', '#0C0C0E', 'important');
    document.documentElement.style.colorScheme = 'dark';
  var meta = document.getElementById('theme-color-meta');
  if (meta) meta.setAttribute('content', '#0C0C0E');
  } else {
  // LIGHT explícito — aísla del CSS prefers-color-scheme:dark
  document.documentElement.setAttribute('data-theme', 'light');
- document.documentElement.style.background = '#F7F2F2';
+ document.documentElement.style.setProperty('background', '#F7F2F2', 'important');
    document.documentElement.style.colorScheme = 'light';
  }
  // Restaurar visibilidad — eliminar el style tag FOUC guard
@@ -796,7 +810,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1822";
+ var CURRENT_CACHE = "dashwey-v1-3-1824";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -815,7 +829,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1822</title>
+<title>Dashwey v1.3.1824</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -4664,7 +4678,7 @@ body[data-dash-snap="1"] .snap-alrt-tabs {
  transform-box: fill-box;
  transform-origin: center bottom;
  transform: scaleY(0);
- transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+ transition: transform 850ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .snap-bar.snap-bar-grown {
  transform: scaleY(1);
@@ -22700,12 +22714,19 @@ function _hideSplash() {
     try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
    var _waitFirstRender = function() {
-    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen StatusBar.
+    // v1.3.1824 FIX FLICKER BARRAS · ANTES el splash se iba 120ms tras el primer
+    //   render local. Pero en boot hay un SEGUNDO render (datos Loyverse frescos vía
+    //   RENDER_DEFER ~300ms) que re-pinta el SVG de las gráficas → las barras se
+    //   reiniciaban a scaleY(0) DESPUÉS de que el splash ya se había ido → flash
+    //   "barras → vacío → barras". FIX: ampliar el margen a 700ms para que el doble
+    //   render ocurra DETRÁS del splash; cuando el splash funde, la gráfica ya está
+    //   en su animación final limpia, una sola vez. Premium: splash → fade → dashboard
+    //   estable, sin pantallazos. El fallback duro de 2.5s sigue protegiendo.
+    var _GRACE = 700;
+    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen de gracia.
     if (window._DashweyFirstRenderDone) {
      requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      // +120ms: da tiempo a que StatusBar/NavigationBar nativas pinten su color
-      //   (setBackgroundColor tarda ~1 frame en aplicarse) → sin barras negras.
-      setTimeout(_hideNativeNow, 120);
+      setTimeout(_hideNativeNow, _GRACE);
      }); });
      return;
     }
@@ -22713,7 +22734,7 @@ function _hideSplash() {
     window.addEventListener('dashwey:first-render', function _onFR() {
      window.removeEventListener('dashwey:first-render', _onFR);
      requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      setTimeout(_hideNativeNow, 120);
+      setTimeout(_hideNativeNow, _GRACE);
      }); });
     }, { once: true });
     // Fallback duro: si el evento no llega en 2.5s, ocultar igual (no colgar).
@@ -23134,7 +23155,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1822';
+ const _APP_VERSION = 'v1.3.1824';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -47428,15 +47449,35 @@ function _confirmBorrarCuenta(id) {
  //   garantiza que el browser registre el estado inicial antes de aplicar la
  //   clase que dispara la transition. Sin doble rAF la transition no se ve.
  //   Stagger 18ms por barra para efecto cascada (sin saturar GPU).
+ // v1.3.1824 FIX FLICKER BARRAS · Guard anti-reanimación en boot. El boot hace DOBLE
+ //   render (local → Loyverse): sin guard, el segundo reiniciaba las barras a scaleY(0)
+ //   → flash "barras→vacío→barras". Solución: durante el boot (app aún no estable),
+ //   si la gráfica YA animó una vez, los re-renders ponen las barras crecidas al instante
+ //   (sin transición) en vez de reanimar. Así la animación de cascada se ve UNA vez, limpia,
+ //   y el doble render no parpadea — sea cual sea el timing del splash. Tras el boot
+ //   (body.data-app-ready + render del usuario), cada render anima normal como siempre.
  try {
-  requestAnimationFrame(function(){
+  var _bootStable = (document.body && document.body.getAttribute('data-app-ready') === 'true');
+  var _alreadyAnimated = svg.getAttribute('data-anim-once') === '1';
+  if (!_bootStable && _alreadyAnimated) {
+   // Re-render durante boot y ya animó: pintar crecidas SIN reanimar (cero flash).
+   svg.querySelectorAll('.snap-bar').forEach(function(bar){
+    bar.style.transition = 'none';
+    bar.classList.add('snap-bar-grown');
+   });
+  } else {
+   // Primer pintado (o ya estable): animación de cascada normal.
    requestAnimationFrame(function(){
-    svg.querySelectorAll('.snap-bar').forEach(function(bar, idx){
-     bar.style.transitionDelay = (idx * 18) + 'ms';
-     bar.classList.add('snap-bar-grown');
+    requestAnimationFrame(function(){
+     svg.querySelectorAll('.snap-bar').forEach(function(bar, idx){
+      bar.style.transition = '';
+      bar.style.transitionDelay = (idx * 18) + 'ms';
+      bar.classList.add('snap-bar-grown');
+     });
     });
    });
-  });
+   try { svg.setAttribute('data-anim-once', '1'); } catch(_) {}
+  }
  } catch(_) {}
 
  // ── 6. TOOLTIP ────────────────────────────────────────────────────────
