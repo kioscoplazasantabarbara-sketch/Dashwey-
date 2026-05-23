@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1828";
+ var CURRENT_CACHE = "dashwey-v1-3-1829";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1828</title>
+<title>Dashwey v1.3.1829</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23205,7 +23205,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1828';
+ const _APP_VERSION = 'v1.3.1829';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -43918,12 +43918,12 @@ function _confirmBorrarCuenta(id) {
   // 1. Comparacion temporal JUSTA (mismos días del mes anterior, v1.3.1828)
   (vta > 0 && delta !== null && Math.abs(delta) >= 5)
    ? (delta > 0
-     ? _enMes + 'vas un ' + delta + '% por encima que el mes pasado por estas fechas. Buen ritmo.'
-     : _enMes + 'vas un ' + Math.abs(delta) + '% por debajo que el mes pasado por estas fechas. Revisa qué cambió.')
+     ? _enMes + 'llevas un ' + delta + '% más que el mes pasado por estas fechas. Vas bien.'
+     : _enMes + 'llevas un ' + Math.abs(delta) + '% menos que el mes pasado por estas fechas. Algo ha bajado.')
    : null,
   // 2. Concentracion top (RELAJADO >=30%, antes >=40%; mantiene filtro totalUdsTop>20)
   (topVnom && concentracionTop >= 30 && totalUdsTop > 20)
-   ? concentracionTop + '% de tus ventas dependen de ' + topVnom + '. Asegura su stock.'
+   ? topVnom + ' es ' + concentracionTop + '% de tus ventas. Si te quedas sin stock, lo notas.'
    : null,
   // 3. Margen bajo accionable
   (vta > 100 && margen > 0 && margen < 20)
@@ -43931,11 +43931,11 @@ function _confirmBorrarCuenta(id) {
    : null,
   // 4. Margen negativo critico
   (vta > 100 && margen < 0)
-   ? 'Margen negativo: pierdes dinero en cada venta. Revisa costes urgente.'
+   ? 'Estás vendiendo por debajo de coste. Hay que revisar precios cuanto antes.'
    : null,
   // 5. Tramos flojos (RELAJADO >=2, antes >=3)
   (nTramosFlojos >= 2 && picoH)
-   ? nTramosFlojos + ' tramos con ventas flojas. Oportunidad de lanzar promo.'
+   ? 'Hay ' + nTramosFlojos + ' franjas con poco movimiento. Buen momento para una promo.'
    : null,
   // 6. V1 · Beneficio neto absoluto (NO redundante con margen %)
   (beneficioAbs !== 0 && vta > 100 && Math.abs(beneficioAbs) <= vta * 2)
@@ -43984,10 +43984,10 @@ function _confirmBorrarCuenta(id) {
   // 4. ROI bajo/alto (sin cambio)
   (inv >= 100 && Math.abs(ben) <= inv * 5 && roi !== 0)
    ? (roi >= 30
-     ? 'ROI del ' + roi + '% sobre la inversión. Buen ritmo.'
+     ? 'Cada euro invertido te devuelve un ' + roi + '%. Las compras rinden.'
      : (roi < 0
-       ? 'ROI negativo (' + roi + '%). Las compras no están rentando.'
-       : 'ROI del ' + roi + '%. Margen de mejora.'))
+       ? 'El ROI está en negativo (' + roi + '%). Las compras no están rentando.'
+       : 'ROI del ' + roi + '%. Hay margen para afinar las compras.'))
    : null,
   // 5. Coste medio pedido (sin cambio)
   (pedRecientes.length >= 3 && cosMedia > 0)
@@ -44126,8 +44126,55 @@ function _confirmBorrarCuenta(id) {
  ]),
  };
 
+ // ════════════════════════════════════════════════════════════════════
+ // v1.3.1829 · CAPA PREMIUM de insights (post-proceso NO invasivo sobre las frases
+ //   ya construidas — no toca ninguna frase ni umbral). Tres mejoras de la auditoría:
+ //   (1) SCORING POR URGENCIA: ordena para que arriba salga lo más accionable hoy.
+ //   (2) ANTI-DUPLICADO SEMÁNTICO: no deja dos insights de la misma "familia" seguidos.
+ //   (3) COOLDOWN: recuerda la última frase mostrada (localStorage) y la pospone para
+ //       que al reabrir la app no salga repetida la de la última vez.
+ //   Todo defensivo en try/catch: si algo falla, devuelve el array original intacto.
+ // ════════════════════════════════════════════════════════════════════
+ var _insightRefine = function(arr, _cardId) {
+  try {
+   if (!arr || arr.length <= 1) return arr;
+   var _clasificar = function(txt) {
+    var t = (txt || '').toLowerCase();
+    var score = 30, fam = 'info';
+    if (/negativ|pierdes|pérdida|perdida|urgent|no cubre|no están rentando|caduca|por debajo de coste|cuanto antes/.test(t)) { score = 100; }
+    else if (/por debajo|riesgo|frenar|reposición|falta |aguantará|dura |ha bajado|% menos/.test(t)) { score = 75; }
+    else if (/oportunidad|buen ritmo|recuperaste|más rentable|por encima|vas bien|% más/.test(t)) { score = 55; }
+    else { score = 30; }
+    if (/margen|rent|roi/.test(t)) fam = 'margen';
+    else if (/stock|inmoviliz|reposición|caduca|zombie|sin vender/.test(t)) fam = 'stock';
+    else if (/caja|saldo|liquidez|runway|aguantará|dura |cubre/.test(t)) fam = 'caja';
+    else if (/pedido|proveedor|compra|coste medio/.test(t)) fam = 'compras';
+    else if (/vent|ingreso|ticket|proyect|mes pasado|tramos/.test(t)) fam = 'ventas';
+    else fam = 'info';
+    return { txt: txt, score: score, fam: fam };
+   };
+   var items = arr.map(_clasificar);
+   var _lastKey = 'dashwey_insight_last_' + _cardId;
+   var _last = '';
+   try { _last = localStorage.getItem(_lastKey) || ''; } catch(_) {}
+   items.forEach(function(it){ if (it.txt === _last) it.score -= 40; });
+   items.sort(function(a, b){ return b.score - a.score; });
+   var out = [], pool = items.slice();
+   var _lastFam = null;
+   while (pool.length) {
+    var idx = 0;
+    for (var k = 0; k < pool.length; k++) { if (pool[k].fam !== _lastFam) { idx = k; break; } }
+    var chosen = pool.splice(idx, 1)[0];
+    out.push(chosen.txt);
+    _lastFam = chosen.fam;
+   }
+   try { if (out[0]) localStorage.setItem(_lastKey, out[0]); } catch(_) {}
+   return out;
+  } catch(_) { return arr; }
+ };
+
  // v1.3.1363: si una card no tiene NINGÚN insight bueno, mostrar 1 mensaje neutral y único
- var result = phrases[cardId];
+ var result = _insightRefine(phrases[cardId], cardId);
  if (!result || result.length === 0) {
   // Fallback minimalista por card — solo se muestra si la card no tiene datos suficientes
   var fallbacks = {
