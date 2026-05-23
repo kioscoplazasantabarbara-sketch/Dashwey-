@@ -656,6 +656,14 @@ body[data-app-ready="true"] #app {
    if (vSync === '1') {
     document.documentElement.classList.add('dev-sync-on');
    }
+   // v1.3.1822: MODO ESPECTADOR (solo lectura) por device. Flag NO sincronizado
+   //   (vive solo en este móvil). Cuando ='1', save() no persiste datos del negocio
+   //   → protege la cuenta compartida frente a un segundo escritor. Se aplica ANTES
+   //   del primer paint para que ningún save inicial escriba. Toggle en Ajustes → Equipo.
+   window._DashweyReadOnly = (localStorage.getItem('dashwey_readonly') === '1');
+   if (window._DashweyReadOnly) {
+    document.documentElement.classList.add('dashwey-readonly');
+   }
   } catch(_) { /* localStorage bloqueado: default oculto, ok */ }
  })();
 
@@ -788,7 +796,7 @@ body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1821";
+ var CURRENT_CACHE = "dashwey-v1-3-1822";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -807,7 +815,7 @@ body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1821</title>
+<title>Dashwey v1.3.1822</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13178,7 +13186,7 @@ function _authTabSafe(tab) {
  </div>
  <div class="sd-row" onclick="window.openEquipoSideSheet()">
  <div class="sd-icon" style="background:#EFF6FF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
- <div class="sd-info"><div class="sd-title">Equipo</div><div class="sd-sub" id="sd-team-sub">Gestión de permisos</div></div>
+ <div class="sd-info"><div class="sd-title">Equipo</div><div class="sd-sub" id="sd-team-sub">Acceso de este dispositivo</div></div>
  <div class="sd-chev">›</div>
  </div>
  <div class="sd-row" onclick="window.openSegSideSheet()">
@@ -17336,6 +17344,18 @@ const State = (() => {
  //   - cambios locales: debounce 500ms, un solo write por ráfaga
  //   - sin reintentos cíclicos; sin throttle de tiempo
  function save() {
+ // v1.3.1822 MODO ESPECTADOR (solo lectura): si el device está en read-only,
+ //   NO persistimos nada (ni localStorage ni Firebase). El _state ya quedó mutado
+ //   en memoria por el caller, así que la VISTA del usuario (rango de fechas,
+ //   navegación, scroll) sigue funcionando con normalidad — simplemente esos
+ //   cambios no se guardan ni se propagan a la cuenta compartida. Protege los
+ //   datos del negocio frente a un segundo escritor sin romper la experiencia de
+ //   consulta. Flag por device (localStorage 'dashwey_readonly'), no sincronizado:
+ //   afecta solo al móvil del coworker, no a la cuenta. Ver toggle en Ajustes → Equipo.
+ if (window._DashweyReadOnly === true) {
+  try { _ndInvalidate(); } catch(_) {}
+  return;
+ }
  // v1.3.1471 LOTE 5: invalidar cache _nd al inicio de cada save
  //   Cualquier llamada a save() implica que algo cambió → la cache puede estar
  //   stale. Invalidación masiva más simple que tracking granular y mismo
@@ -23114,7 +23134,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1821';
+ const _APP_VERSION = 'v1.3.1822';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -24064,10 +24084,11 @@ const ui = (() => {
   }
  } catch(_) {}
  try {
- const teamCount = (State.get.teamMembers ? State.get.teamMembers() : []).length;
- if (el('sd-team-sub')) el('sd-team-sub').textContent = teamCount > 0
- ? teamCount + ' miembro' + (teamCount!==1?'s':'')
- : 'Gestión de permisos';
+ // v1.3.1822 CIERRE-FASE: la fila Equipo ya no gestiona permisos (feature muerta retirada).
+ //   Ahora alberga el "Modo espectador". Subtítulo refleja el estado real del device.
+ if (el('sd-team-sub')) el('sd-team-sub').textContent = (window._DashweyReadOnly === true)
+ ? 'Modo espectador activo'
+ : 'Acceso de este dispositivo';
  } catch(_) {}
  // ctx selector
  _refreshCtxSelector();
@@ -51841,36 +51862,12 @@ window.openDashSideSheet = function() {
  periodChips +
  '</div>' +
  '</div>' +
- '</div>' +
- tog('📊', '#EFF6FF', 'Comparativas', 'Comparar con periodo anterior', 'dashComparativas', comparativas) +
- tog('📈', '#ECFDF5', 'Mostrar tendencias', 'Flechas de tendencia en KPIs', 'dashTendencias', tendencias) +
- '</div>' +
-
- // ── ALERTAS ────────────────────────────────────────────
- '<div class="ss-section-lbl">Alertas</div>' +
- '<div class="sd-group">' +
- tog('⚠️', '#FEF2F2', 'Alertas de riesgo', 'Avisos de márgenes y caducidades', 'dashAlertasRiesgo', alertasRiesgo) +
- '<div class="sd-row">' +
- '<div class="sd-icon" style="background:#ECFDF5"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg></div>' +
- '<div class="sd-info">' +
- '<div class="sd-title">Umbral ingresos bajos (€)</div>' +
- '<div class="sd-sub">Alerta si los ingresos diarios bajan de este valor</div>' +
- '<input type="number" class="fi" style="margin-top:var(--sp-2);height:36px;font-size:var(--fs-base)" placeholder="Ej: 100"' +
- ' value="' + umbralIngresos + '"' +
- ' onchange="window._sdDashSaveSetting(\'dashUmbralIngresos\',this.value)">' +
- '</div>' +
- '</div>' +
- '<div class="sd-row">' +
- '<div class="sd-icon" style="background:#FEF2F2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg></div>' +
- '<div class="sd-info">' +
- '<div class="sd-title">Umbral gasto alto (€)</div>' +
- '<div class="sd-sub">Alerta si el gasto diario supera este valor</div>' +
- '<input type="number" class="fi" style="margin-top:var(--sp-2);height:36px;font-size:var(--fs-base)" placeholder="Ej: 500"' +
- ' value="' + umbralGasto + '"' +
- ' onchange="window._sdDashSaveSetting(\'dashUmbralGasto\',this.value)">' +
- '</div>' +
- '</div>' +
  '</div>'
+ // v1.3.1822 CIERRE-FASE: ocultados toggles/umbrales muertos (se guardaban pero
+ //   nunca se aplicaban en código): dashComparativas, dashTendencias, dashAlertasRiesgo,
+ //   dashUmbralIngresos, dashUmbralGasto. Verificado: 2 refs cada uno (leer + pintar),
+ //   sin consumidor. Se retiran de la UI para no prometer lo que no hace. La sección
+ //   "Visualización" conserva "Periodo por defecto" (vivo). Variables inertes, no rompen.
  );
  });
 };
@@ -51961,34 +51958,14 @@ window.openAlmSideSheet = function() {
  }).join('');
 
  return (
- // ── CONTROL DE STOCK ─────────────────────────────────
- '<div class="ss-section-lbl">Control de stock</div>' +
- '<div class="sd-group">' +
- numInput('📊', '#EFF6FF', 'Stock mínimo por defecto', 'Aplica a nuevos artículos', 'almStockMinDefault', stockMinDefault, 'Ej: 5') +
- '<div class="sd-row">' +
- '<div class="sd-icon" style="background:#F5F3FF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 8.7 8.7 21.3c-1 1-2.5 1-3.4 0l-2.6-2.6c-1-1-1-2.5 0-3.4L15.3 2.7c1-1 2.5-1 3.4 0l2.6 2.6c1 1 1 2.5 0 3.4Z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/><path d="m4.5 13.5 2 2"/></svg></div>' +
- '<div class="sd-info">' +
- '<div class="sd-title">Unidad por defecto</div>' +
- '<div class="sd-chip-group" style="margin-top:var(--sp-2);display:flex;gap:var(--sp-1_5)">' +
- unidadChips +
- '</div>' +
- '</div>' +
- '</div>' +
- tog('🔴', '#FEF2F2', 'Mostrar stock negativo', 'Permite ventas con stock a 0', 'almStockNegativo', stockNegativo) +
- '</div>' +
-
- // ── ALERTAS ────────────────────────────────────────────
- '<div class="ss-section-lbl">Alertas</div>' +
- '<div class="sd-group">' +
- tog('⚠️', '#FEF2F2', 'Alertas de stock bajo', 'Avisar cuando baje del umbral', 'almAlertasBajo', alertasBajo) +
- numInput('🟡', '#FFF7ED', 'Umbral de stock bajo', 'Avisar por debajo de este valor', 'almUmbralStockBajo', umbralStockBajo, 'Ej: 3') +
- tog('🚫', '#FEF2F2', 'Notificar sin stock', 'Alerta cuando llegue a cero', 'almNotifSinStock', notifSinStock) +
- '</div>' +
-
- // ── COMPRAS ────────────────────────────────────────────
+ // v1.3.1822 CIERRE-FASE: retirados todos los controles muertos de Almacén
+ //   (settings guardados pero nunca aplicados en código, verificado 2 refs cada uno):
+ //   almStockNegativo, almAlertasBajo, almNotifSinStock, almSugerenciasAuto,
+ //   almCantidadSugerida, almStockMinDefault, almUmbralStockBajo, almUnidadDefault,
+ //   almFrecuenciaRevision. Se conserva "Historial de pedidos" (vivo → openHistorialPedidos).
+ //   Variables locales arriba quedan inertes (no rompen). Esto evita prometer ajustes que no hacen nada.
  '<div class="ss-section-lbl">Compras</div>' +
  '<div class="sd-group">' +
-     tog('💡', '#FFF9C4', 'Sugerencias automáticas', 'Proponer pedido cuando baje el stock', 'almSugerenciasAuto', sugerenciasAuto) +
      '<div class="sd-row" onclick="App.alm.openHistorialPedidos()" style="cursor:pointer">' +
      '<div class="sd-icon" style="background:#F0FDF4"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg></div>' +
      '<div class="sd-info">' +
@@ -51997,16 +51974,6 @@ window.openAlmSideSheet = function() {
      '</div>' +
      '<div style="color:var(--ink-soft);font-size:var(--fs-h3)">›</div>' +
      '</div>' +
- '<div class="sd-row">' +
- '<div class="sd-icon" style="background:#F0FDF4"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>' +
- '<div class="sd-info">' +
- '<div class="sd-title">Frecuencia de revisión</div>' +
- '<div class="sd-chip-group" style="margin-top:var(--sp-2);display:flex;gap:var(--sp-1_5)">' +
- frecChips +
- '</div>' +
- '</div>' +
- '</div>' +
- tog('📦', '#F0FDF4', 'Cantidad sugerida automática', 'Calcular cantidad según historial', 'almCantidadSugerida', cantidadSugerida) +
  '</div>'
  );
  });
@@ -52109,16 +52076,17 @@ window.openPrefSideSheet = function() {
  '<div class="ss-section-lbl">Notificaciones</div>' +
  '<div class="sd-group">' +
  tog('🔔', '#ECFDF5', 'Activar notificaciones', 'Avisos globales de la app', 'notifOn', notifOn) +
- tog('🔊', '#FFF7ED', 'Sonido', 'Sonido en notificaciones', 'prefNotifSonido', notifSonido) +
- tog('📳', '#F5F3FF', 'Vibración', 'Vibrar al recibir avisos', 'prefNotifVib', notifVibracion) +
+ // v1.3.1822 CIERRE-FASE: quitados 'Sonido' (prefNotifSonido) y 'Vibración' (prefNotifVib) —
+ //   settings muertos (2 refs, nunca aplicados). notifOn se conserva (vivo, 13 refs).
  '</div>' +
 
  // ── INTERACCIÓN ────────────────────────────────────────
  '<div class="ss-section-lbl">Interacción</div>' +
  '<div class="sd-group">' +
  tog('🤝', '#EFF6FF', 'Haptic feedback', 'Vibración táctil al pulsar', 'prefHaptic', hapticOn) +
- tog('✨', '#EFF6FF', 'Animaciones', 'Efectos de transición y movimiento', 'prefAnimaciones', animOn) +
- tog('📱', '#F0FDF4', 'Modo compacto', 'Reduce el espacio entre elementos', 'prefModoCompacto', compactoOn) +
+ // v1.3.1822 CIERRE-FASE: quitados 'Animaciones' (prefAnimaciones) y 'Modo compacto'
+ //   (prefModoCompacto) — settings muertos (2 refs, nunca aplicados). La app anima por
+ //   defecto; prefHaptic se conserva (vivo, conectado al motor háptico).
  '</div>'
  );
  });
@@ -52455,22 +52423,38 @@ window._sdCuentaImportar = function() {
 
 
 // v1.3.438: openEquipoSideSheet -- faltaba, boton Equipo lanzaba ReferenceError
+// v1.3.1822 CIERRE-FASE: ocultado "Gestionar equipo" (teamMembers era UI muerta —
+//   roles/permisos nunca conectados a ninguna lógica). En su lugar, toggle "Modo
+//   espectador" (solo lectura) por device, útil para que un coworker consulte la
+//   cuenta compartida sin poder modificar datos del negocio. El flag protege via save().
 window.openEquipoSideSheet = function() {
  _sdNav('Equipo', function() {
- var members = [];
- try { members = State.get.teamMembers ? State.get.teamMembers() : []; } catch(_) {}
- var rows = members.length > 0
- ? members.map(function(m) {
- return '<div class="sd-row"><div class="sd-icon" style="background:#EFF6FF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg></div>'
- + '<div class="sd-info"><div class="sd-title">' + (m.nombre||m.email||'\u2014') + '</div>'
- + '<div class="sd-sub">' + (m.role||'Miembro') + '</div></div></div>';
- }).join('')
- : '<div style="padding:var(--sp-6) 16px;text-align:center;color:var(--ink-soft);font-size:var(--fs-md)">Sin miembros añadidos</div>';
- return '<div class="ss-section-lbl">Miembros</div>'
- + '<div class="sd-group">' + rows + '</div>'
- + '<div style="padding:0 14px 14px"><button class="btn-ok" style="width:100%"'
- + ' onclick="try{App.ui.openTeamMgr();}catch(e){}">Gestionar equipo</button></div>';
+ var _ro = (window._DashweyReadOnly === true);
+ return '<div class="ss-section-lbl">Acceso de este dispositivo</div>'
+ + '<div class="sd-group">'
+ + '<div class="sd-row sd-toggle-row">'
+ + '<div class="sd-icon" style="background:#EFF6FF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></div>'
+ + '<div class="sd-info"><div class="sd-title">Modo espectador</div><div class="sd-sub">Solo consulta — este móvil no podrá modificar datos</div></div>'
+ + '<button class="sd-toggle' + (_ro ? ' on' : '') + '" id="sd-readonly-toggle" onclick="window._toggleReadOnly(this)" aria-label="Modo espectador"></button>'
+ + '</div>'
+ + '</div>'
+ + '<div style="padding:12px 16px;color:var(--ink-soft);font-size:var(--fs-xs);line-height:var(--lh-snug)">'
+ + 'Actívalo en el móvil de quien solo deba consultar el negocio. Podrá ver todo y cambiar el rango de fechas, pero no crear ni editar movimientos, cierres, productos ni saldos. Se guarda solo en este dispositivo.'
+ + '</div>';
  });
+};
+
+// v1.3.1822: toggle Modo espectador (solo lectura) — flag por device en localStorage.
+window._toggleReadOnly = function(btn) {
+ try {
+  var nuevo = !(window._DashweyReadOnly === true);
+  window._DashweyReadOnly = nuevo;
+  try { localStorage.setItem('dashwey_readonly', nuevo ? '1' : '0'); } catch(_) {}
+  try { document.documentElement.classList.toggle('dashwey-readonly', nuevo); } catch(_) {}
+  if (btn) btn.classList.toggle('on', nuevo);
+  try { Utils.triggerHaptic && Utils.triggerHaptic('light'); } catch(_) {}
+  try { showToast(nuevo ? '👁️ Modo espectador activado — este móvil solo consulta' : '✏️ Modo espectador desactivado — edición permitida'); } catch(_) {}
+ } catch(e) { try { showToast('⚠️ No se pudo cambiar el modo', 'warning'); } catch(_) {} }
 };
 
 window.openSegSideSheet = function() {
