@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1827";
+ var CURRENT_CACHE = "dashwey-v1-3-1828";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1827</title>
+<title>Dashwey v1.3.1828</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23205,7 +23205,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1827';
+ const _APP_VERSION = 'v1.3.1828';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -43483,20 +43483,26 @@ function _confirmBorrarCuenta(id) {
  try {
  var feur = Utils.feur;
  var fmt = _snapFmt;
- // ── Periodo inteligente para insights ──
- //   Los insights necesitan suficiente señal para que las comparaciones tengan sentido.
- //   Un día suelto (selector "Hoy") da falsos "100% por debajo" sin valor.
- //   Si el periodo seleccionado dura menos de ~8 días, usamos el MES actual como base
- //   (promedia findes/festivos/días flojos → comparación estable mes vs mes anterior).
- //   Si dura 8 días o más (Mes/Trimestre/Año), respetamos la selección del usuario.
+ // ── v1.3.1828 · Insights anclados al MES NATURAL en curso ──
+ //   Decisión Hung: los insights deben hablar SIEMPRE del mes natural actual ("En mayo
+ //   llevas...") en vez de un rango arbitrario hacia atrás — más user-friendly y útil.
+ //   Por eso forzamos SIEMPRE el mes actual como base (no solo cuando el periodo es corto).
+ //   El selector global sigue rigiendo las tarjetas/KPIs; solo los INSIGHTS se anclan al mes.
+ period = { type:'month', offset:0 };
+ _snapHint = null; // el hint venía del periodo del selector → no aplica al mes forzado
+ // Nombre del mes en curso para redactar las frases ("En mayo...").
+ var _mesNombre = '';
+ var _diaDelMes = 1;
  try {
-  var _r0 = KPI.getRange(period);
-  var _durDias = (_r0.end - _r0.start) / 86400000;
-  if (_durDias < 8) {
-   period = { type:'month', offset:0 };  // forzar mes actual
-   _snapHint = null;                       // el hint era del periodo corto → no usar
-  }
+  var _hoyMes = new Date();
+  _mesNombre = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+                'septiembre','octubre','noviembre','diciembre'][_hoyMes.getMonth()] || '';
+  _diaDelMes = _hoyMes.getDate();
  } catch(_){}
+ // Prefijo reutilizable: "En mayo " (con mayúscula inicial). Si falla, cadena vacía.
+ var _enMes = _mesNombre ? ('En ' + _mesNombre + ' ') : '';
+ var _enMesCap = _mesNombre ? (_mesNombre.charAt(0).toUpperCase() + _mesNombre.slice(1)) : '';
+
  var bn = KPI.getBeneficioNeto(period);
  var vta = bn.vta || 0;
  var inv = bn.inv || 0;
@@ -43505,26 +43511,29 @@ function _confirmBorrarCuenta(id) {
  var valInv= bn.valorInv || 0;
  var roi = inv > 0 ? Math.max(-999, Math.min(999, Math.round((ben/inv)*100))) : 0;
  var margen= vta > 0 ? Math.round((ben/vta)*100) : 0;
- // v1.3.417: usar snap de FinEngine si ya fue calculado en _snapRenderCard
- // evita recalcular ingresos, margen, delta que ya están en snap
- if (_snapHint) {
- vta = _snapHint.ingresos || vta;
- margen = _snapHint.margenBruto || margen;
- valInv = _snapHint.valorStock || valInv;
- }
  var ticket= nTick > 0 ? vta/nTick : 0;
 
- // Periodo anterior para comparar. Si el periodo es mensual/anual, usar offset
- //   (mes anterior completo vs mes actual) → comparación justa. Para rangos custom,
- //   usar la ventana de igual duración inmediatamente anterior.
+ // ── Comparación JUSTA: mismos días del mes anterior ──
+ //   v1.3.1828 · ANTES se comparaba el mes EN CURSO (parcial, p.ej. 1-23 may) contra el
+ //   mes anterior COMPLETO (1-30 abr) → el delta SIEMPRE salía negativo solo porque el mes
+ //   no ha terminado → insight engañoso e inútil (ya fichado como pendiente en docs).
+ //   FIX: comparar 1→díaActual de mayo contra 1→díaActual de abril (misma ventana de días).
+ //   Construimos el rango con customStart/customEnd (que es lo que KPI.getRange consume para
+ //   type:'custom' — el código viejo usaba start/end y no casaba).
  var pAnt;
- if (period && period.type === 'month') {
-  pAnt = { type:'month', offset:(period.offset||0) - 1 };
- } else if (period && period.type === 'year') {
-  pAnt = { type:'year', offset:(period.offset||0) - 1 };
- } else {
-  var durMs = (function(){ try { var r=KPI.getRange(period); return r.end-r.start; } catch(_){return 30*86400000;} })();
-  pAnt = { type:'custom', start:new Date(Date.now()-durMs*2), end:new Date(Date.now()-durMs) };
+ try {
+  var _now = new Date();
+  var _yA = _now.getFullYear();
+  var _mA = _now.getMonth() - 1; // mes anterior (Date normaliza diciembre→año previo)
+  var _antStart = new Date(_yA, _mA, 1);
+  // Mismo nº de días transcurridos; clamp al último día real del mes anterior (p.ej. si hoy
+  // es 31 y el mes anterior tiene 30, no nos pasamos).
+  var _ultimoDiaAnt = new Date(_yA, _mA + 1, 0).getDate();
+  var _diaClamp = Math.min(_diaDelMes, _ultimoDiaAnt);
+  var _antEnd = new Date(_yA, _mA, _diaClamp + 1); // exclusivo (igual que getRange)
+  pAnt = { type:'custom', customStart:_antStart, customEnd:_antEnd };
+ } catch(_) {
+  pAnt = { type:'month', offset:-1 }; // fallback defensivo
  }
  var bnAnt = (function(){ try { return KPI.getBeneficioNeto(pAnt); } catch(_){return {vta:0};} })();
  // v1.3.1363 FIX BUG-INSIGHT-A: clamp delta a ±999% para evitar valores absurdos
@@ -43906,11 +43915,11 @@ function _confirmBorrarCuenta(id) {
  var phrases = {
  rendimiento: _build([
   // v1.3.1596 SPEC L3 · 10 candidatas (relajadas 1+2+5, 5 nuevas V1-V5)
-  // 1. Comparacion temporal (RELAJADO >=5%, antes >=10%)
+  // 1. Comparacion temporal JUSTA (mismos días del mes anterior, v1.3.1828)
   (vta > 0 && delta !== null && Math.abs(delta) >= 5)
    ? (delta > 0
-     ? 'Vas ' + delta + '% por encima del periodo anterior. Sigue el ritmo.'
-     : 'Vas ' + Math.abs(delta) + '% por debajo del periodo anterior. Revisa qué cambió.')
+     ? _enMes + 'vas un ' + delta + '% por encima que el mes pasado por estas fechas. Buen ritmo.'
+     : _enMes + 'vas un ' + Math.abs(delta) + '% por debajo que el mes pasado por estas fechas. Revisa qué cambió.')
    : null,
   // 2. Concentracion top (RELAJADO >=30%, antes >=40%; mantiene filtro totalUdsTop>20)
   (topVnom && concentracionTop >= 30 && totalUdsTop > 20)
@@ -43950,9 +43959,11 @@ function _confirmBorrarCuenta(id) {
        ? 'Tu top vendido (' + topVnom + ') deja ' + margenTopProd + '% — por encima de tu media ' + margen + '%.'
        : null))
    : null,
-  // 10. V5 · Proyeccion mensual (si periodo = mes en curso)
+  // 10. V5 · Proyeccion mensual (mes en curso) — v1.3.1828 nombra el mes
   proyeccionMes !== null
-   ? 'Al ritmo actual proyectas ' + feur(proyeccionMes) + ' este mes.'
+   ? (_enMesCap
+      ? _enMesCap + ': al ritmo actual proyectas ' + feur(proyeccionMes) + ' en ventas.'
+      : 'Al ritmo actual proyectas ' + feur(proyeccionMes) + ' este mes.')
    : null,
  ]),
 
