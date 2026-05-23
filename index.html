@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1826";
+ var CURRENT_CACHE = "dashwey-v1-3-1827";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1826</title>
+<title>Dashwey v1.3.1827</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22701,6 +22701,14 @@ function _hideSplash() {
  if (!splash) return;
  // Guard estricto: ya hidden o ya en proceso de fade-out → no-op
  if (splash.classList.contains('hidden') || splash.classList.contains('fade-out')) return;
+ // v1.3.1827 GUARD UN SOLO USO · _hideSplash se dispara desde 2 sitios (setTimeout
+ //   directo tras el primer render L63060 + el _waitFirstRender interno) y _renderAll
+ //   corre varias veces en boot. Sin este guard, en caché fría ambos caminos podían
+ //   entrar antes de que classList se marcara → _hideNativeNow se ejecutaba 2 veces →
+ //   doble preparación de animación + arranque intermitente. Flag de un solo uso a nivel
+ //   de función: el PRIMER disparo gana de forma determinista, los demás son no-op total.
+ if (window._DashweySplashHideStarted === true) return;
+ window._DashweySplashHideStarted = true;
  // v1.3.1776 ESTRATEGIA A · Fast-path APK: el splash HTML está oculto (.is-apk),
  //   el nativo Android es el único visible. Cuando la app está lista, ocultar el
  //   splash nativo INMEDIATAMENTE (sin MIN_VISIBLE, que es para el HTML en PWA).
@@ -22718,58 +22726,45 @@ function _hideSplash() {
    //   → fade-in premium en vez de aparición seca.
    splash.classList.add('hidden'); // HTML ya invisible vía CSS (idempotente)
    var _hideNativeNow = function() {
-    // v1.3.1825 ARRANQUE PREMIUM · NUEVO orden anti-blanco. ANTES: revelar app con
-    //   fade-in 0→1 + desvanecer splash A LA VEZ → durante el cruce las dos capas
-    //   semi-transparentes dejaban ver el fondo blanco del WebView. AHORA en 2 tiempos:
-    //   1) Revelar el #app SÓLIDO al instante (en APK no hay fade, vía CSS .is-apk) →
-    //      el dashboard ya está a opacity 1, totalmente pintado, PERO tapado por el
-    //      splash nativo que aún es opaco.
-    document.body.setAttribute('data-app-ready', 'true');
-    //   2) Esperar 2 frames a que el WebView componga la app pintada bajo el splash,
-    //      y SOLO ENTONCES desvanecer el splash nativo → destapa una app ya completa.
-    //      El splash es opaco hasta que arranca su fade, y debajo hay app sólida (no
-    //      blanco) → fundido splash → dashboard directo, imposible ver blanco.
+    // v1.3.1827 ARRANQUE DETERMINISTA · Reescritura: NADA depende de setTimeout de
+    //   gracia (que acertaba con caché caliente y fallaba con caché fría → arranque
+    //   intermitente). Todo se ata al MISMO evento (primer render) y a frames concretos.
+    //   Secuencia, con el splash nativo OPACO tapando todo en cada paso:
+    //   1) Preparar la animación de barras AHORA, mientras el splash aún tapa: activar
+    //      el flag y forzar UN render → las barras quedan animando (no se ve, está tapado).
+    try {
+     window._DashweyBootAnimReady = true;
+     if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+    } catch(_) {}
+    //   2) Tras 2 frames (el render ya pintó), revelar el #app SÓLIDO (sin fade en APK).
     requestAnimationFrame(function(){ requestAnimationFrame(function(){
-     try {
-      if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
-       window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 450 });
-      }
-     } catch(_) {}
-     // v1.3.1826 · El splash empieza a desvanecerse AHORA → el dashboard se va viendo.
-     //   Activamos la animación de barras y forzamos UN re-render de las gráficas para
-     //   que la cascada se reproduzca UNA sola vez, completa, ya visible para el usuario
-     //   (durante el boot estuvieron crecidas sin animar). Pequeño margen (200ms) para
-     //   que coincida con el fundido del splash → la cascada "entra" con el dashboard.
-     setTimeout(function(){
+     document.body.setAttribute('data-app-ready', 'true');
+     //   3) Tras 2 frames más (el WebView ya compuso la app pintada bajo el splash),
+     //      desvanecer el splash nativo → destapa una app COMPLETA con las barras ya
+     //      en mitad de su única animación. Imposible ver blanco ni doble animación
+     //      porque el splash tapó toda la preparación.
+     requestAnimationFrame(function(){ requestAnimationFrame(function(){
       try {
-       window._DashweyBootAnimReady = true;
-       if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
+       if (window.Capacitor?.Plugins?.SplashScreen?.hide) {
+        window.Capacitor.Plugins.SplashScreen.hide({ fadeOutDuration: 500 });
+       }
       } catch(_) {}
-     }, 200);
+      try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
+     }); });
     }); });
-    try { if (window._DashweyPerfMark) window._DashweyPerfMark('splash_hidden_apk'); } catch(_) {}
    };
    var _waitFirstRender = function() {
-    // v1.3.1825 · El splash nativo tapa TODO hasta que el dashboard está pintado.
-    //   Margen corto (300ms) tras el primer render: solo asegura que el primer
-    //   _renderAll terminó de pintar. NO necesita esperar al render de Loyverse —
-    //   el guard anti-reanimación de las barras (v1824) ya impide que el segundo
-    //   render parpadee, ocurra cuando ocurra. Así el splash dura lo justo (corto)
-    //   y el fundido destapa una app limpia. Fallback duro 2.5s sigue protegiendo.
-    var _GRACE = 300;
-    // Si el primer render ya ocurrió → ocultar tras 2 frames + margen corto.
+    // v1.3.1827 · El splash se oculta SOLO cuando el primer render real ha ocurrido —
+    //   condición determinista (_DashweyFirstRenderDone), no un timer. Si ya ocurrió,
+    //   procede; si no, espera el evento. Una sola ejecución (guard al inicio de
+    //   _hideSplash + el propio _DashweyFirstRenderDone). Fallback duro 2.5s anti-cuelgue.
     if (window._DashweyFirstRenderDone) {
-     requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      setTimeout(_hideNativeNow, _GRACE);
-     }); });
+     _hideNativeNow();
      return;
     }
-    // Aún no: escuchar el evento de primer render (se emite tras _renderAll).
     window.addEventListener('dashwey:first-render', function _onFR() {
      window.removeEventListener('dashwey:first-render', _onFR);
-     requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      setTimeout(_hideNativeNow, _GRACE);
-     }); });
+     _hideNativeNow();
     }, { once: true });
     // Fallback duro: si el evento no llega en 2.5s, ocultar igual (no colgar).
     setTimeout(_hideNativeNow, 2500);
@@ -23210,7 +23205,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1826';
+ const _APP_VERSION = 'v1.3.1827';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
