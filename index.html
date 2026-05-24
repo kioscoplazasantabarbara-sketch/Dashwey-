@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1843";
+ var CURRENT_CACHE = "dashwey-v1-3-1844";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1843</title>
+<title>Dashwey v1.3.1844</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23263,7 +23263,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1843';
+ const _APP_VERSION = 'v1.3.1844';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30290,6 +30290,15 @@ const ui = (() => {
     if (opts.onDone) opts.onDone(0);
    } finally {
     _lvSyncInFlight = false;
+    // v1.3.1844: marcar que el PRIMER sync Loyverse del arranque terminó (éxito o error).
+    //   El skeleton del Hero espera este evento para no mostrar la cifra local incompleta
+    //   y luego saltar a la final. Pase lo que pase aquí, el flag se marca → nunca cuelga.
+    try {
+     if (window._DashweyLvFirstSyncDone !== true) {
+      window._DashweyLvFirstSyncDone = true;
+      window.dispatchEvent(new CustomEvent('dashwey:lv-first-sync'));
+     }
+    } catch(_) {}
    }
   });
  }
@@ -71790,6 +71799,13 @@ document.addEventListener('keydown', function(e) {
     state = 'pending';
     pillMode = null; // amarillo pulsante por defecto
     pillLabel = 'Sincronizando…';
+   } else if (!window._DashweyLvFirstSyncDone && !window._DashweyLvSkeletonTimeout) {
+    // v1.3.1844: Firestore ya cargó, pero Loyverse (ventas de hoy) aún no.
+    //   Mantener el GRIS para no mostrar la cifra local incompleta y luego saltar a
+    //   la final. En cuanto llegue Loyverse (evento) o salte el tope de 8s, pasa a done.
+    state = 'pending';
+    pillMode = null;
+    pillLabel = 'Sincronizando…';
    } else {
     state = 'done';
     pillMode = 'done';
@@ -71806,12 +71822,14 @@ document.addEventListener('keydown', function(e) {
     showPill(pillLabel, pillMode);
     if (state === 'done') {
      hidePill(2500);
-     // v1.3.1841: GRIS → ANIMACIÓN. Al desaparecer el skeleton (llega el dato),
-     //   re-animar los Hero de 0 al valor real en vez de mostrarlos fijos.
-     //   Resetea _snapLastTarget de los 3 Hero + re-renderiza la tarjeta activa
-     //   en el próximo frame (cuando el boot ya está estable). Soluciona también
-     //   la animación inicial del boot que faltaba (antes el guard los fijaba).
+     // v1.3.1841/1844: GRIS → ANIMACIÓN. El gris ya esperó al primer sync Loyverse,
+     //   así que este 'done' trae la cifra FINAL (116,45), no la local incompleta.
+     //   Reseteamos _snapLastTarget Y _DashweyHeroBootDone/_DashweyBarsBootDone para que
+     //   esta sea LA animación de boot (de 0 a la cifra final, una vez). Tras esto, los
+     //   renders automáticos vuelven a fijar texto en silencio (flag se re-marca al animar).
      try {
+      window._DashweyHeroBootDone = false;
+      window._DashweyBarsBootDone = false;
       ['snap-val-rendimiento','snap-val-flujo-caja','snap-val-compras'].forEach(function(id){
        var el = document.getElementById(id); if (el) el._snapLastTarget = undefined;
       });
@@ -71845,7 +71863,21 @@ document.addEventListener('keydown', function(e) {
   window.addEventListener('online', evaluate);
   window.addEventListener('offline', evaluate);
   window.addEventListener('dashwey:sync-state-changed', evaluate);
+  // v1.3.1844: cuando el primer sync Loyverse termina → reevaluar (quita el gris + anima).
+  window.addEventListener('dashwey:lv-first-sync', evaluate);
  } catch(_) {}
+
+ // v1.3.1844: TOPE DE SEGURIDAD. Si Loyverse no responde en 8s (red lenta o fallo),
+ //   liberar el skeleton igualmente para no quedar en gris infinito. Marca el flag de
+ //   tiempo agotado y reevalúa → pasa a 'done' con lo que haya.
+ setTimeout(function(){
+  try {
+   if (window._DashweyLvFirstSyncDone !== true) {
+    window._DashweyLvSkeletonTimeout = true;
+    evaluate();
+   }
+  } catch(_) {}
+ }, 8000);
 
  // Sondeo defensivo: cada 1.5s comprobar si el flag cambió y no se disparó
  // el custom event (mismo patrón que _sdStatusPoll).
@@ -71854,8 +71886,10 @@ document.addEventListener('keydown', function(e) {
   try {
    var s = !!window._DashweyInitialSyncDone;
    var o = (typeof navigator !== 'undefined') && navigator.onLine;
+   // v1.3.1844: incluir flag Loyverse + tope en la firma → detecta cuando llega
+   var lv = !!(window._DashweyLvFirstSyncDone || window._DashweyLvSkeletonTimeout);
    // Cambio detectado → evaluar
-   var sig = (s ? '1' : '0') + (o ? '1' : '0');
+   var sig = (s ? '1' : '0') + (o ? '1' : '0') + (lv ? '1' : '0');
    if (sig !== (window._DashweyTrustLastSig || '')) {
     window._DashweyTrustLastSig = sig;
     evaluate();
