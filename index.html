@@ -42561,6 +42561,90 @@ function _confirmBorrarCuenta(id) {
  //   v1.3.1519: CENTRADO en pantalla (no bottom sheet).
  //   El usuario puede cerrar tappeando fuera.
  //   (El editor completo se abrirá por long-press en sesión separada.)
+ // ── v1.3.1849 LOTE A: ALERTAS INTELIGENTES ───────────────────────────────
+ //   directo=true (pocas alertas) → va al artículo. directo=false → modal lista
+ //   editable (stock +/- en sitio, tap → ficha completa con caducidad).
+ function _openAlertasInteligente(alertObj, directo) {
+  try {
+   var prods = State.get.productos ? (State.get.productos() || []) : [];
+   var byId = {}; prods.forEach(function(p){ if (p && p.id) byId[p.id] = p; });
+   // Construir lista única con el motivo de cada artículo
+   var ssSet = {}, bmSet = {}, cadSet = {}, mgSet = {};
+   (alertObj._idsSinStock||[]).forEach(function(id){ ssSet[id]=1; });
+   (alertObj._idsBajoMin||[]).forEach(function(id){ bmSet[id]=1; });
+   (alertObj._idsCad||[]).forEach(function(id){ cadSet[id]=1; });
+   (alertObj._idsMargenBajo||[]).forEach(function(id){ mgSet[id]=1; });
+   var allIds = []; var seen = {};
+   [].concat(alertObj._idsSinStock||[], alertObj._idsBajoMin||[], alertObj._idsCad||[], alertObj._idsMargenBajo||[])
+    .forEach(function(id){ if (id && !seen[id]) { seen[id]=1; allIds.push(id); } });
+   if (!allIds.length) return;
+
+   // DIRECTO (pocas) → ir al primer artículo
+   if (directo) {
+    var pid = allIds[0];
+    if (typeof App !== 'undefined' && App.nav && App.nav.goTab) App.nav.goTab(2);
+    setTimeout(function(){ try { App.alm.openEditArt(pid); } catch(_) {} }, 350);
+    return;
+   }
+
+   // MODAL LISTA (muchas) → editable en sitio
+   var motivo = function(id) {
+    var ms = [];
+    if (ssSet[id]) ms.push('<span style="color:var(--danger);font-weight:600">Sin stock</span>');
+    else if (bmSet[id]) ms.push('<span style="color:#C77700;font-weight:600">Bajo mínimo</span>');
+    if (cadSet[id]) ms.push('<span style="color:#C77700">Caduca pronto</span>');
+    if (mgSet[id]) ms.push('<span style="color:var(--ink-soft)">Margen &lt;15%</span>');
+    return ms.join(' · ');
+   };
+   var rowsHtml = allIds.map(function(id){
+    var p = byId[id]; if (!p) return '';
+    var nombre = p.nombre || p.sourceName || '(sin nombre)';
+    var stock = (p.stockActual||0);
+    return '<div class="alrt-li-row" data-pid="' + id + '" '
+     + 'style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border)">'
+     + '<div style="flex:1;min-width:0" onclick="try{App.dash._alrtGoArt(\'' + id + '\')}catch(_){}">'
+     +   '<div style="font-size:var(--fs-sm);font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + nombre + '</div>'
+     +   '<div style="font-size:var(--fs-2xs);margin-top:2px">' + motivo(id) + '</div>'
+     + '</div>'
+     + '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
+     +   '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',-1)}catch(_){}" style="width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);font-size:18px;font-weight:700;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent">−</button>'
+     +   '<span data-stk="' + id + '" style="min-width:30px;text-align:center;font-size:var(--fs-sm);font-weight:700;font-variant-numeric:tabular-nums;color:' + (stock<=0?'var(--danger)':'var(--ink)') + '">' + stock + '</span>'
+     +   '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',1)}catch(_){}" style="width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);font-size:18px;font-weight:700;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent">+</button>'
+     + '</div>'
+     + '</div>';
+   }).join('');
+   var html = '<div style="padding:16px 0 40px">'
+    + '<h2 style="font-size:18px;font-weight:800;margin:0 16px 4px">Alertas · ' + allIds.length + ' artículos</h2>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin:0 16px 14px">Ajusta el stock con +/−. Toca el nombre para abrir la ficha (caducidad, precios…).</div>'
+    + rowsHtml
+    + '</div>';
+   if (window.App && App.ui && App.ui.setFs && App.ui.openFs) {
+    App.ui.setFs(html); App.ui.openFs('full');
+   }
+  } catch(e) { try { if (typeof showToast === 'function') showToast('⚠️ ' + e.message, 'warning'); } catch(_) {} }
+ }
+ // Helpers de la lista inteligente
+ function _alrtGoArt(pid) {
+  try {
+   if (window.App && App.ui && App.ui.closeFs) App.ui.closeFs();
+   if (App.nav && App.nav.goTab) App.nav.goTab(2);
+   setTimeout(function(){ try { App.alm.openEditArt(pid); } catch(_) {} }, 350);
+  } catch(_) {}
+ }
+ function _alrtStockStep(pid, delta) {
+  try {
+   var prods = State.get.productos ? (State.get.productos() || []) : [];
+   var p = prods.find(function(x){ return x && x.id === pid; });
+   if (!p) return;
+   var nuevo = Math.max(0, (p.stockActual||0) + delta);
+   // Persistir vía updateProd (estampa _updatedAt + dirty + save) — mismo canal que el editor.
+   if (State.set && State.set.updateProd) State.set.updateProd(pid, { stockActual: nuevo });
+   var span = document.querySelector('[data-stk="' + pid + '"]');
+   if (span) { span.textContent = nuevo; span.style.color = (nuevo<=0 ? 'var(--danger)' : 'var(--ink)'); }
+   try { Utils.triggerHaptic && Utils.triggerHaptic('light'); } catch(_) {}
+  } catch(_) {}
+ }
+
  function _openRecordatorioPreview(recId) {
   var arr = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
   var r = arr.find(function(x){ return x && x.id === recId; });
@@ -46594,6 +46678,12 @@ function _confirmBorrarCuenta(id) {
    var _diffMsR = new Date(rangeEnd).getTime() - hoy0.getTime();
    _horizonR = Math.max(7, Math.min(60, Math.ceil(_diffMsR / 86400000) + 1));
   }
+  // v1.3.1849 LOTE A: el horizonte de PROYECCIÓN debe cubrir lo que la tab pedirá.
+  //   'semana' filtra 7 días → proyectar al menos 7. 'todo' quiere el próximo ciclo de
+  //   CADA proveedor (uno quincenal puede estar a ~14d) → proyectar 21d para captarlos;
+  //   el dedup posterior se queda con uno por proveedor, así que no genera ruido.
+  if (_snapAgendaActiveTab === 'semana') _horizonR = Math.max(_horizonR, 7);
+  else if (_snapAgendaActiveTab === 'todo') _horizonR = Math.max(_horizonR, 21);
   var _todosFp = (typeof _feedPedidosProv === 'function')
    ? _feedPedidosProv(prov, hoy0, _horizonR)
    : ((typeof _allUpcomingOrderDates === 'function') ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR) : []);
@@ -46693,7 +46783,13 @@ function _confirmBorrarCuenta(id) {
      bajoMin: _listBajoMin.length,
      cad: _listCad.length,
      margenBajo: _listMargenBajo.length,
-     total: _totalAlertas
+     total: _totalAlertas,
+     // v1.3.1849 LOTE A: listas reales para la lista inteligente de alertas.
+     //   IDs de producto por categoría → el modal/navegación los resuelve.
+     _idsSinStock: _listSinStock.map(function(p){ return p.id; }),
+     _idsBajoMin: _listBajoMin.map(function(p){ return p.id; }),
+     _idsCad: _listCad.map(function(c){ return c.prodId || c.id; }),
+     _idsMargenBajo: _listMargenBajo.map(function(p){ return p.id; })
     }
    });
   }
@@ -46719,6 +46815,24 @@ function _confirmBorrarCuenta(id) {
  //   Se aplica al final, después de construir todos los eventos, ANTES del empty state.
  //   Así el empty state refleja correctamente "Nada para hoy" si el filtro vacía la lista.
  eventos = eventos.filter(function(ev) { return inTemporalFilter(ev.fecha); });
+
+ // v1.3.1849 LOTE A: tab "Todo" = PRÓXIMO CICLO de cada proveedor, sin repetir.
+ //   El motor proyecta varios ciclos en el horizonte (Nestlé lunes ×N semanas), pero
+ //   mostrarlos todos sería ruido (la misma info N veces). Modelo Hung: una entrada por
+ //   proveedor, la más próxima. Los eventos sin provId (recordatorios, alertas) se
+ //   mantienen todos. Vencidos también (son accionables, no son "próximo ciclo").
+ if (_snapAgendaActiveTab === 'todo') {
+  // Ordenar cronológico ANTES de dedup → nos quedamos con el evento más próximo de cada prov.
+  eventos.sort(function(a, b) { return a.sortKey - b.sortKey; });
+  var _vistoProv = {};
+  eventos = eventos.filter(function(ev) {
+   if (!ev || !ev.provId) return true;          // recordatorios/otros: pasan
+   if (ev._atrasado && ev._diasAtraso > 0) return true; // vencidos: pasan
+   if (_vistoProv[ev.provId]) return false;      // ya hay uno más próximo de este prov
+   _vistoProv[ev.provId] = true;
+   return true;
+  });
+ }
 
  // ── Empty state ──────────────────────────────────────────────
  if (!eventos.length) {
@@ -47239,17 +47353,27 @@ function _confirmBorrarCuenta(id) {
      subEl.textContent = detalles.join(' · ');
      contentEl.appendChild(subEl);
     }
-    // v1.3.1560 LOTE J · FIX bug "tap alerta cambia tab a MAÑANA".
-    //   ANTES: tap en alerta seteaba _snapAgendaActiveTab='alertas' (legacy
-    //   obsoleto, ya no existe ese tab visual). Resultado: el filtro temporal
-    //   inTemporalFilter caía al `return true` final → timeline mostraba TODOS
-    //   los eventos incluidos los de MAÑANA → user veía aparecer grupo "MAÑANA"
-    //   de la nada. Además los chips HOY/MAÑANA/SEMANA/TODO quedaban sin
-    //   ninguno activo visualmente.
-    //   AHORA: tap no hace nada (item informativo). El flujo correcto
-    //   (alerta → editor artículo → pedido o ajuste caducidad) queda pendiente
-    //   de diseño post-25 may, junto al rediseño de la card Alertas.
-    // item.style.cursor permanece default (no apunta a "clickeable").
+    // v1.3.1849 LOTE A: alerta inteligente. Pocas (≤3) → tap directo al artículo.
+    //   Muchas (>3) → modal lista editable. El total real cuenta artículos únicos.
+    (function(alertObj) {
+     // IDs únicos de todos los artículos en alerta (un mismo prod puede estar en 2 listas)
+     var _allIds = [].concat(alertObj._idsSinStock||[], alertObj._idsBajoMin||[],
+                            alertObj._idsCad||[], alertObj._idsMargenBajo||[]);
+     var _uniq = []; var _seen = {};
+     _allIds.forEach(function(id){ if (id && !_seen[id]) { _seen[id]=true; _uniq.push(id); } });
+     item.style.cursor = 'pointer';
+     item.addEventListener('click', function() {
+      try { Utils.triggerHaptic && Utils.triggerHaptic('light'); } catch(_) {}
+      if (_uniq.length === 0) return;
+      if (_uniq.length <= 3) {
+       // Pocas → ir directo al primer artículo (o al único)
+       try { App.dash._openAlertasInteligente(alertObj, true); } catch(_) {}
+      } else {
+       // Muchas → modal lista inteligente editable
+       try { App.dash._openAlertasInteligente(alertObj, false); } catch(_) {}
+      }
+     });
+    })(a);
    } else if (ev.tipo === 'recordatorio') {
     var r = ev.recordatorio;
     var recTit = document.createElement('div');
@@ -52166,7 +52290,7 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, _openTicketDetalle, renderVisitasComerciales, renderEventos: renderVisitasComerciales, _openRecordatorioSheet, _openRecordatorioPreview, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre,
+ return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, _openTicketDetalle, renderVisitasComerciales, renderEventos: renderVisitasComerciales, _openRecordatorioSheet, _openRecordatorioPreview, _openAlertasInteligente, _alrtGoArt, _alrtStockStep, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre,
  // v1.3.1636: exposición _snapRenderTimeline para re-render desde _dwyEvMarkDone
  _snapRenderAgenda: _snapRenderTimeline,
  _snapRenderTimeline: _snapRenderTimeline,
