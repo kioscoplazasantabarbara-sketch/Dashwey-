@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1838";
+ var CURRENT_CACHE = "dashwey-v1-3-1839";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1838</title>
+<title>Dashwey v1.3.1839</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19780,12 +19780,19 @@ const KPI = (() => {
  .slice(0,5);
  }
 
- // ── v1.3.1838: helper único — ¿este producto lleva seguimiento de stock? ──
- //   trackStock !== false → SÍ se le hace seguimiento (default true para productos normales).
- //   trackStock === false → seguimiento APAGADO → NO debe generar alertas de stock.
- //   Las alertas de stock (sin stock / bajo mínimo) DEBEN filtrar por esto.
- //   La caducidad es independiente: solo depende de que p.caducidad esté definida.
- function _isStockTracked(p) { return !!(p && p.trackStock !== false && !p.deleted); }
+ // ── v1.3.1839: helper único — ¿este producto lleva seguimiento de stock? ──
+ //   REGLA 1 (manda sobre todo): si pertenece a un GRUPO (p.grupoId) → NO seguimiento.
+ //     Los grupos hacen match con UN item Loyverse ("chicle") que agrupa varios sabores;
+ //     Loyverse no dice qué sabor se vendió → imposible descontar → nunca se sigue su stock.
+ //   REGLA 2: si no está en grupo → trackStock !== false (toggle individual del producto).
+ //   El toggle de stock del PROVEEDOR es de 3 estados DERIVADO de sus productos (no es un
+ //   dato persistido): al togglear escribe trackStock en cada producto. Por eso aquí solo
+ //   se lee el toggle del producto — el del proveedor ya quedó reflejado en sus productos.
+ function _isStockTracked(p) {
+  if (!p || p.deleted) return false;
+  if (p.grupoId) return false;            // pertenece a un grupo → nunca seguimiento
+  return p.trackStock !== false;          // toggle individual (default true salvo OFF explícito)
+ }
  try { window._DashweyIsStockTracked = _isStockTracked; } catch(_) {}
 
  // ── Alertas de Caducidad (próximos 14 días) ─────────────────────
@@ -21486,6 +21493,43 @@ const GruposVenta = (() => {
   return { ventas: total, nItems: nItems };
  }
 
+ // ── v1.3.1839: stockGrupo() — STOCK AGREGADO DE GRUPO (INERTE, solo validación) ──
+ //   Modelo (diseñado abr 2026, piezas ya existentes): un grupo hace match con UN item
+ //   Loyverse ("chicle") que agrupa varios sabores. Como Loyverse no dice qué sabor se
+ //   vendió, el stock se trata AGREGADO: stock_grupo = entradas − salidas.
+ //     · entradas = Σ stockActual de los miembros (stock actual de cada sabor)
+ //     · salidas  = ventasGrupo(grupoId).qty  (uds vendidas del grupo según Loyverse)
+ //   MATIZ CRÍTICO DEL PUNTO DE PARTIDA: ventasGrupo() sin fecha cuenta TODO el histórico
+ //   (3 años) → restar de stockActual actual daría negativo absurdo. Por eso acepta
+ //   `desdeMs` opcional: solo cuenta ventas desde esa fecha (ej. última recepción del grupo).
+ //   INERTE: nadie la llama en producción. Solo para validar el concepto con datos reales
+ //   vía window._DashweyValidarStockGrupos() antes de conectarla a alertas/valor/insights.
+ function stockGrupo(grupoId, desdeMs) {
+  const g = State.get.grupo ? State.get.grupo(grupoId) : null;
+  if (!g || !Array.isArray(g.articuloIds) || !g.articuloIds.length) {
+   return { entradas: 0, salidas: 0, stock: 0, nMiembros: 0, valido: false };
+  }
+  const prods = State.get.productos ? (State.get.productos() || []) : [];
+  const prodSet = new Set(g.articuloIds);
+  let entradas = 0, nMiembros = 0;
+  prods.forEach(function(p){
+   if (!p || p.deleted || !prodSet.has(p.id)) return;
+   entradas += (Number(p.stockActual) || 0);
+   nMiembros++;
+  });
+  const vg = ventasGrupo(grupoId, desdeMs || null, null);
+  const salidas = vg.qty || 0;
+  return {
+   entradas: entradas,
+   salidas: salidas,
+   stock: entradas - salidas,
+   nMiembros: nMiembros,
+   loyverseName: g.loyverseName || '',
+   nombre: g.nombre || '',
+   valido: true
+  };
+ }
+
  // Validación integridad (para dashboard Salud Sync fase 2):
  // { totalVentas, sumGrupos, sumSinGrupo, coherente }
  function validarIntegridad(dateFromMs, dateToMs) {
@@ -21516,6 +21560,7 @@ const GruposVenta = (() => {
   inversionGrupoProrrateada,
   ventasGrupo,
   ventasSinGrupo,
+  stockGrupo,
   validarIntegridad,
  };
 })();
@@ -23216,7 +23261,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1838';
+ const _APP_VERSION = 'v1.3.1839';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -67265,6 +67310,39 @@ if (typeof Utils !== 'undefined') window.Utils = Utils;
 // Corrección: exponer desde App.State (que sí está disponible aquí).
 if (typeof State !== 'undefined') window.State = State;
 else if (window.App?.State) window.State = window.App.State;
+
+// ── v1.3.1839: VALIDADOR stock de grupo (INERTE, solo diagnóstico en consola) ──
+//   Ejecutar en DevTools: window._DashweyValidarStockGrupos()
+//   Muestra, para cada grupo real, el stock agregado con DISTINTOS puntos de partida
+//   (todo el histórico / últimos 30 / 60 / 90 días) para ver cuál da números coherentes.
+//   NO toca datos ni conecta nada. Solo lee y muestra una tabla.
+window._DashweyValidarStockGrupos = function() {
+ try {
+  if (typeof KPI === 'undefined' || !KPI.stockGrupo) { console.warn('KPI.stockGrupo no disponible'); return; }
+  var grupos = State.get.gruposVenta ? (State.get.gruposVenta() || []) : [];
+  if (!grupos.length) { console.info('No hay grupos creados.'); return; }
+  var ahora = Date.now(), DIA = 86400000;
+  var puntos = [
+   { label: 'TODO histórico', desde: null },
+   { label: 'últimos 90d',    desde: ahora - 90*DIA },
+   { label: 'últimos 60d',    desde: ahora - 60*DIA },
+   { label: 'últimos 30d',    desde: ahora - 30*DIA }
+  ];
+  console.info('═══ VALIDACIÓN STOCK DE GRUPO (' + grupos.length + ' grupos) ═══');
+  console.info('stock = (Σ stockActual de miembros) − (uds vendidas Loyverse desde el punto de partida)');
+  grupos.forEach(function(g){
+   if (!g || g.deleted) return;
+   var base = KPI.stockGrupo(g.id, null);
+   console.info('\n▸ ' + (g.nombre||'?') + '  [TPV: "' + (g.loyverseName||'—') + '"]  · ' + base.nMiembros + ' miembros · entradas(stock actual miembros)=' + base.entradas);
+   puntos.forEach(function(pt){
+    var r = KPI.stockGrupo(g.id, pt.desde);
+    console.info('   ' + pt.label.padEnd(16) + ' → vendidas=' + r.salidas + '  stock=' + r.stock + (r.stock < 0 ? '  ⚠️ NEGATIVO' : ''));
+   });
+  });
+  console.info('\n═══ Interpretación: el punto de partida correcto es el que da stock ≥ 0 y coherente con lo físico. ═══');
+ } catch(e) { console.error('[ValidarStockGrupos]', e); }
+};
+
 if (typeof DashweyBus !== 'undefined') window.DashweyBus = DashweyBus;
 else if (window.App?.DashweyBus) window.DashweyBus = window.App.DashweyBus;
 // v1.3.1610 ROLLBACK: feature KpiSheet eliminada (4 intentos v1606-v1609 fallidos
