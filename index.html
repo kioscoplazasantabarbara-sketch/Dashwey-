@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1842";
+ var CURRENT_CACHE = "dashwey-v1-3-1843";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1842</title>
+<title>Dashwey v1.3.1843</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23263,7 +23263,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1842';
+ const _APP_VERSION = 'v1.3.1843';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33240,6 +33240,17 @@ const dash = (() => {
    _ptrShimmerCleanup = setTimeout(_ptrClearShimmer, 200);
   }
  };
+ // v1.3.1843: PTR es ACCIÓN DE USUARIO → permitir que el Hero re-anime el refresh.
+ //   Marca el flag + resetea el Hero de la card activa. El render que sigue al sync animará.
+ try {
+  var _aidPtr = (App.dash && App.dash._getActiveCardId) ? App.dash._getActiveCardId() : null;
+  var _heroPtr = _aidPtr === 'rendimiento' ? 'snap-val-rendimiento'
+              : _aidPtr === 'flujo-caja'  ? 'snap-val-flujo-caja'
+              : _aidPtr === 'compras'     ? 'snap-val-compras' : null;
+  if (_heroPtr) { var _hElPtr = document.getElementById(_heroPtr); if (_hElPtr) _hElPtr._snapLastTarget = undefined; }
+  window._DashweyHeroUserAction = true;
+  setTimeout(function(){ try { window._DashweyHeroUserAction = false; } catch(_) {} }, 1500);
+ } catch(_) {}
  // v1.3.1100: disparar sync Loyverse en paralelo (fire-and-forget, no bloquea render)
  // v1.3.1613 FIX G: contabilizar para shimmer coordinado
  _ptrPendingSyncs++;
@@ -43652,22 +43663,19 @@ function _confirmBorrarCuenta(id) {
   el._snapLastTarget = target;
   return;
  }
- // v1.3.1842 FIX DOBLE-ANIM BOOT: durante el boot hay 2 renders de datos seguidos
- //   (local → Loyverse fresco). Si ambos animan → "mitad" y luego "total" = doble.
- //   Solución: el Hero anima UNA sola vez por ventana de boot. La 1ª animación marca
- //   _bootAnimDone; los renders siguientes del boot (Loyverse llega y cambia el valor)
- //   solo FIJAN el texto sin re-animar. La ventana de boot se considera activa hasta
- //   que pasen 4s desde que _DashweyBootAnimReady se puso true (sync estable).
- //   Tras la ventana, todo render del usuario (cambio tarjeta/PTR) anima normal.
- var _enBootWindow = (function(){
-  try {
-   if (window._DashweyBootAnimReady !== true) return true; // aún en boot
-   var t0 = window._DashweyBootReadyAt || 0;
-   return t0 > 0 && (Date.now() - t0) < 4000; // 4s de gracia tras boot ready
-  } catch(_) { return false; }
- })();
- if (_enBootWindow && el._bootAnimDone) {
-  // Ya animó una vez en esta ventana de boot → segundo render (Loyverse) solo fija texto.
+ // v1.3.1843 FIX DEFINITIVO DOBLE-ANIM BOOT: el boot hace 2+ renders de datos
+ //   (local → Loyverse, que puede tardar >4s con el negocio abierto). Una ventana
+ //   de tiempo era frágil. AHORA: flag de UN SOLO USO por sesión de app.
+ //   · El Hero anima UNA vez (primer render con datos tras abrir la app).
+ //   · Renders automáticos posteriores (Loyverse, ventas nuevas, sync de fondo)
+ //     solo FIJAN el texto en silencio — sin re-animar.
+ //   · La animación VUELVE solo cuando hay interacción del usuario (cambio de tarjeta,
+ //     PTR, periodo): esos flujos resetean _snapLastTarget Y ponen _DashweyHeroUserAction.
+ //   Robusto ante cualquier timing de Loyverse.
+ var _bootAnimUsada = (window._DashweyHeroBootDone === true);
+ var _accionUsuario = (window._DashweyHeroUserAction === true);
+ if (_bootAnimUsada && !_accionUsuario) {
+  // Ya se hizo la animación inicial y este render NO viene de interacción → fijar texto.
   if (isEur) el.textContent = _snapFeur(target);
   else if (isPct) el.textContent = _snapFmt(target, 1) + '%';
   else el.textContent = _snapFmt(Math.round(target));
@@ -43675,8 +43683,8 @@ function _confirmBorrarCuenta(id) {
   el._snapLastTarget = target;
   return;
  }
- if (_enBootWindow) el._bootAnimDone = true;
- else el._bootAnimDone = false; // fuera de boot, resetear para futuros boots
+ // Esta animación cuenta como la del boot (marca el flag de sesión).
+ if (!_bootAnimUsada) { try { window._DashweyHeroBootDone = true; } catch(_) {} }
  // Animar desde el valor previo (si existe) hacia el nuevo → transición natural.
  var start = _hasPrev ? _prev : 0;
  el._snapLastTarget = target;
@@ -48046,25 +48054,21 @@ function _confirmBorrarCuenta(id) {
  //     completa, con el dashboard ya visible. Renders posteriores del usuario animan normal.
  try {
   var _animReady = (window._DashweyBootAnimReady === true);
-  // v1.3.1842 FIX BARRAS 4 VECES: ventana de boot. El doble render (local→Loyverse)
-  //   + re-renders del observer animaban la cascada hasta 4 veces. Ahora: durante la
-  //   ventana de boot (4s tras BootAnimReady) la cascada anima UNA sola vez (flag
-  //   _barBootAnimDone en el svg); los renders siguientes pintan barras crecidas al
-  //   instante. Fuera de la ventana (uso normal), cada render anima como siempre.
-  var _barBootWin = false;
-  try {
-   if (!_animReady) _barBootWin = true;
-   else { var _t0b = window._DashweyBootReadyAt || 0; _barBootWin = (_t0b > 0 && (Date.now() - _t0b) < 4000); }
-  } catch(_) {}
-  if (!_animReady || (_barBootWin && svg._barBootAnimDone)) {
-   // Boot inicial (splash) O ya animó una vez en la ventana → barras crecidas sin animar.
+  // v1.3.1843: igual que el Hero — flag de UN SOLO USO por sesión (no ventana de tiempo).
+  //   La cascada de barras anima UNA vez (primer render con datos). Renders automáticos
+  //   posteriores (Loyverse, ventas) pintan barras crecidas al instante. Solo vuelve a
+  //   animar con acción de usuario (cambio de tarjeta / PTR marca _DashweyHeroUserAction).
+  var _barBootUsada = (window._DashweyBarsBootDone === true);
+  var _accUsuarioB = (window._DashweyHeroUserAction === true);
+  if (!_animReady || (_barBootUsada && !_accUsuarioB)) {
+   // Splash O ya animó una vez y no es interacción → barras crecidas sin animar.
    svg.querySelectorAll('.snap-bar').forEach(function(bar){
     bar.style.transition = 'none';
     bar.classList.add('snap-bar-grown');
    });
   } else {
-   // Primera animación de la ventana de boot, o uso normal: cascada completa UNA vez.
-   if (_barBootWin) svg._barBootAnimDone = true;
+   // Primera animación de la sesión, o acción de usuario: cascada completa.
+   if (!_barBootUsada) { try { window._DashweyBarsBootDone = true; } catch(_) {} }
    svg.querySelectorAll('.snap-bar').forEach(function(bar){ bar.style.transition = ''; });
    requestAnimationFrame(function(){
     requestAnimationFrame(function(){
@@ -49250,19 +49254,9 @@ function _confirmBorrarCuenta(id) {
  // Fase 5.3: persistir tarjeta activa para landscape mode
  if (activeId) _activeCardId = activeId;
 
- // v1.3.1840: re-animar el Hero de la tarjeta activa en el render completo
- //   (PTR pull-to-refresh, cambio de periodo). Resetea _snapLastTarget del Hero
- //   activo → _snapCounterUp anima desde 0 aunque el valor no haya cambiado
- //   (feedback visual del refresh). Solo el Hero de la card activa.
- //   GUARD: solo si el boot está estable (evita doble-animación durante el boot).
- try {
-  if (window._DashweyBootAnimReady === true) {
-   var _heroIdAll = activeId === 'rendimiento' ? 'snap-val-rendimiento'
-                : activeId === 'flujo-caja'  ? 'snap-val-flujo-caja'
-                : activeId === 'compras'     ? 'snap-val-compras' : null;
-   if (_heroIdAll) { var _hElAll = document.getElementById(_heroIdAll); if (_hElAll) _hElAll._snapLastTarget = undefined; }
-  }
- } catch(_) {}
+ // v1.3.1843: el reset del Hero para PTR/periodo se hace en los callsites concretos
+ //   (marcando _DashweyHeroUserAction). Aquí NO se resetea — _snapDoRenderAll se llama
+ //   también en boot y renders automáticos, donde el Hero NO debe re-animar.
 
  // v1.3.583: precalcular snapshot una vez para todas las cards
  var _sharedSnap = null;
@@ -49398,18 +49392,22 @@ function _confirmBorrarCuenta(id) {
  _snapLastRenderedCardId = cardId;
  delete entry.target.dataset.stale;
  _snapUpdateTitle(cardId);
- // v1.3.1840: re-animar el número Hero al CAMBIAR de tarjeta (como las gráficas).
- //   Al entrar en una card distinta, resetear _snapLastTarget de su Hero → el
- //   próximo _snapCounterUp anima desde 0 en vez de fijar el texto (guard v1809).
- //   Solo los 3 Hero grandes (rendimiento/flujo-caja/compras). Cero lógica de datos.
- //   GUARD: solo si el boot está estable (_DashweyBootAnimReady) — durante el boot
- //   hay doble render (local + Loyverse) que NO debe doble-animar.
+ // v1.3.1840/1843: re-animar el número Hero al CAMBIAR de tarjeta (como las gráficas).
+ //   Cambio de tarjeta = ACCIÓN DE USUARIO → marca el flag que permite animar aunque
+ //   ya se hiciera la animación de boot. Resetea _snapLastTarget → anima desde 0.
+ //   GUARD: solo si el boot está estable (_DashweyBootAnimReady).
  try {
   if (window._DashweyBootAnimReady === true) {
    var _heroId = cardId === 'rendimiento' ? 'snap-val-rendimiento'
                : cardId === 'flujo-caja'  ? 'snap-val-flujo-caja'
                : cardId === 'compras'     ? 'snap-val-compras' : null;
-   if (_heroId) { var _hEl = document.getElementById(_heroId); if (_hEl) _hEl._snapLastTarget = undefined; }
+   if (_heroId) {
+    var _hEl = document.getElementById(_heroId);
+    if (_hEl) _hEl._snapLastTarget = undefined;
+    window._DashweyHeroUserAction = true;
+    // limpiar el flag tras el render para que el siguiente render automático no anime
+    setTimeout(function(){ try { window._DashweyHeroUserAction = false; } catch(_) {} }, 900);
+   }
   }
  } catch(_) {}
  try { _snapRenderCard(cardId); } catch(_e) {}
