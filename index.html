@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1831";
+ var CURRENT_CACHE = "dashwey-v1-3-1832";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1831</title>
+<title>Dashwey v1.3.1832</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23208,7 +23208,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1831';
+ const _APP_VERSION = 'v1.3.1832';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -44786,11 +44786,83 @@ function _confirmBorrarCuenta(id) {
   return cambios;
  }
 
+ // ── FASE 2 · PUENTE motor viejo ↔ ciclos ──────────────────────────────────
+ // _provCadaDias(prov) → periodicidad en días reales del proveedor (7 si semanal).
+ function _provCadaDias(prov) {
+  var per = (prov && prov.reparto && prov.reparto.periodicidad) || (prov && prov.periodicidad) || null;
+  if (!per) return 7;
+  var n = per.n || per._n || 1;
+  var unit = per.unit || per._unit || (per.tipo === 'semanal' ? 'week' : null);
+  if (n <= 0) n = 1;
+  if (unit === 'day') return n;
+  if (unit === 'month') return n * 30;
+  return n * 7; // week / default
+ }
+
+ // _provTienePeriodicidadReal(prov) → true si NO es semanal puro (1×/semana).
+ //   Solo entonces usamos el motor de ciclos; si es semanal, comportamiento viejo idéntico.
+ function _provTienePeriodicidadReal(prov) {
+  if (!prov) return false;
+  if (Array.isArray(prov.ciclosReparto) && prov.ciclosReparto.length) {
+   // si algún ciclo no es semanal → real
+   for (var i = 0; i < prov.ciclosReparto.length; i++) {
+    if (prov.ciclosReparto[i].cadaDias && prov.ciclosReparto[i].cadaDias !== 7) return true;
+   }
+   return false;
+  }
+  return _provCadaDias(prov) !== 7;
+ }
+
+ // _feedPedidosProv(prov, fromDate, horizonDays) → array de Date de pedido.
+ //   Si el prov tiene periodicidad real → motor de ciclos (un ciclo por día de pedido,
+ //   anclado a la próxima ocurrencia, con cadaDias real). Si es semanal → motor viejo
+ //   (byte-idéntico al comportamiento actual). Devuelve SOLO fechas de pedido (las
+ //   entregas las sigue resolviendo calcEntA, que también consulta el offset si aplica).
+ function _feedPedidosProv(prov, fromDate, horizonDays) {
+  if (!prov) return [];
+  if (!_provTienePeriodicidadReal(prov)) {
+   // semanal puro → comportamiento viejo intacto
+   return _allUpcomingOrderDates(prov.diasPedido, fromDate, horizonDays);
+  }
+  // periodicidad real → construir ciclos (uno por día de pedido) y proyectar
+  var dp = Array.isArray(prov.diasPedido) ? prov.diasPedido : [];
+  if (!dp.length) return [];
+  var cadaDias = _provCadaDias(prov);
+  var hoy = new Date(fromDate); hoy.setHours(0, 0, 0, 0);
+  var de = Array.isArray(prov.diasEntrega) ? prov.diasEntrega : [];
+  var ciclos = [];
+  for (var i = 0; i < dp.length; i++) {
+   var diaPed = dp[i];
+   var ancla = new Date(hoy);
+   for (var k = 0; k < 7; k++) {
+    var dow = ancla.getDay() === 0 ? 6 : ancla.getDay() - 1;
+    if (dow === diaPed) break;
+    ancla.setDate(ancla.getDate() + 1);
+   }
+   var off = 1;
+   if (de.length) { var diaEnt = (i < de.length) ? de[i] : de[0]; off = (diaEnt - diaPed + 7) % 7; }
+   ciclos.push({
+    id: 'cic_feed_' + diaPed + '_' + i,
+    fechaAncla: ancla.toISOString().slice(0, 10),
+    cadaDias: cadaDias, offsetEntrega: off
+   });
+  }
+  var proy = [];
+  for (var c = 0; c < ciclos.length; c++) {
+   var r = _proyectarUnCiclo(ciclos[c], fromDate, horizonDays || 14);
+   for (var j = 0; j < r.length; j++) proy.push(r[j].pedido);
+  }
+  proy.sort(function(a, b){ return a.getTime() - b.getTime(); });
+  return proy;
+ }
+
  // Exposición para diagnóstico/tests en consola (no afecta a producción).
  try {
   window._DashweyProyectarCiclos = _proyectarCiclos;
   window._DashweyProvCiclos = _provCiclos;
   window._DashweyMigrarCiclos = _DashweyMigrarCiclos;
+  window._DashweyFeedPedidosProv = _feedPedidosProv;
+  window._DashweyProvCadaDias = _provCadaDias;
  } catch(_) {}
 
  // v1.3.991 — LOTE B: helpers puros de recurrencia Próximo Pedido
@@ -45099,9 +45171,9 @@ function _confirmBorrarCuenta(id) {
     var _diffMs = new Date(rangeEnd).getTime() - _hoyMidnight.getTime();
     _horizonD = Math.max(7, Math.min(60, Math.ceil(_diffMs / 86400000) + 1));
    }
-   var _todosFp = (typeof _allUpcomingOrderDates === 'function')
-    ? _allUpcomingOrderDates(prov.diasPedido, _hoyMidnight, _horizonD)
-    : [];
+   var _todosFp = (typeof _feedPedidosProv === 'function')
+    ? _feedPedidosProv(prov, _hoyMidnight, _horizonD)
+    : ((typeof _allUpcomingOrderDates === 'function') ? _allUpcomingOrderDates(prov.diasPedido, _hoyMidnight, _horizonD) : []);
    _todosFp.forEach(function(fpPred, idx) {
     // v1.3.1451: skip predicho stale (anterior o igual al pending real activo)
     if (_latestPending && fpPred <= _latestPending) return;
@@ -46199,9 +46271,9 @@ function _confirmBorrarCuenta(id) {
    var _diffMsR = new Date(rangeEnd).getTime() - hoy0.getTime();
    _horizonR = Math.max(7, Math.min(60, Math.ceil(_diffMsR / 86400000) + 1));
   }
-  var _todosFp = (typeof _allUpcomingOrderDates === 'function')
-   ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR)
-   : [];
+  var _todosFp = (typeof _feedPedidosProv === 'function')
+   ? _feedPedidosProv(prov, hoy0, _horizonR)
+   : ((typeof _allUpcomingOrderDates === 'function') ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR) : []);
   // v1.3.1451: NO precalcular _esSameDay global. Cada fecha tiene su propio
   //   estado sameDay (Praviana Lu = sameDay, Praviana Do = solo pedido).
   _todosFp.forEach(function(fpPred, idx) {
