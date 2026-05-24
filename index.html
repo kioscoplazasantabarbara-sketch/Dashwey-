@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1841";
+ var CURRENT_CACHE = "dashwey-v1-3-1842";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1841</title>
+<title>Dashwey v1.3.1842</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -22791,7 +22791,7 @@ function _hideSplash() {
     //   1) Preparar la animación de barras AHORA, mientras el splash aún tapa: activar
     //      el flag y forzar UN render → las barras quedan animando (no se ve, está tapado).
     try {
-     window._DashweyBootAnimReady = true;
+     window._DashweyBootAnimReady = true; window._DashweyBootReadyAt = window._DashweyBootReadyAt || Date.now();
      if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
     } catch(_) {}
     //   2) Tras 2 frames (el render ya pintó), revelar el #app SÓLIDO (sin fade en APK).
@@ -22857,7 +22857,7 @@ function _hideSplash() {
   //   nunca animaban. Re-render para reproducir la cascada una vez, ya visible.
   setTimeout(function(){
    try {
-    window._DashweyBootAnimReady = true;
+    window._DashweyBootAnimReady = true; window._DashweyBootReadyAt = window._DashweyBootReadyAt || Date.now();
     if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
    } catch(_) {}
   }, 200);
@@ -22887,7 +22887,7 @@ window._splashStartTime = Date.now();
 setTimeout(function(){
  try {
   if (window._DashweyBootAnimReady !== true) {
-   window._DashweyBootAnimReady = true;
+   window._DashweyBootAnimReady = true; window._DashweyBootReadyAt = window._DashweyBootReadyAt || Date.now();
    if (window.App && App.dash && typeof App.dash.render === 'function') App.dash.render();
   }
  } catch(_) {}
@@ -23263,7 +23263,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1841';
+ const _APP_VERSION = 'v1.3.1842';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -43652,6 +43652,31 @@ function _confirmBorrarCuenta(id) {
   el._snapLastTarget = target;
   return;
  }
+ // v1.3.1842 FIX DOBLE-ANIM BOOT: durante el boot hay 2 renders de datos seguidos
+ //   (local → Loyverse fresco). Si ambos animan → "mitad" y luego "total" = doble.
+ //   Solución: el Hero anima UNA sola vez por ventana de boot. La 1ª animación marca
+ //   _bootAnimDone; los renders siguientes del boot (Loyverse llega y cambia el valor)
+ //   solo FIJAN el texto sin re-animar. La ventana de boot se considera activa hasta
+ //   que pasen 4s desde que _DashweyBootAnimReady se puso true (sync estable).
+ //   Tras la ventana, todo render del usuario (cambio tarjeta/PTR) anima normal.
+ var _enBootWindow = (function(){
+  try {
+   if (window._DashweyBootAnimReady !== true) return true; // aún en boot
+   var t0 = window._DashweyBootReadyAt || 0;
+   return t0 > 0 && (Date.now() - t0) < 4000; // 4s de gracia tras boot ready
+  } catch(_) { return false; }
+ })();
+ if (_enBootWindow && el._bootAnimDone) {
+  // Ya animó una vez en esta ventana de boot → segundo render (Loyverse) solo fija texto.
+  if (isEur) el.textContent = _snapFeur(target);
+  else if (isPct) el.textContent = _snapFmt(target, 1) + '%';
+  else el.textContent = _snapFmt(Math.round(target));
+  el.classList.remove('snap-counting');
+  el._snapLastTarget = target;
+  return;
+ }
+ if (_enBootWindow) el._bootAnimDone = true;
+ else el._bootAnimDone = false; // fuera de boot, resetear para futuros boots
  // Animar desde el valor previo (si existe) hacia el nuevo → transición natural.
  var start = _hasPrev ? _prev : 0;
  el._snapLastTarget = target;
@@ -48021,14 +48046,25 @@ function _confirmBorrarCuenta(id) {
  //     completa, con el dashboard ya visible. Renders posteriores del usuario animan normal.
  try {
   var _animReady = (window._DashweyBootAnimReady === true);
-  if (!_animReady) {
-   // Boot: barras crecidas al instante, sin animar (tapadas por splash / sin flash).
+  // v1.3.1842 FIX BARRAS 4 VECES: ventana de boot. El doble render (local→Loyverse)
+  //   + re-renders del observer animaban la cascada hasta 4 veces. Ahora: durante la
+  //   ventana de boot (4s tras BootAnimReady) la cascada anima UNA sola vez (flag
+  //   _barBootAnimDone en el svg); los renders siguientes pintan barras crecidas al
+  //   instante. Fuera de la ventana (uso normal), cada render anima como siempre.
+  var _barBootWin = false;
+  try {
+   if (!_animReady) _barBootWin = true;
+   else { var _t0b = window._DashweyBootReadyAt || 0; _barBootWin = (_t0b > 0 && (Date.now() - _t0b) < 4000); }
+  } catch(_) {}
+  if (!_animReady || (_barBootWin && svg._barBootAnimDone)) {
+   // Boot inicial (splash) O ya animó una vez en la ventana → barras crecidas sin animar.
    svg.querySelectorAll('.snap-bar').forEach(function(bar){
     bar.style.transition = 'none';
     bar.classList.add('snap-bar-grown');
    });
   } else {
-   // Arranque estable o uso normal: animación de cascada completa.
+   // Primera animación de la ventana de boot, o uso normal: cascada completa UNA vez.
+   if (_barBootWin) svg._barBootAnimDone = true;
    svg.querySelectorAll('.snap-bar').forEach(function(bar){ bar.style.transition = ''; });
    requestAnimationFrame(function(){
     requestAnimationFrame(function(){
