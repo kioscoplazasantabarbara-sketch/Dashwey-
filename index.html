@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1833";
+ var CURRENT_CACHE = "dashwey-v1-3-1834";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1833</title>
+<title>Dashwey v1.3.1834</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23208,7 +23208,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1833';
+ const _APP_VERSION = 'v1.3.1834';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29660,32 +29660,47 @@ const ui = (() => {
  //    prov.reparto = { fechaInicio: ISO, periodicidad: {n,unit}, hora }
  // ════════════════════════════════════════════════════════════════════════════
  (function() {
+  // ════════════════════════════════════════════════════════════════════════════
+  //  _DashweyProvPicker · MULTI-CICLO (v1.3.1834, FASE 4)
+  //    Modelo: array de ciclos. Cada ciclo = { fechaAncla, diaPedido, offsetEntrega, cadaDias, hora }
+  //    "Días exactos mandan": cadaDias en días reales. Fecha exacta por ciclo (calendario desplegable).
+  //    API: open({ provNombre, initialCiclos:[...], initialFechaInicio, initialPeriodicidad, initialHora,
+  //               onConfirm: fn({ ciclos:[...], fechaInicio, periodicidad, hora }), onCancel })
+  //    onConfirm devuelve ciclos[] (modelo nuevo) Y los campos legacy (fechaInicio/periodicidad/hora del
+  //    primer ciclo) para compatibilidad con el caller actual.
+  // ════════════════════════════════════════════════════════════════════════════
   var _open = false;
   var _onConfirm = null;
   var _onCancel = null;
 
   var MONTHS_PP = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var DOWS_SHORT = ['Lu','Ma','Mi','Ju','Vi','Sá','Do'];
   var DOWS_FULL_PP = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
 
-  // State interno del picker
-  var st = {
-   fechaInicio: new Date(),
-   periodicidad: { n: 1, unit: 'week' },
-   hora: '10:00',
-   provNombre: '',
-   _viewDate: new Date() // mes visible del calendario
-  };
+  // st.ciclos = array de { fechaAncla:Date, diaPedido:0..6, offsetEntrega:int, cadaDias:int, hora, _viewDate:Date, _calOpen:bool }
+  var st = { provNombre: '', ciclos: [] };
+
+  function _nuevoCiclo(base) {
+   base = base || {};
+   var f = base.fechaAncla ? new Date(base.fechaAncla) : new Date();
+   if (isNaN(f.getTime())) f = new Date();
+   var dp = (typeof base.diaPedido === 'number') ? base.diaPedido : (f.getDay() === 0 ? 6 : f.getDay() - 1);
+   return {
+    fechaAncla: f,
+    diaPedido: dp,
+    offsetEntrega: (typeof base.offsetEntrega === 'number') ? base.offsetEntrega : 0,
+    cadaDias: (base.cadaDias > 0) ? base.cadaDias : 7,
+    hora: (typeof base.hora === 'string' && /^\d{2}:\d{2}$/.test(base.hora)) ? base.hora : '10:00',
+    _viewDate: new Date(f.getFullYear(), f.getMonth(), 1),
+    _calOpen: false
+   };
+  }
 
   function _ensureStyles() {
    if (document.getElementById('dwy-prov-picker-styles')) return;
    var style = document.createElement('style');
    style.id = 'dwy-prov-picker-styles';
    style.textContent = [
-    // v1.3.1519: OPTIMIZACIÓN WEBVIEW ANDROID
-    //  - ELIMINADO backdrop-filter (causa lag/flickering severo en Pixel)
-    //  - top/left/right/bottom explícitos en lugar de 'inset:0' (evita layout shift)
-    //  - translate3d en lugar de translateY (forza composite layer GPU)
-    //  - will-change:transform pre-anim para que WebView prepare layer
     '.dpp-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:10300;background:rgba(0,0,0,0.55);display:flex;align-items:flex-end;justify-content:center;opacity:0;transition:opacity var(--dur-std) ease;pointer-events:none}',
     '.dpp-overlay.show{opacity:1;pointer-events:auto}',
     '.dpp-sheet{width:100%;max-width:480px;max-height:92vh;background:var(--surface);border-radius:var(--r-lg,20px) var(--r-lg,20px) 0 0;box-shadow:0 -8px 32px rgba(0,0,0,0.18);display:flex;flex-direction:column;overflow:hidden;transform:translate3d(0,100%,0);transition:transform 0.28s cubic-bezier(0.16,1,0.3,1);will-change:transform;font-family:var(--font);-webkit-backface-visibility:hidden;backface-visibility:hidden}',
@@ -29699,128 +29714,286 @@ const ui = (() => {
     '.dpp-btn{flex:1;padding:var(--sp-3,12px) var(--sp-4,16px);border-radius:var(--r-md,14px);font-size:var(--fs-base,15px);font-weight:var(--fw-bold,700);cursor:pointer;border:none;font-family:inherit;transition:all var(--dur-micro) ease}',
     '.dpp-btn-cancel{background:transparent;color:var(--ink-soft);border:1px solid var(--border)}',
     '.dpp-btn-ok{background:var(--ink);color:white}',
-    '.dpp-hero{background:linear-gradient(135deg,var(--bg) 0%,var(--bg-mid,#efebe8) 100%);border-radius:var(--r-md,14px);padding:var(--sp-5,20px);margin-bottom:var(--sp-5,20px);text-align:center}',
-    '.dpp-hero-label{font-size:11px;font-weight:var(--fw-bold,700);color:var(--ink-soft);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:var(--sp-2,8px)}',
-    '.dpp-hero-value{font-size:26px;font-weight:var(--fw-xbold,800);color:var(--ink);letter-spacing:-0.5px;line-height:1.15}',
-    '.dpp-hero-sub{font-size:var(--fs-sm,13px);color:var(--ink-mid,#4a4540);margin-top:var(--sp-2,8px);font-weight:var(--fw-semi,600)}',
-    '.dpp-section{margin-bottom:var(--sp-5,20px)}',
-    '.dpp-section-label{font-size:11px;font-weight:var(--fw-bold,700);color:var(--ink-soft);letter-spacing:0.6px;text-transform:uppercase;margin-bottom:var(--sp-3,12px);padding-left:2px}',
-    '.dpp-cal{background:var(--bg);border-radius:var(--r-md,14px);padding:var(--sp-4,16px)}',
-    '.dpp-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-3,12px)}',
-    '.dpp-cal-month{font-size:var(--fs-base,15px);font-weight:var(--fw-bold,700);color:var(--ink)}',
-    '.dpp-cal-nav{display:flex;gap:var(--sp-1,4px)}',
-    '.dpp-cal-navbtn{width:32px;height:32px;border:none;border-radius:var(--r-sm,10px);background:var(--surface);color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:var(--fw-bold,700);font-family:inherit;padding:0}',
-    '.dpp-cal-dowrow{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:var(--sp-2,8px)}',
-    '.dpp-cal-dow{text-align:center;font-size:11px;font-weight:var(--fw-bold,700);color:var(--ink-soft);padding:var(--sp-1,4px);letter-spacing:0.5px}',
-    '.dpp-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}',
-    '.dpp-cal-day{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:var(--fs-sm,13px);color:var(--ink);cursor:pointer;border-radius:8px;font-weight:var(--fw-semi,600);font-family:inherit;border:none;background:transparent;padding:0}',
-    '.dpp-cal-day.dim{color:var(--ink-soft);opacity:0.4}',
-    '.dpp-cal-day.today{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--ink)}',
-    '.dpp-cal-day.selected{background:var(--ink);color:white}',
-    '.dpp-period-row{display:grid;grid-template-columns:90px 1fr;gap:var(--sp-2,8px);align-items:center}',
-    '.dpp-n-wrap{display:flex;align-items:center;background:var(--bg);border-radius:var(--r-md,14px);height:44px;padding:0 var(--sp-2,8px)}',
-    '.dpp-n-btn{width:28px;height:28px;border:none;background:var(--surface);border-radius:6px;cursor:pointer;font-size:16px;font-weight:var(--fw-bold,700);color:var(--ink);display:flex;align-items:center;justify-content:center;font-family:inherit;padding:0}',
-    '.dpp-n-input{flex:1;border:none;background:transparent;text-align:center;font-size:var(--fs-base,15px);font-weight:var(--fw-bold,700);color:var(--ink);font-family:inherit;outline:none;width:100%;-moz-appearance:textfield}',
+    '.dpp-section-label{font-size:11px;font-weight:var(--fw-bold,700);color:var(--ink-soft);letter-spacing:0.6px;text-transform:uppercase;margin-bottom:var(--sp-3,12px);padding-left:2px;display:flex;align-items:center;gap:8px}',
+    '.dpp-section-label::before{content:"";width:4px;height:14px;background:var(--red,#9E1C32);border-radius:3px}',
+    // tarjeta de ciclo
+    '.dpp-ciclo{background:var(--bg);border-radius:var(--r-md,14px);padding:var(--sp-4,16px);margin-bottom:var(--sp-3,12px);animation:dppRise .35s ease both}',
+    '@keyframes dppRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}',
+    '.dpp-ciclo-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-3,12px)}',
+    '.dpp-ciclo-title{font-size:var(--fs-base,15px);font-weight:var(--fw-xbold,800);color:var(--ink);display:flex;align-items:center;gap:9px}',
+    '.dpp-ciclo-num{display:inline-flex;align-items:center;justify-content:center;width:23px;height:23px;background:var(--red,#9E1C32);color:#fff;border-radius:7px;font-size:12px;font-weight:800}',
+    '.dpp-ciclo-del{background:none;border:none;color:var(--ink-soft);cursor:pointer;padding:4px;display:flex;align-items:center}',
+    '.dpp-crow{margin-bottom:var(--sp-3,12px)}',
+    '.dpp-crow:last-child{margin-bottom:0}',
+    '.dpp-crow-lbl{font-size:12px;font-weight:var(--fw-semi,600);color:var(--ink-soft);margin:0 0 7px 2px}',
+    '.dpp-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}',
+    '.dpp-dow-c{height:38px;border-radius:10px;background:var(--surface);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:var(--fw-bold,700);color:var(--ink-soft);cursor:pointer;font-family:inherit;padding:0;transition:all var(--dur-micro) ease}',
+    '.dpp-dow-c.on{background:var(--ink);border-color:var(--ink);color:#fff}',
+    '.dpp-ent{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}',
+    '.dpp-ent-c{padding:9px 4px;border-radius:10px;background:var(--surface);border:1.5px solid var(--border);font-size:12.5px;font-weight:var(--fw-bold,700);color:var(--ink-soft);cursor:pointer;font-family:inherit;text-align:center;white-space:nowrap;transition:all var(--dur-micro) ease}',
+    '.dpp-ent-c.on{background:var(--ink);border-color:var(--ink);color:#fff}',
+    '.dpp-freq{display:flex;align-items:center;gap:11px}',
+    '.dpp-n-wrap{display:flex;align-items:center;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;height:44px;padding:0 6px}',
+    '.dpp-n-btn{width:30px;height:30px;border:none;background:var(--bg);border-radius:7px;cursor:pointer;font-size:18px;font-weight:var(--fw-bold,700);color:var(--ink);display:flex;align-items:center;justify-content:center;font-family:inherit;padding:0}',
+    '.dpp-n-input{width:46px;border:none;background:transparent;text-align:center;font-size:16px;font-weight:var(--fw-xbold,800);color:var(--ink);font-family:inherit;outline:none;-moz-appearance:textfield}',
     '.dpp-n-input::-webkit-outer-spin-button,.dpp-n-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}',
-    '.dpp-unit-chips{display:flex;gap:var(--sp-1,4px);background:var(--bg);border-radius:var(--r-md,14px);padding:4px;height:44px}',
-    '.dpp-unit-chip{flex:1;border:none;background:transparent;border-radius:8px;font-size:var(--fs-sm,13px);font-weight:var(--fw-semi,600);color:var(--ink-soft);cursor:pointer;font-family:inherit;transition:all var(--dur-micro) ease;padding:0}',
-    '.dpp-unit-chip.active{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,0.08)}',
-    '.dpp-dow-selector{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--sp-1,4px);margin-top:var(--sp-3,12px)}',
-    '.dpp-dow-chip{aspect-ratio:1;max-height:44px;border:1.5px solid var(--border);background:var(--surface);border-radius:var(--r-sm,10px);font-size:var(--fs-sm,13px);font-weight:var(--fw-bold,700);color:var(--ink-mid,#4a4540);cursor:pointer;font-family:inherit;transition:all var(--dur-micro) ease;padding:0}',
-    '.dpp-dow-chip.active{background:var(--ink);color:white;border-color:var(--ink)}',
-    '.dpp-dow-help{font-size:var(--fs-xs,12px);color:var(--ink-soft);margin-top:var(--sp-2,8px);padding-left:2px}',
-    '.dpp-hora-row{display:flex;align-items:center;justify-content:space-between;background:var(--bg);border-radius:var(--r-md,14px);padding:var(--sp-3,12px) var(--sp-4,16px)}',
-    '.dpp-hora-label{font-size:var(--fs-sm,13px);font-weight:var(--fw-semi,600);color:var(--ink)}',
-    '.dpp-hora-value{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm,10px);padding:8px 14px;font-size:var(--fs-base,15px);font-weight:var(--fw-bold,700);color:var(--ink);cursor:pointer;font-family:inherit;font-variant-numeric:tabular-nums;outline:none}'
+    '.dpp-freq-unit{font-size:14px;font-weight:var(--fw-bold,700);color:var(--ink)}',
+    // fecha (toggle calendario)
+    '.dpp-fecha-row{display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:11px 14px;cursor:pointer}',
+    '.dpp-fecha-val{font-size:13.5px;font-weight:var(--fw-bold,700);color:var(--ink)}',
+    '.dpp-fecha-chev{color:var(--ink-soft);transition:transform .2s}',
+    '.dpp-fecha-chev.open{transform:rotate(180deg)}',
+    '.dpp-cal{background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:var(--sp-3,12px);margin-top:8px}',
+    '.dpp-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}',
+    '.dpp-cal-month{font-size:14px;font-weight:var(--fw-bold,700);color:var(--ink)}',
+    '.dpp-cal-nav{display:flex;gap:4px}',
+    '.dpp-cal-navbtn{width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:var(--fw-bold,700);font-family:inherit;padding:0}',
+    '.dpp-cal-dowrow{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:6px}',
+    '.dpp-cal-dow{text-align:center;font-size:10.5px;font-weight:var(--fw-bold,700);color:var(--ink-soft);padding:2px}',
+    '.dpp-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}',
+    '.dpp-cal-day{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:12.5px;color:var(--ink);cursor:pointer;border-radius:8px;font-weight:var(--fw-semi,600);font-family:inherit;border:none;background:transparent;padding:0}',
+    '.dpp-cal-day.dim{color:var(--ink-soft);opacity:0.4}',
+    '.dpp-cal-day.today{box-shadow:inset 0 0 0 1.5px var(--ink)}',
+    '.dpp-cal-day.selected{background:var(--ink);color:white}',
+    '.dpp-hora-row{display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:10px 14px}',
+    '.dpp-hora-label{font-size:13px;font-weight:var(--fw-semi,600);color:var(--ink)}',
+    '.dpp-hora-value{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:7px 12px;font-size:14px;font-weight:var(--fw-bold,700);color:var(--ink);cursor:pointer;font-family:inherit;font-variant-numeric:tabular-nums;outline:none}',
+    '.dpp-add{width:100%;padding:14px;border-radius:var(--r-md,14px);background:transparent;border:2px dashed #d9c9cc;color:var(--red,#9E1C32);font-size:14.5px;font-weight:var(--fw-xbold,800);cursor:pointer;font-family:inherit;margin-bottom:var(--sp-4,16px)}',
+    '.dpp-resumen{background:var(--ink);color:#fff;border-radius:var(--r-md,14px);padding:16px 16px;margin-top:4px}',
+    '.dpp-resumen-l{font-size:10.5px;font-weight:800;letter-spacing:1px;color:#caa;opacity:.7;text-transform:uppercase}',
+    '.dpp-resumen-t{font-size:14.5px;font-weight:var(--fw-bold,700);margin-top:6px;line-height:1.4}'
    ].join('\n');
    document.head.appendChild(style);
   }
 
+  function _svgTrash() {
+   return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+  }
+  function _svgChev() {
+   return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  }
+  function _svgClip() {
+   return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1z"/></svg>';
+  }
+
+  function _fmtFecha(d) {
+   var dd = new Date(d);
+   return DOWS_FULL_PP[dd.getDay() === 0 ? 6 : dd.getDay() - 1] + ' ' + dd.getDate() + ' ' + MONTHS_PP[dd.getMonth()].toLowerCase();
+  }
+  function _entLabel(off) {
+   if (off === 0) return 'Mismo día';
+   return '+' + off + (off === 1 ? ' día' : ' días');
+  }
+
   function _resumenTxt() {
-   var p = st.periodicidad;
-   var unitLabel = ({
-    day: p.n === 1 ? 'día' : 'días',
-    week: p.n === 1 ? 'semana' : 'semanas',
-    month: p.n === 1 ? 'mes' : 'meses'
-   })[p.unit] || 'semana';
-   var main = p.n === 1
-    ? (p.unit === 'day' ? 'Diario' : 'Cada ' + unitLabel)
-    : 'Cada ' + p.n + ' ' + unitLabel;
-   // v1.3.1519: hero ya NO incluye días (los chips externos los manejan aparte)
-   //   Solo periodicidad + hora.
-   var sub = st.hora || '';
-   return { main: main, sub: sub };
+   if (!st.ciclos.length) return 'Sin ciclos configurados';
+   var parts = st.ciclos.map(function(c){
+    var diaP = DOWS_FULL_PP[c.diaPedido];
+    var ent = c.offsetEntrega === 0 ? 'mismo día' : '+' + c.offsetEntrega + 'd';
+    return diaP + ' (entrega ' + ent + ')';
+   });
+   var cadaTxt = '';
+   // si todos comparten cadaDias, mostrarlo una vez
+   var allSame = st.ciclos.every(function(c){ return c.cadaDias === st.ciclos[0].cadaDias; });
+   if (allSame) cadaTxt = ' · cada ' + st.ciclos[0].cadaDias + (st.ciclos[0].cadaDias === 1 ? ' día' : ' días');
+   return parts.join(' y ') + cadaTxt;
   }
 
-  function _renderHero(root) {
-   var r = _resumenTxt();
-   var heroVal = root.querySelector('.dpp-hero-value');
-   var heroSub = root.querySelector('.dpp-hero-sub');
-   if (heroVal) heroVal.textContent = r.main;
-   if (heroSub) heroSub.textContent = r.sub;
-  }
-
-  function _renderCalendar(root) {
-   var grid = root.querySelector('.dpp-cal-grid');
-   var monthLbl = root.querySelector('.dpp-cal-month');
+  function _renderCalendar(cicloEl, ciclo) {
+   var grid = cicloEl.querySelector('.dpp-cal-grid');
+   var monthLbl = cicloEl.querySelector('.dpp-cal-month');
    if (!grid || !monthLbl) return;
    grid.innerHTML = '';
-   var v = st._viewDate;
-   var year = v.getFullYear();
-   var month = v.getMonth();
+   var v = ciclo._viewDate;
+   var year = v.getFullYear(), month = v.getMonth();
    monthLbl.textContent = MONTHS_PP[month] + ' ' + year;
    var firstDay = new Date(year, month, 1);
    var dowFirst = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
    var daysInMonth = new Date(year, month + 1, 0).getDate();
    var today = new Date(); today.setHours(0,0,0,0);
-   var selMid = new Date(st.fechaInicio); selMid.setHours(0,0,0,0);
+   var selMid = new Date(ciclo.fechaAncla); selMid.setHours(0,0,0,0);
    var prevMonthDays = new Date(year, month, 0).getDate();
    for (var i = dowFirst - 1; i >= 0; i--) {
     var b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'dpp-cal-day dim';
-    b.textContent = prevMonthDays - i;
+    b.type = 'button'; b.className = 'dpp-cal-day dim'; b.textContent = prevMonthDays - i;
     grid.appendChild(b);
    }
    for (var d = 1; d <= daysInMonth; d++) {
     var cell = new Date(year, month, d); cell.setHours(0,0,0,0);
     var bd = document.createElement('button');
-    bd.type = 'button';
-    bd.className = 'dpp-cal-day';
-    bd.textContent = d;
+    bd.type = 'button'; bd.className = 'dpp-cal-day'; bd.textContent = d;
     if (cell.getTime() === today.getTime()) bd.classList.add('today');
     if (cell.getTime() === selMid.getTime()) bd.classList.add('selected');
-    (function(yy, mm, dd) {
+    (function(yy, mm, dd2) {
      bd.addEventListener('click', function() {
-      st.fechaInicio = new Date(yy, mm, dd);
-      _renderCalendar(root);
+      ciclo.fechaAncla = new Date(yy, mm, dd2);
+      ciclo.diaPedido = ciclo.fechaAncla.getDay() === 0 ? 6 : ciclo.fechaAncla.getDay() - 1; // sincroniza día con fecha
+      _renderBody();
      });
     })(year, month, d);
     grid.appendChild(bd);
    }
    var filled = dowFirst + daysInMonth;
    var remaining = (7 - (filled % 7)) % 7;
-   for (var dd = 1; dd <= remaining; dd++) {
+   for (var dd3 = 1; dd3 <= remaining; dd3++) {
     var bn = document.createElement('button');
-    bn.type = 'button';
-    bn.className = 'dpp-cal-day dim';
-    bn.textContent = dd;
+    bn.type = 'button'; bn.className = 'dpp-cal-day dim'; bn.textContent = dd3;
     grid.appendChild(bn);
    }
   }
 
-  function _renderAll(root) {
-   _renderHero(root);
-   _renderCalendar(root);
-   // unit chips
-   var chips = root.querySelectorAll('.dpp-unit-chip');
-   chips.forEach(function(c){ c.classList.toggle('active', c.getAttribute('data-unit') === st.periodicidad.unit); });
-   // n input
-   var nInput = root.querySelector('.dpp-n-input');
-   if (nInput) nInput.value = st.periodicidad.n;
-   // hora input
-   var horaInput = root.querySelector('.dpp-hora-value');
-   if (horaInput && horaInput.value !== st.hora) horaInput.value = st.hora;
+  function _cicloHtml(ciclo, idx) {
+   var diaP = DOWS_FULL_PP[ciclo.diaPedido];
+   var entIdx = Math.min(3, Math.max(0, ciclo.offsetEntrega));
+   var dowChips = DOWS_SHORT.map(function(d, i){
+    return '<button type="button" class="dpp-dow-c' + (i === ciclo.diaPedido ? ' on' : '') + '" data-dow="' + i + '">' + d + '</button>';
+   }).join('');
+   var entChips = [0,1,2,3].map(function(o){
+    return '<button type="button" class="dpp-ent-c' + (o === entIdx ? ' on' : '') + '" data-ent="' + o + '">' + _entLabel(o) + '</button>';
+   }).join('');
+   var entregaDia = DOWS_FULL_PP[(ciclo.diaPedido + ciclo.offsetEntrega) % 7];
+   return [
+    '<div class="dpp-ciclo" data-cidx="' + idx + '">',
+     '<div class="dpp-ciclo-top">',
+      '<div class="dpp-ciclo-title"><span class="dpp-ciclo-num">' + (idx+1) + '</span>' + diaP + ' → ' + entregaDia + '</div>',
+      (st.ciclos.length > 1 ? '<button type="button" class="dpp-ciclo-del" data-del="' + idx + '">' + _svgTrash() + '</button>' : ''),
+     '</div>',
+     '<div class="dpp-crow">',
+      '<div class="dpp-crow-lbl">Día que hago el pedido</div>',
+      '<div class="dpp-dow">' + dowChips + '</div>',
+     '</div>',
+     '<div class="dpp-crow">',
+      '<div class="dpp-crow-lbl">Cuándo llega la entrega</div>',
+      '<div class="dpp-ent">' + entChips + '</div>',
+     '</div>',
+     '<div class="dpp-crow">',
+      '<div class="dpp-crow-lbl">Cada cuánto se repite</div>',
+      '<div class="dpp-freq">',
+       '<div class="dpp-n-wrap">',
+        '<button type="button" class="dpp-n-btn" data-ndec="' + idx + '">−</button>',
+        '<input type="number" class="dpp-n-input" min="1" max="365" value="' + ciclo.cadaDias + '" data-nin="' + idx + '">',
+        '<button type="button" class="dpp-n-btn" data-ninc="' + idx + '">+</button>',
+       '</div>',
+       '<span class="dpp-freq-unit">días</span>',
+      '</div>',
+     '</div>',
+     '<div class="dpp-crow">',
+      '<div class="dpp-crow-lbl">Fecha de inicio</div>',
+      '<div class="dpp-fecha-row" data-caltoggle="' + idx + '">',
+       '<span class="dpp-fecha-val">' + _fmtFecha(ciclo.fechaAncla) + '</span>',
+       '<span class="dpp-fecha-chev' + (ciclo._calOpen ? ' open' : '') + '">' + _svgChev() + '</span>',
+      '</div>',
+      (ciclo._calOpen ? (
+       '<div class="dpp-cal">' +
+        '<div class="dpp-cal-head">' +
+         '<span class="dpp-cal-month">—</span>' +
+         '<div class="dpp-cal-nav">' +
+          '<button type="button" class="dpp-cal-navbtn" data-calprev="' + idx + '">‹</button>' +
+          '<button type="button" class="dpp-cal-navbtn" data-calnext="' + idx + '">›</button>' +
+         '</div>' +
+        '</div>' +
+        '<div class="dpp-cal-dowrow">' +
+         '<div class="dpp-cal-dow">L</div><div class="dpp-cal-dow">M</div><div class="dpp-cal-dow">X</div>' +
+         '<div class="dpp-cal-dow">J</div><div class="dpp-cal-dow">V</div><div class="dpp-cal-dow">S</div><div class="dpp-cal-dow">D</div>' +
+        '</div>' +
+        '<div class="dpp-cal-grid"></div>' +
+       '</div>'
+      ) : ''),
+     '</div>',
+    '</div>'
+   ].join('');
+  }
+
+  function _renderBody() {
+   var body = document.getElementById('dwy-prov-picker-body');
+   if (!body) return;
+   var html = '<div class="dpp-section-label">Ciclos de reparto</div>';
+   html += st.ciclos.map(_cicloHtml).join('');
+   html += '<button type="button" class="dpp-add" data-addciclo="1">+ Añadir otro ciclo</button>';
+   html += '<div class="dpp-resumen"><div class="dpp-resumen-l">' + _svgClip() + 'Reparto configurado</div><div class="dpp-resumen-t">' + _escHtml(_resumenTxt()) + '</div></div>';
+   body.innerHTML = html;
+   // render calendarios abiertos
+   st.ciclos.forEach(function(c, i){
+    if (c._calOpen) {
+     var el = body.querySelector('.dpp-ciclo[data-cidx="' + i + '"]');
+     if (el) _renderCalendar(el, c);
+    }
+   });
+   _wireBody(body);
+  }
+
+  function _wireBody(body) {
+   body.querySelectorAll('.dpp-dow-c').forEach(function(b){
+    b.addEventListener('click', function(){
+     var cidx = parseInt(b.closest('.dpp-ciclo').getAttribute('data-cidx'), 10);
+     var dow = parseInt(b.getAttribute('data-dow'), 10);
+     var c = st.ciclos[cidx]; if (!c) return;
+     // mover la fechaAncla a la próxima ocurrencia de ese día de semana
+     var nf = new Date(c.fechaAncla);
+     var cur = nf.getDay() === 0 ? 6 : nf.getDay() - 1;
+     var delta = (dow - cur + 7) % 7;
+     nf.setDate(nf.getDate() + delta);
+     c.fechaAncla = nf; c.diaPedido = dow; c._viewDate = new Date(nf.getFullYear(), nf.getMonth(), 1);
+     _renderBody();
+    });
+   });
+   body.querySelectorAll('.dpp-ent-c').forEach(function(b){
+    b.addEventListener('click', function(){
+     var cidx = parseInt(b.closest('.dpp-ciclo').getAttribute('data-cidx'), 10);
+     st.ciclos[cidx].offsetEntrega = parseInt(b.getAttribute('data-ent'), 10);
+     _renderBody();
+    });
+   });
+   body.querySelectorAll('[data-ndec]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var c = st.ciclos[parseInt(b.getAttribute('data-ndec'),10)];
+     if (c && c.cadaDias > 1) { c.cadaDias--; _renderBody(); }
+    });
+   });
+   body.querySelectorAll('[data-ninc]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var c = st.ciclos[parseInt(b.getAttribute('data-ninc'),10)];
+     if (c && c.cadaDias < 365) { c.cadaDias++; _renderBody(); }
+    });
+   });
+   body.querySelectorAll('[data-nin]').forEach(function(inp){
+    inp.addEventListener('input', function(){
+     var c = st.ciclos[parseInt(inp.getAttribute('data-nin'),10)];
+     if (c) { var v = parseInt(inp.value,10)||1; c.cadaDias = Math.max(1, Math.min(365, v)); }
+    });
+    inp.addEventListener('blur', _renderBody);
+   });
+   body.querySelectorAll('[data-caltoggle]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var c = st.ciclos[parseInt(b.getAttribute('data-caltoggle'),10)];
+     if (c) { c._calOpen = !c._calOpen; _renderBody(); }
+    });
+   });
+   body.querySelectorAll('[data-calprev]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var c = st.ciclos[parseInt(b.getAttribute('data-calprev'),10)];
+     if (c) { c._viewDate = new Date(c._viewDate.getFullYear(), c._viewDate.getMonth()-1, 1); _renderBody(); }
+    });
+   });
+   body.querySelectorAll('[data-calnext]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var c = st.ciclos[parseInt(b.getAttribute('data-calnext'),10)];
+     if (c) { c._viewDate = new Date(c._viewDate.getFullYear(), c._viewDate.getMonth()+1, 1); _renderBody(); }
+    });
+   });
+   body.querySelectorAll('[data-del]').forEach(function(b){
+    b.addEventListener('click', function(){
+     var idx = parseInt(b.getAttribute('data-del'),10);
+     st.ciclos.splice(idx, 1);
+     _renderBody();
+    });
+   });
+   var add = body.querySelector('[data-addciclo]');
+   if (add) add.addEventListener('click', function(){
+    var last = st.ciclos[st.ciclos.length-1] || {};
+    st.ciclos.push(_nuevoCiclo({ cadaDias: last.cadaDias || 7, hora: last.hora || '10:00' }));
+    _renderBody();
+   });
   }
 
   function _close() {
@@ -29828,37 +30001,47 @@ const ui = (() => {
    if (!ov) return;
    ov.classList.remove('show');
    _open = false;
-   setTimeout(function(){
-    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
-   }, 280);
+   setTimeout(function(){ if (ov && ov.parentNode) ov.parentNode.removeChild(ov); }, 280);
   }
 
   function open(opts) {
    opts = opts || {};
-   if (_open) return; // ya abierto
+   if (_open) return;
    _ensureStyles();
 
-   // Inicializar state
-   var fIni = opts.initialFechaInicio
-    ? (opts.initialFechaInicio instanceof Date ? new Date(opts.initialFechaInicio) : new Date(opts.initialFechaInicio))
-    : new Date();
-   if (isNaN(fIni.getTime())) fIni = new Date();
-   st.fechaInicio = fIni;
-   st._viewDate = new Date(fIni.getFullYear(), fIni.getMonth(), 1);
-
-   var p = opts.initialPeriodicidad || {};
-   st.periodicidad = {
-    n: Math.max(1, parseInt(p.n || p._n || 1, 10) || 1),
-    unit: (p.unit || p._unit || 'week')
-   };
-   if (['day','week','month'].indexOf(st.periodicidad.unit) < 0) st.periodicidad.unit = 'week';
-
-   st.hora = (typeof opts.initialHora === 'string' && /^\d{2}:\d{2}$/.test(opts.initialHora)) ? opts.initialHora : '10:00';
+   // Inicializar ciclos: desde initialCiclos (modelo nuevo) o derivar del legacy
    st.provNombre = opts.provNombre || '';
+   st.ciclos = [];
+   if (Array.isArray(opts.initialCiclos) && opts.initialCiclos.length) {
+    st.ciclos = opts.initialCiclos.map(function(c){ return _nuevoCiclo(c); });
+   } else {
+    // derivar del legacy: fechaInicio + periodicidad + (diasPedido/diasEntrega vía opts)
+    var fIni = opts.initialFechaInicio ? new Date(opts.initialFechaInicio) : new Date();
+    if (isNaN(fIni.getTime())) fIni = new Date();
+    var per = opts.initialPeriodicidad || {};
+    var n = Math.max(1, parseInt(per.n || per._n || 1, 10) || 1);
+    var unit = per.unit || per._unit || 'week';
+    var cadaDias = unit === 'day' ? n : (unit === 'month' ? n*30 : n*7);
+    var hora = (typeof opts.initialHora === 'string' && /^\d{2}:\d{2}$/.test(opts.initialHora)) ? opts.initialHora : '10:00';
+    var dp = Array.isArray(opts.initialDiasPedido) ? opts.initialDiasPedido : [];
+    var de = Array.isArray(opts.initialDiasEntrega) ? opts.initialDiasEntrega : [];
+    if (dp.length) {
+     dp.forEach(function(diaPed, i){
+      var ancla = new Date(fIni);
+      var cur = ancla.getDay() === 0 ? 6 : ancla.getDay() - 1;
+      ancla.setDate(ancla.getDate() + ((diaPed - cur + 7) % 7));
+      var off = 0;
+      if (de.length) { var diaEnt = (i < de.length) ? de[i] : de[0]; off = (diaEnt - diaPed + 7) % 7; }
+      st.ciclos.push(_nuevoCiclo({ fechaAncla: ancla, diaPedido: diaPed, offsetEntrega: off, cadaDias: cadaDias, hora: hora }));
+     });
+    } else {
+     st.ciclos.push(_nuevoCiclo({ fechaAncla: fIni, cadaDias: cadaDias, hora: hora }));
+    }
+   }
+
    _onConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
    _onCancel = typeof opts.onCancel === 'function' ? opts.onCancel : null;
 
-   // Construir DOM
    var prevOv = document.getElementById('dwy-prov-picker-ov');
    if (prevOv) prevOv.remove();
 
@@ -29872,59 +30055,9 @@ const ui = (() => {
        '<div class="dpp-title">Definir reparto</div>',
        st.provNombre ? '<div class="dpp-title-sub">' + _escHtml(st.provNombre) + '</div>' : '',
       '</div>',
-      '<button type="button" class="dpp-close" data-action="cancel">✕</button>',
+      '<button type="button" class="dpp-close" data-action="cancel"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>',
      '</div>',
-     '<div class="dpp-body">',
-      '<div class="dpp-hero">',
-       '<div class="dpp-hero-label">Próxima entrega</div>',
-       '<div class="dpp-hero-value">—</div>',
-       '<div class="dpp-hero-sub">—</div>',
-      '</div>',
-      '<div class="dpp-section">',
-       '<div class="dpp-section-label">Fecha de inicio</div>',
-       '<div class="dpp-cal">',
-        '<div class="dpp-cal-head">',
-         '<span class="dpp-cal-month">—</span>',
-         '<div class="dpp-cal-nav">',
-          '<button type="button" class="dpp-cal-navbtn" data-action="prev-month">‹</button>',
-          '<button type="button" class="dpp-cal-navbtn" data-action="next-month">›</button>',
-         '</div>',
-        '</div>',
-        '<div class="dpp-cal-dowrow">',
-         '<div class="dpp-cal-dow">L</div>',
-         '<div class="dpp-cal-dow">M</div>',
-         '<div class="dpp-cal-dow">X</div>',
-         '<div class="dpp-cal-dow">J</div>',
-         '<div class="dpp-cal-dow">V</div>',
-         '<div class="dpp-cal-dow">S</div>',
-         '<div class="dpp-cal-dow">D</div>',
-        '</div>',
-        '<div class="dpp-cal-grid"></div>',
-       '</div>',
-      '</div>',
-      '<div class="dpp-section">',
-       '<div class="dpp-section-label">Periodicidad</div>',
-       '<div class="dpp-period-row">',
-        '<div class="dpp-n-wrap">',
-         '<button type="button" class="dpp-n-btn" data-action="n-dec">−</button>',
-         '<input type="number" class="dpp-n-input" min="1" max="99" value="1">',
-         '<button type="button" class="dpp-n-btn" data-action="n-inc">+</button>',
-        '</div>',
-        '<div class="dpp-unit-chips">',
-         '<button type="button" class="dpp-unit-chip" data-unit="day">Día</button>',
-         '<button type="button" class="dpp-unit-chip active" data-unit="week">Semana</button>',
-         '<button type="button" class="dpp-unit-chip" data-unit="month">Mes</button>',
-        '</div>',
-       '</div>',
-      '</div>',
-      '<div class="dpp-section">',
-       '<div class="dpp-section-label">Hora de visita</div>',
-       '<div class="dpp-hora-row">',
-        '<span class="dpp-hora-label">A las</span>',
-        '<input type="time" class="dpp-hora-value" value="10:00">',
-       '</div>',
-      '</div>',
-     '</div>',
+     '<div class="dpp-body" id="dwy-prov-picker-body"></div>',
      '<div class="dpp-footer">',
       '<button type="button" class="dpp-btn dpp-btn-cancel" data-action="cancel">Cancelar</button>',
       '<button type="button" class="dpp-btn dpp-btn-ok" data-action="confirm">Aceptar</button>',
@@ -29933,67 +30066,40 @@ const ui = (() => {
    ].join('');
    document.body.appendChild(ov);
 
-   _renderAll(ov);
+   _renderBody();
 
-   // Mostrar con animación
-   requestAnimationFrame(function(){
-    ov.classList.add('show');
-   });
+   requestAnimationFrame(function(){ ov.classList.add('show'); });
    _open = true;
 
-   // ── Wire events ────────────────────────────────────────────
-   // Tap fuera del sheet = cancelar
    ov.addEventListener('click', function(e){
-    if (e.target === ov) {
-     if (_onCancel) try { _onCancel(); } catch(_) {}
-     _close();
-    }
+    if (e.target === ov) { if (_onCancel) try { _onCancel(); } catch(_) {} _close(); }
    });
-   // Header close
    ov.querySelectorAll('[data-action="cancel"]').forEach(function(b){
     b.addEventListener('click', function(){ if (_onCancel) try { _onCancel(); } catch(_) {} _close(); });
    });
-   // Calendar nav
-   ov.querySelector('[data-action="prev-month"]').addEventListener('click', function(){
-    st._viewDate = new Date(st._viewDate.getFullYear(), st._viewDate.getMonth() - 1, 1);
-    _renderCalendar(ov);
-   });
-   ov.querySelector('[data-action="next-month"]').addEventListener('click', function(){
-    st._viewDate = new Date(st._viewDate.getFullYear(), st._viewDate.getMonth() + 1, 1);
-    _renderCalendar(ov);
-   });
-   // N input
-   ov.querySelector('[data-action="n-dec"]').addEventListener('click', function(){
-    if (st.periodicidad.n > 1) { st.periodicidad.n--; _renderAll(ov); }
-   });
-   ov.querySelector('[data-action="n-inc"]').addEventListener('click', function(){
-    if (st.periodicidad.n < 99) { st.periodicidad.n++; _renderAll(ov); }
-   });
-   ov.querySelector('.dpp-n-input').addEventListener('input', function(e){
-    var v = parseInt(e.target.value, 10) || 1;
-    st.periodicidad.n = Math.max(1, Math.min(99, v));
-    _renderHero(ov);
-   });
-   // Unit chips
-   ov.querySelectorAll('.dpp-unit-chip').forEach(function(c){
-    c.addEventListener('click', function(){
-     st.periodicidad.unit = c.getAttribute('data-unit');
-     _renderAll(ov);
-    });
-   });
-   // Hora
-   ov.querySelector('.dpp-hora-value').addEventListener('change', function(e){
-    st.hora = e.target.value || '10:00';
-    _renderHero(ov);
-   });
-   // Confirm
    ov.querySelector('[data-action="confirm"]').addEventListener('click', function(){
     if (_onConfirm) {
      try {
+      var ciclosOut = st.ciclos.map(function(c){
+       return {
+        id: c.id || ('cic_' + (c.diaPedido) + '_' + Math.random().toString(36).slice(2,7)),
+        fechaAncla: c.fechaAncla.toISOString().slice(0,10),
+        diaPedido: c.diaPedido,
+        offsetEntrega: c.offsetEntrega,
+        cadaDias: c.cadaDias,
+        hora: c.hora
+       };
+      });
+      var first = st.ciclos[0] || {};
+      // compat legacy: fechaInicio + periodicidad (días) + hora del primer ciclo
       _onConfirm({
-       fechaInicio: st.fechaInicio.toISOString(),
-       periodicidad: { n: st.periodicidad.n, unit: st.periodicidad.unit },
-       hora: st.hora
+       ciclos: ciclosOut,
+       fechaInicio: first.fechaAncla ? first.fechaAncla.toISOString() : new Date().toISOString(),
+       periodicidad: { n: first.cadaDias || 7, unit: 'day' },
+       hora: first.hora || '10:00',
+       // arrays legacy derivados de los ciclos (para mantener chips coherentes mientras existan)
+       diasPedido: st.ciclos.map(function(c){ return c.diaPedido; }),
+       diasEntrega: st.ciclos.map(function(c){ return (c.diaPedido + c.offsetEntrega) % 7; })
       });
      } catch(e) { console.warn('[ProvPicker] onConfirm error:', e); }
     }
@@ -44829,11 +44935,22 @@ function _confirmBorrarCuenta(id) {
  //   entregas las sigue resolviendo calcEntA, que también consulta el offset si aplica).
  function _feedPedidosProv(prov, fromDate, horizonDays) {
   if (!prov) return [];
+  // FASE 4: si el prov tiene ciclosReparto reales (definidos en el modal nuevo) → usarlos
+  //   directamente con sus fechas exactas. Es lo más preciso (respeta lo que eligió el usuario).
+  if (Array.isArray(prov.ciclosReparto) && prov.ciclosReparto.length) {
+   var proyC = [];
+   for (var ci = 0; ci < prov.ciclosReparto.length; ci++) {
+    var rc = _proyectarUnCiclo(prov.ciclosReparto[ci], fromDate, horizonDays || 14);
+    for (var cj = 0; cj < rc.length; cj++) proyC.push(rc[cj].pedido);
+   }
+   proyC.sort(function(a, b){ return a.getTime() - b.getTime(); });
+   return proyC;
+  }
   if (!_provTienePeriodicidadReal(prov)) {
    // semanal puro → comportamiento viejo intacto
    return _allUpcomingOrderDates(prov.diasPedido, fromDate, horizonDays);
   }
-  // periodicidad real → construir ciclos (uno por día de pedido) y proyectar
+  // periodicidad real legacy (sin ciclos definidos aún) → derivar ciclos al vuelo
   var dp = Array.isArray(prov.diasPedido) ? prov.diasPedido : [];
   if (!dp.length) return [];
   var cadaDias = _provCadaDias(prov);
@@ -57090,9 +57207,12 @@ function _parseIva(iva) {
    }
    window._DashweyProvPicker.open({
     provNombre: pCurrent.nombre || '',
+    initialCiclos: (Array.isArray(pCurrent.ciclosReparto) && pCurrent.ciclosReparto.length) ? pCurrent.ciclosReparto : null,
     initialFechaInicio: initialFecha,
     initialPeriodicidad: initialPeriod,
     initialHora: initialHora,
+    initialDiasPedido: Array.isArray(pCurrent.diasPedido) ? pCurrent.diasPedido : [],
+    initialDiasEntrega: Array.isArray(pCurrent.diasEntrega) ? pCurrent.diasEntrega : [],
     onConfirm: function(result) {
      // Construir nuevo schema (sin diasReparto)
      var newReparto = {
@@ -57113,16 +57233,22 @@ function _parseIva(iva) {
      // Mutar en memoria
      pCurrent.reparto = newReparto;
      pCurrent.periodicidad = legacyPeriodicidad;
-     // v1.3.1519: NO TOCAR diasPedido ni diasEntrega.
-     //   Los chips externos del editor son la fuente única de verdad para esos arrays.
+     // FASE 4: guardar el modelo nuevo de ciclos + sincronizar arrays legacy
+     //   desde los ciclos (para que los chips del editor sigan coherentes mientras existan).
+     var _ciclos = Array.isArray(result.ciclos) ? result.ciclos : null;
+     var _dp = Array.isArray(result.diasPedido) ? result.diasPedido : null;
+     var _de = Array.isArray(result.diasEntrega) ? result.diasEntrega : null;
+     if (_ciclos) { pCurrent.ciclosReparto = _ciclos; pCurrent._ciclosMigrados = true; }
+     if (_dp) pCurrent.diasPedido = _dp;
+     if (_de) pCurrent.diasEntrega = _de;
 
      // Persistir solo si proveedor ya existe (pendientes se guardan al "Guardar" externo)
      if (State.get.prov(pid)) {
-      State.set.updateProv(pid, {
-       reparto: newReparto,
-       periodicidad: legacyPeriodicidad
-       // NO incluir diasPedido aquí — preservamos los chips externos.
-      });
+      var _vals = { reparto: newReparto, periodicidad: legacyPeriodicidad };
+      if (_ciclos) { _vals.ciclosReparto = _ciclos; _vals._ciclosMigrados = true; }
+      if (_dp) _vals.diasPedido = _dp;
+      if (_de) _vals.diasEntrega = _de;
+      State.set.updateProv(pid, _vals);
      }
 
      // Update visual del resumen en el botón
