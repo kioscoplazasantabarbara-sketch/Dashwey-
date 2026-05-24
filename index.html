@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1862";
+ var CURRENT_CACHE = "dashwey-v1-3-1863";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1862</title>
+<title>Dashwey v1.3.1863</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23278,7 +23278,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1862';
+ const _APP_VERSION = 'v1.3.1863';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41688,7 +41688,11 @@ function _confirmBorrarCuenta(id) {
     var visible = window._isKpiVisible || function(){return true;};
     var ventasVis = ventas.filter(visible);
     d.ventasTotal = ventasVis.reduce(function(s,v){ return s+_ventaIng(v); }, 0);
-    d.nTickets = ventasVis.length;
+    // v1.3.1863 BUG-WRAP-2: nTickets = recibos REALES (no nº de registros/líneas).
+    //   Un registro v_lvsum_* o varias líneas del mismo ticket NO son tickets distintos.
+    //   Mismo criterio que KPI.getBeneficioNeto (new Set(ticketId||id)). Antes:
+    //   ventasVis.length daba "3460 tickets" cuando eran líneas → ticket medio absurdo.
+    d.nTickets = new Set(ventasVis.map(function(v){ return v.ticketId || v.id; })).size;
 
     // Día récord + media diaria
     var porDia = {};
@@ -41722,6 +41726,10 @@ function _confirmBorrarCuenta(id) {
       var items = (v.items && v.items.length) ? v.items : (v.prodId ? [v] : []);
       items.forEach(function(it){
        var pid = it.prodId; if (!pid) return;
+       // v1.3.1863 BUG-WRAP-1: excluir el pseudo-producto de los días sintéticos
+       //   (v_lvsum_* importados de CSV: prodId '_lvsum', nombre "Ventas del día").
+       //   Sin esto, "Ventas del día (Loyverse)" aparecía como artículo nº1 del ranking.
+       if (pid === '_lvsum') return;
        var prod = State.get.prod(pid);
        var nom = (prod && prod.nombre) || '—';
        // Si el artículo pertenece a un grupo de venta, usar el nombre del grupo
@@ -41767,29 +41775,40 @@ function _confirmBorrarCuenta(id) {
      .slice(0,5)
      .map(function(x){ return { nombre: x.prod.nombre || '—', gain: x.gain, roi: x.roi }; });
 
-    // ── Modelo financiero del Wrapped (v1.3.1761 — acordado con Hung) ──
+    // ── Modelo financiero del Wrapped (v1.3.1863 — revisado con Hung) ──
     //   NOTA: mayo 2026 es MES TRANSICIONAL. Datos mezclados: importaciones CSV
     //   (BudgetBakers, con TODOS los gastos) + datos nuevos de la app. Los números
     //   pueden no cuadrar al 100% este mes; el primer Wrapped "limpio" será junio 2026.
     //
     //   Modelo:
-    //   Ingresos    = ventas del periodo (cierres Kiosco)
-    //   Proveedores = pedidos del módulo Almacén (origen:'pedido')
-    //   Operativos  = resto de gastos agregables del periodo (luz, autónomos…)
-    //                 EXCLUYENDO proveedores (para no duplicar con el CSV que ya los trae)
-    //   Total gastos = proveedores + operativos
-    //   Ganancia neta = ingresos − total gastos
+    //   Ingresos      = ventas del periodo (cierres Kiosco)
+    //   Proveedores   = pedidos del módulo Almacén (compras del periodo)
+    //   Operativos    = gastos de la cuenta SANTANDER (luz, autónomos, recibos…),
+    //                   salvo que el gasto tenga tag tipoGasto explícito (el tag manda).
+    //   Total gastos  = proveedores + operativos  → "salida de caja" del mes (flujo).
+    //   Ganancia neta = BENEFICIO BRUTO (ventas − coste de lo vendido, COGS), idéntico
+    //                   al Dashboard. NO es ingresos−compras: comprar stock para el
+    //                   futuro no es una pérdida del mes. Coherencia total con Dashboard.
     var bn = KPI.getBeneficioNeto(period) || {};
     d.ingresos = (bn.vta!=null) ? bn.vta : d.ventasTotal;
     d.proveedores = d.comprasTotal || 0;
-    // Operativos: gastos agregables del periodo que NO son pedidos a proveedores.
-    //   _isKpiVisible ya excluye transfer/pendiente/ajuste (incluye transferencias internas Kiosco→Santander).
-    //   Excluimos también orígenes de proveedor (pedido, cierre_caja_auto) para no duplicar.
+    // v1.3.1863 BUG-WRAP-7: operativos = gastos de la cuenta SANTANDER (decisión Hung:
+    //   "importamos todos los gastos operativos de ahí"). El tag tipoGasto SIEMPRE manda
+    //   por encima (cualquier gasto de cualquier cuenta editable a operativo/proveedor).
+    //   Antes el fallback heurístico colaba proveedores de mercancía (Goyo, Bimbo…) como
+    //   operativos. Santander se identifica por nombre (mismo criterio que el import BB).
+    var _santanderId = null;
+    try {
+     var _cus = State.get.cuentas() || [];
+     for (var _ci=0; _ci<_cus.length; _ci++){
+      var _cn = (_cus[_ci].nombre||'').toLowerCase();
+      if (!_cus[_ci].deleted && _cn.indexOf('santander') >= 0){ _santanderId = _cus[_ci].id; break; }
+     }
+    } catch(_){}
     d.operativos = 0;
     try {
      var _rng = KPI.getRange ? KPI.getRange(period) : null;
      var _vis = window._isKpiVisible || function(){return true;};
-     var _esProveedorOrig = { 'pedido':1, 'cierre_caja_auto':1, 'auto_directo':1, 'auto_promovido':1 };
      var _opPorConcepto = {};   // concepto → suma € (para top 5)
      (State.get.gastosOp() || []).forEach(function(g){
       if (!g || !_vis(g)) return;                    // excluye transfer/pendiente/ajuste
@@ -41800,17 +41819,17 @@ function _confirmBorrarCuenta(id) {
       // ── Clasificación: tipoGasto es la FUENTE DE VERDAD (tag explícito del usuario) ──
       var esOperativo;
       if (g.tipoGasto === 'operativo') {
-       esOperativo = true;                            // tag explícito
+       esOperativo = true;                            // tag explícito → operativo
       } else if (g.tipoGasto === 'proveedor') {
-       esOperativo = false;                           // tag explícito
+       esOperativo = false;                           // tag explícito → proveedor
       } else {
-       // Sin tag (gastos viejos): fallback heurístico
-       if (g.origen && _esProveedorOrig[g.origen]) esOperativo = false;
-       else if (g.provId || g.proveedorId) esOperativo = false;
-       else if (g.categoria === 'Compras') esOperativo = false;
-       else esOperativo = true;
+       // Sin tag: es operativo SOLO si pertenece a la cuenta Santander.
+       //   (Decisión Hung: los operativos se importaron todos a Santander.)
+       //   Si no hay cuenta Santander identificada, ningún gasto sin tag es operativo
+       //   (evita volver a colar proveedores de mercancía).
+       esOperativo = !!(_santanderId && g.cuentaId === _santanderId);
       }
-      if (!esOperativo) return;                        // es proveedor → ya contado aparte
+      if (!esOperativo) return;                        // proveedor → ya contado en d.proveedores
       var imp = (g.importe || 0);
       d.operativos += imp;
       // Agrupar por nombre/concepto para el desglose top 5
@@ -41831,8 +41850,10 @@ function _confirmBorrarCuenta(id) {
       .sort(function(a,b){ return b.gasto - a.gasto; })
       .slice(0,5);
     } catch(_){ d.operativos = 0; }
-    d.gastos = d.proveedores + d.operativos;        // total gastos
-    d.beneficioNeto = d.ingresos - d.gastos;        // ganancia neta real
+    d.gastos = d.proveedores + d.operativos;        // salida de caja del mes (flujo)
+    // v1.3.1863 BUG-WRAP-6: ganancia neta = BENEFICIO BRUTO (COGS), igual que el Dashboard.
+    //   beneficioBruto = ventas − coste de lo vendido. Fallback al modelo viejo si no hay dato.
+    d.beneficioNeto = (bn.beneficioBruto!=null) ? bn.beneficioBruto : (d.ingresos - d.gastos);
     d.centimosPorEuro = (d.ingresos>0) ? Math.round(d.beneficioNeto/d.ingresos*100) : null;
 
     // Comparativa vs periodo anterior
@@ -42161,7 +42182,11 @@ function _confirmBorrarCuenta(id) {
    } else if (c.kind==='festivo'){
     var MESES_C=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
     var desgHtml = '';
-    if (c.desglose && c.desglose.length){
+    // v1.3.1863 BUG-WRAP-8: el desglose por día solo aporta si el festivo abarca
+    //   VARIOS días (Reyes, Navidad, puente…). Con UN solo día la cifra grande ya
+    //   es ese importe → repetirlo abajo ("1 may  415 €") era redundante y se veía
+    //   apelmazado. Mostrar desglose solo si hay 2+ días.
+    if (c.desglose && c.desglose.length > 1){
      desgHtml = '<div class="wrp-festivo-desg">' + c.desglose.map(function(dd){
       return '<p class="wrp-festivo-row wrp-aline"><span class="wrp-festivo-dia">'+dd.dia+' '+(MESES_C[(dd.mes-1+12)%12]||'')+'</span><span class="wrp-festivo-imp">'+_eur(dd.importe)+'</span></p>';
      }).join('') + '</div>';
