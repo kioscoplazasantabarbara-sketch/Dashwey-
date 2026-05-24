@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1853";
+ var CURRENT_CACHE = "dashwey-v1-3-1854";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1853</title>
+<title>Dashwey v1.3.1854</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19423,6 +19423,9 @@ function _calcMargenProd(p) {
 
  return { cu: cu, mg: mg, valid: true };
 }
+// v1.3.1853: exponer para uso cross-script (alertas inteligentes, bloque 9).
+//   _calcMargenProd vive en este bloque; scripts posteriores no lo ven sin window.
+try { window._calcMargenProd = _calcMargenProd; } catch(_) {}
 
 
 const KPI = (() => {
@@ -23275,7 +23278,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1853';
+ const _APP_VERSION = 'v1.3.1854';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -42615,26 +42618,54 @@ function _confirmBorrarCuenta(id) {
     if (mgSet[id]) ms.push('<span style="color:var(--ink-soft)">Margen &lt;15%</span>');
     return ms.join(' · ');
    };
+   // v1.3.1853: control por tipo de alerta.
+   //   - Sin stock / bajo mínimo → +/− de STOCK (reponer es lo urgente).
+   //   - Solo margen bajo (stock OK) → +/− de PVP (el problema es el precio, no el stock).
+   //   Prioridad: si falta stock, primero reponer; el margen se ajusta luego en la ficha.
+   var _calcMg = (typeof _calcMargenProd === 'function') ? _calcMargenProd
+    : (window._calcMargenProd || function(){ return { mg:null, valid:false }; });
+   var _btnStyle = 'width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);font-size:18px;font-weight:700;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent';
    var rowsHtml = allIds.map(function(id){
     var p = byId[id]; if (!p) return '';
     var nombre = p.nombre || p.sourceName || '(sin nombre)';
     var stock = (p.stockActual||0);
+    // ¿Esta fila es de margen puro? (margen bajo Y con stock disponible)
+    var _esMargen = mgSet[id] && !ssSet[id] && !bmSet[id];
+    var _ctrl;
+    if (_esMargen) {
+     // Control de PVP: muestra el precio y el margen % que se recalcula al vuelo
+     var _pvp = (p.pvp||0);
+     var _mgR = _calcMg(p);
+     var _mgVal = (_mgR && _mgR.valid && _mgR.mg!=null) ? _mgR.mg : null;
+     var _mgCol = _mgVal==null ? 'var(--ink-soft)' : (_mgVal>=30?'var(--success)':_mgVal>=15?'#C77700':'var(--danger)');
+     _ctrl = '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
+      + '<button onclick="try{App.dash._alrtPvpStep(\'' + id + '\',-1)}catch(_){}" style="' + _btnStyle + '">−</button>'
+      + '<div style="min-width:62px;text-align:center">'
+      +   '<span data-pvp="' + id + '" style="display:block;font-size:var(--fs-sm);font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)">' + feur(_pvp) + '</span>'
+      +   '<span data-mg="' + id + '" style="display:block;font-size:var(--fs-2xs);font-weight:700;color:' + _mgCol + '">' + (_mgVal==null?'—':(_mgVal+'% mg')) + '</span>'
+      + '</div>'
+      + '<button onclick="try{App.dash._alrtPvpStep(\'' + id + '\',1)}catch(_){}" style="' + _btnStyle + '">+</button>'
+      + '</div>';
+    } else {
+     // Control de stock (sin stock / bajo mínimo)
+     _ctrl = '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
+      + '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',-1)}catch(_){}" style="' + _btnStyle + '">−</button>'
+      + '<span data-stk="' + id + '" style="min-width:30px;text-align:center;font-size:var(--fs-sm);font-weight:700;font-variant-numeric:tabular-nums;color:' + (stock<=0?'var(--danger)':'var(--ink)') + '">' + stock + '</span>'
+      + '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',1)}catch(_){}" style="' + _btnStyle + '">+</button>'
+      + '</div>';
+    }
     return '<div class="alrt-li-row" data-pid="' + id + '" '
      + 'style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border)">'
      + '<div style="flex:1;min-width:0" onclick="try{App.dash._alrtGoArt(\'' + id + '\')}catch(_){}">'
      +   '<div style="font-size:var(--fs-sm);font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + nombre + '</div>'
      +   '<div style="font-size:var(--fs-2xs);margin-top:2px">' + motivo(id) + '</div>'
      + '</div>'
-     + '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
-     +   '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',-1)}catch(_){}" style="width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);font-size:18px;font-weight:700;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent">−</button>'
-     +   '<span data-stk="' + id + '" style="min-width:30px;text-align:center;font-size:var(--fs-sm);font-weight:700;font-variant-numeric:tabular-nums;color:' + (stock<=0?'var(--danger)':'var(--ink)') + '">' + stock + '</span>'
-     +   '<button onclick="try{App.dash._alrtStockStep(\'' + id + '\',1)}catch(_){}" style="width:30px;height:30px;border:none;border-radius:8px;background:var(--bg);font-size:18px;font-weight:700;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent">+</button>'
-     + '</div>'
+     + _ctrl
      + '</div>';
    }).join('');
    var html = '<div style="padding:16px 0 40px">'
     + '<h2 style="font-size:18px;font-weight:800;margin:0 16px 4px">Alertas · ' + allIds.length + ' artículos</h2>'
-    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin:0 16px 14px">Ajusta el stock con +/−. Toca el nombre para abrir la ficha (caducidad, precios…).</div>'
+    + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin:0 16px 14px">Ajusta stock con +/− (sin stock / bajo mínimo) o el PVP (margen bajo). Toca el nombre para abrir la ficha completa.</div>'
     + rowsHtml
     + '</div>';
    if (window.App && App.ui && App.ui.setFs && App.ui.openFs) {
@@ -42675,6 +42706,39 @@ function _confirmBorrarCuenta(id) {
      if (nuevo > 0) { row.style.transition = 'opacity 0.3s'; row.style.opacity = '0.45'; }
      else { row.style.opacity = '1'; }
     }
+   }
+   try { Utils.triggerHaptic && Utils.triggerHaptic('light'); } catch(_) {}
+  } catch(_) {}
+ }
+ // v1.3.1853: ajuste de PVP para alertas de margen bajo. Paso 0,05€.
+ //   Recalcula el margen % al vuelo con _calcMargenProd (fuente única) y lo refleja.
+ function _alrtPvpStep(pid, delta) {
+  try {
+   var prods = State.get.productos ? (State.get.productos() || []) : [];
+   var p = prods.find(function(x){ return x && x.id === pid; });
+   if (!p) return;
+   var nuevo = Math.max(0, +(((p.pvp||0) + delta*0.05).toFixed(2)));
+   if (State.set && State.set.updateProd) State.set.updateProd(pid, { pvp: nuevo });
+   // Recalcular margen con el PVP nuevo (objeto local, no hace falta re-leer State)
+   var _pTmp = Object.assign({}, p, { pvp: nuevo });
+   var _calcMg = (typeof _calcMargenProd === 'function') ? _calcMargenProd : (window._calcMargenProd || function(){ return { mg:null, valid:false }; });
+   var _r = _calcMg(_pTmp);
+   var _mg = (_r && _r.valid && _r.mg!=null) ? _r.mg : null;
+   var spP = document.querySelector('[data-pvp="' + pid + '"]');
+   var spM = document.querySelector('[data-mg="' + pid + '"]');
+   if (spP) {
+    spP.textContent = (typeof Utils!=='undefined' && Utils.feur) ? Utils.feur(nuevo) : (nuevo.toFixed(2).replace('.',',')+' €');
+    spP.style.transition = 'transform 0.15s'; spP.style.transform = 'scale(1.2)';
+    setTimeout(function(){ spP.style.transform = 'scale(1)'; }, 200);
+   }
+   if (spM) {
+    var _mgCol = _mg==null ? 'var(--ink-soft)' : (_mg>=30?'var(--success)':_mg>=15?'#C77700':'var(--danger)');
+    spM.textContent = (_mg==null?'—':(_mg+'% mg'));
+    spM.style.color = _mgCol;
+    // Si ya supera el 15%, atenuar la fila (resuelto)
+    var row = spM.closest('.alrt-li-row');
+    if (row && _mg!=null && _mg>=15) { row.style.transition='opacity 0.3s'; row.style.opacity='0.45'; }
+    else if (row) { row.style.opacity='1'; }
    }
    try { Utils.triggerHaptic && Utils.triggerHaptic('light'); } catch(_) {}
   } catch(_) {}
@@ -52255,7 +52319,7 @@ function _confirmBorrarCuenta(id) {
   }
  }
 
- return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, _openTicketDetalle, renderVisitasComerciales, renderEventos: renderVisitasComerciales, _openRecordatorioSheet, _openRecordatorioPreview, _openAlertasInteligente, _alrtGoArt, _alrtStockStep, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre,
+ return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, _openTicketDetalle, renderVisitasComerciales, renderEventos: renderVisitasComerciales, _openRecordatorioSheet, _openRecordatorioPreview, _openAlertasInteligente, _alrtGoArt, _alrtStockStep, _alrtPvpStep, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre,
  // v1.3.1636: exposición _snapRenderTimeline para re-render desde _dwyEvMarkDone
  _snapRenderAgenda: _snapRenderTimeline,
  _snapRenderTimeline: _snapRenderTimeline,
