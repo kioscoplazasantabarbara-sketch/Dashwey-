@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1851";
+ var CURRENT_CACHE = "dashwey-v1-3-1852";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1851</title>
+<title>Dashwey v1.3.1852</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23275,7 +23275,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1851';
+ const _APP_VERSION = 'v1.3.1852';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -45622,9 +45622,21 @@ function _confirmBorrarCuenta(id) {
        agente: prov.agente || '', notas: 'Predicho', _src: 'predicho'
       });
      }
-     // v1.3.1452: NO añadir entrega predicha a allPedidos. Una entrega solo
-     //   existe tras un pedido real en almacén (decisión semántica Hung).
-     //   El tab Entregas solo muestra: pendingOrders + historialPedidos reales.
+     // v1.3.1852: ENTREGA predicha del ciclo → tab Entregas (allPedidos), simétrico
+     //   al pedido predicho. ANTES (v1.3.1452) la entrega solo existía tras pedido
+     //   real → el tab Entregas mostraba siempre los mismos (no proyectaba ciclos).
+     //   Ahora el ciclo proyecta su entrega aunque no se haya hecho el pedido real,
+     //   coherente con la nueva Agenda por tipo (Pedidos=días pedido, Entregas=días entrega).
+     var _fePred = calcEnt(fpPred.toISOString(), prov.id);
+     if (_fePred && !isNaN(_fePred.getTime())) {
+      var _fePredD = new Date(_fePred); _fePredD.setHours(0,0,0,0);
+      if (_fePredD >= _rSc && _fePredD <= _rEc && (!_rangoIncluyeHoy || _fePredD >= _hoyMidnight)) {
+       allPedidos.push({
+        id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, date: fpPred.toISOString(),
+        items: [], _src: 'predicho', _fechaEntrega: _fePred.toISOString()
+       });
+      }
+     }
     }
    });
   });
@@ -45728,7 +45740,8 @@ function _confirmBorrarCuenta(id) {
   try { allVisitas.forEach(function(v){ if (v && v.fecha) _cPedidos++; }); } catch(_) {}
   try { allPedidos.forEach(function(p){
    if (!p || !p.date) return;
-   if (p._src === 'predicho') return; // predichas no se muestran
+   // v1.3.1852: las entregas predichas del ciclo SÍ cuentan (antes se excluían →
+   //   el contador mostraba siempre los mismos). Coherente con tab Entregas por tipo.
    _cEntregas++;
   }); } catch(_) {}
 
@@ -46718,6 +46731,23 @@ function _confirmBorrarCuenta(id) {
      _diasAtraso: _diasAtrasoPred,
      _esHoy: _esHoyPred
     });
+    // v1.3.1852: si el día de ENTREGA del ciclo es DISTINTO al de pedido (no sameDay),
+    //   generar también un evento 'entrega' predicho → el tab Entregas muestra el día
+    //   en que llega el ciclo, aunque no se haya hecho el pedido real. Simétrico al
+    //   pedido. Antes (v1.3.1452) solo había entregas reales → tab Entregas no proyectaba.
+    if (!_esSameDayPred) {
+     var _entPred = (typeof calcEntA === 'function') ? calcEntA(fpPred.toISOString(), prov.id) : null;
+     if (_entPred && !isNaN(_entPred.getTime()) && _entPred >= hoy0 && inRange(_entPred)) {
+      eventos.push({
+       tipo: 'entrega',
+       fecha: _entPred,
+       sortKey: _entPred.getTime(),
+       pedido: { id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+       _predicho: true,
+       _fechaEntrega: _entPred.toISOString()
+      });
+     }
+    }
    }
    // v1.3.1452: NO push 'entrega' predicho independiente (decisión preservada).
    //   Entregas predichas SOLAS (sin pedido) excluidas del feed.
