@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1864";
+ var CURRENT_CACHE = "dashwey-v1-3-1865";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1864</title>
+<title>Dashwey v1.3.1865</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -15886,7 +15886,40 @@ window._DashweyRegisterFCM = async function() {
    if (_earlyToken) {
     console.info('[Dashwey/FCM] Token capturado early:', _earlyToken.slice(0,20)+'...');
     window._DashweyEarlyFCMToken = _earlyToken;
-    // NO llamar _DashweyRegisterFCM aquí — esperar a firebase-ready
+    // v1.3.1865: PERSISTIR TOKEN AUTOMÁTICAMENTE en subcolección fcmTokens.
+    //   Antes esto esperaba a _DashweyRegisterFCM, que escribía en el doc 'state'
+    //   raíz → el root guard lo bloqueaba/revertía y el token NUNCA persistía
+    //   (obligaba a guardarlo a mano por consola). La subcolección NO pasa por
+    //   el guard, así que es escritura limpia. Reintenta hasta que exista uid
+    //   (login puede no haber terminado al capturar el token).
+    (function _persistEarlyToken() {
+     var _tk = _earlyToken;
+     var _tries = 0;
+     var _save = async function() {
+      try {
+       var fbAuth = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+       var uid = fbAuth.getAuth().currentUser && fbAuth.getAuth().currentUser.uid;
+       if (!uid) {
+        if (_tries++ < 30) { setTimeout(_save, 1000); return; } // espera login ~30s
+        console.warn('[Dashwey/FCM] No hay uid tras reintentos — token no persistido');
+        return;
+       }
+       var fbFs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+       var db = fbFs.getFirestore();
+       var deviceId = window._DashweyDeviceId || 'unknown';
+       await fbFs.setDoc(
+        fbFs.doc(db, 'state', uid, 'fcmTokens', deviceId),
+        { token: _tk, deviceId: deviceId, updatedAt: Date.now(), platform: 'android' },
+        { merge: true }
+       );
+       console.info('[Dashwey/FCM] ✅ Token persistido auto en fcmTokens/' + deviceId);
+      } catch(e) {
+       if (_tries++ < 30) { setTimeout(_save, 1000); return; }
+       console.warn('[Dashwey/FCM] Error persistiendo token early:', e && (e.code || e.message));
+      }
+     };
+     _save();
+    })();
    }
   });
   PN.addListener('registrationError', function(err) {
@@ -23305,7 +23338,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1864';
+ const _APP_VERSION = 'v1.3.1865';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
