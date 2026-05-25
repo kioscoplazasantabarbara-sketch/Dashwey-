@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1869";
+ var CURRENT_CACHE = "dashwey-v1-3-1870";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1869</title>
+<title>Dashwey v1.3.1870</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23346,7 +23346,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1869';
+ const _APP_VERSION = 'v1.3.1870';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -27503,6 +27503,29 @@ const ui = (() => {
  }
  window._lvDayKey = _lvDayKey;
 
+ // ════════════════════════════════════════════════════════════════════════════
+ // v1.3.1869 — _DashweyDiaLocal(date) → 'YYYY-MM-DD' por COMPONENTES LOCALES.
+ //   Helper canónico para convertir una FECHA-DÍA (sin hora real, ej. un día
+ //   elegido en un calendario o calculado como medianoche local) a string.
+ //   NO usa toISOString() (que pasa a UTC y resta 1 día en TZ Madrid UTC+1/+2 →
+ //   "Domingo 24" se guardaba "2026-05-23"). Usa getFullYear/Month/Date locales.
+ //
+ //   ⚠️ CUÁNDO USAR CADA UNO:
+ //   - _DashweyDiaLocal  → el usuario ELIGIÓ un día en un calendario/picker, o la
+ //                         fecha es un "día N" sin hora real (anclas de ciclo,
+ //                         value de <input type=date>). Preserva el día tocado.
+ //   - _lvDayKey         → convertir un INSTANTE real (venta, evento con hora) a su
+ //                         día-de-negocio en zona del kiosco (perfil.zona).
+ // ────────────────────────────────────────────────────────────────────────────
+ function _DashweyDiaLocal(date) {
+  var d = (date instanceof Date) ? date : (date != null ? new Date(date) : new Date());
+  if (isNaN(d.getTime())) d = new Date();
+  return d.getFullYear() + '-' +
+   String(d.getMonth() + 1).padStart(2, '0') + '-' +
+   String(d.getDate()).padStart(2, '0');
+ }
+ window._DashweyDiaLocal = _DashweyDiaLocal;
+
  function _lvSumParseDate(s) {
   // d/m/yy → Date ISO local 12:00
   if (!s) return null;
@@ -29820,7 +29843,16 @@ const ui = (() => {
 
   function _nuevoCiclo(base) {
    base = base || {};
-   var f = base.fechaAncla ? new Date(base.fechaAncla) : new Date();
+   // v1.3.1869 FIX-TZ: si fechaAncla es string 'YYYY-MM-DD', new Date() lo parsea
+   //   como UTC medianoche → en TZ negativas (América) daría el día anterior local.
+   //   Parsear como fecha LOCAL preserva el día guardado en cualquier zona.
+   var f;
+   if (typeof base.fechaAncla === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(base.fechaAncla)) {
+    var _p = base.fechaAncla.split('-');
+    f = new Date(parseInt(_p[0],10), parseInt(_p[1],10)-1, parseInt(_p[2],10));
+   } else {
+    f = base.fechaAncla ? new Date(base.fechaAncla) : new Date();
+   }
    if (isNaN(f.getTime())) f = new Date();
    var dp = (typeof base.diaPedido === 'number') ? base.diaPedido : (f.getDay() === 0 ? 6 : f.getDay() - 1);
    return {
@@ -30256,14 +30288,11 @@ const ui = (() => {
       // v1.3.1869 FIX-TZ: la fechaAncla es una fecha LOCAL a medianoche
       //   (new Date(yy,mm,dd) en el calendario). toISOString() la pasa a UTC y,
       //   en horario Europe/Madrid (UTC+1/+2), resta 1 día → "Domingo 24" se
-      //   guardaba como "2026-05-23" (sábado) y reaparecía corrida. Guardar con
-      //   componentes LOCALES preserva el día elegido. (Lectura ya era correcta.)
-      var _localISO = function(d){
-       var y = d.getFullYear();
-       var m = String(d.getMonth() + 1).padStart(2, '0');
-       var day = String(d.getDate()).padStart(2, '0');
-       return y + '-' + m + '-' + day;
-      };
+      //   guardaba como "2026-05-23" (sábado) y reaparecía corrida. El helper
+      //   canónico _DashweyDiaLocal preserva el día elegido. (Lectura ya era OK.)
+      var _localISO = (typeof window._DashweyDiaLocal === 'function')
+       ? window._DashweyDiaLocal
+       : function(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
       var ciclosOut = st.ciclos.map(function(c){
        return {
         id: c.id || ('cic_' + (c.diaPedido) + '_' + Math.random().toString(36).slice(2,7)),
@@ -37226,7 +37255,7 @@ function _DashweyMovDetallesSheet(onClose) {
      }
      _selFecha = new Date(year, month, day, _h, _m, 0);
      var f = document.getElementById('mov-fecha');
-     if (f) f.value = _selFecha.toISOString().slice(0,10);
+     if (f) f.value = window._DashweyDiaLocal(_selFecha); // v1.3.1869 FIX-TZ: día local, no UTC
      _mdsRenderCal();
     });
     grid.appendChild(b);
@@ -44514,7 +44543,7 @@ function _confirmBorrarCuenta(id) {
    var fechaE = feD ? feD.getTime() : 0;
    [fechaP, fechaE].forEach(function(f){
     if (f >= hoyMs && f <= fin7d) {
-     var key = new Date(f).toISOString().slice(0,10);
+     var key = window._DashweyDiaLocal(new Date(f)); // v1.3.1869 FIX-TZ: día local (coherente con rango local)
      eventos7d[key] = (eventos7d[key] || 0) + 1;
     }
    });
@@ -44522,7 +44551,7 @@ function _confirmBorrarCuenta(id) {
   visPend.forEach(function(v){
    var f = new Date(v.fecha).getTime();
    if (f >= hoyMs && f <= fin7d) {
-    var key = new Date(f).toISOString().slice(0,10);
+    var key = window._DashweyDiaLocal(new Date(f)); // v1.3.1869 FIX-TZ: día local (coherente con rango local)
     eventos7d[key] = (eventos7d[key] || 0) + 1;
    }
   });
@@ -45370,7 +45399,7 @@ function _confirmBorrarCuenta(id) {
    }
    out.push({
     id: 'cic_legacy_' + diaPed + '_' + i,
-    fechaAncla: ancla.toISOString().slice(0, 10),
+    fechaAncla: window._DashweyDiaLocal(ancla),
     cadaDias: cadaDias,
     offsetEntrega: offset,
     hora: hora
@@ -45384,7 +45413,16 @@ function _confirmBorrarCuenta(id) {
  function _proyectarUnCiclo(ciclo, fromDate, horizonDays) {
   if (!ciclo || !ciclo.fechaAncla || !(ciclo.cadaDias > 0)) return [];
   var from = new Date(fromDate); from.setHours(0, 0, 0, 0);
-  var ancla = new Date(ciclo.fechaAncla); if (isNaN(ancla.getTime())) return [];
+  // v1.3.1869 FIX-TZ: ancla string 'YYYY-MM-DD' → parsear LOCAL (no UTC) para
+  //   preservar el día en cualquier zona horaria (incluidas TZ negativas).
+  var ancla;
+  if (typeof ciclo.fechaAncla === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ciclo.fechaAncla)) {
+   var _pa = ciclo.fechaAncla.split('-');
+   ancla = new Date(parseInt(_pa[0],10), parseInt(_pa[1],10)-1, parseInt(_pa[2],10));
+  } else {
+   ancla = new Date(ciclo.fechaAncla);
+  }
+  if (isNaN(ancla.getTime())) return [];
   ancla.setHours(9, 0, 0, 0);
   var off = (typeof ciclo.offsetEntrega === 'number') ? ciclo.offsetEntrega : 0;
   var diff = Math.round((from.getTime() - ancla.getTime()) / _CICLO_MS);
@@ -45519,7 +45557,7 @@ function _confirmBorrarCuenta(id) {
    if (de.length) { var diaEnt = (i < de.length) ? de[i] : de[0]; off = (diaEnt - diaPed + 7) % 7; }
    ciclos.push({
     id: 'cic_feed_' + diaPed + '_' + i,
-    fechaAncla: ancla.toISOString().slice(0, 10),
+    fechaAncla: window._DashweyDiaLocal(ancla),
     cadaDias: cadaDias, offsetEntrega: off
    });
   }
