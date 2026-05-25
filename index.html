@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1865";
+ var CURRENT_CACHE = "dashwey-v1-3-1867";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1865</title>
+<title>Dashwey v1.3.1867</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -10774,8 +10774,16 @@ html, body { background: var(--bg); }
 .wrp-overlay.wrp-on-light .wrp-pbar { background: rgba(0,0,0,0.18); }
 .wrp-overlay.wrp-on-light .wrp-pbar.on { background: #111; }
 .wrp-progress { position: absolute; top: 0; left: 0; right: 0; z-index: 20; display: flex; gap: 5px; padding: max(14px, calc(var(--sat,0px) + 10px)) 16px 12px; }
-.wrp-pbar { flex: 1; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.25); transition: background .35s; }
+.wrp-pbar { flex: 1; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.25); transition: background .35s; position: relative; overflow: hidden; }
 .wrp-pbar.on { background: #fff; }
+/* v1.3.1865: relleno animado tipo Instagram Stories — la barra de la tarjeta
+   actual se llena de 0→100% en _state.dur ms. El ancho lo controla JS via la
+   variable --wrpfill (transición lineal). Pausa = se congela el transition. */
+.wrp-pbar .wrp-pfill { position: absolute; top: 0; left: 0; bottom: 0; width: 0; background: #fff; border-radius: 2px; }
+.wrp-pbar.cur { background: rgba(255,255,255,0.25); }
+.wrp-pbar.cur .wrp-pfill { width: var(--wrpfill, 0%); }
+.wrp-overlay.wrp-on-light .wrp-pbar .wrp-pfill { background: #111; }
+.wrp-overlay.wrp-on-light .wrp-pbar.cur { background: rgba(0,0,0,0.18); }
 .wrp-stage {
  position: absolute; inset: 0; overflow: hidden;
  display: flex; flex-direction: column; justify-content: center;
@@ -23338,7 +23346,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1865';
+ const _APP_VERSION = 'v1.3.1867';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -42125,7 +42133,7 @@ function _confirmBorrarCuenta(id) {
   function _esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   // ── Render del visor de stories ──
-  var _state = { cards:[], idx:0, animating:false };
+  var _state = { cards:[], idx:0, animating:false, dur:5000, timer:null, paused:false, _remain:null, _fillStart:0, _fillDur:0 };
 
   function open(period){
    period = period || { type:'month', offset:0 };
@@ -42136,6 +42144,8 @@ function _confirmBorrarCuenta(id) {
    _state.cards = _cards(d, period);
    _state.data = d;
    _state.idx = 0;
+   _state.paused = false; _state._remain = null;
+   if (_state.timer){ clearTimeout(_state.timer); _state.timer = null; } // v1.3.1865 autoplay reset
 
    // Overlay PROPIO full screen (no el modal compartido → sin lag ni primer-toque-fallido)
    var prev = document.getElementById('wrpOverlay');
@@ -42163,6 +42173,7 @@ function _confirmBorrarCuenta(id) {
   function _close(){
    var ov = document.getElementById('wrpOverlay');
    if (!ov) return;
+   if (_state.timer){ clearTimeout(_state.timer); _state.timer = null; } // v1.3.1865 parar autoplay
    ov.classList.remove('open');
    setTimeout(function(){ if (ov.parentNode) ov.parentNode.removeChild(ov); }, 320);
   }
@@ -42171,10 +42182,78 @@ function _confirmBorrarCuenta(id) {
    var p = document.getElementById('wrpProg'); if (!p) return;
    var html='';
    for (var i=0;i<_state.cards.length;i++){
-    html += '<span class="wrp-pbar'+(i<=_state.idx?' on':'')+'"></span>';
+    if (i < _state.idx){
+     html += '<span class="wrp-pbar on"></span>';        // ya vista → llena fija
+    } else if (i === _state.idx){
+     html += '<span class="wrp-pbar cur"><i class="wrp-pfill"></i></span>'; // actual → se llena sola
+    } else {
+     html += '<span class="wrp-pbar"></span>';            // futura → vacía
+    }
    }
    p.innerHTML = html;
+   _startFill();
   }
+
+  // v1.3.1865 AUTOPLAY tipo Instagram Stories ─────────────────────
+  //   La barra de la tarjeta actual se llena de 0→100% en _state.dur ms.
+  //   Al completarse, avanza sola. Mantener pulsado pausa (congela el fill
+  //   en su % actual); soltar reanuda desde ahí. Tap manual / prev / next
+  //   reinician limpio el ciclo de la nueva tarjeta.
+  function _startFill(){
+   _clearTimer();
+   if (_state.paused) return;
+   var fillEl = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
+   if (!fillEl) return;
+   var remaining = (_state._remain != null) ? _state._remain : _state.dur;
+   // Arrancar desde el % ya consumido (para reanudar tras pausa)
+   var startPct = 100 * (1 - remaining / _state.dur);
+   fillEl.style.transition = 'none';
+   fillEl.style.width = startPct + '%';
+   // v1.3.1867: doble rAF — en Android WebView un transition de width sobre un
+   //   elemento recién insertado por innerHTML NO dispara sin garantizar que el
+   //   layout inicial ya se pintó. El void offsetWidth solo no basta. Con doble
+   //   requestAnimationFrame el navegador confirma el frame de partida y entonces
+   //   el cambio a 100% sí anima linealmente. (Regla WebView: transitionend/anim
+   //   no fiables sin reflow forzado.)
+   void fillEl.offsetWidth;
+   requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+     var fe = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
+     if (!fe) return;
+     fe.style.transition = 'width ' + remaining + 'ms linear';
+     fe.style.width = '100%';
+    });
+   });
+   _state._fillStart = Date.now();
+   _state._fillDur = remaining;
+   _state.timer = setTimeout(function(){
+    _state._remain = null;
+    _next();
+   }, remaining);
+  }
+  function _clearTimer(){
+   if (_state.timer){ clearTimeout(_state.timer); _state.timer = null; }
+  }
+  function _pauseFill(){
+   if (_state.paused) return;
+   _state.paused = true;
+   _clearTimer();
+   var fillEl = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
+   if (fillEl && _state._fillStart){
+    var elapsed = Date.now() - _state._fillStart;
+    _state._remain = Math.max(0, _state._fillDur - elapsed);
+    // Congelar el ancho actual
+    var pctNow = 100 * (1 - _state._remain / _state.dur);
+    fillEl.style.transition = 'none';
+    fillEl.style.width = pctNow + '%';
+   }
+  }
+  function _resumeFill(){
+   if (!_state.paused) return;
+   _state.paused = false;
+   _startFill();
+  }
+
 
   function _renderCard(i, first){
    var c = _state.cards[i]; if (!c) return;
@@ -42192,7 +42271,7 @@ function _confirmBorrarCuenta(id) {
       '<p class="wrp-cover-sub wrp-aline">'+_esc(_negocio())+'</p>'+
       '<p class="wrp-cover-mes wrp-aline">'+_esc(c.sub)+'</p>'+
       '<p class="wrp-cover-p wrp-aline">'+_esc(c.titulo)+'</p>'+
-      '<p class="wrp-hint wrp-aline">Toca para avanzar →</p></div>';
+      '<p class="wrp-hint wrp-aline">Mantén pulsado para pausar</p></div>';
    } else if (c.kind==='big'){
     inner = '<div class="wrp-big">'+
       '<p class="wrp-big-label wrp-aline">'+_esc(c.label)+'</p>'+
@@ -42362,19 +42441,53 @@ function _confirmBorrarCuenta(id) {
 
   function _next(){
    if (_state.animating) return;
-   if (_state.idx >= _state.cards.length-1){ _close(); return; }
+   if (_state.idx >= _state.cards.length-1){
+    // v1.3.1865: última tarjeta (final con confeti + compartir) → autoplay se
+    //   detiene y se queda fija. El cierre es manual (X o tap). NO cierra sola.
+    _clearTimer();
+    var fE = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
+    if (fE){ fE.style.transition='width 280ms linear'; fE.style.width='100%'; }
+    return;
+   }
+   _state._remain = null; // ciclo limpio para la nueva tarjeta
    _state.idx++; _hap('light'); _renderCard(_state.idx);
   }
   function _prev(){
    if (_state.animating || _state.idx<=0) return;
+   _state._remain = null;
    _state.idx--; _hap('light'); _renderCard(_state.idx);
   }
 
   function _wire(){
    var nx=document.getElementById('wrpNext'), pv=document.getElementById('wrpPrev'), cl=document.getElementById('wrpClose');
-   if (nx) nx.addEventListener('click', _next);
-   if (pv) pv.addEventListener('click', _prev);
-   if (cl) cl.addEventListener('click', function(){ _hap('light'); _close(); });
+   // v1.3.1865: distinguir TAP (avanzar/retroceder) de HOLD (pausar autoplay).
+   //   Si el dedo se mantiene >180ms → es hold: pausa. Al soltar reanuda.
+   //   Si suelta antes de 180ms → es tap: navega.
+   var HOLD_MS = 180;
+   function _bindZone(el, onTap){
+    if (!el) return;
+    var holdTimer=null, didHold=false;
+    var down=function(e){
+     didHold=false;
+     holdTimer=setTimeout(function(){ didHold=true; _hap('selection'); _pauseFill(); }, HOLD_MS);
+    };
+    var up=function(e){
+     if (holdTimer){ clearTimeout(holdTimer); holdTimer=null; }
+     if (didHold){ _resumeFill(); }   // era hold → reanudar
+     else { onTap(); }                // era tap rápido → navegar
+    };
+    var cancel=function(){ if (holdTimer){ clearTimeout(holdTimer); holdTimer=null; } if (didHold){ _resumeFill(); } };
+    el.addEventListener('touchstart', down, { passive:true });
+    el.addEventListener('touchend', up);
+    el.addEventListener('touchcancel', cancel);
+    // Soporte ratón (PWA escritorio)
+    el.addEventListener('mousedown', down);
+    el.addEventListener('mouseup', up);
+    el.addEventListener('mouseleave', cancel);
+   }
+   _bindZone(nx, _next);
+   _bindZone(pv, _prev);
+   if (cl) cl.addEventListener('click', function(){ _hap('light'); _clearTimer(); _close(); });
   }
 
   // ── ESTRELLA: tap con animación de vuelo al centro + explosión + haptic ──
