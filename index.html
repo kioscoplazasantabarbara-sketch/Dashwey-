@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1876";
+ var CURRENT_CACHE = "dashwey-v1-3-1877";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1876</title>
+<title>Dashwey v1.3.1877</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23351,7 +23351,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1876';
+ const _APP_VERSION = 'v1.3.1877';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41394,7 +41394,11 @@ function _confirmBorrarCuenta(id) {
      if (p.provId) _provConPending[p.provId]=true;
      var prov=_prov(p.provId);
      var nombre=(prov && prov.nombre) || p.provId || 'Proveedor';
-     var feOrig=_entregaPara(prov?prov.diasEntrega:[], p.date);
+     // v1.3.1877 FUENTE ÚNICA: entrega = pedido + offset del ciclo (Definir reparto).
+     var feOrig=(typeof window._DashweyEntregaDePedido==='function' && prov)
+      ? window._DashweyEntregaDePedido(prov, p.date)
+      : _entregaPara(prov?prov.diasEntrega:[], p.date);
+     if (!feOrig || isNaN(feOrig.getTime())) feOrig=_entregaPara(prov?prov.diasEntrega:[], p.date);
      var feMid=new Date(feOrig); feMid.setHours(0,0,0,0);
      var atras=feMid<hoy ? Math.floor((hoy-feMid)/MS_DAY) : 0;
 
@@ -45473,6 +45477,41 @@ function _confirmBorrarCuenta(id) {
   return out;
  }
 
+ // v1.3.1877 — FUENTE ÚNICA DE VERDAD para la entrega de un pedido.
+ //   Dada la fecha de un pedido y el proveedor, devuelve la fecha de entrega
+ //   según lo definido en "Definir reparto" (ciclos). Reemplaza los dos cálculos
+ //   que convivían (_entregaPara / calcEntA desde diasEntrega, y el inline "próximo
+ //   diasEntrega desde HOY"), que descuadraban (Bebidas/Nestlé pedidos hoy → entrega
+ //   "hoy" → sin línea). Ahora: entrega = fecha_pedido + offsetEntrega del ciclo que
+ //   corresponde al día de semana del pedido. Si ningún ciclo coincide, usa el offset
+ //   del primer ciclo. Sin ciclos → fallback +2 días (igual que el legacy).
+ function _entregaDePedido(prov, fechaPedido) {
+  var fp = (fechaPedido instanceof Date) ? new Date(fechaPedido) : new Date(fechaPedido);
+  if (isNaN(fp.getTime())) return null;
+  fp.setHours(9, 0, 0, 0);
+  var ciclos = _provCiclos(prov) || [];
+  if (!ciclos.length) { var f2 = new Date(fp); f2.setDate(f2.getDate() + 2); return f2; }
+  var dowPed = fp.getDay() === 0 ? 6 : fp.getDay() - 1; // 0=Lu..6=Do
+  var off = null;
+  // Buscar el ciclo cuyo día de pedido coincide con el día de semana del pedido real.
+  for (var i = 0; i < ciclos.length; i++) {
+   var c = ciclos[i];
+   var diaPedC = (typeof c.diaPedido === 'number') ? c.diaPedido : null;
+   if (diaPedC === null && c.fechaAncla) {
+    // derivar día de semana de la ancla
+    var a = (typeof c.fechaAncla === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.fechaAncla))
+     ? (function(s){ var p = s.split('-'); return new Date(+p[0], +p[1]-1, +p[2]); })(c.fechaAncla)
+     : new Date(c.fechaAncla);
+    if (!isNaN(a.getTime())) diaPedC = a.getDay() === 0 ? 6 : a.getDay() - 1;
+   }
+   if (diaPedC === dowPed) { off = (typeof c.offsetEntrega === 'number') ? c.offsetEntrega : 0; break; }
+  }
+  // Sin coincidencia exacta → offset del primer ciclo.
+  if (off === null) off = (typeof ciclos[0].offsetEntrega === 'number') ? ciclos[0].offsetEntrega : 0;
+  var ent = new Date(fp.getTime() + off * 86400000);
+  return ent;
+ }
+
  // _proyectarUnCiclo(ciclo, fromDate, horizonDays) → [{pedido:Date, entrega:Date, cicloId}]
  //   Núcleo matemático. "Días exactos": suma cadaDias desde fechaAncla.
  function _proyectarUnCiclo(ciclo, fromDate, horizonDays) {
@@ -45681,6 +45720,7 @@ function _confirmBorrarCuenta(id) {
   window._DashweyMigrarCiclos = _DashweyMigrarCiclos;
   window._DashweyFeedPedidosProv = _feedPedidosProv;
   window._DashweyFeedCiclosProv = _feedCiclosProv;
+  window._DashweyEntregaDePedido = _entregaDePedido;
   window._DashweyProvCadaDias = _provCadaDias;
  } catch(_) {}
 
@@ -46989,22 +47029,16 @@ function _confirmBorrarCuenta(id) {
    });
    return;
   }
-  // Caso normal: días distintos. Calcular próximo diasEntrega desde HOY (no desde p.date).
-  // Si no hay diasEntrega configurado → fallback al cálculo original calcEntA(p.date).
-  var _fechaFeedE;
-  var _de = prov_get(p.provId, 'diasEntrega');
-  if (_de && _de.length) {
-   // Buscar próximo día de entrega desde HOY
-   _fechaFeedE = null;
-   for (var _i = 0; _i <= 14; _i++) {
-    var _d = new Date(hoy0); _d.setDate(hoy0.getDate() + _i);
-    var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
-    if (_de.indexOf(_dow) >= 0) { _fechaFeedE = _d; break; }
-   }
-   if (!_fechaFeedE) _fechaFeedE = feOriginal; // fallback
-  } else {
-   _fechaFeedE = feOriginal;
-  }
+  // v1.3.1877 FUENTE ÚNICA: la entrega = fecha del pedido + offset del ciclo
+  //   definido en "Definir reparto" (decisión Hung). Reemplaza el cálculo inline
+  //   "próximo diasEntrega desde HOY" que daba la misma fecha que el pedido cuando
+  //   este se hacía en un día de entrega (Bebidas/Nestlé pedidos el lunes → entrega
+  //   "lunes" → sin línea). Ahora pedido lun + offset → entrega real → línea correcta.
+  var _provObj = (State.get.prov ? State.get.prov(p.provId) : null);
+  var _fechaFeedE = (typeof window._DashweyEntregaDePedido === 'function' && _provObj)
+   ? window._DashweyEntregaDePedido(_provObj, p.date)
+   : feOriginal;
+  if (!_fechaFeedE || isNaN(_fechaFeedE.getTime())) _fechaFeedE = feOriginal;
   if (isNaN(_fechaFeedE.getTime())) return;
   if (!inRange(_fechaFeedE)) return;
   eventos.push({
