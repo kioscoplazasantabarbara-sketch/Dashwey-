@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1883";
+ var CURRENT_CACHE = "dashwey-v1-3-1885";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1883</title>
+<title>Dashwey v1.3.1885</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23428,7 +23428,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1883';
+ const _APP_VERSION = 'v1.3.1885';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46227,7 +46227,13 @@ function _confirmBorrarCuenta(id) {
  try { localStorage.setItem('dashwey_agenda_filter', _snapAgendaActiveTab); } catch(_) {}
  tabsEl.querySelectorAll('.snap-agenda-tab').forEach(function(b){ b.classList.remove('active'); });
  newBtn.classList.add('active');
- _snapRenderAgendaPanel(wrap, allPedidos, allVisitas, calcEnt, hoy);
+ // v1.3.1884: re-render COMPLETO del timeline (no solo el panel). El Hero
+ //   (título grande) vive en _snapRenderTimeline y filtra por tab activo;
+ //   si solo repintáramos el panel, el Hero quedaba congelado en la tarea
+ //   del tab anterior (ej: "Recibir entrega" mostrándose en el tab Pedidos).
+ //   _snapRenderTimeline es idempotente (cloneNode limpia listeners) → seguro.
+ if (typeof _snapRenderTimeline === 'function') { _snapRenderTimeline(); }
+ else { _snapRenderAgendaPanel(wrap, allPedidos, allVisitas, calcEnt, hoy); }
  });
  });
  // Sync active class
@@ -46297,6 +46303,7 @@ function _confirmBorrarCuenta(id) {
      title: 'Realizar pedido · ' + nom,
      date: fp,
      suffix: '',
+     _tabTipo: 'pedidos', // v1.3.1884: para filtrar Hero por tab activo
      _noHora: v._src === 'predicho' || v._src === 'pending',
      _doneKey: _doneKeyP
     });
@@ -46337,6 +46344,7 @@ function _confirmBorrarCuenta(id) {
      title: 'Recibir entrega · ' + nom,
      date: fe,
      suffix: nArts > 0 ? (' · ' + nArts + ' arts.') : '',
+     _tabTipo: 'entregas', // v1.3.1884: para filtrar Hero por tab activo
      _noHora: p._src === 'pending', // pending hora ya no es relevante, fecha del editor sin hora real
      _doneKey: _doneKeyE
     });
@@ -46360,6 +46368,7 @@ function _confirmBorrarCuenta(id) {
      title: _recTitle,
      date: fr,
      suffix: '',
+     _tabTipo: 'alertas', // v1.3.1884: recordatorios/eventos → tab "Eventos"
      _doneKey: (r.id ? ('rec_' + r.id) : null)
     });
    });
@@ -46396,6 +46405,17 @@ function _confirmBorrarCuenta(id) {
      return !_isDoneCnd(cnd._doneKey);
     });
    } catch(_) { /* si falla el filtro, no romper el hero */ }
+   // v1.3.1884: el Hero refleja el TAB ACTIVO (Pedidos/Entregas/Eventos),
+   //   igual que el feed (inTemporalFilter). Antes mezclaba los 3 tipos →
+   //   en el tab Entregas mostraba "Recibir entrega" aunque las entregas
+   //   estuvieran al día y quedaran pedidos. Ahora cada tab muestra SU próxima
+   //   tarea y, al completar la última de ese tab, el empty premium contextual.
+   //   El tab "alertas" (Eventos) incluye recordatorios (los candidatos de
+   //   alertas de stock se gestionan aparte, no son eventos del Hero).
+   var _heroTab = (typeof _snapAgendaActiveTab === 'string') ? _snapAgendaActiveTab : 'pedidos';
+   _candidatos = _candidatos.filter(function(cnd) {
+    return cnd._tabTipo === _heroTab;
+   });
    // Ordenar y coger el primero
    _candidatos.sort(function(a, b) { return a.ts - b.ts; });
    var prox = _candidatos[0];
@@ -46431,11 +46451,18 @@ function _confirmBorrarCuenta(id) {
     if (valEl) valEl.style.display = 'none';
     if (tagEl) tagEl.textContent = 'Próximo';
    } else {
-    // Sin próximos: empty state amigable
+    // v1.3.1884: empty state contextual por TAB activo — coherente con el
+    //   cuerpo del feed (#2). Antes era genérico "Todo en orden / No hay
+    //   eventos próximos" en los 3 tabs. Ahora cada tab celebra lo suyo.
+    var _heroDoneTitle, _heroDoneSub;
+    if (_heroTab === 'pedidos') { _heroDoneTitle = 'Pedidos al día'; _heroDoneSub = 'No queda ningún pedido por hacer'; }
+    else if (_heroTab === 'entregas') { _heroDoneTitle = 'Entregas al día'; _heroDoneSub = 'Has recibido todo lo previsto'; }
+    else if (_heroTab === 'alertas') { _heroDoneTitle = 'Sin eventos pendientes'; _heroDoneSub = 'No hay recordatorios para hoy'; }
+    else { _heroDoneTitle = 'Todo en orden'; _heroDoneSub = 'No hay eventos próximos'; }
     heroIcon.textContent = '✓';
-    if (typeof _snapFlipText === 'function') _snapFlipText(heroTitle, 'Todo en orden');
-    else heroTitle.textContent = 'Todo en orden';
-    heroSub.textContent = 'No hay eventos próximos';
+    if (typeof _snapFlipText === 'function') _snapFlipText(heroTitle, _heroDoneTitle);
+    else heroTitle.textContent = _heroDoneTitle;
+    heroSub.textContent = _heroDoneSub;
     heroEl.style.display = 'flex';
     heroEl.classList.add('is-visible');
     if (lblEl) lblEl.style.display = 'none';
