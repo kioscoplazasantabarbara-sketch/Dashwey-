@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1871";
+ var CURRENT_CACHE = "dashwey-v1-3-1872";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1871</title>
+<title>Dashwey v1.3.1872</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23346,7 +23346,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1871';
+ const _APP_VERSION = 'v1.3.1872';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41399,48 +41399,74 @@ function _confirmBorrarCuenta(id) {
    } catch(_){}
 
    // ── 2) PRÓXIMOS DÍAS DE PEDIDO (recurrentes por proveedor) — realizar pedido ──
+   // v1.3.1872 FIX MULTI-CICLO: antes la campana (a) saltaba el proveedor ENTERO si
+   //   tenía cualquier pending real (_provConPending) y (b) solo proyectaba UN día
+   //   (_nextOrder → primer día). Para proveedores con 2+ ciclos (ej. Bebidas: un
+   //   ciclo en la misma semana + otro de semana a semana), el segundo ciclo nunca
+   //   salía. Ahora proyecta TODAS las fechas de pedido del horizonte (motor de
+   //   ciclos _DashweyFeedPedidosProv, que empareja pedido→entrega con offset real)
+   //   y salta SOLO la fecha concreta cubierta por un pending real — igual que el
+   //   panel timeline (_snapRenderRecordatoriosPanel). Patrón coherente entre ambos.
    try {
     var provs = (S && S.get && S.get.proveedores) ? (S.get.proveedores()||[]) : [];
+    // Fecha del pending real más reciente por proveedor (para saltar predichos ya cubiertos)
+    var _provLatestPendCamp = {};
+    try {
+     var _pendCamp = (S && S.get && S.get.pendingOrders) ? (S.get.pendingOrders()||[]) : [];
+     _pendCamp.forEach(function(pp){
+      if (!pp || !pp.provId || !pp.date) return;
+      var _fpp = new Date(pp.date); if (isNaN(_fpp.getTime())) return;
+      _fpp.setHours(0,0,0,0);
+      var _prev = _provLatestPendCamp[pp.provId];
+      if (!_prev || _fpp > _prev) _provLatestPendCamp[pp.provId] = _fpp;
+     });
+    } catch(_){}
     provs.forEach(function(p){
      if (!p || p.deleted) return;
-     if (_provConPending[p.id]) return; // ya tiene pedido pendiente real → no duplicar
      if (!Array.isArray(p.diasPedido) || !p.diasPedido.length) return;
-     var fped=_nextOrder(p.diasPedido, hoy, p);
-     if (!fped) return;
-     var fpedMid=new Date(fped); fpedMid.setHours(0,0,0,0);
-     if (fpedMid>horizonte) return;
-     // Evitar duplicar si ya hay un pending real para ese proveedor en ese ciclo
-     var key='ped__predicho_'+p.id+'_p0';
-     var fent=_entregaPara(p.diasEntrega, fped);
-     var nombre=p.nombre||p.id;
-     var same=_esSameDay(p.id, fped);
-     var diaEntStr = _fmtDiaCorto(fent);
-     var diaPedStr = _fmtDiaCorto(fped);
-     /* v1.3.1789 FIX coherencia: el subtítulo debe reflejar el DÍA REAL del evento,
-        no decir "Hoy" cuando la tarjeta cae en Próximo. Capitaliza el día (inicio de frase). */
-     var diaPedCap = diaPedStr.charAt(0).toUpperCase() + diaPedStr.slice(1);
-     items.push({ ev:{tipo: same?'pedido_entrega':'pedido', pedido:{id:'_predicho_'+p.id+'_p0', provId:p.id, fecha:fped.toISOString()}},
-      kind: same?'pedido_entrega':'pedido', accion:'pedido:'+p.id,
-      titulo: (same?'Pedido y entrega de ':'Realizar pedido de ')+nombre,
-      sub: same
-        ? (diaPedCap + ' pides y llega el mismo día')
-        : ('Pides ' + diaPedStr + ' · entrega ' + diaEntStr),
-      fecha: fpedMid, atrasado:false });
-     // v1.3.1870 FIX COHERENCIA: si NO es sameDay, añadir también la ENTREGA
-     //   predicha en su día (simétrico al panel timeline _snapRenderRecordatoriosPanel,
-     //   v1.3.1852). Antes la campana solo generaba el pedido predicho → las entregas
-     //   de ciclos sin pedido real (ej. Bebidas) no salían como "Recibir" en su día.
-     if (!same) {
-      var fentMid = new Date(fent); fentMid.setHours(0,0,0,0);
-      if (!isNaN(fentMid.getTime()) && fentMid <= horizonte && fentMid >= hoy) {
-       var diaEntCap = diaEntStr.charAt(0).toUpperCase() + diaEntStr.slice(1);
-       items.push({ ev:{tipo:'entrega', pedido:{id:'_predent_'+p.id+'_p0', provId:p.id, fecha:fped.toISOString()}},
-        kind:'entrega', accion:'pedido:'+p.id,
-        titulo:'Recibir pedido de '+nombre,
-        sub: diaEntCap + ' llega · pedido el ' + diaPedStr,
-        fecha: fentMid, atrasado:false, _predicho:true });
+     // Proyectar TODAS las fechas de pedido del horizonte (todos los ciclos).
+     var _horizDias = 14;
+     try { _horizDias = Math.max(7, Math.ceil((horizonte.getTime() - hoy.getTime())/MS_DAY) + 1); } catch(_){}
+     var _fechasPed = [];
+     try {
+      if (window._DashweyFeedPedidosProv) _fechasPed = window._DashweyFeedPedidosProv(p, hoy, _horizDias) || [];
+     } catch(_){}
+     // Fallback: lógica vieja (un solo día) si el motor no devolvió nada
+     if (!_fechasPed.length) { var _f1 = _nextOrder(p.diasPedido, hoy, p); if (_f1) _fechasPed = [_f1]; }
+     var _latestPend = _provLatestPendCamp[p.id] || null;
+     var nombre = p.nombre || p.id;
+     _fechasPed.forEach(function(fped, _ci){
+      if (!fped) return;
+      var fpedMid = new Date(fped); fpedMid.setHours(0,0,0,0);
+      if (fpedMid > horizonte) return;
+      // Saltar SOLO la fecha cubierta por un pending real (no el proveedor entero).
+      //   La sección 1 ya generó el evento del pending; este predicho sería duplicado.
+      if (_latestPend && fpedMid <= _latestPend) return;
+      var fent = _entregaPara(p.diasEntrega, fped);
+      var same = _esSameDay(p.id, fped);
+      var diaEntStr = _fmtDiaCorto(fent);
+      var diaPedStr = _fmtDiaCorto(fped);
+      var diaPedCap = diaPedStr.charAt(0).toUpperCase() + diaPedStr.slice(1);
+      items.push({ ev:{tipo: same?'pedido_entrega':'pedido', pedido:{id:'_predicho_'+p.id+'_p'+_ci, provId:p.id, fecha:fped.toISOString()}},
+       kind: same?'pedido_entrega':'pedido', accion:'pedido:'+p.id,
+       titulo: (same?'Pedido y entrega de ':'Realizar pedido de ')+nombre,
+       sub: same
+         ? (diaPedCap + ' pides y llega el mismo día')
+         : ('Pides ' + diaPedStr + ' · entrega ' + diaEntStr),
+       fecha: fpedMid, atrasado:false, _predicho:true });
+      // Entrega predicha en su día (simétrico al panel; solo si NO sameDay).
+      if (!same) {
+       var fentMid = new Date(fent); fentMid.setHours(0,0,0,0);
+       if (!isNaN(fentMid.getTime()) && fentMid <= horizonte && fentMid >= hoy) {
+        var diaEntCap = diaEntStr.charAt(0).toUpperCase() + diaEntStr.slice(1);
+        items.push({ ev:{tipo:'entrega', pedido:{id:'_predent_'+p.id+'_p'+_ci, provId:p.id, fecha:fped.toISOString()}},
+         kind:'entrega', accion:'pedido:'+p.id,
+         titulo:'Recibir pedido de '+nombre,
+         sub: diaEntCap + ' llega · pedido el ' + diaPedStr,
+         fecha: fentMid, atrasado:false, _predicho:true });
+       }
       }
-     }
+     });
     });
    } catch(_){}
 
@@ -47497,11 +47523,13 @@ function _confirmBorrarCuenta(id) {
     // v1.3.1498: ciclo pedido→entrega. Para 'pedido_entrega' (sameDay) el span
     //   es 0 (mismo día), así pct=1 directamente y se muestra "Entregado".
     //   Las labels coinciden (fecha pedido = fecha entrega) — visualmente claro.
-    // v1.3.1499: NO mostrar timeline si es predicho (sugerencia, no pedido real).
+    // v1.3.1872 FIX COHERENCIA: mostrar la línea TAMBIÉN en predichos (igual que
+    //   los tipos 'pedido' y 'entrega' ya hacen). Antes (v1.3.1499) se ocultaba en
+    //   predichos → un ciclo sameDay sin pedido real no mostraba la línea de tiempo.
     // v1.3.1500: centro solo estado (provider/arts ya en header).
     var fechaPE = new Date(pPE.fecha);
     var fechaEntPE = fechaPE; // pedido_entrega = mismo día por definición
-    if (!ev._predicho && !isNaN(fechaPE.getTime())) {
+    if (!isNaN(fechaPE.getTime())) {
      var _pctPEE = (fechaPE <= ahora) ? 1 : 0;
      // v1.3.1592 MOD C1: mid flecha SVG unicolor larga (antes "Entregado"/"Programado")
      var _stateLblPE = '<svg width="72" height="10" viewBox="0 0 72 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:middle"><path d="M1 5 L66 5 M61 1 L66 5 L61 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -67344,6 +67372,15 @@ window._DashweyDeviceId = (() => {
   if (_c) _c.querySelectorAll('.card[data-card-id]').forEach(function(card){ card.dataset.stale = '1'; });
   if (document.body.dataset.tab === '1' && typeof _snapDoRenderAll === 'function') {
    _snapDoRenderAll();
+  }
+  // v1.3.1872 FIX: re-render del timeline de Agenda SIEMPRE que esté montado en el
+  //   DOM, sin depender del tab activo. Cubre el borrado de pedido desde el overlay
+  //   del Almacén (long-press → eliminar): antes el timeline quedaba stale y el pedido
+  //   seguía visible hasta cambiar de tab (el guard !_snapActive bloqueaba el re-render
+  //   y _snapDoRenderAll solo corría en tab 1). Esto cubre los 3 caminos de borrado
+  //   (todos pasan por removePendingOrder → emit 'pedido').
+  if (document.getElementById('snap-agenda-timeline') && typeof _snapRenderTimeline === 'function') {
+   _snapRenderTimeline();
   }
  } catch(_) {}
  });
