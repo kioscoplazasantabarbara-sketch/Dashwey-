@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1872";
+ var CURRENT_CACHE = "dashwey-v1-3-1874";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1872</title>
+<title>Dashwey v1.3.1874</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3961,6 +3961,10 @@ body[data-dash-snap="1"] .snap-agenda-tabs {
  font-weight: var(--fw-bold);
  color: var(--ink);
  letter-spacing: var(--ls-tight);
+ /* v1.3.1874: los KPIs PEDIDOS/ENTREGAS/EVENTOS NUNCA animan (decisión Hung).
+    Sin transición ni animación heredada → no más "amago" al arrancar la app. */
+ animation: none !important;
+ transition: none !important;
 }
 .snap-agenda-tab.active .snap-agenda-tab-val { color: var(--red); }
 .snap-agenda-tab:active { opacity: 0.65; }
@@ -23346,7 +23350,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1872';
+ const _APP_VERSION = 'v1.3.1874';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35033,9 +35037,19 @@ function _toggleCardFromManager(id, btn) {
  if (!cont) return;
  const card = cont.querySelector(`[data-card-id="${cardId}"]`);
  if (card) {
+ // v1.3.1874 FIX "amago de animación": durante el boot la card se renderiza 2 veces
+ //   (optimistic localStorage + llegada de Firestore ~1-2s). Cada render llamaba a
+ //   _animateCardAppear → remove+add de 'card-appear' → REINICIABA el fade a media
+ //   animación → se veía un "amago que arranca y se corta" en los KPIs/contenido.
+ //   FIX: si la card ya está animando su entrada (o ya la completó hace <1.5s), NO
+ //   reiniciar — dejar que termine limpia una sola vez.
+ var _now = Date.now();
+ if (card.classList.contains('card-appear')) return; // ya animando → no reiniciar
+ if (card._appearedAt && (_now - card._appearedAt) < 1500) return; // recién animada
  card.classList.remove('card-appear');
  requestAnimationFrame(() => {
  card.classList.add('card-appear');
+ card._appearedAt = Date.now();
  card.addEventListener('animationend', () => card.classList.remove('card-appear'), { once: true });
  });
  }
@@ -47802,6 +47816,25 @@ function _confirmBorrarCuenta(id) {
 
  scrollWrap.appendChild(tl);
  wrap.appendChild(scrollWrap);
+
+ // v1.3.1872 FIX SWIPE CAJÓN: el cajón de actividad compite con el scroll-snap
+ //   VERTICAL del dashboard (cambiar Agenda↔Flujo de Caja también es un gesto Y).
+ //   v1.3.1851 puso overscroll-behavior-y:contain para que el cajón retuviera su
+ //   scroll → reintrodujo el bug: si el contenido NO desborda, el cajón igualmente
+ //   "atrapaba" el gesto y bloqueaba el cambio de tarjeta. FIX: ajustar dinámicamente
+ //   — 'contain' SOLO si el contenido desborda de verdad (hace falta scroll propio);
+ //   'auto' si cabe (cede el gesto al padre para cambiar de tarjeta). Lo mejor de
+ //   ambos: el cajón largo scrollea su contenido, el cajón corto deja pasar el swipe.
+ try {
+  requestAnimationFrame(function(){
+   try {
+    var _desborda = scrollWrap.scrollHeight > (scrollWrap.clientHeight + 4);
+    scrollWrap.style.overscrollBehaviorY = _desborda ? 'contain' : 'auto';
+    // Si no desborda, no tiene sentido capturar pan-y: dejar el gesto al padre.
+    scrollWrap.style.touchAction = _desborda ? 'pan-y' : 'auto';
+   } catch(_) {}
+  });
+ } catch(_) {}
 
  // v1.3.1367: botón "+ Nuevo recordatorio" eliminado de aquí, ahora en FAB Agenda
  }
