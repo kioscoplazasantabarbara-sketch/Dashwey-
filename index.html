@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1867";
+ var CURRENT_CACHE = "dashwey-v1-3-1869";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1867</title>
+<title>Dashwey v1.3.1869</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23346,7 +23346,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1867';
+ const _APP_VERSION = 'v1.3.1869';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -30253,10 +30253,21 @@ const ui = (() => {
    ov.querySelector('[data-action="confirm"]').addEventListener('click', function(){
     if (_onConfirm) {
      try {
+      // v1.3.1869 FIX-TZ: la fechaAncla es una fecha LOCAL a medianoche
+      //   (new Date(yy,mm,dd) en el calendario). toISOString() la pasa a UTC y,
+      //   en horario Europe/Madrid (UTC+1/+2), resta 1 día → "Domingo 24" se
+      //   guardaba como "2026-05-23" (sábado) y reaparecía corrida. Guardar con
+      //   componentes LOCALES preserva el día elegido. (Lectura ya era correcta.)
+      var _localISO = function(d){
+       var y = d.getFullYear();
+       var m = String(d.getMonth() + 1).padStart(2, '0');
+       var day = String(d.getDate()).padStart(2, '0');
+       return y + '-' + m + '-' + day;
+      };
       var ciclosOut = st.ciclos.map(function(c){
        return {
         id: c.id || ('cic_' + (c.diaPedido) + '_' + Math.random().toString(36).slice(2,7)),
-        fechaAncla: c.fechaAncla.toISOString().slice(0,10),
+        fechaAncla: _localISO(c.fechaAncla),
         diaPedido: c.diaPedido,
         offsetEntrega: c.offsetEntrega,
         cadaDias: c.cadaDias,
@@ -30267,7 +30278,7 @@ const ui = (() => {
       // compat legacy: fechaInicio + periodicidad (días) + hora del primer ciclo
       _onConfirm({
        ciclos: ciclosOut,
-       fechaInicio: first.fechaAncla ? first.fechaAncla.toISOString() : new Date().toISOString(),
+       fechaInicio: first.fechaAncla ? (_localISO(first.fechaAncla) + 'T09:00:00') : new Date().toISOString(),
        periodicidad: { n: first.cadaDias || 7, unit: 'day' },
        hora: first.hora || '10:00',
        // arrays legacy derivados de los ciclos (para mantener chips coherentes mientras existan)
@@ -42166,8 +42177,12 @@ function _confirmBorrarCuenta(id) {
    void ov.offsetWidth;
    ov.classList.add('open');
    _wire();
-   // Render primera tarjeta tras montar (rAF garantiza que el DOM existe → no más "no pasó nada")
-   requestAnimationFrame(function(){ _renderCard(0, true); });
+   // v1.3.1867: primer render. rAF + fallback setTimeout — al abrir desde
+   //   notificación en frío los rAF pueden estar pausados (webview no visible).
+   var _rendered = false;
+   var _doRender = function(){ if (_rendered) return; _rendered = true; _renderCard(0, true); };
+   requestAnimationFrame(_doRender);
+   setTimeout(_doRender, 120);
   }
 
   function _close(){
@@ -42209,21 +42224,22 @@ function _confirmBorrarCuenta(id) {
    var startPct = 100 * (1 - remaining / _state.dur);
    fillEl.style.transition = 'none';
    fillEl.style.width = startPct + '%';
-   // v1.3.1867: doble rAF — en Android WebView un transition de width sobre un
-   //   elemento recién insertado por innerHTML NO dispara sin garantizar que el
-   //   layout inicial ya se pintó. El void offsetWidth solo no basta. Con doble
-   //   requestAnimationFrame el navegador confirma el frame de partida y entonces
-   //   el cambio a 100% sí anima linealmente. (Regla WebView: transitionend/anim
-   //   no fiables sin reflow forzado.)
    void fillEl.offsetWidth;
-   requestAnimationFrame(function(){
-    requestAnimationFrame(function(){
-     var fe = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
-     if (!fe) return;
-     fe.style.transition = 'width ' + remaining + 'ms linear';
-     fe.style.width = '100%';
-    });
-   });
+   // v1.3.1867: lanzar la animación del ancho. Doble rAF para WebView normal,
+   //   PERO con fallback setTimeout porque al abrir el Wrapped desde una
+   //   NOTIFICACIÓN (app en frío / webview aún no visible) los requestAnimationFrame
+   //   quedan PAUSADOS por el navegador y nunca disparan → la barra no se llena y
+   //   el autoplay no avanza. El setTimeout siempre corre. _fillArmed evita doble disparo.
+   var _armed = false;
+   var _arm = function(){
+    if (_armed) return; _armed = true;
+    var fe = document.querySelector('#wrpProg .wrp-pbar.cur .wrp-pfill');
+    if (!fe) return;
+    fe.style.transition = 'width ' + remaining + 'ms linear';
+    fe.style.width = '100%';
+   };
+   requestAnimationFrame(function(){ requestAnimationFrame(_arm); });
+   setTimeout(_arm, 80); // fallback infalible (cold start / webview oculto)
    _state._fillStart = Date.now();
    _state._fillDur = remaining;
    _state.timer = setTimeout(function(){
