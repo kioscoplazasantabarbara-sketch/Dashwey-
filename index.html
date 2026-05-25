@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1880";
+ var CURRENT_CACHE = "dashwey-v1-3-1882";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1880</title>
+<title>Dashwey v1.3.1882</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18378,7 +18378,44 @@ const State = (() => {
   },
   setCierres: (v) => {
    const _snap = _snapshotMap(_state.cierresCaja);
-   _state.cierresCaja = _preserveDeleted ? _preserveDeleted('cierresCaja', v) : (v || []);
+   // v1.3.1882 GUARD ANTI-PISADO (CORE SAFE): antes este setter REEMPLAZABA el
+   //   array entero por el remoto. Si un dispositivo con estado viejo (ej: Samsung
+   //   con 1 cierre) escribía, machacaba los cierres de los demás (caso real
+   //   25-may: PWA 21 cierres → APK 1 cierre los pisó). Ahora FUSIONA por id:
+   //   - cierres que están solo en local (no en el remoto entrante) → se CONSERVAN
+   //   - cierres que están en ambos → gana el de _updatedAt más reciente (LWW)
+   //   - cierres nuevos del remoto → se añaden
+   //   Esto evita que ningún dispositivo borre cierres de otro. Solo afecta a este
+   //   setter; NO toca el merge general del documento raíz. Si algo falla, el
+   //   try/catch cae al comportamiento legacy (reemplazo) — no rompe el sync.
+   var _entrante = _preserveDeleted ? _preserveDeleted('cierresCaja', v) : (v || []);
+   try {
+    var _local = Array.isArray(_state.cierresCaja) ? _state.cierresCaja : [];
+    if (Array.isArray(_entrante) && _local.length) {
+     var _byId = {};
+     // 1. Sembrar con los locales
+     _local.forEach(function(c){ if (c && c.id) _byId[c.id] = c; });
+     // 2. Aplicar entrantes: gana el más reciente por _updatedAt
+     _entrante.forEach(function(rc){
+      if (!rc || !rc.id) return;
+      var ex = _byId[rc.id];
+      if (!ex) { _byId[rc.id] = rc; return; }
+      var tEx = (typeof ex._updatedAt === 'number') ? ex._updatedAt : 0;
+      var tRc = (typeof rc._updatedAt === 'number') ? rc._updatedAt : 0;
+      // remoto gana solo si es estrictamente más nuevo; empate → conservar local
+      _byId[rc.id] = (tRc > tEx) ? rc : ex;
+     });
+     var _merged = Object.keys(_byId).map(function(k){ return _byId[k]; });
+     // Salvaguarda: el merge NUNCA debe tener menos cierres que el local previo
+     //   (si los tuviera, algo raro pasó → preferir local intacto).
+     _state.cierresCaja = (_merged.length >= _local.length) ? _merged : _local;
+    } else {
+     _state.cierresCaja = _entrante;
+    }
+   } catch(_e) {
+    console.warn('[Dashwey/Guard] setCierres merge falló, fallback a reemplazo:', _e);
+    _state.cierresCaja = _entrante;
+   }
    _diffMarkDirty && _diffMarkDirty('cierresCaja', _snap, _state.cierresCaja);
    save();
   },
@@ -23360,7 +23397,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1880';
+ const _APP_VERSION = 'v1.3.1882';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -47804,11 +47841,12 @@ function _confirmBorrarCuenta(id) {
   tl.appendChild(group);
  });
 
- // v1.3.1880 FIX "línea cuelga": la línea vertical del ÚLTIMO grupo terminaba al
- //   fondo del grupo (bottom:12), pasando por debajo del último evento → aspecto
- //   de mal acabado. Ahora la recortamos al centro vertical del ÚLTIMO item del
- //   último grupo. La línea nace en top:11px del grupo, así que su altura útil =
- //   (centro del último item − 11). Se fija vía variable CSS --last-line-h.
+ // v1.3.1881 FIX "línea cuelga" (v2): el v1880 medía el CENTRO del último .item,
+ //   pero los items de pedido/entrega contienen una barra horizontal interna que
+ //   los hace altos → el centro queda muy abajo y la línea pasaba del check. En
+ //   Entregas funcionaba por casualidad (items más cortos). FIX: medir el CHECK
+ //   (el círculo de la izquierda), que es el punto al que la línea debe llegar,
+ //   independientemente de la altura del item. Fallback al item si no hay check.
  try {
   requestAnimationFrame(function(){
    try {
@@ -47818,10 +47856,11 @@ function _confirmBorrarCuenta(id) {
     var _items = _ultimo.querySelectorAll('.snap-tl-v-item');
     if (!_items.length) { _ultimo.style.setProperty('--last-line-h', '0px'); return; }
     var _lastItem = _items[_items.length - 1];
+    // Punto destino = centro del CHECK del último item (no el item entero).
+    var _target = _lastItem.querySelector('.snap-tl-v-check') || _lastItem;
     var _gRect = _ultimo.getBoundingClientRect();
-    var _iRect = _lastItem.getBoundingClientRect();
-    // centro vertical del último item relativo al top del grupo
-    var _centro = (_iRect.top - _gRect.top) + (_iRect.height / 2);
+    var _tRect = _target.getBoundingClientRect();
+    var _centro = (_tRect.top - _gRect.top) + (_tRect.height / 2);
     var _h = Math.max(0, _centro - 11); // la línea nace en top:11
     _ultimo.style.setProperty('--last-line-h', _h + 'px');
    } catch(_) {}
