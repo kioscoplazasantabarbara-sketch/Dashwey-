@@ -15,7 +15,7 @@
    - skipWaiting: inmediato siempre (manual y automático).
    ═══════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME  = 'dashwey-v1-3-1889';
+const CACHE_NAME  = 'dashwey-v1-3-1890';
 const HTML_URL    = 'index.html';
 
 /* v1.3.1436 BUG-OFFLINE FIX — Lote D
@@ -344,6 +344,13 @@ self.addEventListener('fetch', e => {
     if (h.includes('fcmregistrations.googleapis.com')) return true;
     if (h.includes('cloudfunctions.net')) return true;
     if (h.endsWith('.run.app')) return true;
+    /* v1.3.1890: EXCEPCIÓN Storage — las fotos de productos viven en
+       firebasestorage.googleapis.com con query string (token de descarga),
+       pero son recursos ESTÁTICOS (una foto subida no cambia). NO deben
+       tratarse como API dinámica never-cache: queremos cachearlas para que
+       carguen rápido y offline. Se gestionan como imágenes más abajo. */
+    if (h.includes('firebasestorage.googleapis.com')) return false;
+    if (h.includes('firebasestorage.app')) return false;
     /* Heurística: cualquier googleapis.com NO-gstatic con query string
        es API dinámica (Firestore, RTDB, etc.). gstatic.com sin query
        son SDKs cacheables. */

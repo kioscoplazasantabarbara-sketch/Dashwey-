@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1889";
+ var CURRENT_CACHE = "dashwey-v1-3-1890";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1889</title>
+<title>Dashwey v1.3.1890</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13513,6 +13513,46 @@ window._DashweyFirebase = {
  }
  },
 
+ // v1.3.1890 — Subida de fotos a Firebase Storage (fix de raíz del incidente
+ //   de fotos base64). Sube un dataURL base64 a Storage en la ruta
+ //   productos/{uid}/{key}.jpg y devuelve la URL de descarga (~100B) para
+ //   guardar en producto.foto en lugar del base64 (que inflaba el doc >1MB).
+ //   Requiere conexión (decisión Hung). SDK Storage con import diferido.
+ //   Lanza Error si no hay uid, no hay red, o falla la subida → el caller avisa.
+ async uploadFoto(key, dataUrl) {
+  if (!FIREBASE_ENABLED || !_fbApp) throw new Error('Firebase no disponible');
+  if (!_uid) throw new Error('Sin usuario autenticado');
+  if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.indexOf('data:image') !== 0) {
+   throw new Error('dataUrl no es una imagen válida');
+  }
+  // SDK Storage diferido (mismo patrón que firestore)
+  const st = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js');
+  const storage = st.getStorage(_fbApp);
+  // Ruta: productos/{uid}/{key}.jpg — coincide con las reglas de seguridad
+  //   (allow read/write if request.auth.uid == userId).
+  const safeKey = String(key).replace(/[^A-Za-z0-9_-]/g, '_'); // sanear (sin / ni espacios)
+  const ref = st.ref(storage, 'productos/' + _uid + '/' + safeKey + '.jpg');
+  // uploadString acepta el dataURL completo (data:image/jpeg;base64,...)
+  await st.uploadString(ref, dataUrl, 'data_url');
+  const url = await st.getDownloadURL(ref);
+  return url;
+ },
+
+ // v1.3.1890 — Borra una foto de Storage (al cambiarla o quitarla).
+ //   No lanza si no existe (best-effort). No bloquea el flujo del caller.
+ async deleteFoto(key) {
+  try {
+   if (!FIREBASE_ENABLED || !_fbApp || !_uid) return false;
+   const st = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js');
+   const storage = st.getStorage(_fbApp);
+   const safeKey = String(key).replace(/[^A-Za-z0-9_-]/g, '_');
+   const ref = st.ref(storage, 'productos/' + _uid + '/' + safeKey + '.jpg');
+   await st.deleteObject(ref);
+   return true;
+  } catch(_) { return false; } // not-found u otro → ignorar
+ },
+
+
  // Evita saturar la cola de Firestore cuando el canal está bloqueado por la red
  _writeTimers: {},
  _writePending: {},
@@ -23428,7 +23468,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1889';
+ const _APP_VERSION = 'v1.3.1890';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -56911,8 +56951,62 @@ function _parseIva(iva) {
  ...(_eaDescEl ? { descuento: _eaDescEl.value.trim() || '' } : {}),
  ...(_eaCatEl  ? { cat: _eaCatEl.value.trim() || '' } : {}),
  };
- if (_editPhoto !== fotoOrig) updates.foto = _editPhoto;
+ // v1.3.1890 — FOTO VÍA STORAGE (fix de raíz del incidente base64).
+ //   - Si la foto NO cambió → no se toca.
+ //   - Si se QUITÓ (null) → guardar foto:null + borrar de Storage (best-effort).
+ //   - Si hay foto NUEVA en base64 → guardar el artículo YA (sin la foto, para
+ //     que el guardado sea instantáneo) y subir la imagen a Storage en paralelo;
+ //     cuando vuelve la URL, se actualiza producto.foto con la URL (~100B), NUNCA
+ //     el base64. Así el documento de Firestore no se infla jamás. Requiere red.
+ var _fotoCambio = (_editPhoto !== fotoOrig);
+ var _fotoNueva = _fotoCambio && _editPhoto && typeof _editPhoto === 'string' && _editPhoto.indexOf('data:image') === 0;
+ var _fotoQuitada = _fotoCambio && (_editPhoto === null || _editPhoto === '');
+ // Si la foto ya es una URL (caso raro: reabrir y guardar sin cambiarla), se respeta.
+ var _fotoEsUrlYa = _fotoCambio && _editPhoto && typeof _editPhoto === 'string' && _editPhoto.indexOf('http') === 0;
+
+ if (_fotoQuitada) {
+  updates.foto = null;
+ } else if (_fotoEsUrlYa) {
+  updates.foto = _editPhoto; // ya es URL, guardar tal cual
+ }
+ // Si es foto NUEVA base64: NO la metemos en updates (se sube aparte abajo).
+
  State.set.updateProd(id, updates);
+
+ // Borrado en Storage si se quitó la foto (no bloquea)
+ if (_fotoQuitada) {
+  try { if (window._DashweyFirebase && window._DashweyFirebase.deleteFoto) window._DashweyFirebase.deleteFoto(id); } catch(_) {}
+ }
+
+ // Subida en paralelo de la foto nueva
+ if (_fotoNueva) {
+  var _b64 = _editPhoto; // capturar antes de limpiar (la subida es async)
+  (function(_prodId, _dataUrl){
+   var _fb = window._DashweyFirebase;
+   if (!_fb || !_fb.uploadFoto) {
+    try { showToast('⚠️ No se pudo subir la foto (Firebase no disponible)', 'warning'); } catch(_) {}
+    return;
+   }
+   // Comprobar conexión antes de intentar (decisión: subida requiere red)
+   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try { showToast('📷 Necesitas conexión para subir la foto', 'warning'); } catch(_) {}
+    return;
+   }
+   try { showToast('📷 Subiendo foto…', 'info'); } catch(_) {}
+   _fb.uploadFoto(_prodId, _dataUrl)
+    .then(function(url){
+     // Guardar SOLO la URL en el producto (no base64)
+     try { State.set.updateProd(_prodId, { foto: url }); } catch(_) {}
+     try { showToast('✅ Foto guardada', 'success'); } catch(_) {}
+     // Re-render para mostrar la foto
+     try { renderOrden(); renderCatInline(); } catch(_) {}
+    })
+    .catch(function(e){
+     console.warn('[ea-photo] subida Storage falló:', e && e.message);
+     try { showToast('⚠️ No se pudo subir la foto. Inténtalo con conexión.', 'warning'); } catch(_) {}
+    });
+  })(id, _b64);
+ }
  _editPhoto = null;
  // Limpiar borrador al guardar exitosamente
  try { const f = document.getElementById('fs-content'); window._clearFormDirty(f, 'editar_art_' + id); } catch(_) {}
