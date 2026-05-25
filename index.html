@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1885";
+ var CURRENT_CACHE = "dashwey-v1-3-1886";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1885</title>
+<title>Dashwey v1.3.1886</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23428,7 +23428,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1885';
+ const _APP_VERSION = 'v1.3.1886';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46242,6 +46242,12 @@ function _confirmBorrarCuenta(id) {
  });
  }
 
+ // ── v1.3.1886: Render panel del cuerpo PRIMERO ──────────────
+ //   Pinta el feed y, de paso, puebla window._dwyLastFeedEventos con la lista
+ //   COMPLETA de eventos del periodo (con ciclos, predichos, pendingOrders).
+ //   El Hero (abajo) lee esa misma lista → Hero y cuerpo NUNCA divergen.
+ _snapRenderAgendaPanel(wrap, allPedidos, allVisitas, calcEnt, hoy);
+
  // ── v1.3.1447: Próximo evento (hero) ─────────────────────────
  // Coge el evento futuro más inmediato del feed unificado y lo
  // muestra en el header como acción concreta. Si no hay → muestra
@@ -46252,144 +46258,78 @@ function _confirmBorrarCuenta(id) {
   var heroTitle = document.getElementById('snap-prox-title');
   var heroSub = document.getElementById('snap-prox-sub');
   if (heroEl && heroIcon && heroTitle && heroSub) {
+   // v1.3.1886 FIX RAÍZ Hero≠cuerpo: el Hero ahora lee EXACTAMENTE los mismos
+   //   eventos que el cuerpo del feed (window._dwyLastFeedEventos, poblado por
+   //   _snapRenderRecordatoriosPanel justo antes). Antes el Hero recalculaba por
+   //   su cuenta desde historialPedidos → divergía del cuerpo (caso real:
+   //   "Recibir entrega · Praviana" en el Hero mientras el cuerpo decía "Entregas
+   //   recibidas"; "Realizar pedido · Bebidas" fantasma que no estaba en el feed).
+   //   Una sola fuente → imposible que diverjan por diseño.
    var _candidatos = [];
    var _now = new Date();
-   // v1.3.1452 — comparar contra HOY 00:00, no hora exacta. Antes los pedidos
-   //   con fecha 09:00 quedaban filtrados si abrías la app por la tarde
-   //   ("Realizar pedido · Goyo MAÑANA" cuando había Praviana HOY).
    var _hoy00Hero = new Date(_now); _hoy00Hero.setHours(0,0,0,0);
-   // Pedidos próximos (allVisitas tiene fecha de pedido)
-   // v1.3.1448: texto accionable "Realizar pedido · X" en lugar de "Pedido · X"
-   // v1.3.1504: si el pedido es PREDICHO (_src='predicho'), NO mostrar hora —
-   //   la hora 00:00 del ISO no es real. Solo mostrar fecha (Hoy/Mañana/etc).
-   //   Para pedidos REALES (pending/hist) sí mostrar hora.
-   // v1.3.1508: para pendings reales, calcular próximo diasPedido del editor
-   //   del proveedor DESDE HOY (no v.fecha). Si no hay diasPedido, mantener v.fecha.
-   allVisitas.forEach(function(v) {
-    if (!v || !v.fecha) return;
-    var fp;
-    var provV = State.get.prov ? State.get.prov(v.provId) : null;
-    var _dpProv = (provV && provV.diasPedido) || [];
-    if (v._src === 'pending' && _dpProv.length) {
-     fp = null;
-     for (var _i = 0; _i <= 14; _i++) {
-      var _d = new Date(_hoy00Hero); _d.setDate(_hoy00Hero.getDate() + _i);
-      var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
-      if (_dpProv.indexOf(_dow) >= 0) { fp = _d; break; }
-     }
-     if (!fp) fp = new Date(v.fecha);
-    } else {
-     fp = new Date(v.fecha);
+
+   // Leer la lista de eventos YA calculada por el cuerpo (misma fuente).
+   var _feedEv = [];
+   try {
+    if (window._dwyLastFeedEventos && Array.isArray(window._dwyLastFeedEventos)) {
+     _feedEv = window._dwyLastFeedEventos;
     }
-    if (isNaN(fp.getTime()) || fp < _hoy00Hero) return;
-    var nom = (provV && provV.nombre) || v.provId || 'Proveedor';
-    // v1.3.1637: _doneKey reconstruido desde provId para visitas predichas.
-    //   Antes (v1635/v1636): usábamos v.id, pero las visitas predichas no
-    //   siempre tienen v.id estable (eran 'undefined' → _doneKey=null →
-    //   filtro nunca rechazaba). La key real guardada por _dwyEvMarkDone para
-    //   un evento predicho es 'ped__predicho_<provId>_p0'. Reconstruimos igual.
-    //   Si la visita tiene v.id real (pedido pendiente existente), priorizamos eso.
-    var _doneKeyP;
-    if (v && v.id) {
-     _doneKeyP = 'ped_' + v.id;
-    } else if (v && v.provId) {
-     _doneKeyP = 'ped__predicho_' + v.provId + '_p0';
-    } else {
-     _doneKeyP = null;
+   } catch(_) {}
+
+   // Mapear cada evento del feed a un candidato del Hero (título + icono + fecha).
+   //   Las ALERTAS se excluyen (decisión Hung: son informativas, nunca en el Hero).
+   //   El tipo de evento define a qué TAB pertenece, igual que inTemporalFilter:
+   //     - 'pedido' / 'pedido_entrega' → tab "pedidos"
+   //     - 'entrega' / 'pedido_entrega' → tab "entregas"
+   //     - 'recordatorio' → tab "alertas" (Eventos)
+   //   pedido_entrega cuenta para AMBOS tabs (se pide y llega el mismo día).
+   var _provNombreHero = function(provId, fallback) {
+    try { var p = State.get.prov ? State.get.prov(provId) : null; return (p && p.nombre) || fallback || 'Proveedor'; }
+    catch(_) { return fallback || 'Proveedor'; }
+   };
+   _feedEv.forEach(function(ev) {
+    if (!ev || !ev.fecha) return;
+    if (ev.tipo === 'alerta') return; // alertas nunca en el Hero
+    var f = (ev.fecha instanceof Date) ? ev.fecha : new Date(ev.fecha);
+    if (isNaN(f.getTime())) return;
+    var _ts = (typeof ev.sortKey === 'number') ? ev.sortKey : f.getTime();
+    // Construir hasta 2 candidatos según el tipo (pedido_entrega → pedido + entrega)
+    if (ev.tipo === 'pedido' || ev.tipo === 'pedido_entrega') {
+     var _nomP = _provNombreHero(ev.pedido && ev.pedido.provId, ev.pedido && ev.pedido.proveedor);
+     _candidatos.push({
+      ts: _ts, icon: '🧑‍💼', title: 'Realizar pedido · ' + _nomP, date: f,
+      suffix: '', _tabTipo: 'pedidos', _noHora: true,
+      _doneKey: (ev.pedido && ev.pedido.id) ? (ev.tipo === 'pedido_entrega' ? 'pedent_' + ev.pedido.id : 'ped_' + ev.pedido.id) : null
+     });
     }
-    _candidatos.push({
-     ts: fp.getTime(),
-     icon: '🧑‍💼',
-     title: 'Realizar pedido · ' + nom,
-     date: fp,
-     suffix: '',
-     _tabTipo: 'pedidos', // v1.3.1884: para filtrar Hero por tab activo
-     _noHora: v._src === 'predicho' || v._src === 'pending',
-     _doneKey: _doneKeyP
-    });
-   });
-   // Entregas próximas (allPedidos: calcular fecha entrega)
-   // v1.3.1448: texto accionable "Recibir entrega · X" en lugar de "Entrega · X"
-   // v1.3.1452: SOLO entregas reales (con pedido pendiente), NO predichas.
-   //   Una entrega solo existe tras un pedido real en almacén.
-   // v1.3.1508: para pendings reales, calcular próximo diasEntrega del editor
-   //   del proveedor DESDE HOY (no desde p.date). Si el editor no tiene
-   //   diasEntrega definidos, fallback al cálculo original.
-   allPedidos.forEach(function(p) {
-    if (!p || !p.date) return;
-    if (p._src === 'predicho') return; // entregas predichas excluidas del hero
-    var fe;
-    var prov = State.get.prov ? State.get.prov(p.provId) : null;
-    var _deProv = (prov && prov.diasEntrega) || [];
-    if (p._src === 'pending' && _deProv.length) {
-     // Calcular próximo diasEntrega desde HOY
-     fe = null;
-     for (var _i = 0; _i <= 14; _i++) {
-      var _d = new Date(_hoy00Hero); _d.setDate(_hoy00Hero.getDate() + _i);
-      var _dow = _d.getDay() === 0 ? 6 : _d.getDay() - 1;
-      if (_deProv.indexOf(_dow) >= 0) { fe = _d; break; }
-     }
-     if (!fe) fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
-    } else {
-     fe = p._fechaEntrega ? new Date(p._fechaEntrega) : calcEnt(p.date, p.provId);
+    if (ev.tipo === 'entrega' || ev.tipo === 'pedido_entrega') {
+     var _nomE = _provNombreHero(ev.pedido && ev.pedido.provId, ev.pedido && ev.pedido.proveedor);
+     var _nArtsE = (ev.pedido && ev.pedido.items && ev.pedido.items.length) || 0;
+     _candidatos.push({
+      ts: _ts + 0.5, icon: '🚚', title: 'Recibir entrega · ' + _nomE, date: f,
+      suffix: _nArtsE > 0 ? (' · ' + _nArtsE + ' arts.') : '', _tabTipo: 'entregas', _noHora: true,
+      _doneKey: (ev.pedido && ev.pedido.id) ? (ev.tipo === 'pedido_entrega' ? 'pedent_' + ev.pedido.id : 'ent_' + ev.pedido.id) : null
+     });
     }
-    if (!fe || isNaN(fe.getTime()) || fe < _hoy00Hero) return;
-    var nom = (prov && prov.nombre) || p.provId || 'Proveedor';
-    var nArts = (p.items && p.items.length) || 0;
-    // v1.3.1635: clave para "entrega completada" — tipo='entrega' → 'ent_' + id.
-    var _doneKeyE = (p && p.id) ? ('ent_' + p.id) : null;
-    _candidatos.push({
-     ts: fe.getTime(),
-     icon: '🚚',
-     title: 'Recibir entrega · ' + nom,
-     date: fe,
-     suffix: nArts > 0 ? (' · ' + nArts + ' arts.') : '',
-     _tabTipo: 'entregas', // v1.3.1884: para filtrar Hero por tab activo
-     _noHora: p._src === 'pending', // pending hora ya no es relevante, fecha del editor sin hora real
-     _doneKey: _doneKeyE
-    });
+    if (ev.tipo === 'recordatorio') {
+     var _r = ev.recordatorio || {};
+     _candidatos.push({
+      ts: _ts, icon: '⏰', title: _r.titulo || 'Recordatorio', date: f,
+      suffix: '', _tabTipo: 'alertas', _noHora: false,
+      _doneKey: _r.id ? ('rec_' + _r.id) : null
+     });
+    }
    });
-   // Recordatorios próximos
-   // v1.3.1496: eliminado prefijo "Recordatorio · " — el icono ⏰ ya implica el tipo.
-   //   Patrón premium (Apple Reminders, Things, Cron): título limpio sin redundancia.
-   var _recsHero = State.get.recordatorios ? (State.get.recordatorios() || []) : [];
-   _recsHero.forEach(function(r) {
-    if (!r || !r.fecha) return;
-    var fr = new Date(r.fecha);
-    if (isNaN(fr.getTime()) || fr < _hoy00Hero) return;
-    // v1.3.1635: recordatorios marcados done (r.done=true) no aparecen en hero.
-    //   Coherente con _dwyEvIsDone: para tipo='recordatorio', si ev.recordatorio.done
-    //   → true. Aquí filtramos directamente por r.done.
-    if (r.done === true) return;
-    var _recTitle = r.titulo || 'Recordatorio';
-    _candidatos.push({
-     ts: fr.getTime(),
-     icon: '⏰',
-     title: _recTitle,
-     date: fr,
-     suffix: '',
-     _tabTipo: 'alertas', // v1.3.1884: recordatorios/eventos → tab "Eventos"
-     _doneKey: (r.id ? ('rec_' + r.id) : null)
-    });
-   });
-   // v1.3.1635: filtrar candidatos completados ANTES del sort.
-   //   Lee eventosCompletados (State + localStorage fallback como _dwyEvIsDone).
-   //   Sin esto, pedidos/entregas marcados como completados en el panel seguían
-   //   apareciendo en el hero "Próximo evento" del Dashboard.
+
+   // Filtrar completados (las 3 variantes de key del mismo pedido).
    try {
     var _evDoneMap = (typeof State !== 'undefined' && State.get && State.get.eventosCompletados) ? (State.get.eventosCompletados() || {}) : {};
     var _evDoneLs = {};
     try { _evDoneLs = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_) {}
-    // v1.3.1883 FIX #3 (raíz): un mismo pedido puede haberse completado en el
-    //   feed bajo CUALQUIERA de sus variantes de key: 'ped_<id>' (pedido),
-    //   'ent_<id>' (entrega) o 'pedent_<id>' (pedido_entrega — mismo día se pide
-    //   y llega). El Hero solo generaba candidatos 'ped_'/'ent_', así que un
-    //   evento marcado como 'pedent_' quedaba STALE (seguía mostrándose). Ahora
-    //   comprobamos las 3 variantes derivadas del mismo id → cero stale.
     var _isDoneCnd = function(key) {
      if (!key) return false;
      if (_evDoneMap[key] || _evDoneLs[key]) return true;
-     // Comprobación cruzada: si la key es ped_/ent_/pedent_<id>, mirar las otras 2
      var _m = /^(ped|ent|pedent)_(.+)$/.exec(key);
      if (_m) {
       var _id = _m[2];
@@ -46401,17 +46341,12 @@ function _confirmBorrarCuenta(id) {
      return false;
     };
     _candidatos = _candidatos.filter(function(cnd) {
-     if (!cnd._doneKey) return true; // sin key estable → no se puede marcar done → mantener
+     if (!cnd._doneKey) return true;
      return !_isDoneCnd(cnd._doneKey);
     });
    } catch(_) { /* si falla el filtro, no romper el hero */ }
-   // v1.3.1884: el Hero refleja el TAB ACTIVO (Pedidos/Entregas/Eventos),
-   //   igual que el feed (inTemporalFilter). Antes mezclaba los 3 tipos →
-   //   en el tab Entregas mostraba "Recibir entrega" aunque las entregas
-   //   estuvieran al día y quedaran pedidos. Ahora cada tab muestra SU próxima
-   //   tarea y, al completar la última de ese tab, el empty premium contextual.
-   //   El tab "alertas" (Eventos) incluye recordatorios (los candidatos de
-   //   alertas de stock se gestionan aparte, no son eventos del Hero).
+
+   // Filtrar por TAB activo (coherente con el cuerpo del feed).
    var _heroTab = (typeof _snapAgendaActiveTab === 'string') ? _snapAgendaActiveTab : 'pedidos';
    _candidatos = _candidatos.filter(function(cnd) {
     return cnd._tabTipo === _heroTab;
@@ -46473,9 +46408,9 @@ function _confirmBorrarCuenta(id) {
  } catch(eHero) {
   console.warn('[Dashwey/agenda] hero próximo evento error:', eHero && eHero.message);
  }
-
- // ── Render panel ──────────────────────────────────────────
- _snapRenderAgendaPanel(wrap, allPedidos, allVisitas, calcEnt, hoy);
+ // v1.3.1886: el panel del cuerpo se renderiza AHORA ARRIBA (antes del Hero)
+ //   para poblar window._dwyLastFeedEventos, que el Hero lee como fuente única.
+ //   La llamada que estaba aquí se movió antes del bloque Hero.
  }
 
  // ── Panel según tab activo ─────────────────────────────────────────────
@@ -47396,6 +47331,14 @@ function _confirmBorrarCuenta(id) {
  //   Así el empty state refleja correctamente "Nada para hoy" si el filtro vacía la lista.
  eventos = eventos.filter(function(ev) { return inTemporalFilter(ev.fecha, ev); });
 
+ // v1.3.1886: poblar la caché de eventos AQUÍ (antes del empty state), no al
+ //   final. Si todo está completado, el panel hace return en el empty state SIN
+ //   llegar al poblado de abajo → el Hero leería la caché VIEJA y mostraría el
+ //   último evento ya completado (justo el bug a evitar). Poblándola aquí, la
+ //   caché SIEMPRE refleja el estado real del tab, incluso vacío → el Hero
+ //   muestra "Todo en orden" correctamente. La campana también la lee.
+ try { window._dwyLastFeedEventos = eventos.slice(); window._dwyLastFeedEventosTs = Date.now(); } catch(_) {}
+
  // v1.3.1850: dedup eliminado — los tabs ya no son temporales. El periodo global
  //   controla cuántos ciclos se muestran (Mes → varios; Hoy → los de hoy).
 
@@ -47479,6 +47422,9 @@ function _confirmBorrarCuenta(id) {
  //   que el centro de notificaciones la lea sin duplicar ni un solo cálculo.
  //   Solo lectura — no altera el render del feed. La campana llama a la función
  //   de render en background y luego lee window._dwyLastFeedEventos.
+ // v1.3.1886: refresca la caché con la versión YA ORDENADA (caso normal con
+ //   eventos activos). El primer poblado (antes del empty state) cubre el caso
+ //   "todo completado" donde este punto no se alcanza por el return temprano.
  try { window._dwyLastFeedEventos = eventos.slice(); window._dwyLastFeedEventosTs = Date.now(); } catch(_) {}
 
  // ── Agrupar por día ──────────────────────────────────────────
