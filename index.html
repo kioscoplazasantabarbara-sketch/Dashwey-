@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1882";
+ var CURRENT_CACHE = "dashwey-v1-3-1883";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1882</title>
+<title>Dashwey v1.3.1883</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5720,6 +5720,37 @@ body[data-ctx="inversion"] .bt.active::after { background: var(--indigo); }
  width: 8px; height: 8px; border-radius: 50%;
  background: var(--red); opacity: 0.18;
  display: inline-block; margin: 0 3px 10px;
+}
+
+/* v1.3.1883 — Estado premium "Todo completado" en Agenda (tarea #2).
+   Aparece cuando todas las tareas del periodo están hechas. Diseño limpio:
+   check circular suave + título + subtítulo. Coherente con Dashwey.
+   Animación segura para WebView: opacity + translateY (NO scale en SVG). */
+.snap-agenda-alldone {
+ display: flex; flex-direction: column; align-items: center;
+ text-align: center;
+ padding: var(--sp-5, 22px) 16px var(--sp-4, 16px);
+ font-family: Inter, var(--font), sans-serif;
+ animation: snapAllDoneIn var(--dur-mid, 320ms) cubic-bezier(.22,.9,.3,1) both;
+}
+.snap-agenda-alldone-ring {
+ width: 52px; height: 52px; border-radius: 50%;
+ display: flex; align-items: center; justify-content: center;
+ color: var(--green, #2e9e6b);
+ background: rgba(34, 197, 94, 0.13);
+ margin-bottom: 12px;
+}
+.snap-agenda-alldone-title {
+ font-size: var(--fs-base, 15px); font-weight: var(--fw-semi, 600);
+ color: var(--ink); letter-spacing: -0.01em;
+}
+.snap-agenda-alldone-sub {
+ font-size: var(--fs-xs, 12px); color: var(--ink-soft);
+ margin-top: 3px; line-height: 1.4;
+}
+@keyframes snapAllDoneIn {
+ from { opacity: 0; transform: translateY(6px); }
+ to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ══ SETTINGS DASHBOARD PANEL ═══════════════════════════════════════════ */
@@ -23397,7 +23428,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1882';
+ const _APP_VERSION = 'v1.3.1883';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46340,11 +46371,29 @@ function _confirmBorrarCuenta(id) {
     var _evDoneMap = (typeof State !== 'undefined' && State.get && State.get.eventosCompletados) ? (State.get.eventosCompletados() || {}) : {};
     var _evDoneLs = {};
     try { _evDoneLs = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_) {}
+    // v1.3.1883 FIX #3 (raíz): un mismo pedido puede haberse completado en el
+    //   feed bajo CUALQUIERA de sus variantes de key: 'ped_<id>' (pedido),
+    //   'ent_<id>' (entrega) o 'pedent_<id>' (pedido_entrega — mismo día se pide
+    //   y llega). El Hero solo generaba candidatos 'ped_'/'ent_', así que un
+    //   evento marcado como 'pedent_' quedaba STALE (seguía mostrándose). Ahora
+    //   comprobamos las 3 variantes derivadas del mismo id → cero stale.
+    var _isDoneCnd = function(key) {
+     if (!key) return false;
+     if (_evDoneMap[key] || _evDoneLs[key]) return true;
+     // Comprobación cruzada: si la key es ped_/ent_/pedent_<id>, mirar las otras 2
+     var _m = /^(ped|ent|pedent)_(.+)$/.exec(key);
+     if (_m) {
+      var _id = _m[2];
+      var _alts = ['ped_' + _id, 'ent_' + _id, 'pedent_' + _id];
+      for (var _a = 0; _a < _alts.length; _a++) {
+       if (_evDoneMap[_alts[_a]] || _evDoneLs[_alts[_a]]) return true;
+      }
+     }
+     return false;
+    };
     _candidatos = _candidatos.filter(function(cnd) {
      if (!cnd._doneKey) return true; // sin key estable → no se puede marcar done → mantener
-     if (_evDoneMap[cnd._doneKey]) return false;
-     if (_evDoneLs[cnd._doneKey]) return false;
-     return true;
+     return !_isDoneCnd(cnd._doneKey);
     });
    } catch(_) { /* si falla el filtro, no romper el hero */ }
    // Ordenar y coger el primero
@@ -46842,6 +46891,89 @@ function _confirmBorrarCuenta(id) {
   } catch(e){ console.warn('[Agenda/MarkDone] error global', e); }
  }
 
+ // v1.3.1883: helper extraído — render de la sección "Completado · N"
+ //   colapsable. Reutilizado por (a) el flujo normal del feed (cuando hay
+ //   eventos activos + algunos completados) y (b) el estado premium "Todo
+ //   completado" (cuando NO hay activos pero sí completados). Una sola fuente
+ //   de verdad para el render → cero divergencia visual entre ambos casos.
+ //   targetEl: contenedor al que se appende la sección. doneEvents: array.
+ function _renderDoneSection(targetEl, doneEvents) {
+  if (!targetEl || !doneEvents || !doneEvents.length) return;
+  var _done = doneEvents.slice().sort(function(a,b){ return b.fecha - a.fecha; });
+
+  var doneSection = document.createElement('div');
+  doneSection.className = 'snap-tl-v-done-section';
+
+  var doneHeader = document.createElement('div');
+  doneHeader.className = 'snap-tl-v-done-header';
+  var _doneCollapsedKey = 'dwy_done_collapsed';
+  var _doneCollapsed = false;
+  try { _doneCollapsed = localStorage.getItem(_doneCollapsedKey) === '1'; } catch(_){}
+  if (_doneCollapsed) doneHeader.classList.add('collapsed');
+  doneHeader.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+   + '<span>Completado · ' + _done.length + '</span>';
+  doneHeader.addEventListener('click', function(){
+   var was = doneHeader.classList.contains('collapsed');
+   doneHeader.classList.toggle('collapsed', !was);
+   try { localStorage.setItem(_doneCollapsedKey, !was ? '1' : '0'); } catch(_){}
+  });
+  doneSection.appendChild(doneHeader);
+
+  var doneContent = document.createElement('div');
+  doneContent.className = 'snap-tl-v-done-content';
+
+  _done.forEach(function(ev){
+   var item = document.createElement('div');
+   item.className = 'snap-tl-v-item snap-tl-v-item-act done';
+
+   var horaEl = document.createElement('div');
+   horaEl.className = 'snap-tl-v-item-hora';
+   var hh = ev.fecha.getHours(), mm = ev.fecha.getMinutes();
+   horaEl.textContent = String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+   item.appendChild(horaEl);
+
+   var checkEl = document.createElement('button');
+   checkEl.type = 'button';
+   checkEl.className = 'snap-tl-v-check done';
+   checkEl.setAttribute('aria-label', 'Desmarcar');
+   (function(_ev){
+    checkEl.addEventListener('click', function(e){
+     e.stopPropagation();
+     _dwyEvMarkDone(_ev, false);
+     try { Utils.triggerHaptic('light'); } catch(_){}
+     try { _snapRenderTimeline(); } catch(_){}
+    });
+   })(ev);
+   item.appendChild(checkEl);
+
+   var titEl = document.createElement('div');
+   titEl.className = 'snap-tl-v-item-titulo';
+   var _t = '';
+   // v1.3.1627 BUG-AGENDA-1 FIX: pedidos completados mostraban solo "Pedido"
+   //   sin proveedor. Misma logica que header card para coherencia.
+   var _provNameDone = '';
+   if ((ev.tipo === 'pedido' || ev.tipo === 'pedido_entrega' || ev.tipo === 'entrega') && ev.pedido) {
+    try {
+     var _provDone = State.get.prov ? State.get.prov(ev.pedido.provId) : null;
+     _provNameDone = _provDone ? (_provDone.nombre || '') : (ev.pedido.proveedor || '');
+    } catch(_) {}
+   }
+   if (ev.tipo === 'recordatorio') _t = (ev.recordatorio && ev.recordatorio.titulo) || 'Recordatorio';
+   else if (ev.tipo === 'pedido') _t = 'Pedido' + (_provNameDone ? ' · ' + _provNameDone : '');
+   else if (ev.tipo === 'pedido_entrega') _t = 'Pedido + entrega' + (_provNameDone ? ' · ' + _provNameDone : '');
+   else if (ev.tipo === 'entrega') _t = 'Entrega' + (_provNameDone ? ' · ' + _provNameDone : '');
+   else if (ev.tipo === 'alerta') _t = 'Alertas · ' + (ev.alertas && ev.alertas.total || 0) + ' productos';
+   else _t = 'Evento';
+   titEl.textContent = _t;
+   item.appendChild(titEl);
+
+   doneContent.appendChild(item);
+  });
+
+  doneSection.appendChild(doneContent);
+  targetEl.appendChild(doneSection);
+ }
+
  function _snapRenderRecordatoriosPanel(wrap, hoy, fmtD) {
  // ── Recolectar todos los eventos del periodo activo ─────────────
  var period = State.get.period ? State.get.period() : { type:'month', offset:0 };
@@ -47241,16 +47373,57 @@ function _confirmBorrarCuenta(id) {
  //   controla cuántos ciclos se muestran (Mes → varios; Hoy → los de hoy).
 
  // ── Empty state ──────────────────────────────────────────────
- if (!eventos.length) {
+ // v1.3.1883 FIX #2 BUG-AGENDA-EMPTY: distinguir "no hay nada" de
+ //   "todo completado". Antes `eventos.length` contaba también los
+ //   completados → cuando TODO estaba hecho, no entraba aquí, llegaba
+ //   al render y solo pintaba la sección "Completado · N" colapsada,
+ //   dejando la tarjeta visualmente vacía/inconsistente arriba.
+ //   Ahora separamos activos (pendientes) de completados ANTES de decidir.
+ //   _dwyEvIsDone es idempotente y solo lee estado (sin side-effects).
+ var _activos = [];
+ var _hechos = [];
+ eventos.forEach(function(ev){ (_dwyEvIsDone(ev) ? _hechos : _activos).push(ev); });
+
+ if (!_activos.length) {
   var empty = document.createElement('div');
-  empty.style.cssText = 'text-align:center;padding:var(--sp-5) 0 8px;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
-  // v1.3.1497: mensaje empty contextual según filtro temporal
-  var _emptyMsg = 'Sin eventos en este periodo';
-  if (_snapAgendaActiveTab === 'pedidos') _emptyMsg = '✓ Sin pedidos en este periodo';
-  else if (_snapAgendaActiveTab === 'entregas') _emptyMsg = '✓ Sin entregas en este periodo';
-  else if (_snapAgendaActiveTab === 'alertas') _emptyMsg = '✓ Sin avisos pendientes';
-  empty.textContent = _emptyMsg;
-  wrap.appendChild(empty);
+  if (_hechos.length) {
+   // ── Estado premium: todas las tareas del periodo completadas ──
+   //   Diseño coherente con Dashwey: check circular suave + título limpio
+   //   + subtítulo contextual. Sin emojis baratos, sin texto robótico.
+   empty.className = 'snap-agenda-alldone';
+   var _doneTitle, _doneSub;
+   if (_snapAgendaActiveTab === 'pedidos') { _doneTitle = 'Pedidos al día'; _doneSub = 'No queda ningún pedido por hacer'; }
+   else if (_snapAgendaActiveTab === 'entregas') { _doneTitle = 'Entregas recibidas'; _doneSub = 'Has recibido todo lo previsto'; }
+   else if (_snapAgendaActiveTab === 'alertas') { _doneTitle = 'Sin avisos pendientes'; _doneSub = 'Todo revisado'; }
+   else { _doneTitle = 'Todo completado'; _doneSub = 'No queda nada pendiente en este periodo'; }
+   empty.innerHTML =
+    '<div class="snap-agenda-alldone-ring">'
+    + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+    + '</div>'
+    + '<div class="snap-agenda-alldone-title">' + _doneTitle + '</div>'
+    + '<div class="snap-agenda-alldone-sub">' + _doneSub + '</div>';
+   wrap.appendChild(empty);
+   // Bajo el estado premium, dejar accesibles los completados (colapsados
+   //   por defecto) por si Hung quiere desmarcar/revisar. Reutiliza el mismo
+   //   render de la sección Completado. Se envuelve en un .snap-tl-v para que
+   //   herede el mismo CSS de la sección en el flujo normal.
+   try {
+    var _doneWrap = document.createElement('div');
+    _doneWrap.className = 'snap-tl-v snap-tl-v-actividad';
+    _doneWrap.style.marginTop = 'var(--sp-4)';
+    _renderDoneSection(_doneWrap, _hechos);
+    wrap.appendChild(_doneWrap);
+   } catch(_) {}
+  } else {
+   // ── Sin eventos en absoluto (ni pendientes ni completados) ──
+   empty.style.cssText = 'text-align:center;padding:var(--sp-5) 0 8px;font-size:var(--fs-sm);color:var(--ink-soft);font-family:Inter,var(--font),sans-serif';
+   var _emptyMsg = 'Sin eventos en este periodo';
+   if (_snapAgendaActiveTab === 'pedidos') _emptyMsg = 'Sin pedidos en este periodo';
+   else if (_snapAgendaActiveTab === 'entregas') _emptyMsg = 'Sin entregas en este periodo';
+   else if (_snapAgendaActiveTab === 'alertas') _emptyMsg = 'Sin avisos pendientes';
+   empty.textContent = _emptyMsg;
+   wrap.appendChild(empty);
+  }
   // v1.3.1367: botón "+ Nuevo recordatorio" eliminado de aquí, ahora en FAB Agenda
   return;
  }
@@ -47867,81 +48040,11 @@ function _confirmBorrarCuenta(id) {
   });
  } catch(_) {}
 
- // v1.3.1493: SECCIÓN COMPLETADO — colapsable al final
+ // v1.3.1493: SECCIÓN COMPLETADO — colapsable al final.
+ // v1.3.1883: extraída a helper _renderDoneSection (reutilizada por el
+ //   estado premium "Todo completado"). Mismo render, una sola fuente.
  if (_completedEvents.length > 0) {
-  _completedEvents.sort(function(a,b){ return b.fecha - a.fecha; });
-
-  var doneSection = document.createElement('div');
-  doneSection.className = 'snap-tl-v-done-section';
-
-  var doneHeader = document.createElement('div');
-  doneHeader.className = 'snap-tl-v-done-header';
-  var _doneCollapsedKey = 'dwy_done_collapsed';
-  var _doneCollapsed = false;
-  try { _doneCollapsed = localStorage.getItem(_doneCollapsedKey) === '1'; } catch(_){}
-  if (_doneCollapsed) doneHeader.classList.add('collapsed');
-  doneHeader.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
-   + '<span>Completado · ' + _completedEvents.length + '</span>';
-  doneHeader.addEventListener('click', function(){
-   var was = doneHeader.classList.contains('collapsed');
-   doneHeader.classList.toggle('collapsed', !was);
-   try { localStorage.setItem(_doneCollapsedKey, !was ? '1' : '0'); } catch(_){}
-  });
-  doneSection.appendChild(doneHeader);
-
-  var doneContent = document.createElement('div');
-  doneContent.className = 'snap-tl-v-done-content';
-
-  _completedEvents.forEach(function(ev){
-   var item = document.createElement('div');
-   item.className = 'snap-tl-v-item snap-tl-v-item-act done';
-
-   var horaEl = document.createElement('div');
-   horaEl.className = 'snap-tl-v-item-hora';
-   var hh = ev.fecha.getHours(), mm = ev.fecha.getMinutes();
-   horaEl.textContent = String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
-   item.appendChild(horaEl);
-
-   var checkEl = document.createElement('button');
-   checkEl.type = 'button';
-   checkEl.className = 'snap-tl-v-check done';
-   checkEl.setAttribute('aria-label', 'Desmarcar');
-   (function(_ev){
-    checkEl.addEventListener('click', function(e){
-     e.stopPropagation();
-     _dwyEvMarkDone(_ev, false);
-     try { Utils.triggerHaptic('light'); } catch(_){}
-     try { _snapRenderTimeline(); } catch(_){}
-    });
-   })(ev);
-   item.appendChild(checkEl);
-
-   var titEl = document.createElement('div');
-   titEl.className = 'snap-tl-v-item-titulo';
-   var _t = '';
-   // v1.3.1627 BUG-AGENDA-1 FIX: pedidos completados mostraban solo "Pedido"
-   //   sin proveedor. Misma logica que header card (linea ~43323) para coherencia.
-   var _provNameDone = '';
-   if ((ev.tipo === 'pedido' || ev.tipo === 'pedido_entrega' || ev.tipo === 'entrega') && ev.pedido) {
-    try {
-     var _provDone = State.get.prov ? State.get.prov(ev.pedido.provId) : null;
-     _provNameDone = _provDone ? (_provDone.nombre || '') : (ev.pedido.proveedor || '');
-    } catch(_) {}
-   }
-   if (ev.tipo === 'recordatorio') _t = (ev.recordatorio && ev.recordatorio.titulo) || 'Recordatorio';
-   else if (ev.tipo === 'pedido') _t = 'Pedido' + (_provNameDone ? ' · ' + _provNameDone : '');
-   else if (ev.tipo === 'pedido_entrega') _t = 'Pedido + entrega' + (_provNameDone ? ' · ' + _provNameDone : '');
-   else if (ev.tipo === 'entrega') _t = 'Entrega' + (_provNameDone ? ' · ' + _provNameDone : '');
-   else if (ev.tipo === 'alerta') _t = 'Alertas · ' + (ev.alertas && ev.alertas.total || 0) + ' productos';
-   else _t = 'Evento';
-   titEl.textContent = _t;
-   item.appendChild(titEl);
-
-   doneContent.appendChild(item);
-  });
-
-  doneSection.appendChild(doneContent);
-  tl.appendChild(doneSection);
+  _renderDoneSection(tl, _completedEvents);
  }
 
  scrollWrap.appendChild(tl);
