@@ -825,7 +825,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1875";
+ var CURRENT_CACHE = "dashwey-v1-3-1876";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -844,7 +844,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1875</title>
+<title>Dashwey v1.3.1876</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23351,7 +23351,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1875';
+ const _APP_VERSION = 'v1.3.1876';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41439,27 +41439,35 @@ function _confirmBorrarCuenta(id) {
     provs.forEach(function(p){
      if (!p || p.deleted) return;
      if (!Array.isArray(p.diasPedido) || !p.diasPedido.length) return;
-     // Proyectar TODAS las fechas de pedido del horizonte (todos los ciclos).
+     // Proyectar TODOS los ciclos del horizonte como PARES {pedido, entrega}.
+     //   v1.3.1876: usar _feedCiclosProv → la entrega respeta el offsetEntrega REAL
+     //   del ciclo (antes _entregaPara reinventaba la entrega y descuadraba).
      var _horizDias = 14;
      try { _horizDias = Math.max(7, Math.ceil((horizonte.getTime() - hoy.getTime())/MS_DAY) + 1); } catch(_){}
-     var _fechasPed = [];
+     var _pares = [];
      try {
-      if (window._DashweyFeedPedidosProv) _fechasPed = window._DashweyFeedPedidosProv(p, hoy, _horizDias) || [];
+      if (window._DashweyFeedCiclosProv) _pares = window._DashweyFeedCiclosProv(p, hoy, _horizDias) || [];
      } catch(_){}
-     // Fallback: lógica vieja (un solo día) si el motor no devolvió nada
-     if (!_fechasPed.length) { var _f1 = _nextOrder(p.diasPedido, hoy, p); if (_f1) _fechasPed = [_f1]; }
+     // Fallback: lógica vieja (un solo par) si el motor no devolvió nada
+     if (!_pares.length) {
+      var _f1 = _nextOrder(p.diasPedido, hoy, p);
+      if (_f1) _pares = [{ pedido: _f1, entrega: _entregaPara(p.diasEntrega, _f1) }];
+     }
      var _latestPend = _provLatestPendCamp[p.id] || null;
      var nombre = p.nombre || p.id;
-     _fechasPed.forEach(function(fped, _ci){
+     _pares.forEach(function(par, _ci){
+      var fped = par.pedido, fent = par.entrega;
       if (!fped) return;
       var fpedMid = new Date(fped); fpedMid.setHours(0,0,0,0);
       if (fpedMid > horizonte) return;
       // Saltar SOLO la fecha cubierta por un pending real (no el proveedor entero).
       //   La sección 1 ya generó el evento del pending; este predicho sería duplicado.
       if (_latestPend && fpedMid <= _latestPend) return;
-      var fent = _entregaPara(p.diasEntrega, fped);
-      var same = _esSameDay(p.id, fped);
-      var diaEntStr = _fmtDiaCorto(fent);
+      // sameDay = pedido y entrega caen el MISMO día (offset 0)
+      var _fpKey = window._DashweyDiaLocal ? window._DashweyDiaLocal(fped) : fped.toDateString();
+      var _feKey = (fent && window._DashweyDiaLocal) ? window._DashweyDiaLocal(fent) : (fent ? fent.toDateString() : '');
+      var same = (!fent) || (_fpKey === _feKey);
+      var diaEntStr = fent ? _fmtDiaCorto(fent) : '';
       var diaPedStr = _fmtDiaCorto(fped);
       var diaPedCap = diaPedStr.charAt(0).toUpperCase() + diaPedStr.slice(1);
       items.push({ ev:{tipo: same?'pedido_entrega':'pedido', pedido:{id:'_predicho_'+p.id+'_p'+_ci, provId:p.id, fecha:fped.toISOString()}},
@@ -41470,14 +41478,15 @@ function _confirmBorrarCuenta(id) {
          : ('Pides ' + diaPedStr + ' · entrega ' + diaEntStr),
        fecha: fpedMid, atrasado:false, _predicho:true });
       // Entrega predicha en su día (simétrico al panel; solo si NO sameDay).
-      if (!same) {
+      if (!same && fent) {
        var fentMid = new Date(fent); fentMid.setHours(0,0,0,0);
        if (!isNaN(fentMid.getTime()) && fentMid <= horizonte && fentMid >= hoy) {
         var diaEntCap = diaEntStr.charAt(0).toUpperCase() + diaEntStr.slice(1);
         items.push({ ev:{tipo:'entrega', pedido:{id:'_predent_'+p.id+'_p'+_ci, provId:p.id, fecha:fped.toISOString()}},
          kind:'entrega', accion:'pedido:'+p.id,
          titulo:'Recibir pedido de '+nombre,
-         sub: diaEntCap + ' llega · pedido el ' + diaPedStr,
+         // v1.3.1876 FIX texto: _fmtDiaCorto ya incluye "el" → NO anteponer otro "el".
+         sub: diaEntCap + ' llega · pedido ' + diaPedStr,
          fecha: fentMid, atrasado:false, _predicho:true });
        }
       }
@@ -45626,12 +45635,52 @@ function _confirmBorrarCuenta(id) {
   return proy;
  }
 
+ // v1.3.1876 — como _feedPedidosProv pero devuelve PARES {pedido, entrega} con la
+ //   entrega emparejada por el offsetEntrega REAL del ciclo (no por _entregaPara,
+ //   que reinventaba la entrega con dias de semana sueltos y podia descuadrar).
+ //   Usado por la campana para que "pedido X → entrega Y" respete el ciclo exacto.
+ function _feedCiclosProv(prov, fromDate, horizonDays) {
+  if (!prov) return [];
+  var ciclos = null;
+  if (Array.isArray(prov.ciclosReparto) && prov.ciclosReparto.length) {
+   ciclos = prov.ciclosReparto;
+  } else {
+   // derivar ciclos legacy al vuelo (mismo criterio que _feedPedidosProv)
+   var dp = Array.isArray(prov.diasPedido) ? prov.diasPedido : [];
+   if (!dp.length) return [];
+   var cadaD = _provCadaDias(prov);
+   var hoy0 = new Date(fromDate); hoy0.setHours(0, 0, 0, 0);
+   var de = Array.isArray(prov.diasEntrega) ? prov.diasEntrega : [];
+   ciclos = [];
+   for (var i = 0; i < dp.length; i++) {
+    var diaPed = dp[i];
+    var ancla = new Date(hoy0);
+    for (var k = 0; k < 7; k++) {
+     var dow = ancla.getDay() === 0 ? 6 : ancla.getDay() - 1;
+     if (dow === diaPed) break;
+     ancla.setDate(ancla.getDate() + 1);
+    }
+    var off = 1;
+    if (de.length) { var diaEnt = (i < de.length) ? de[i] : de[0]; off = (diaEnt - diaPed + 7) % 7; }
+    ciclos.push({ id: 'cic_feed_' + diaPed + '_' + i, fechaAncla: window._DashweyDiaLocal(ancla), cadaDias: cadaD, offsetEntrega: off });
+   }
+  }
+  var pares = [];
+  for (var c = 0; c < ciclos.length; c++) {
+   var r = _proyectarUnCiclo(ciclos[c], fromDate, horizonDays || 14);
+   for (var j = 0; j < r.length; j++) pares.push({ pedido: r[j].pedido, entrega: r[j].entrega });
+  }
+  pares.sort(function(a, b){ return a.pedido.getTime() - b.pedido.getTime(); });
+  return pares;
+ }
+
  // Exposición para diagnóstico/tests en consola (no afecta a producción).
  try {
   window._DashweyProyectarCiclos = _proyectarCiclos;
   window._DashweyProvCiclos = _provCiclos;
   window._DashweyMigrarCiclos = _DashweyMigrarCiclos;
   window._DashweyFeedPedidosProv = _feedPedidosProv;
+  window._DashweyFeedCiclosProv = _feedCiclosProv;
   window._DashweyProvCadaDias = _provCadaDias;
  } catch(_) {}
 
