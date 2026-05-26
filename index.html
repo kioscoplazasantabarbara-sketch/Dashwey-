@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1891";
+ var CURRENT_CACHE = "dashwey-v1-3-1892";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1891</title>
+<title>Dashwey v1.3.1892</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18488,14 +18488,35 @@ const State = (() => {
      var _byId = {};
      // 1. Sembrar con los locales
      _local.forEach(function(c){ if (c && c.id) _byId[c.id] = c; });
-     // 2. Aplicar entrantes: gana el más reciente por _updatedAt
+     // 2. Aplicar entrantes: gana el MÁS COMPLETO (más tickets); empate → más reciente
+     //   v1.3.1892 FIX RAÍZ (incidente sync cierres 25-26 may): antes ganaba solo
+     //   el de _updatedAt más reciente (LWW puro). Problema real: un cierre
+     //   REGENERADO mal (con ventas parciales → menos tickets) pero con timestamp
+     //   nuevo, ganaba al cierre BUENO (más tickets, timestamp viejo). Resultado:
+     //   el 24-may pasó de 141 tickets a 99 al sincronizar. Un cierre NUNCA pierde
+     //   ventas legítimamente con el tiempo → más tickets = más completo = correcto.
+     //   Nuevo criterio: (1) gana el que tiene más eventIds.ventas; (2) si empatan,
+     //   gana el _updatedAt más reciente. NO toca importes — solo elige cuál conservar.
+     var _nTickets = function(c){
+      try {
+       if (c && c.eventIds && Array.isArray(c.eventIds.ventas)) return c.eventIds.ventas.length;
+       if (c && typeof c.nVentas === 'number') return c.nVentas;
+      } catch(_){}
+      return 0;
+     };
      _entrante.forEach(function(rc){
       if (!rc || !rc.id) return;
       var ex = _byId[rc.id];
       if (!ex) { _byId[rc.id] = rc; return; }
+      // Tombstones primero: un borrado siempre se respeta (no resucitar)
+      if (ex.deleted && !rc.deleted) { return; }            // local borrado gana
+      if (rc.deleted && !ex.deleted) { _byId[rc.id] = rc; return; } // remoto borrado gana
+      var nEx = _nTickets(ex), nRc = _nTickets(rc);
+      if (nRc > nEx) { _byId[rc.id] = rc; return; }          // remoto más completo gana
+      if (nEx > nRc) { return; }                             // local más completo gana
+      // Empate en tickets → desempatar por _updatedAt (LWW)
       var tEx = (typeof ex._updatedAt === 'number') ? ex._updatedAt : 0;
       var tRc = (typeof rc._updatedAt === 'number') ? rc._updatedAt : 0;
-      // remoto gana solo si es estrictamente más nuevo; empate → conservar local
       _byId[rc.id] = (tRc > tEx) ? rc : ex;
      });
      var _merged = Object.keys(_byId).map(function(k){ return _byId[k]; });
@@ -23490,7 +23511,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1891';
+ const _APP_VERSION = 'v1.3.1892';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
