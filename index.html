@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1902";
+ var CURRENT_CACHE = "dashwey-v1-3-1903";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1902</title>
+<title>Dashwey v1.3.1903</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1902';
+ const _APP_VERSION = 'v1.3.1903';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41809,6 +41809,24 @@ function _confirmBorrarCuenta(id) {
     });
    } catch(_){}
 
+   // v1.3.1903: índice de pedidos _recibido:true por proveedor+día para excluirlos
+   // de predichos (cohesivo con renderTimeline que ya hace esto).
+   // Soluciona la notificación "VENCIDO · Realizar pedido de Goyo" tras marcar recibido.
+   var _recibidosProvDayCamp = {};
+   try {
+    var _histCamp = (S && S.get && S.get.historialPedidos) ? (S.get.historialPedidos()||[]) : [];
+    _histCamp.forEach(function(ph) {
+     if (!ph || ph.deleted || !ph._recibido || !ph._recibidoAt) return;
+     var _feC = new Date(ph._recibidoAt);
+     var _keyC = ph.provId + '_' + _feC.getFullYear() + '-' + String(_feC.getMonth()+1).padStart(2,'0') + '-' + String(_feC.getDate()).padStart(2,'0');
+     _recibidosProvDayCamp[_keyC] = true;
+     // También marcar el día de pedido (para "Realizar pedido") y día entrega (para "Recibir")
+     var _feP = ph.fecha ? new Date(ph.fecha) : _feC;
+     var _keyP = ph.provId + '_' + _feP.getFullYear() + '-' + String(_feP.getMonth()+1).padStart(2,'0') + '-' + String(_feP.getDate()).padStart(2,'0');
+     _recibidosProvDayCamp[_keyP] = true;
+    });
+   } catch(_) {}
+
    // ── 2) PRÓXIMOS DÍAS DE PEDIDO (recurrentes por proveedor) — realizar pedido ──
    // v1.3.1872 FIX MULTI-CICLO: antes la campana (a) saltaba el proveedor ENTERO si
    //   tenía cualquier pending real (_provConPending) y (b) solo proyectaba UN día
@@ -41859,6 +41877,14 @@ function _confirmBorrarCuenta(id) {
       // Saltar SOLO la fecha cubierta por un pending real (no el proveedor entero).
       //   La sección 1 ya generó el evento del pending; este predicho sería duplicado.
       if (_latestPend && fpedMid <= _latestPend) return;
+      // v1.3.1903: saltar si ya hay _recibido de este proveedor ese día o el día de entrega
+      var _fentC = par.entrega ? new Date(par.entrega) : null;
+      if (_fentC) {
+       var _keyEntC = p.id + '_' + _fentC.getFullYear() + '-' + String(_fentC.getMonth()+1).padStart(2,'0') + '-' + String(_fentC.getDate()).padStart(2,'0');
+       if (_recibidosProvDayCamp[_keyEntC]) return;
+      }
+      var _keyPedC = p.id + '_' + fpedMid.getFullYear() + '-' + String(fpedMid.getMonth()+1).padStart(2,'0') + '-' + String(fpedMid.getDate()).padStart(2,'0');
+      if (_recibidosProvDayCamp[_keyPedC]) return;
       // sameDay = pedido y entrega caen el MISMO día (offset 0)
       var _fpKey = window._DashweyDiaLocal ? window._DashweyDiaLocal(fped) : fped.toDateString();
       var _feKey = (fent && window._DashweyDiaLocal) ? window._DashweyDiaLocal(fent) : (fent ? fent.toDateString() : '');
@@ -42008,11 +42034,9 @@ function _confirmBorrarCuenta(id) {
 
   // ── Render del sheet ──
   function _renderItem(it, idx){
-   // v1.3.1877: SIN checks en la campana (decisión Hung: solo crean ruido). La
-   //   campana es informativa — cada item muestra el icono SVG unicolor de su tipo
-   //   y navega al tap. La acción "comprobar pedido" vive en la Agenda, su sitio.
    var checkHtml = '<span class="cmp-ic" aria-hidden="true">'+(ICONS[it.kind]||ICONS.recordatorio)+'</span>';
-   return '<div class="cmp-item" data-cmp-nav="'+idx+'">'+
+   // v1.3.1903: data-cmp-idx para long-press dismiss menu
+   return '<div class="cmp-item" data-cmp-nav="'+idx+'" data-cmp-idx="'+idx+'" data-cmp-kind="'+(it.kind||'')+'">'+
      checkHtml+
      '<div class="cmp-body">'+
        '<div class="cmp-title">'+_esc(it.titulo)+'</div>'+
@@ -42083,16 +42107,37 @@ function _confirmBorrarCuenta(id) {
    var closeBtn=root.querySelector('.cmp-close');
    if (closeBtn) closeBtn.addEventListener('click', function(){ try{App.ui.closeModal();}catch(_){} });
 
-   // v1.3.1877: checks eliminados de la campana (solo creaban ruido). Ya no hay
-   //   listener [data-cmp-done]. La campana solo informa y navega al tap.
-
-   // Navegar (toda la fila)
+   // Navegar (tap → acción del item)
    root.querySelectorAll('[data-cmp-nav]').forEach(function(rowEl){
     rowEl.addEventListener('click', function(){
      var i=parseInt(rowEl.getAttribute('data-cmp-nav'),10);
      var it=allItems[i]; if (!it) return;
      _navegar(it);
     });
+   });
+
+   // v1.3.1903: Long-press → menú flotante con "Marcar como completado" y "Eliminar"
+   root.querySelectorAll('[data-cmp-idx]').forEach(function(rowEl){
+    var _lpt = null, _lpFired = false;
+    function _startLp(e) {
+     _lpFired = false;
+     _lpt = setTimeout(function() {
+      _lpFired = true;
+      try { if (typeof Utils!=='undefined' && Utils.triggerHaptic) Utils.triggerHaptic('medium'); } catch(_) {}
+      var i = parseInt(rowEl.getAttribute('data-cmp-idx'), 10);
+      var it = allItems[i]; if (!it) return;
+      _showDismissMenu(it, rowEl, allItems);
+     }, 500);
+    }
+    function _cancelLp() { clearTimeout(_lpt); }
+    rowEl.addEventListener('touchstart', _startLp, { passive: true });
+    rowEl.addEventListener('touchend', _cancelLp);
+    rowEl.addEventListener('touchmove', _cancelLp);
+    rowEl.addEventListener('mousedown', _startLp);
+    rowEl.addEventListener('mouseup', _cancelLp);
+    rowEl.addEventListener('mouseleave', _cancelLp);
+    // Bloquear click si fue long-press para no navegar
+    rowEl.addEventListener('click', function(e) { if (_lpFired) { e.stopImmediatePropagation(); _lpFired = false; } }, true);
    });
 
    // Sistema: acción directa
@@ -42106,6 +42151,64 @@ function _confirmBorrarCuenta(id) {
      try { App.ui.closeModal(); } catch(_){}
     });
    });
+  }
+
+
+  // v1.3.1903: menú flotante de long-press con dos acciones
+  function _showDismissMenu(it, rowEl, allItems) {
+   var prev = document.getElementById('_cmp-dismiss-menu');
+   if (prev) prev.remove();
+   var canDone = (it.kind === 'pedido' || it.kind === 'pedido_entrega' || it.kind === 'entrega' || it.kind === 'recordatorio');
+   var menu = document.createElement('div');
+   menu.id = '_cmp-dismiss-menu';
+   menu.style.cssText = 'position:fixed;z-index:10500;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:0 8px 32px rgba(0,0,0,0.18);overflow:hidden;min-width:210px;font-family:var(--font);';
+   var rect = rowEl.getBoundingClientRect();
+   var top = Math.min(rect.bottom + 4, window.innerHeight - 120);
+   var left = Math.max(12, Math.min(rect.left, window.innerWidth - 230));
+   menu.style.top = top + 'px';
+   menu.style.left = left + 'px';
+   function _makeBtn(label, icon, danger, fn) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;padding:13px 16px;border:none;background:transparent;font-size:var(--fs-md);font-family:var(--font);color:' + (danger ? 'var(--red)' : 'var(--ink)') + ';cursor:pointer;text-align:left;-webkit-tap-highlight-color:transparent;';
+    btn.innerHTML = '<span style="font-size:16px">' + icon + '</span>' + label;
+    btn.addEventListener('click', function(e) { e.stopPropagation(); menu.remove(); fn(); });
+    return btn;
+   }
+   if (canDone) {
+    menu.appendChild(_makeBtn('Marcar como completado', '✅', false, function() {
+     try { if (typeof Utils!=='undefined' && Utils.triggerHaptic) Utils.triggerHaptic('light'); } catch(_) {}
+     try { App.dash._dwyEvMarkDone(it.ev, true); } catch(_) {}
+     try { window._dashweyCampanaUpdateBadge && window._dashweyCampanaUpdateBadge(); } catch(_) {}
+     try { App.ui.closeModal(); } catch(_) {}
+     try { showToast('✅ Marcado como completado', 'success'); } catch(_) {}
+    }));
+   }
+   menu.appendChild(_makeBtn('Eliminar de notificaciones', '🗑️', true, function() {
+    try { if (typeof Utils!=='undefined' && Utils.triggerHaptic) Utils.triggerHaptic('light'); } catch(_) {}
+    try {
+     if (it.ev && it.ev.tipo === 'recordatorio' && it.ev.recordatorio && it.ev.recordatorio.id) {
+      if (typeof App !== 'undefined' && App.dash && App.dash._dwyEvMarkDone) App.dash._dwyEvMarkDone(it.ev, true);
+     } else if (it.ev && it.ev.pedido && it.ev.pedido.id) {
+      var _k = (it.ev.tipo === 'pedido' ? 'ped_' : it.ev.tipo === 'pedido_entrega' ? 'pedent_' : 'ent_') + it.ev.pedido.id;
+      var _ls = {}; try { _ls = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); } catch(_) {}
+      _ls[_k] = Date.now();
+      localStorage.setItem('_dwyEvDone', JSON.stringify(_ls));
+      try { if (window.State && State.set && State.set.setEventoCompletado) State.set.setEventoCompletado(_k, Date.now()); } catch(_) {}
+     }
+    } catch(_) {}
+    try { window._dashweyCampanaUpdateBadge && window._dashweyCampanaUpdateBadge(); } catch(_) {}
+    try { App.ui.closeModal(); } catch(_) {}
+    try { showToast('🗑️ Notificación eliminada', 'info'); } catch(_) {}
+   }));
+   document.body.appendChild(menu);
+   setTimeout(function() {
+    function _closeOnOut(e) {
+     if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('touchstart', _closeOnOut); document.removeEventListener('mousedown', _closeOnOut); }
+    }
+    document.addEventListener('touchstart', _closeOnOut, { passive: true });
+    document.addEventListener('mousedown', _closeOnOut);
+   }, 100);
   }
 
   function _navegar(it){
