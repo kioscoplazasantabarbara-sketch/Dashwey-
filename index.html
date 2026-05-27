@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1907";
+ var CURRENT_CACHE = "dashwey-v1-3-1908";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1907</title>
+<title>Dashwey v1.3.1908</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1907';
+ const _APP_VERSION = 'v1.3.1908';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41872,11 +41872,11 @@ function _confirmBorrarCuenta(id) {
     try {
      var _pendCamp = (S && S.get && S.get.pendingOrders) ? (S.get.pendingOrders()||[]) : [];
      _pendCamp.forEach(function(pp){
-      if (!pp || !pp.provId || !pp.date) return;
+      if (!pp || !pp.provId || !pp.date || pp.deleted) return;
       var _fpp = new Date(pp.date); if (isNaN(_fpp.getTime())) return;
       _fpp.setHours(0,0,0,0);
-      var _prev = _provLatestPendCamp[pp.provId];
-      if (!_prev || _fpp > _prev) _provLatestPendCamp[pp.provId] = _fpp;
+      // v1.3.1908: mapa por día exacto (no latest)
+      _provLatestPendCamp[pp.provId + '_' + _fpp.toDateString()] = _fpp;
      });
     } catch(_){}
     provs.forEach(function(p){
@@ -41905,7 +41905,8 @@ function _confirmBorrarCuenta(id) {
       if (fpedMid > horizonte) return;
       // Saltar SOLO la fecha cubierta por un pending real (no el proveedor entero).
       //   La sección 1 ya generó el evento del pending; este predicho sería duplicado.
-      if (_latestPend && fpedMid <= _latestPend) return;
+      // v1.3.1908: skip por día exacto del pendingOrder (no "todo lo anterior")
+      if (_provLatestPendCamp[p.id + '_' + fpedMid.toDateString()]) return;
       // v1.3.1903: saltar si ya hay _recibido de este proveedor ese día o el día de entrega
       var _fentC = par.entrega ? new Date(par.entrega) : null;
       if (_fentC) {
@@ -46500,16 +46501,17 @@ function _confirmBorrarCuenta(id) {
   //   fecha sea ≤ pendingOrder más reciente (stale = ya cubierto). Predichos
   //   posteriores siguen siendo válidos como próximos ciclos del proveedor.
   var _provsP = State.get.proveedores ? (State.get.proveedores() || []) : [];
-  var _provLatestPendingP = {};
+  // v1.3.1908: mapa por día exacto de pendingOrder (no latest)
+  var _provPendingDaysP = {};
   _poList.forEach(function(p){
-   if (!p || !p.provId || !p.date) return;
+   if (!p || !p.provId || !p.date || p.deleted) return;
    var fp = new Date(p.date); if (isNaN(fp.getTime())) return;
-   var prev = _provLatestPendingP[p.provId];
-   if (!prev || fp > prev) _provLatestPendingP[p.provId] = fp;
+   fp.setHours(0,0,0,0);
+   _provPendingDaysP[p.provId + '_' + fp.toDateString()] = true;
   });
   _provsP.forEach(function(prov) {
    if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-   var _latestPending = _provLatestPendingP[prov.id] || null;
+   // _provPendingDaysP: skip por día exacto
    // v1.3.1901 FIX AGENDA PREDICHOS — root cause dual:
    //
    // BUG 1 (Goyo no aparece en "Hoy"):
@@ -46545,7 +46547,8 @@ function _confirmBorrarCuenta(id) {
     var fpPred = par.pedido;   // Date — fecha del pedido del ciclo
     var fePred = par.entrega;  // Date — fecha de entrega del ciclo
     // v1.3.1451: skip predicho stale (pedido anterior o igual al pending real activo)
-    if (_latestPending && fpPred <= _latestPending) return;
+    var _fpMidP = new Date(fpPred); _fpMidP.setHours(0,0,0,0);
+    if (_provPendingDaysP[prov.id + '_' + _fpMidP.toDateString()]) return;
     if (_rSc && _rEnd) {
      var fpPredD = new Date(fpPred); fpPredD.setHours(0,0,0,0);
      var fePredD = new Date(fePred); fePredD.setHours(0,0,0,0);
@@ -47823,20 +47826,23 @@ function _confirmBorrarCuenta(id) {
  //   - Si pasa el día predicho sin acción, simplemente desaparece (filtro 1366)
  var _provs = State.get.proveedores ? (State.get.proveedores() || []) : [];
  var _pending2 = State.get.pendingOrders ? (State.get.pendingOrders() || []) : [];
- // v1.3.1451: latest pendingOrder.date por proveedor → predichos ≤ esa fecha
- //   están "ya cubiertos" por el pendiente. Predichos posteriores son
- //   próximos ciclos legítimos. Antes (skip-all) ocultaba Bebidas Ju+Do.
- var _provLatestPending = {};
+ // v1.3.1908 FIX 2 CICLOS: mapa de días exactos de pedido cubiertos por pendingOrder.
+ //   Antes: _provLatestPending guardaba la fecha MÁS RECIENTE y skip cubría todos
+ //   los pares con fpPred <= esa fecha → en proveedores con 2 ciclos semanales,
+ //   el segundo ciclo se saltaba si su fecha coincidía con el pendingOrder del primero.
+ //   Ahora: key = provId + '_' + día exacto → solo se salta el ciclo que tiene
+ //   un pendingOrder real en ESA fecha, no todos los anteriores.
+ var _provPendingDays = {};
  _pending2.forEach(function(p){
-  if (!p || !p.provId || !p.date) return;
+  if (!p || !p.provId || !p.date || p.deleted) return;
   var fp = new Date(p.date); if (isNaN(fp.getTime())) return;
-  var prev = _provLatestPending[p.provId];
-  if (!prev || fp > prev) _provLatestPending[p.provId] = fp;
+  fp.setHours(0,0,0,0);
+  _provPendingDays[p.provId + '_' + fp.toDateString()] = true;
  });
 
  _provs.forEach(function(prov) {
   if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
-  var _latestPendingF = _provLatestPending[prov.id] || null;
+  // _provPendingDays: clave provId+día exacto — solo skipear el ciclo con pendingOrder real
   // v1.3.1450: TODOS los días configurados, no solo el primero
   // Horizonte: hasta el final del rango activo o 14 días por defecto
   var _horizonR = 14;
@@ -47856,8 +47862,9 @@ function _confirmBorrarCuenta(id) {
   _todosCiclosF.forEach(function(par, idx) {
    var fpPred = par.pedido;    // Date — fecha del PEDIDO del ciclo
    var fePredCiclo = par.entrega; // Date — fecha de ENTREGA del ciclo (offset exacto)
-   // v1.3.1451: skip predicho stale
-   if (_latestPendingF && fpPred <= _latestPendingF) return;
+   // v1.3.1908: skip solo si hay pendingOrder en ESA fecha exacta (no "todo lo anterior")
+   var _fpMidC = new Date(fpPred); _fpMidC.setHours(0,0,0,0);
+   if (_provPendingDays[prov.id + '_' + _fpMidC.toDateString()]) return;
    // v1.3.1501: si la ENTREGA ya pasó → ocultar (no llegará)
    var _feD = new Date(fePredCiclo); _feD.setHours(0,0,0,0);
    if (_feD < hoy0) return;
