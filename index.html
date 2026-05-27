@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1904";
+ var CURRENT_CACHE = "dashwey-v1-3-1905";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1904</title>
+<title>Dashwey v1.3.1905</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1904';
+ const _APP_VERSION = 'v1.3.1905';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41742,36 +41742,26 @@ function _confirmBorrarCuenta(id) {
    try {
     // Check estándar: clave directa en eventosCompletados / localStorage
     if (window.App && App.dash && App.dash._dwyEvIsDone && App.dash._dwyEvIsDone(ev)) return true;
-    // v1.3.1904 FIX SYNC MULTI-DEVICE: para predichos (_predent_ / _predicho_),
-    //   la clave done es 'ent__predent_provId_p0' pero el LDC escribe 'ent_ped_XXXX'.
-    //   Son claves distintas → Samsung nunca ve el done del Pixel.
-    //   Solución: si el ev es predicho, buscar también en historialPedidos un pedido
-    //   _recibido:true del mismo provId cuya fecha de recepción cae el mismo día
-    //   que la entrega del ciclo predicho. Si existe → done.
+    // v1.3.1904 FIX v2: para predichos, buscar historialPedido _recibido
+    //   del mismo provId cuyo _recibidoAt coincide con la fecha de ENTREGA del ciclo.
+    //   historialPedido.fecha = fecha recepción (27may) ≠ fecha pedido ciclo (25may).
+    //   Comparación correcta: _recibidoAt vs ev.fecha (entrega esperada).
     var _pedId = ev && ev.pedido && ev.pedido.id;
     if (_pedId && (String(_pedId).indexOf('_predent_') === 0 || String(_pedId).indexOf('_predicho_') === 0)) {
      var _provId = ev.pedido.provId;
      if (!_provId) return false;
      var S = _S();
      var _hist = (S && S.get && S.get.historialPedidos) ? (S.get.historialPedidos() || []) : [];
-     // Fecha de la entrega del predicho: ev.fecha o calcular desde ev.pedido.fecha
      var _evFecha = ev.fecha instanceof Date ? ev.fecha : (ev.fecha ? new Date(ev.fecha) : null);
-     var _evDay = _evFecha ? (_evFecha.getFullYear() + '-' + String(_evFecha.getMonth()+1).padStart(2,'0') + '-' + String(_evFecha.getDate()).padStart(2,'0')) : null;
+     var _evDay = _evFecha ? _evFecha.toDateString() : null;
+     var _evMs = _evFecha ? _evFecha.getTime() : 0;
      for (var _hi = 0; _hi < _hist.length; _hi++) {
       var _h = _hist[_hi];
       if (!_h || _h.deleted || !_h._recibido || !_h._recibidoAt || _h.provId !== _provId) continue;
-      // Mismo día de recepción que la entrega predicha
-      var _hFecha = new Date(_h._recibidoAt);
-      var _hDay = _hFecha.getFullYear() + '-' + String(_hFecha.getMonth()+1).padStart(2,'0') + '-' + String(_hFecha.getDate()).padStart(2,'0');
-      if (_evDay && _hDay === _evDay) return true;
-      // También: fecha del pedido original coincide con la fecha de pedido del ciclo
-      if (ev.pedido.fecha && _h.fecha) {
-       var _cycleDay = new Date(ev.pedido.fecha);
-       _cycleDay = _cycleDay.getFullYear() + '-' + String(_cycleDay.getMonth()+1).padStart(2,'0') + '-' + String(_cycleDay.getDate()).padStart(2,'0');
-       var _hPedDay = new Date(_h.fecha);
-       _hPedDay = _hPedDay.getFullYear() + '-' + String(_hPedDay.getMonth()+1).padStart(2,'0') + '-' + String(_hPedDay.getDate()).padStart(2,'0');
-       if (_cycleDay === _hPedDay) return true;
-      }
+      // Recepción el mismo día que la entrega esperada del ciclo
+      if (_evDay && new Date(_h._recibidoAt).toDateString() === _evDay) return true;
+      // Fallback: recepción dentro de ±7 días de la entrega esperada
+      if (_evMs && Math.abs(_h._recibidoAt - _evMs) < 7 * 86400000) return true;
      }
     }
     return false;
@@ -47361,32 +47351,30 @@ function _confirmBorrarCuenta(id) {
    var map = (typeof State !== 'undefined' && State.get && State.get.eventosCompletados) ? State.get.eventosCompletados() : null;
    if (map && map[k]) return true;
    try { var ls = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); if (ls[k]) return true; } catch(_){}
-   // v1.3.1904 FIX SYNC MULTI-DEVICE: para predichos, buscar historialPedido _recibido
-   //   del mismo provId+día. El LDC escribe 'ent_ped_XXXX' pero el predicho tiene
-   //   clave 'ent__predent_provId_p0' → claves distintas → Samsung no ve el done.
+   // v1.3.1904 FIX SYNC MULTI-DEVICE (v2): para predichos, buscar historialPedido
+   //   _recibido:true del mismo provId recibido dentro del horizonte del ciclo.
+   //   Root cause: historialPedido.fecha = fecha de RECEPCIÓN (27may),
+   //   pero ev.pedido.fecha = fecha del PEDIDO del ciclo (25may) → no coincidían.
+   //   Comparación correcta: _recibidoAt del historial vs fecha de ENTREGA del ciclo.
    var _pedId = ev && ev.pedido && ev.pedido.id;
    if (_pedId && (String(_pedId).indexOf('_predent_') === 0 || String(_pedId).indexOf('_predicho_') === 0)) {
-    var _provId = ev.pedido.provId || (ev.pedido && ev.pedido.provId);
-    if (_provId) {
-     var _hist = (State.get && State.get.historialPedidos) ? (State.get.historialPedidos() || []) : [];
-     // Fecha del ciclo: fecha del pedido original (ev.pedido.fecha)
-     var _cycleDay = ev.pedido.fecha ? new Date(ev.pedido.fecha) : null;
-     var _cycleDayStr = _cycleDay ? (_cycleDay.getFullYear() + '-' + String(_cycleDay.getMonth()+1).padStart(2,'0') + '-' + String(_cycleDay.getDate()).padStart(2,'0')) : null;
-     for (var _dii = 0; _dii < _hist.length; _dii++) {
-      var _dh = _hist[_dii];
-      if (!_dh || _dh.deleted || !_dh._recibido || _dh.provId !== _provId) continue;
-      // Coincide si el historial tiene la misma fecha de pedido que el ciclo predicho
-      if (_cycleDayStr && _dh.fecha) {
-       var _dhD = new Date(_dh.fecha);
-       var _dhDStr = _dhD.getFullYear() + '-' + String(_dhD.getMonth()+1).padStart(2,'0') + '-' + String(_dhD.getDate()).padStart(2,'0');
-       if (_dhDStr === _cycleDayStr) return true;
+    var _provId2 = ev.pedido.provId;
+    if (_provId2) {
+     var _hist2 = (State.get && State.get.historialPedidos) ? (State.get.historialPedidos() || []) : [];
+     // Fecha de ENTREGA del ciclo: ev.fecha (para 'entrega') o calcular desde ev.pedido.fecha
+     var _entFecha = ev.fecha instanceof Date ? ev.fecha : (ev.fecha ? new Date(ev.fecha) : null);
+     var _entDay = _entFecha ? _entFecha.toDateString() : null;
+     // Ventana: ±7 días desde la entrega del ciclo (cubre offsets largos)
+     var _entMs = _entFecha ? _entFecha.getTime() : 0;
+     for (var _dii = 0; _dii < _hist2.length; _dii++) {
+      var _dh = _hist2[_dii];
+      if (!_dh || _dh.deleted || !_dh._recibido || _dh.provId !== _provId2) continue;
+      // Comparar _recibidoAt con la fecha de entrega del ciclo (mismo día)
+      if (_dh._recibidoAt && _entDay) {
+       if (new Date(_dh._recibidoAt).toDateString() === _entDay) return true;
       }
-      // O si la recepción fue el mismo día que la entrega del ciclo
-      if (_dh._recibidoAt && ev.fecha) {
-       var _rFecha = new Date(_dh._recibidoAt);
-       var _evFecha = ev.fecha instanceof Date ? ev.fecha : new Date(ev.fecha);
-       if (_rFecha.toDateString() === _evFecha.toDateString()) return true;
-      }
+      // Fallback: recepción dentro de ±7 días de la entrega esperada
+      if (_dh._recibidoAt && _entMs && Math.abs(_dh._recibidoAt - _entMs) < 7 * 86400000) return true;
      }
     }
    }
