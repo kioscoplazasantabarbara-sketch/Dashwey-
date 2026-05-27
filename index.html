@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1899";
+ var CURRENT_CACHE = "dashwey-v1-3-1900";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1899</title>
+<title>Dashwey v1.3.1900</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -13575,6 +13575,33 @@ window._DashweyFirebase = {
  },
 
 
+ // v1.3.1900 — Sube banner de proveedor a Storage (proveedores/{uid}/{key}_banner.jpg).
+ //   Devuelve URL de descarga. Mismo patrón que uploadFoto pero ruta separada.
+ async uploadBanner(key, dataUrl) {
+  if (!FIREBASE_ENABLED || !_fbApp) throw new Error('Firebase no disponible');
+  if (!_uid) throw new Error('Sin usuario autenticado');
+  if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.indexOf('data:image') !== 0) {
+   throw new Error('dataUrl no válida');
+  }
+  const st = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js');
+  const storage = st.getStorage(_fbApp);
+  const safeKey = String(key).replace(/[^A-Za-z0-9_-]/g, '_');
+  const ref = st.ref(storage, 'proveedores/' + _uid + '/' + safeKey + '_banner.jpg');
+  await st.uploadString(ref, dataUrl, 'data_url');
+  return await st.getDownloadURL(ref);
+ },
+ async deleteBanner(key) {
+  try {
+   if (!FIREBASE_ENABLED || !_fbApp || !_uid) return false;
+   const st = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js');
+   const storage = st.getStorage(_fbApp);
+   const safeKey = String(key).replace(/[^A-Za-z0-9_-]/g, '_');
+   const ref = st.ref(storage, 'proveedores/' + _uid + '/' + safeKey + '_banner.jpg');
+   await st.deleteObject(ref);
+   return true;
+  } catch(_) { return false; }
+ },
+
  // Evita saturar la cola de Firestore cuando el canal está bloqueado por la red
  _writeTimers: {},
  _writePending: {},
@@ -23543,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1899';
+ const _APP_VERSION = 'v1.3.1900';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -45833,6 +45860,12 @@ function _confirmBorrarCuenta(id) {
 
  // _proyectarUnCiclo(ciclo, fromDate, horizonDays) → [{pedido:Date, entrega:Date, cicloId}]
  //   Núcleo matemático. "Días exactos": suma cadaDias desde fechaAncla.
+ // v1.3.1900 FIX ENTREGA HOY: retroceder 1 paso para capturar ciclos cuya
+ // ENTREGA cae hoy aunque el PEDIDO ya pasó. Root cause: ceil(diff/cadaDias)
+ // saltaba directamente al siguiente ciclo cuando el pedido había pasado
+ // (ej: pedido lunes, entrega +2d miércoles, fromDate=miércoles → n=ceil(2/7)=1
+ // saltaba al siguiente lunes, perdiendo la entrega de hoy).
+ // Fix: retroceder n-1 e incluir solo si entrega >= fromDate (no pedido).
  function _proyectarUnCiclo(ciclo, fromDate, horizonDays) {
   if (!ciclo || !ciclo.fechaAncla || !(ciclo.cadaDias > 0)) return [];
   var from = new Date(fromDate); from.setHours(0, 0, 0, 0);
@@ -45851,13 +45884,16 @@ function _confirmBorrarCuenta(id) {
   var diff = Math.round((from.getTime() - ancla.getTime()) / _CICLO_MS);
   var n = Math.ceil(diff / ciclo.cadaDias);
   if (n < 0) n = 0;
+  // v1.3.1900: retroceder 1 para no perder la entrega de hoy cuando el pedido ya pasó
+  if (n > 0) n--;
   var d = new Date(ancla.getTime() + n * ciclo.cadaDias * _CICLO_MS);
   var out = [];
   var guard = 0;
   while (((d.getTime() - from.getTime()) / _CICLO_MS) <= horizonDays && guard < 400) {
    guard++;
-   if (d.getTime() >= from.getTime() - _CICLO_MS) { // tolerancia 1 día por horas
-    var ent = new Date(d.getTime() + off * _CICLO_MS);
+   var ent = new Date(d.getTime() + off * _CICLO_MS);
+   // Incluir si la ENTREGA es hoy o futura (criterio correcto para agenda de entregas)
+   if (ent.getTime() >= from.getTime()) {
     out.push({ pedido: new Date(d), entrega: ent, cicloId: ciclo.id || null });
    }
    d = new Date(d.getTime() + ciclo.cadaDias * _CICLO_MS);
@@ -58340,24 +58376,44 @@ function _parseIva(iva) {
  return `<div class="day-chip${on ? ' on-deliv' : ''}" id="dcd-${pid}-${i}" onclick="App.alm._toggleDayDeliv('${pid}',${i})">${DNAMES[i]}</div>`;
  }
  ui.setFs(`
+ <!-- v1.3.1900: banner en header (único lugar). Sin él → header con botón + Banner. -->
+ ${p.banner ? `
+ <div style="position:relative;height:110px;overflow:hidden;flex-shrink:0;cursor:pointer"
+  onclick="document.getElementById('pe-banner-inp').click()">
+  <img id="pe-hdr-banner-img" loading="lazy" src="${esc(p.banner)}"
+   style="width:100%;height:100%;object-fit:cover;display:block">
+  <div style="position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,0.5) 0%,rgba(0,0,0,0.15) 50%,transparent 80%)"></div>
+  <div style="position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:var(--sp-3) 16px;gap:var(--sp-2)">
+   <div style="display:flex;align-items:center;gap:var(--sp-3)">
+    <div class="mhd-prov-icon" style="background:rgba(255,255,255,0.18);border-color:rgba(255,255,255,0.3)">${esc(p.icon || '🏪')}</div>
+    <div>
+     <h2 class="mhd-title" style="color:#fff;margin:0">${esc(p.nombre)}</h2>
+     <div class="mhd-sub" style="color:rgba(255,255,255,0.8)">Toca para cambiar banner</div>
+    </div>
+   </div>
+   <div style="display:flex;align-items:center;gap:var(--sp-1_5)">
+    <button type="button" onclick="event.stopPropagation();App.alm._clearProvBanner('${esc(p.id)}')" style="background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:var(--r-sm);padding:4px 8px;font-size:var(--fs-xs);font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">Eliminar</button>
+    <button class="mhd-close" style="color:#fff;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.2)" onclick="App.alm._cancelEditProv();App.ui.closeFs()">×</button>
+   </div>
+  </div>
+ </div>` : `
  <div class="modal-header-dark mhd-prov-accent">
- <div class="mhd-row">
- <div style="display:flex;align-items:center;gap:var(--sp-3)">
- <div class="mhd-prov-icon">${esc(p.icon || '🏪')}</div>
- <div>
- <h2 class="mhd-title">${esc(p.nombre)}</h2>
- <div class="mhd-sub">Editar proveedor</div>
- </div>
- </div>
- <div style="display:flex;align-items:center;gap:var(--sp-2)">
-<!-- v1.3.1552 Lote C #17: botón Historial eliminado del header. Historial accesible
-     desde Dashboard > snap card "Inversión en Mercancía" > botón Historial. -->
-<button class="mhd-close" onclick="App.alm._cancelEditProv();App.ui.closeFs()">×</button>
-</div>
- </div>
- </div>
- <!-- v1.3.1899: banner decorativo eliminado del modal de edición. Solo aparece en la
-      sección "BANNER DEL PROVEEDOR" al final del form. El header ya muestra nombre+foto. -->
+  <div class="mhd-row">
+   <div style="display:flex;align-items:center;gap:var(--sp-3)">
+    <div class="mhd-prov-icon">${esc(p.icon || '🏪')}</div>
+    <div>
+     <h2 class="mhd-title">${esc(p.nombre)}</h2>
+     <div class="mhd-sub">Editar proveedor</div>
+    </div>
+   </div>
+   <div style="display:flex;align-items:center;gap:var(--sp-2)">
+    <button type="button" onclick="document.getElementById('pe-banner-inp').click()" style="font-size:var(--fs-xs);color:var(--ink-soft);background:var(--bg-mid);border:1px solid var(--border);border-radius:var(--r-sm);padding:4px 8px;font-family:var(--font);cursor:pointer;-webkit-tap-highlight-color:transparent">+ Banner</button>
+    <button class="mhd-close" onclick="App.alm._cancelEditProv();App.ui.closeFs()">×</button>
+   </div>
+  </div>
+ </div>`}
+ <input type="file" id="pe-banner-inp" accept="image/*" style="display:none"
+  onchange="App.alm._loadProvBanner('${esc(p.id)}', this)">
  <div class="prov-edit-section">
 
  <!-- Datos del proveedor -->
@@ -58434,22 +58490,8 @@ function _parseIva(iva) {
    <span style="color:var(--ink-soft);font-size:20px;font-weight:var(--fw-bold);flex-shrink:0">›</span>
  </button>
  </div>
-
- <!-- Banner del proveedor — v1.2.60 -->
- <div>
- <div style="font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--ink-soft);text-transform:uppercase;letter-spacing:var(--ls-wide);margin-bottom:var(--sp-2)">Banner del proveedor</div>
- <div id="pe-banner-preview" style="width:100%;height:80px;border-radius:var(--r-md);background:var(--bg);border:1.5px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative"
- onclick="document.getElementById('pe-banner-inp').click()">
- ${p.banner
- ? `<img loading="lazy" src="${p.banner}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">`
- : `<div style="text-align:center;color:var(--ink-soft)"><div style="font-size:var(--fs-h2)">🖼️</div><div style="font-size:var(--fs-xs);margin-top:var(--sp-1)">Toca para subir banner</div></div>`
- }
- </div>
- <input type="file" id="pe-banner-inp" accept="image/*" style="display:none"
- onchange="App.alm._loadProvBanner('${p.id}', this)">
- ${p.banner ? `<button onclick="App.alm._clearProvBanner('${p.id}')" style="margin-top:var(--sp-1_5);font-size:var(--fs-xs);font-weight:var(--fw-bold);color:var(--red);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">Eliminar banner</button>` : ''}
- </div>
-
+ <!-- v1.3.1900: sección "Banner del proveedor" consolidada en el header —
+      input pe-banner-inp ahora vive en el header (único punto de edición). -->
  <!-- Acciones -->
  <div class="alm-form-footer" style="padding-top:4px">
  <button class="btn-sec alm-btn-danger" aria-label="Eliminar proveedor" data-action="prov-borrar" data-pid="${esc(p.id)}">
@@ -58806,57 +58848,74 @@ function _parseIva(iva) {
  }
  }
 
+ // v1.3.1900 — _loadProvBanner migrado a Firebase Storage.
+ //   Antes: comprimía a ~50KB base64 y lo guardaba en State/Firestore doc raíz.
+ //   Riesgo: doc raíz se infla → BUG-DATOS-001 class (payload overflow, sync bloqueado).
+ //   Ahora: sube a proveedores/{uid}/{provId}_banner.jpg → guarda solo la URL (~100B).
+ //   Fallback offline: si no hay red → toast de aviso, no guarda nada (no corrompe).
  function _loadProvBanner(provId, input) {
- const file = input.files[0];
- if (!file) return;
- // v1.3.427: validar tamano maximo 2MB (archivo de entrada)
- if (file.size > 2 * 1024 * 1024) {
- showToast('⚠️ Imagen demasiado grande (max 2MB)', 'warning');
- return;
- }
- // v1.3.1621 COMPRESIÓN OBLIGATORIA — antes guardaba raw, podía meter 2MB
- // en state. Ahora pasa por helper, queda ~50KB JPEG.
- if (typeof window._DashweyCompressImage === 'function') {
-  window._DashweyCompressImage(file, window._DASHWEY_PHOTO_PRESETS.proveedorBanner)
-   .then(function(compressed){
-    State.set.updateProv(provId, { banner: compressed });
-    const preview = document.getElementById('pe-banner-preview');
-    if (preview) {
-     preview.innerHTML = '<img src="'+compressed+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
-    }
-    showToast('✅ Banner actualizado', 'success');
-   })
-   .catch(function(e){
-    console.warn('[banner-prov] compresión falló:', e && e.message);
-    showToast('⚠️ No se pudo procesar la imagen', 'warning');
-   });
- } else {
-  // Fallback defensivo
-  const reader = new FileReader();
-  reader.onload = function(e) {
-   State.set.updateProv(provId, { banner: e.target.result });
-   const preview = document.getElementById('pe-banner-preview');
-   if (preview) {
-    preview.innerHTML = '<img src="'+e.target.result+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
-   }
-   showToast('✅ Banner actualizado', 'success');
+  var file = input.files && input.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+   showToast('⚠️ Imagen demasiado grande (max 5MB)', 'warning'); return;
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+   showToast('📷 Necesitas conexión para subir el banner', 'warning'); return;
+  }
+  var _fb = window._DashweyFirebase;
+  if (!_fb || !_fb.uploadBanner) {
+   showToast('⚠️ Firebase Storage no disponible', 'warning'); return;
+  }
+  // Comprimir primero para reducir tiempo de subida
+  var _doUpload = function(dataUrl) {
+   showToast('📷 Subiendo banner…', 'info');
+   _fb.uploadBanner(provId, dataUrl)
+    .then(function(url) {
+     State.set.updateProv(provId, { banner: url });
+     // Refrescar preview en el editor
+     var preview = document.getElementById('pe-banner-preview');
+     if (preview) {
+      preview.innerHTML = '<img loading="lazy" src="' + url + '" style="width:100%;height:100%;object-fit:cover;border-radius:var(--r-sm2)">';
+     }
+     // Refrescar header si está abierto (tap ícono de banner en header)
+     var hdrBanner = document.getElementById('pe-hdr-banner-img');
+     if (hdrBanner) hdrBanner.src = url;
+     showToast('✅ Banner guardado', 'success');
+    })
+    .catch(function(e) {
+     console.warn('[banner-prov] subida Storage falló:', e && e.message);
+     showToast('⚠️ No se pudo subir el banner. Inténtalo con conexión.', 'warning');
+    });
   };
-  reader.readAsDataURL(file);
- }
+  if (typeof window._DashweyCompressImage === 'function') {
+   window._DashweyCompressImage(file, window._DASHWEY_PHOTO_PRESETS.proveedorBanner)
+    .then(_doUpload)
+    .catch(function(e) { console.warn('[banner-prov] compresión:', e && e.message); showToast('⚠️ No se pudo procesar la imagen', 'warning'); });
+  } else {
+   var reader = new FileReader();
+   reader.onload = function(ev) { _doUpload(ev.target.result); };
+   reader.readAsDataURL(file);
+  }
  }
 
  // v1.3.427: limpiar proveedor pendiente si el usuario cancela sin guardar
  function _cancelEditProv() {
- _provNuevoPendiente = null;
+  _provNuevoPendiente = null;
  }
 
  function _clearProvBanner(provId) {
- State.set.updateProv(provId, { banner: null });
- const preview = document.getElementById('pe-banner-preview');
- if (preview) {
- preview.innerHTML = '<div style="text-align:center;color:var(--ink-soft)"><div style="font-size:var(--fs-h2)">🖼️</div><div style="font-size:var(--fs-xs);margin-top:var(--sp-1)">Toca para subir banner</div></div>';
- }
- showToast('🗑️ Banner eliminado');
+  // Borrar de Storage (best-effort, no bloquea)
+  var _fb = window._DashweyFirebase;
+  if (_fb && _fb.deleteBanner) { try { _fb.deleteBanner(provId); } catch(_) {} }
+  State.set.updateProv(provId, { banner: null });
+  var preview = document.getElementById('pe-banner-preview');
+  if (preview) {
+   preview.innerHTML = '<div style="text-align:center;color:var(--ink-soft)"><div style="font-size:var(--fs-h2)">🖼️</div><div style="font-size:var(--fs-xs);margin-top:var(--sp-1)">Toca para subir banner</div></div>';
+  }
+  // Limpiar banner del header si está abierto
+  var hdrBanner = document.getElementById('pe-hdr-banner-img');
+  if (hdrBanner) hdrBanner.closest('[id="pe-hdr-banner"]') && hdrBanner.closest('[id="pe-hdr-banner"]').remove();
+  showToast('🗑️ Banner eliminado');
  }
 
  // ── v1.3.1520: AVATAR PROVEEDOR ─────────────────────────────────────
@@ -66435,6 +66494,46 @@ _eaRecalc();
      } catch(_) {}
     }
     localStorage.setItem('dashwey_photo_migration_v1', 'done');
+
+    // v1.3.1900 — MIGRACIÓN BANNERS BASE64 → STORAGE (fire-and-forget, tras migración compresión)
+    //   Banners legacy guardados como data:image base64 en doc raíz → riesgo payload overflow.
+    //   Migrar a Storage (misma ruta que _loadProvBanner: proveedores/{uid}/{id}_banner.jpg).
+    setTimeout(function(){
+     try {
+      if (localStorage.getItem('dashwey_banner_storage_migration_v1') === 'done') return;
+      var _fb = window._DashweyFirebase;
+      if (!_fb || !_fb.uploadBanner) return;
+      if (!navigator.onLine) return;
+      var _S2 = window.App && window.App.State;
+      if (!_S2 || !_S2.get) return;
+      var provs2 = (_S2.raw && _S2.raw.proveedores) ? _S2.raw.proveedores() : _S2.get.proveedores();
+      var bannerTasks = [];
+      for (var bi = 0; bi < provs2.length; bi++) {
+       var pb = provs2[bi];
+       if (!pb || !pb.banner || typeof pb.banner !== 'string') continue;
+       if (pb.banner.indexOf('data:image') !== 0) continue; // ya es URL de Storage
+       (function(prov) {
+        bannerTasks.push(
+         _fb.uploadBanner(prov.id, prov.banner)
+          .then(function(url) {
+           prov.banner = url;
+           console.info('[banner-migrate] ' + prov.id + ' → Storage OK');
+          })
+          .catch(function(e) { console.warn('[banner-migrate]', prov.id, e && e.message); })
+        );
+       })(pb);
+      }
+      if (!bannerTasks.length) {
+       localStorage.setItem('dashwey_banner_storage_migration_v1', 'done');
+       return;
+      }
+      Promise.all(bannerTasks).then(function(){
+       try { if (typeof save === 'function') save(); } catch(_) {}
+       localStorage.setItem('dashwey_banner_storage_migration_v1', 'done');
+       console.info('[banner-migrate] migración banners a Storage completada');
+      });
+     } catch(e) { console.warn('[banner-migrate] error:', e && e.message); }
+    }, 5000); // 5s después de la migración de fotos
    });
   } catch(e){
    console.warn('[Dashwey/v1621] migración fotos error:', e && e.message);
