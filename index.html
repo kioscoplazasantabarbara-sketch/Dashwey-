@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1900";
+ var CURRENT_CACHE = "dashwey-v1-3-1901";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1900</title>
+<title>Dashwey v1.3.1901</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1900';
+ const _APP_VERSION = 'v1.3.1901';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46378,43 +46378,61 @@ function _confirmBorrarCuenta(id) {
   _provsP.forEach(function(prov) {
    if (!prov || !Array.isArray(prov.diasPedido) || !prov.diasPedido.length) return;
    var _latestPending = _provLatestPendingP[prov.id] || null;
-   // Horizonte: si hay rango, hasta el final del rango. Si no, 14 días.
+   // v1.3.1901 FIX AGENDA PREDICHOS — root cause dual:
+   //
+   // BUG 1 (Goyo no aparece en "Hoy"):
+   //   _feedPedidosProv(prov, _hoyMidnight) solo devuelve fechas de PEDIDO >= hoy.
+   //   Si el pedido fue el lunes (pasado) y la entrega es hoy (miércoles), no aparece
+   //   porque el pedido queda excluido. Luego calcEnt(pedidoFuturo) nunca llega a hoy.
+   //   FIX: usar _feedCiclosProv (pares {pedido,entrega} con el fix de _proyectarUnCiclo
+   //   que retrocede 1 ciclo para capturar entregas cuyo pedido ya pasó).
+   //   Filtrar por fecha de ENTREGA del par (no del pedido).
+   //
+   // BUG 2 ("Hoy" mostraba mañana):
+   //   periodRange('today') devuelve end = hoy+1 día (28may 00:00).
+   //   El filtro hacía _rEc = rangeEnd.setHours(23,59,59) → 28may 23:59 → mañana entraba.
+   //   FIX: comparar < rangeEnd como límite EXCLUSIVO (sin convertir a 23:59).
+   //   Esto es correcto: periodRange devuelve end exclusivo (estilo [start, end)).
+   //
+   // Horizonte: días hasta el fin del rango. Cap 1 ciclo por proveedor implícito:
+   //   _feedCiclosProv con horizonte = rangeEnd - hoy solo proyecta los ciclos que
+   //   caen en ese horizonte, sin repetir ciclos fuera del rango solicitado.
    var _horizonD = 14;
    if (rangeStart && rangeEnd) {
     var _diffMs = new Date(rangeEnd).getTime() - _hoyMidnight.getTime();
     _horizonD = Math.max(7, Math.min(60, Math.ceil(_diffMs / 86400000) + 1));
    }
-   var _todosFp = (typeof _feedPedidosProv === 'function')
-    ? _feedPedidosProv(prov, _hoyMidnight, _horizonD)
-    : ((typeof _allUpcomingOrderDates === 'function') ? _allUpcomingOrderDates(prov.diasPedido, _hoyMidnight, _horizonD) : []);
-   _todosFp.forEach(function(fpPred, idx) {
-    // v1.3.1451: skip predicho stale (anterior o igual al pending real activo)
+   // _rSc / _rEnd: inicio inclusivo y fin EXCLUSIVO del rango para predichos
+   var _rSc = rangeStart ? (function(){ var d=new Date(rangeStart); d.setHours(0,0,0,0); return d; })() : null;
+   var _rEnd = rangeEnd ? new Date(rangeEnd) : null; // exclusivo — NO setHours(23,59,59)
+   // Proyectar pares {pedido, entrega} usando _feedCiclosProv (corrige Bug 1)
+   var _todosCiclos = (typeof _feedCiclosProv === 'function')
+    ? _feedCiclosProv(prov, _hoyMidnight, _horizonD)
+    : [];
+   _todosCiclos.forEach(function(par, idx) {
+    var fpPred = par.pedido;   // Date — fecha del pedido del ciclo
+    var fePred = par.entrega;  // Date — fecha de entrega del ciclo
+    // v1.3.1451: skip predicho stale (pedido anterior o igual al pending real activo)
     if (_latestPending && fpPred <= _latestPending) return;
-    if (rangeStart && rangeEnd) {
-     var _rSc = new Date(rangeStart); _rSc.setHours(0,0,0,0);
-     var _rEc = new Date(rangeEnd); _rEc.setHours(23,59,59,999);
-     // Pedido predicho en rango → tab Pedidos (allVisitas)
+    if (_rSc && _rEnd) {
+     var fpPredD = new Date(fpPred); fpPredD.setHours(0,0,0,0);
+     var fePredD = new Date(fePred); fePredD.setHours(0,0,0,0);
+     // Pedido predicho: fecha de PEDIDO en rango (exclusivo) → tab Pedidos
      // v1.3.1452: pedidos SIEMPRE recurrentes (visita comercial garantizada).
-     if (fpPred >= _rSc && fpPred <= _rEc) {
+     if (fpPredD >= _rSc && fpPredD < _rEnd) {
       allVisitas.push({
        provId: prov.id, fecha: fpPred.toISOString(),
        agente: prov.agente || '', notas: 'Predicho', _src: 'predicho'
       });
      }
-     // v1.3.1852: ENTREGA predicha del ciclo → tab Entregas (allPedidos), simétrico
-     //   al pedido predicho. ANTES (v1.3.1452) la entrega solo existía tras pedido
-     //   real → el tab Entregas mostraba siempre los mismos (no proyectaba ciclos).
-     //   Ahora el ciclo proyecta su entrega aunque no se haya hecho el pedido real,
-     //   coherente con la nueva Agenda por tipo (Pedidos=días pedido, Entregas=días entrega).
-     var _fePred = calcEnt(fpPred.toISOString(), prov.id);
-     if (_fePred && !isNaN(_fePred.getTime())) {
-      var _fePredD = new Date(_fePred); _fePredD.setHours(0,0,0,0);
-      if (_fePredD >= _rSc && _fePredD <= _rEc && (!_rangoIncluyeHoy || _fePredD >= _hoyMidnight)) {
-       allPedidos.push({
-        id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, date: fpPred.toISOString(),
-        items: [], _src: 'predicho', _fechaEntrega: _fePred.toISOString()
-       });
-      }
+     // Entrega predicha: fecha de ENTREGA en rango (exclusivo) → tab Entregas
+     // _rangoIncluyeHoy: si la vista es actual (hoy/semana/mes actual), ocultar
+     // entregas ya vencidas (< hoy). No aplica a vistas históricas (mes anterior…).
+     if (fePredD >= _rSc && fePredD < _rEnd && (!_rangoIncluyeHoy || fePredD >= _hoyMidnight)) {
+      allPedidos.push({
+       id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, date: fpPred.toISOString(),
+       items: [], _src: 'predicho', _fechaEntrega: fePred.toISOString()
+      });
      }
     }
    });
@@ -47359,12 +47377,16 @@ function _confirmBorrarCuenta(id) {
   var fb=new Date(fechaISO); fb.setDate(fb.getDate()+3); return fb;
  };
 
+ // v1.3.1901 FIX inRange: comparación EXCLUSIVA en rangeEnd (sin setHours 23:59).
+ //   rangeEnd es exclusivo en periodRange (today: end=mañana 00:00, week: end=lun+7 00:00).
+ //   Con setHours(23,59,59) se convertía en inclusivo → "Hoy" incluía mañana.
+ //   Ahora: dd < rangeEnd (exclusivo) — correcto para todos los tipos de periodo.
+ var _rStartMidnight = rangeStart ? (function(){ var d=new Date(rangeStart); d.setHours(0,0,0,0); return d; })() : null;
+ var _rEndExcl = rangeEnd ? new Date(rangeEnd) : null; // exclusivo, sin modificar
  var inRange = function(d) {
-  if (!rangeStart || !rangeEnd) return true;
+  if (!_rStartMidnight || !_rEndExcl) return true;
   var dd = new Date(d); dd.setHours(0,0,0,0);
-  var rS = new Date(rangeStart); rS.setHours(0,0,0,0);
-  var rE = new Date(rangeEnd); rE.setHours(23,59,59,999);
-  return dd >= rS && dd <= rE;
+  return dd >= _rStartMidnight && dd < _rEndExcl;
  };
 
  // v1.3.1850: tabs por TIPO (no por tiempo — el tiempo lo da el selector global).
@@ -47576,59 +47598,36 @@ function _confirmBorrarCuenta(id) {
   }
   // v1.3.1850: el horizonte de proyección lo determina el periodo global (rangeStart/End).
   //   Los tabs ya no son temporales, así que no fuerzan horizonte propio.
-  var _todosFp = (typeof _feedPedidosProv === 'function')
-   ? _feedPedidosProv(prov, hoy0, _horizonR)
-   : ((typeof _allUpcomingOrderDates === 'function') ? _allUpcomingOrderDates(prov.diasPedido, hoy0, _horizonR) : []);
-  // v1.3.1451: NO precalcular _esSameDay global. Cada fecha tiene su propio
-  //   estado sameDay (Praviana Lu = sameDay, Praviana Do = solo pedido).
-  _todosFp.forEach(function(fpPred, idx) {
-   // v1.3.1451: skip predicho stale (anterior o igual al pending real)
+  // v1.3.1901 FIX: migrar de _feedPedidosProv a _feedCiclosProv.
+  //   _feedPedidosProv devuelve fechas de PEDIDO desde hoy → pierde ciclos cuya
+  //   ENTREGA cae hoy pero el pedido fue ayer/anteayer. _feedCiclosProv usa
+  //   _proyectarUnCiclo (con fix retroceder-1) que incluye esos pares correctamente.
+  var _todosCiclosF = (typeof _feedCiclosProv === 'function')
+   ? _feedCiclosProv(prov, hoy0, _horizonR)
+   : [];
+  _todosCiclosF.forEach(function(par, idx) {
+   var fpPred = par.pedido;    // Date — fecha del PEDIDO del ciclo
+   var fePredCiclo = par.entrega; // Date — fecha de ENTREGA del ciclo (offset exacto)
+   // v1.3.1451: skip predicho stale
    if (_latestPendingF && fpPred <= _latestPendingF) return;
-   // v1.3.1501: si el día de ENTREGA del predicho ya pasó (>24h hoy) y NO hay
-   //   pedido real registrado para este proveedor en ese ciclo → ocultar.
-   //   Significa que el usuario no hizo el pedido y la entrega ya no llegará.
-   //   Si pasó el día de PEDIDO pero la entrega aún no → mostrar marcado
-   //   como _atrasado para que el usuario vea que se le pasó hacer el pedido.
-   var _fechaEntPred = calcEntA(fpPred.toISOString(), prov.id);
-   if (!isNaN(_fechaEntPred.getTime()) && _fechaEntPred < hoy0) {
-    // Día de entrega ya pasó sin pedido real → desaparecer del feed
-    return;
-   }
+   // v1.3.1501: si la ENTREGA ya pasó → ocultar (no llegará)
+   var _feD = new Date(fePredCiclo); _feD.setHours(0,0,0,0);
+   if (_feD < hoy0) return;
    var _esAtrasadoPred = false;
    var _diasAtrasoPred = 0;
    var _esHoyPred = false;
    var _fpPredMid = new Date(fpPred); _fpPredMid.setHours(0,0,0,0);
    if (_fpPredMid.getTime() === hoy0.getTime()) {
-    // v1.3.1508: día de pedido del proveedor coincide con HOY → estado "REALIZAR PEDIDO"
     _esHoyPred = true;
-   } else if (fpPred < hoy0) {
-    // Día pedido pasó pero entrega aún no → marcar atrasado
+   } else if (_fpPredMid < hoy0) {
+    // Pedido ya pasó pero entrega aún no → marcar atrasado
     _esAtrasadoPred = true;
-    _diasAtrasoPred = Math.floor((hoy0.getTime() - fpPred.getTime()) / 86400000);
+    _diasAtrasoPred = Math.floor((hoy0.getTime() - _fpPredMid.getTime()) / 86400000);
    }
-   // v1.3.1452: predichos SOLO como tipo 'pedido' (incluso si sameDay).
-   //   Decisión semántica original: entregas solo si pedido real en almacén.
-   //
-   // v1.3.1519 REVISIÓN — caso Fiesta (12 may 2026):
-   //   Fiesta tiene diasPedido=[Ju], diasEntrega=[Ju], periodicidad custom_n=15días.
-   //   Sin pedido real → cae en predichos → se genera como 'pedido' simple →
-   //   card timeline render con calcEntA() que ALWAYS suma +1 día mínimo
-   //   (bucle empieza i=1) → muestra timeline "JU 14 → JU 21" en lugar de
-   //   "JU 14 (pedido+entrega mismo día)".
-   //
-   //   FIX: cuando _eventoSameDay(provId, fpPred) === true → el predicho se
-   //   genera como tipo 'pedido_entrega' (igual que pendings reales).
-   //   Razón: si el día es SIMULTÁNEAMENTE pedido y entrega, no hay ambigüedad
-   //   semántica posible. El usuario configuró expresamente que ese día hace
-   //   ambas cosas. No es "visita pedido pendiente de entrega futura" —
-   //   es "pedido y entrega ocurren a la vez".
-   //
-   //   Esta corrección NO genera entregas predichas sueltas. Solo unifica
-   //   el evento sameDay para que el render lo muestre correctamente.
+   // Determinar si pedido y entrega son el mismo día (sameDay)
+   var _esSameDayPred = _fpPredMid.getTime() === _feD.getTime();
+   // Evento de PEDIDO: si la fecha de pedido está en rango
    if (inRange(fpPred)) {
-    var _esSameDayPred = (typeof _eventoSameDay === 'function')
-     ? _eventoSameDay(prov.id, fpPred)
-     : false;
     eventos.push({
      tipo: _esSameDayPred ? 'pedido_entrega' : 'pedido',
      fecha: fpPred,
@@ -47639,27 +47638,18 @@ function _confirmBorrarCuenta(id) {
      _diasAtraso: _diasAtrasoPred,
      _esHoy: _esHoyPred
     });
-    // v1.3.1852: si el día de ENTREGA del ciclo es DISTINTO al de pedido (no sameDay),
-    //   generar también un evento 'entrega' predicho → el tab Entregas muestra el día
-    //   en que llega el ciclo, aunque no se haya hecho el pedido real. Simétrico al
-    //   pedido. Antes (v1.3.1452) solo había entregas reales → tab Entregas no proyectaba.
-    if (!_esSameDayPred) {
-     var _entPred = (typeof calcEntA === 'function') ? calcEntA(fpPred.toISOString(), prov.id) : null;
-     if (_entPred && !isNaN(_entPred.getTime()) && _entPred >= hoy0 && inRange(_entPred)) {
-      eventos.push({
-       tipo: 'entrega',
-       fecha: _entPred,
-       sortKey: _entPred.getTime(),
-       pedido: { id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
-       _predicho: true,
-       _fechaEntrega: _entPred.toISOString()
-      });
-     }
-    }
    }
-   // v1.3.1452: NO push 'entrega' predicho independiente (decisión preservada).
-   //   Entregas predichas SOLAS (sin pedido) excluidas del feed.
-   //   v1.3.1519: sameDay sí se genera como evento único 'pedido_entrega' arriba.
+   // Evento de ENTREGA: si la entrega es diferente al pedido y está en rango
+   if (!_esSameDayPred && inRange(fePredCiclo) && fePredCiclo >= hoy0) {
+    eventos.push({
+     tipo: 'entrega',
+     fecha: fePredCiclo,
+     sortKey: fePredCiclo.getTime(),
+     pedido: { id: '_predent_' + prov.id + '_p' + idx, provId: prov.id, fecha: fpPred.toISOString(), items: [] },
+     _predicho: true,
+     _fechaEntrega: fePredCiclo.toISOString()
+    });
+   }
   });
  });
 
