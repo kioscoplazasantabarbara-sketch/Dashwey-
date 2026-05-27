@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1901";
+ var CURRENT_CACHE = "dashwey-v1-3-1902";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1901</title>
+<title>Dashwey v1.3.1902</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1901';
+ const _APP_VERSION = 'v1.3.1902';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -47313,6 +47313,55 @@ function _confirmBorrarCuenta(id) {
    (function(_ev){
     checkEl.addEventListener('click', function(e){
      e.stopPropagation();
+     // v1.3.1902: si es entrega confirmada (_recibidoConfirmado), revertir financieramente
+     if (_ev._recibidoConfirmado && _ev.pedido && _ev.pedido.id) {
+      var _pedId = _ev.pedido.id;
+      var _pedObj = State.get.historialPedidos ? (State.get.historialPedidos() || []).find(function(p){ return p && p.id === _pedId; }) : null;
+      if (!_pedObj) { _dwyEvMarkDone(_ev, false); try { _snapRenderTimeline(); } catch(_){} return; }
+      var _recibidoTs = _pedObj._recibidoAt || 0;
+      var _ventasPost = 0;
+      try {
+       var _vds = State.get.ventas ? (State.get.ventas() || []) : [];
+       _ventasPost = _vds.filter(function(v){ return v && !v.deleted && v.provId === _pedObj.provId && new Date(v.fecha).getTime() > _recibidoTs; }).length;
+      } catch(_) {}
+      var _provNomRev = (State.get.prov && State.get.prov(_pedObj.provId) ? State.get.prov(_pedObj.provId).nombre : _pedId);
+      var _msg = '¿Desmarcar "' + _provNomRev + '" como recibido? Se revertirá el gasto y el descuento en la cuenta.';
+      if (_ventasPost > 0) _msg += '\n\n⚠️ ' + _ventasPost + ' venta(s) posteriores — el stock puede no cuadrar.';
+      window._showDestructiveConfirm({
+       title: 'Revertir recepción',
+       message: _msg,
+       confirmText: 'Revertir',
+       onConfirm: function() {
+        try { Utils.triggerHaptic('light'); } catch(_){}
+        // 1. Revertir stock
+        try {
+         (_pedObj.items || []).forEach(function(it){
+          var _pr = State.get.prod ? State.get.prod(it.prodId) : null;
+          if (_pr) {
+           var _ns = Math.max(0, (_pr.stockActual||0) - (it.ncajas||1)*(it.udscaja||_pr.udscaja||1));
+           State.set.updateProd(it.prodId, { stockActual: _ns });
+          }
+         });
+        } catch(_sv) { console.warn('[Revertir/stock]', _sv && _sv.message); }
+        // 2. Revertir pedido (cascade gasto + saldo via removeHistorialPedido)
+        try { State.set.removeHistorialPedido(_pedId); } catch(_rp) { console.warn('[Revertir/hist]', _rp && _rp.message); }
+        // 3. Recrear pendingOrder para que vuelva a aparecer en almacén
+        try {
+         var _newPO = { id: _pedObj._pendingOrderId || ('pord_' + Date.now()), provId: _pedObj.provId,
+          date: _pedObj.fecha || new Date().toISOString(), items: _pedObj.items || [],
+          status: 'pending', _updatedAt: Date.now(), updatedAt: new Date().toISOString() };
+         State.set.addPendingOrder(_newPO);
+        } catch(_apo) { console.warn('[Revertir/pending]', _apo && _apo.message); }
+        // 4. Desmarcar en agenda
+        _dwyEvMarkDone(_ev, false);
+        try { showToast('↩️ Recepción revertida — gasto eliminado', 'info'); } catch(_){}
+        try { _snapRenderTimeline(); } catch(_){}
+        try { if (window.App && App.alm) { App.alm.renderCatInline && App.alm.renderCatInline(); App.alm.updateBadge && App.alm.updateBadge(); } } catch(_){}
+       }
+      });
+      return;
+     }
+     // Comportamiento normal (recordatorios, alertas, etc.)
      _dwyEvMarkDone(_ev, false);
      try { Utils.triggerHaptic('light'); } catch(_){}
      try { _snapRenderTimeline(); } catch(_){}
@@ -47465,7 +47514,39 @@ function _confirmBorrarCuenta(id) {
  //
  // Si el usuario quiere ver el historial de pedidos cerrados de un
  // proveedor, debe ir al historial del proveedor (botón en editor).
+ // v1.3.1902: historialPedidos SOLO con _recibido:true y entrega en rango.
+ //   La decisión v1.3.1505 eliminó todos los historialPedidos del feed porque
+ //   se proyectaban como entregas activas (BUG-RISI). Ahora los pedidos
+ //   recibidos por el usuario llevan _recibido:true → se muestran como
+ //   entrega COMPLETADA (isDone) sin proyectar fechas fantasma.
+ //   Solo se muestran si la fecha de entrega real cae en el rango activo.
  var _histPed = []; // mantener nombre para no romper refs próximas si las hay
+ try {
+  var _histAll = State.get.historialPedidos ? (State.get.historialPedidos() || []) : [];
+  // v1.3.1902: índice de pedidos recibidos por proveedor+día (para excluir predichos duplicados)
+  var _recibidosByProvDay = {}; // key: provId + '_' + 'YYYY-MM-DD'
+  _histAll.forEach(function(p) {
+   if (!p || p.deleted || !p._recibido || !p._recibidoAt) return;
+   // Fecha de entrega = cuándo se marcó recibido (_recibidoAt), NO heurístico calcEntA.
+   // _recibidoAt es el timestamp real del momento en que el usuario pulsó "Pedido recibido".
+   var _feReal = new Date(p._recibidoAt);
+   _feReal.setHours(9, 0, 0, 0); // normalizar a 09:00 para alineación visual
+   // Mostrar solo si la entrega está en el rango activo
+   if (!inRange(_feReal)) return;
+   // Registrar para excluir predichos del mismo proveedor y día
+   var _feDayKey = p.provId + '_' + _feReal.getFullYear() + '-' + String(_feReal.getMonth()+1).padStart(2,'0') + '-' + String(_feReal.getDate()).padStart(2,'0');
+   _recibidosByProvDay[_feDayKey] = true;
+   var _evRec = {
+    tipo: 'entrega',
+    fecha: _feReal,
+    sortKey: _feReal.getTime(),
+    pedido: { id: p.id, provId: p.provId, fecha: p.fecha, items: p.items || [] },
+    _recibidoConfirmado: true, // flag para el handler de desmarcar (reversión financiera)
+    _pendingOrderId: p._pendingOrderId || null,
+   };
+   eventos.push(_evRec);
+  });
+ } catch(_rh) { console.warn('[Agenda/histRecibidos]', _rh && _rh.message); }
 
  // v1.3.1367 (Cambio C) — 2.5) Pedidos PENDIENTES (no recibidos físicamente)
  //   Los pedidos en pendingOrders (status='pending') no han tocado stock todavía
@@ -47494,6 +47575,14 @@ function _confirmBorrarCuenta(id) {
   // Si status='checked' significa que ya está siendo revisado pero no confirmado;
   // lo seguimos mostrando porque tampoco ha tocado stock.
   if (!p || !p.date) return;
+  // v1.3.1902: si ya hay _recibido para este proveedor ese día → pendingOrder ya confirmado
+  try {
+   var _feChkPO = (typeof calcEntA === 'function') ? calcEntA(p.date, p.provId) : null;
+   if (_feChkPO) {
+    var _pdKey = p.provId + '_' + _feChkPO.getFullYear() + '-' + String(_feChkPO.getMonth()+1).padStart(2,'0') + '-' + String(_feChkPO.getDate()).padStart(2,'0');
+    if (_recibidosByProvDay && _recibidosByProvDay[_pdKey]) return;
+   }
+  } catch(_) {}
   var fp = new Date(p.date);
   if (isNaN(fp.getTime())) return;
 
@@ -47613,6 +47702,10 @@ function _confirmBorrarCuenta(id) {
    // v1.3.1501: si la ENTREGA ya pasó → ocultar (no llegará)
    var _feD = new Date(fePredCiclo); _feD.setHours(0,0,0,0);
    if (_feD < hoy0) return;
+   // v1.3.1902: si ya hay pedido _recibido del mismo proveedor ese día → no mostrar predicho
+   // (el historialPedido con _recibidoConfirmado ya aparece como "Completado")
+   var _feDayKeyChk = prov.id + '_' + _feD.getFullYear() + '-' + String(_feD.getMonth()+1).padStart(2,'0') + '-' + String(_feD.getDate()).padStart(2,'0');
+   if (_recibidosByProvDay && _recibidosByProvDay[_feDayKeyChk]) return;
    var _esAtrasadoPred = false;
    var _diasAtrasoPred = 0;
    var _esHoyPred = false;
@@ -59722,8 +59815,19 @@ function _parseIva(iva) {
          provId: _ord2.provId,
          items: (_ord2.items||[]).map(function(it){ return { prodId:it.prodId, ncajas:it.ncajas||1, udscaja:it.udscaja||1, precio:it.precio||0, pvp:it.pvp||0 }; }),
          cargosExtra: _cargosExtra_v1174,
+         // v1.3.1902: flag para reactivar en feed de agenda y permitir reversión
+         _recibido: true,
+         _recibidoAt: Date.now(),
+         _pendingOrderId: _ord2.id, // para recrear pendingOrder si se desmarca
         };
         try { State.set.addPedido(_pedConfirmado); } catch(_e) { console.error('[LDC] addPedido failed:', _e); }
+        // v1.3.1902: marcar entrega como COMPLETADA en agenda automáticamente
+        try {
+         var _evEnt = { tipo: 'entrega', pedido: { id: _pedConfirmado.id, provId: _pedConfirmado.provId }, fecha: new Date() };
+         var _markFn = (typeof _dwyEvMarkDone === 'function') ? _dwyEvMarkDone
+          : (window.App && App.dash && App.dash._dwyEvMarkDone ? App.dash._dwyEvMarkDone : null);
+         if (_markFn) _markFn(_evEnt, true);
+        } catch(_me) { console.warn('[LDC] markDone entrega:', _me && _me.message); }
         try{App.ui.closeFs();}catch(_){}
         State.set.removePendingOrder(orderId);
         try{App.alm.updateBadge();}catch(_){}
