@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1903";
+ var CURRENT_CACHE = "dashwey-v1-3-1904";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1903</title>
+<title>Dashwey v1.3.1904</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23570,7 +23570,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1903';
+ const _APP_VERSION = 'v1.3.1904';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41738,7 +41738,45 @@ function _confirmBorrarCuenta(id) {
 
   // ── Motor de completados (delegado a App.dash) ──
   function _markDone(ev, done){ try { if (window.App && App.dash && App.dash._dwyEvMarkDone) App.dash._dwyEvMarkDone(ev, done); } catch(_){} }
-  function _isDone(ev){ try { return !!(window.App && App.dash && App.dash._dwyEvIsDone && App.dash._dwyEvIsDone(ev)); } catch(_) { return false; } }
+  function _isDone(ev){
+   try {
+    // Check estándar: clave directa en eventosCompletados / localStorage
+    if (window.App && App.dash && App.dash._dwyEvIsDone && App.dash._dwyEvIsDone(ev)) return true;
+    // v1.3.1904 FIX SYNC MULTI-DEVICE: para predichos (_predent_ / _predicho_),
+    //   la clave done es 'ent__predent_provId_p0' pero el LDC escribe 'ent_ped_XXXX'.
+    //   Son claves distintas → Samsung nunca ve el done del Pixel.
+    //   Solución: si el ev es predicho, buscar también en historialPedidos un pedido
+    //   _recibido:true del mismo provId cuya fecha de recepción cae el mismo día
+    //   que la entrega del ciclo predicho. Si existe → done.
+    var _pedId = ev && ev.pedido && ev.pedido.id;
+    if (_pedId && (String(_pedId).indexOf('_predent_') === 0 || String(_pedId).indexOf('_predicho_') === 0)) {
+     var _provId = ev.pedido.provId;
+     if (!_provId) return false;
+     var S = _S();
+     var _hist = (S && S.get && S.get.historialPedidos) ? (S.get.historialPedidos() || []) : [];
+     // Fecha de la entrega del predicho: ev.fecha o calcular desde ev.pedido.fecha
+     var _evFecha = ev.fecha instanceof Date ? ev.fecha : (ev.fecha ? new Date(ev.fecha) : null);
+     var _evDay = _evFecha ? (_evFecha.getFullYear() + '-' + String(_evFecha.getMonth()+1).padStart(2,'0') + '-' + String(_evFecha.getDate()).padStart(2,'0')) : null;
+     for (var _hi = 0; _hi < _hist.length; _hi++) {
+      var _h = _hist[_hi];
+      if (!_h || _h.deleted || !_h._recibido || !_h._recibidoAt || _h.provId !== _provId) continue;
+      // Mismo día de recepción que la entrega predicha
+      var _hFecha = new Date(_h._recibidoAt);
+      var _hDay = _hFecha.getFullYear() + '-' + String(_hFecha.getMonth()+1).padStart(2,'0') + '-' + String(_hFecha.getDate()).padStart(2,'0');
+      if (_evDay && _hDay === _evDay) return true;
+      // También: fecha del pedido original coincide con la fecha de pedido del ciclo
+      if (ev.pedido.fecha && _h.fecha) {
+       var _cycleDay = new Date(ev.pedido.fecha);
+       _cycleDay = _cycleDay.getFullYear() + '-' + String(_cycleDay.getMonth()+1).padStart(2,'0') + '-' + String(_cycleDay.getDate()).padStart(2,'0');
+       var _hPedDay = new Date(_h.fecha);
+       _hPedDay = _hPedDay.getFullYear() + '-' + String(_hPedDay.getMonth()+1).padStart(2,'0') + '-' + String(_hPedDay.getDate()).padStart(2,'0');
+       if (_cycleDay === _hPedDay) return true;
+      }
+     }
+    }
+    return false;
+   } catch(_) { return false; }
+  }
 
   // ── Próximo día de pedido (delegado o fallback local) ──
   function _nextOrder(diasPedido, from, prov){
@@ -47323,6 +47361,35 @@ function _confirmBorrarCuenta(id) {
    var map = (typeof State !== 'undefined' && State.get && State.get.eventosCompletados) ? State.get.eventosCompletados() : null;
    if (map && map[k]) return true;
    try { var ls = JSON.parse(localStorage.getItem('_dwyEvDone') || '{}'); if (ls[k]) return true; } catch(_){}
+   // v1.3.1904 FIX SYNC MULTI-DEVICE: para predichos, buscar historialPedido _recibido
+   //   del mismo provId+día. El LDC escribe 'ent_ped_XXXX' pero el predicho tiene
+   //   clave 'ent__predent_provId_p0' → claves distintas → Samsung no ve el done.
+   var _pedId = ev && ev.pedido && ev.pedido.id;
+   if (_pedId && (String(_pedId).indexOf('_predent_') === 0 || String(_pedId).indexOf('_predicho_') === 0)) {
+    var _provId = ev.pedido.provId || (ev.pedido && ev.pedido.provId);
+    if (_provId) {
+     var _hist = (State.get && State.get.historialPedidos) ? (State.get.historialPedidos() || []) : [];
+     // Fecha del ciclo: fecha del pedido original (ev.pedido.fecha)
+     var _cycleDay = ev.pedido.fecha ? new Date(ev.pedido.fecha) : null;
+     var _cycleDayStr = _cycleDay ? (_cycleDay.getFullYear() + '-' + String(_cycleDay.getMonth()+1).padStart(2,'0') + '-' + String(_cycleDay.getDate()).padStart(2,'0')) : null;
+     for (var _dii = 0; _dii < _hist.length; _dii++) {
+      var _dh = _hist[_dii];
+      if (!_dh || _dh.deleted || !_dh._recibido || _dh.provId !== _provId) continue;
+      // Coincide si el historial tiene la misma fecha de pedido que el ciclo predicho
+      if (_cycleDayStr && _dh.fecha) {
+       var _dhD = new Date(_dh.fecha);
+       var _dhDStr = _dhD.getFullYear() + '-' + String(_dhD.getMonth()+1).padStart(2,'0') + '-' + String(_dhD.getDate()).padStart(2,'0');
+       if (_dhDStr === _cycleDayStr) return true;
+      }
+      // O si la recepción fue el mismo día que la entrega del ciclo
+      if (_dh._recibidoAt && ev.fecha) {
+       var _rFecha = new Date(_dh._recibidoAt);
+       var _evFecha = ev.fecha instanceof Date ? ev.fecha : new Date(ev.fecha);
+       if (_rFecha.toDateString() === _evFecha.toDateString()) return true;
+      }
+     }
+    }
+   }
    return false;
   } catch(_) { return false; }
  }
