@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1893";
+ var CURRENT_CACHE = "dashwey-v1-3-1894";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1893</title>
+<title>Dashwey v1.3.1894</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23518,7 +23518,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1893';
+ const _APP_VERSION = 'v1.3.1894';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -27276,6 +27276,131 @@ const ui = (() => {
   }
  }
 
+ // v1.3.1894 — Herramienta permanente: reconstruye eventIds de un cierre por rango horario.
+ //   Portada desde la sesión de reparación de mayo (27 may). No toca ventas ni saldos.
+ //   Uso: _fixRecalcCierreDia('2026-05-23') → reconstruye cierre del 23 may.
+ //        _fixRecalcCierreDia('2026-05-23', { dryRun: true }) → simula sin escribir.
+ window._fixRecalcCierreDia = function(dateKey, opts) {
+  try {
+   opts = opts || {};
+   var dryRun = opts.dryRun === true;
+   if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    console.warn('[FixCierre] dateKey inválido. Formato: YYYY-MM-DD'); return;
+   }
+   if (!window._DashweyInitialSyncDone) {
+    console.warn('[FixCierre] initialSync no terminó → abortar'); return;
+   }
+   var perfil = null;
+   try { perfil = State.get.perfil ? State.get.perfil() : null; } catch(_) {}
+   if (!perfil || !perfil.cierreCajaCuentaDestino) {
+    console.warn('[FixCierre] sin cuenta destino configurada'); return;
+   }
+   var zona = perfil.zona || 'Europe/Madrid';
+   var horarioApertura = perfil.horarioApertura || '08:00';
+   var horarioCierre = perfil.horarioCierre || '22:00';
+   var cuentaId = opts.cuentaId || perfil.cierreCajaCuentaDestino;
+   var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
+   var ventas = (State.get.ventas && State.get.ventas()) || [];
+   var _aggFn = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
+   // Determinar rango horario del día
+   var parts = dateKey.split('-');
+   var hhA = parseInt((horarioApertura||'08:00').split(':')[0], 10);
+   var mmA = parseInt((horarioApertura||'08:00').split(':')[1], 10);
+   var hhC = parseInt((horarioCierre||'22:00').split(':')[0], 10);
+   var mmC = parseInt((horarioCierre||'22:00').split(':')[1], 10);
+   var esNocturno = (hhA * 60 + mmA > hhC * 60 + mmC);
+   // Construir rango UTC desde/hasta
+   var aperturaDia = new Date(dateKey + 'T' + horarioApertura + ':00');
+   var cierreDia;
+   if (esNocturno) {
+    var nextDate = new Date(parts[0], parseInt(parts[1],10)-1, parseInt(parts[2],10)+1);
+    var nd = nextDate.getFullYear() + '-' + String(nextDate.getMonth()+1).padStart(2,'0') + '-' + String(nextDate.getDate()).padStart(2,'0');
+    cierreDia = new Date(nd + 'T' + horarioCierre + ':00');
+   } else {
+    cierreDia = new Date(dateKey + 'T' + horarioCierre + ':00');
+   }
+   var tsDesde = aperturaDia.getTime();
+   var tsHasta = cierreDia.getTime();
+   // Filtrar ventas del rango
+   var ventasDia = ventas.filter(function(v) {
+    if (!v || v.deleted || !_aggFn(v)) return false;
+    var ts = v.fecha ? new Date(v.fecha).getTime() : 0;
+    return ts >= tsDesde && ts <= tsHasta;
+   });
+   var totalVentas = ventasDia.reduce(function(s, v) {
+    return s + (typeof v.total === 'number' ? v.total : 0);
+   }, 0);
+   totalVentas = Math.round(totalVentas * 100) / 100;
+   // Encontrar cierre existente para este día
+   var jornadaLabel = dateKey;
+   var cierreExistente = cierres.find(function(c) {
+    return c && !c.deleted && c.cuentaId === cuentaId &&
+     (c.jornadaLabel === jornadaLabel || (c.fecha && c.fecha.startsWith && c.fecha.startsWith(dateKey)));
+   });
+   console.info('[FixCierre] ' + dateKey + ' → ' + ventasDia.length + ' ventas · ' + totalVentas.toFixed(2) + '€' +
+    (cierreExistente ? ' · cierre: ' + cierreExistente.id.slice(-10) : ' · SIN cierre') +
+    (dryRun ? ' [DRY RUN]' : ''));
+   if (!cierreExistente) {
+    console.warn('[FixCierre] no hay cierre para ' + dateKey + ' · usa _DashweyAutoCierreCheckBacklog para crear');
+    return { ok: false, motivo: 'sin cierre', ventas: ventasDia.length, total: totalVentas };
+   }
+   if (dryRun) {
+    console.info('[FixCierre] DRY RUN OK · sin cambios escritos');
+    return { ok: true, dryRun: true, ventas: ventasDia.length, total: totalVentas };
+   }
+   // Reconstruir cierre
+   var eventIds = cierreExistente.eventIds || { ventas: [], gastos: [], ingresos: [] };
+   eventIds.ventas = ventasDia.map(function(v) { return v.id; });
+   var update = {
+    ventas: totalVentas,
+    saldoEsperado: totalVentas,
+    saldoReal: totalVentas,
+    nVentas: ventasDia.length,
+    eventIds: eventIds
+   };
+   try { State.set.updateCierre(cierreExistente.id, update); } catch(e) {
+    console.warn('[FixCierre] error updateCierre:', e); return { ok: false, motivo: e.message };
+   }
+   try { window._DashweyMarkDirty && window._DashweyMarkDirty('cierresCaja', cierreExistente.id); } catch(_) {}
+   try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
+   console.info('[FixCierre] ✓ ' + dateKey + ' reconstruido — ' + ventasDia.length + ' eventIds · ' + totalVentas.toFixed(2) + '€');
+   return { ok: true, ventas: ventasDia.length, total: totalVentas, cierreId: cierreExistente.id };
+  } catch(e) {
+   console.error('[FixCierre] error:', e);
+   return { ok: false, motivo: e.message };
+  }
+ };
+
+ // v1.3.1894 — Botón Ajustes→Desarrollador: recalcula cierres del mes actual (últimos 30 días).
+ function _recalcCierresMesActual() {
+  if (!window._DashweyInitialSyncDone) {
+   showToast('⚠️ Sync en curso · espera unos segundos', 'warning'); return;
+  }
+  // Guard convergencia
+  try {
+   var _cv = localStorage.getItem('dashwey_convergence_state');
+   if (_cv) {
+    var _cvSt = JSON.parse(_cv);
+    if (Math.max(0, parseInt(_cvSt.fails, 10) || 0) >= 3) {
+     showToast('⚠️ Datos divergen · sync primero', 'warning'); return;
+    }
+   }
+  } catch(_) {}
+  var hoy = new Date();
+  var procesados = 0, errores = 0;
+  for (var i = 0; i < 30; i++) {
+   var d = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - i);
+   var dk = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+   var res = window._fixRecalcCierreDia(dk);
+   if (res && res.ok) procesados++;
+   else if (res && !res.ok && res.motivo !== 'sin cierre') errores++;
+  }
+  var msg = '✅ ' + procesados + ' cierres reconstruidos';
+  if (errores > 0) msg += ' · ' + errores + ' errores (ver consola)';
+  showToast(msg, errores > 0 ? 'warning' : 'success');
+  setTimeout(function(){ try { App.dash.render(); } catch(_) {} }, 800);
+ }
+
  // ── v1.3.1066: Compactación REAL — sola función que agrega todo lo >30 días ────
  function _calcStateSize() {
   try {
@@ -28432,11 +28557,13 @@ const ui = (() => {
    var cierreTsDiaContable = tzToUtc(dateKey, hhC, mmC);
 
    // Idempotencia: ¿ya hay cierre cerrado para este dateKey + cuenta?
+   // v1.3.1894: ampliar a c.fecha.startsWith(dateKey) — captura _nocta y otros IDs no canónicos.
    var cierres = (State.get.cierresCaja && State.get.cierresCaja()) || [];
    var yaExiste = cierres.some(function(c){
-    return c && !c.deleted && c.estado === 'cerrado'
-        && c.jornadaLabel === dateKey
-        && c.cuentaId === cuentaId;
+    if (!c || c.deleted || c.estado !== 'cerrado' || c.cuentaId !== cuentaId) return false;
+    if (c.jornadaLabel === dateKey) return true;
+    if (c.fecha && typeof c.fecha === 'string' && c.fecha.slice(0,10) === dateKey) return true;
+    return false;
    });
    if (yaExiste) {
     console.info('[AutoCierre/Directo] ya existe cierre cerrado para', dateKey, 'cuenta', cuentaId, '— skip');
@@ -28659,6 +28786,27 @@ const ui = (() => {
     console.info('[AutoCierre/Backlog] sin conexión → posponer hasta volver online');
     return;
    }
+   // v1.3.1894 GUARD CONVERGENCIA: no reconciliar cierres si hay divergencia activa.
+   //   Si los datos entre devices no cuadran, reconciliar con estado parcial puede
+   //   generar cierres con eventIds incompletos (causa raíz del caos de mayo).
+   try {
+    var _convRaw = localStorage.getItem('dashwey_convergence_state');
+    if (_convRaw) {
+     var _convSt = JSON.parse(_convRaw);
+     var _convFails = Math.max(0, parseInt(_convSt.fails, 10) || 0);
+     if (_convFails >= 3) {
+      console.warn('[AutoCierre/Backlog] convergencia en rojo (fails=' + _convFails + ') → posponer reconciliación');
+      return;
+     }
+    }
+   } catch(_) {}
+   // GUARD ANTI-DUPLICADO: no ejecutar si hay otra instancia corriendo
+   if (window._DashweyAutoCierreBacklogRunning) {
+    console.info('[AutoCierre/Backlog] ya en curso → skip');
+    return;
+   }
+   window._DashweyAutoCierreBacklogRunning = true;
+   setTimeout(function() { window._DashweyAutoCierreBacklogRunning = false; }, 60000);
    var perfil = null;
    try { perfil = State.get.perfil ? State.get.perfil() : null; } catch(_) {}
    if (!perfil) return;
@@ -29000,8 +29148,10 @@ const ui = (() => {
     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
    }
+   window._DashweyAutoCierreBacklogRunning = false;
    return estampados;
   } catch(e) {
+   window._DashweyAutoCierreBacklogRunning = false;
    console.warn('[Reconciliación v1.3.1405] err', e);
    return 0;
   }
@@ -30761,6 +30911,7 @@ const ui = (() => {
     label: '🔧 Utilidades',
     items: [
      { icon:'♻️', iconBg:'#D1FAE5', title:'Recalcular saldos', sub:'Reconstruye saldo cuentas desde movimientos · seguro', fn:'_recalcSaldosManual' },
+     { icon:'📅', iconBg:'#FEF3C7', title:'Recalcular cierres del mes', sub:'Reconstruye eventIds cierres rotos · últimos 30 días · seguro', fn:'_recalcCierresMesActual' },
      { icon:'📊', iconBg:'#E0F2FE', title:'Limpiar lotes FIFO', sub:'Reconstruye valorStock desde 0 · no afecta ventas', fn:'_cleanLotesStock' }
     ]
    },
@@ -32799,7 +32950,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _recalcCierresMesActual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
 })();
 
 // ══════════════════════════════════════════
