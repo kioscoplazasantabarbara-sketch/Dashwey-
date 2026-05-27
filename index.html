@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1894";
+ var CURRENT_CACHE = "dashwey-v1-3-1895";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1894</title>
+<title>Dashwey v1.3.1895</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23518,7 +23518,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1894';
+ const _APP_VERSION = 'v1.3.1895';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -74015,6 +74015,10 @@ document.addEventListener('keydown', function(e) {
   setTimeout(function() { _runCheck('post-sync'); }, 100);
   // T2
   setTimeout(function() { _runCheck('post-sync+5s'); }, CONV.T2_DELAY_MS + 100);
+  // v1.3.1894: purgar footprints caducados 1 vez por sesión (30s post-sync, no urgente)
+  setTimeout(function() {
+   try { var fb = window._DashweyFirebase; if (fb && fb.ready) _purgeStaleFootprints(fb); } catch(_) {}
+  }, 30000);
  }
 
  // Init
@@ -74024,6 +74028,10 @@ document.addEventListener('keydown', function(e) {
    CONV._t1Triggered = true;
    setTimeout(function() { _runCheck('post-sync(late)'); }, 500);
    setTimeout(function() { _runCheck('post-sync+5s(late)'); }, CONV.T2_DELAY_MS + 500);
+   // v1.3.1894: purgar footprints caducados (path late)
+   setTimeout(function() {
+    try { var fb = window._DashweyFirebase; if (fb && fb.ready) _purgeStaleFootprints(fb); } catch(_) {}
+   }, 30000);
   } else {
    window.addEventListener('dashwey:sync-state-changed', _onSyncStateChanged);
   }
@@ -74040,6 +74048,39 @@ document.addEventListener('keydown', function(e) {
   }
 
   console.info('[Dashwey/Convergence v1584] detector inicializado · deviceId=' + (window._DashweyDeviceId || 'unknown'));
+ }
+
+ // v1.3.1894 FASE 6 parcial — Purga física de footprints caducados en Firestore.
+ //   El filtro FOOTPRINT_TTL_MS ya los excluía de la comparación (L73739) pero los
+ //   documentos seguían acumulándose en devices/ → falsos positivos + Firestore reads innecesarios.
+ //   Esta función los borra físicamente 1 vez por sesión (solo footprints de OTROS devices).
+ async function _purgeStaleFootprints(fb) {
+  try {
+   var _uid = fb && fb.uid;
+   if (!_uid) return;
+   var ownDeviceId = window._DashweyDeviceId || 'unknown';
+   var fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+   var app = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+   var apps = app.getApps();
+   if (!apps.length) return;
+   var _db = fs.getFirestore(apps[0]);
+   var snap = await fs.getDocs(fs.collection(_db, 'state', _uid, 'devices'));
+   var nowMs = Date.now();
+   var purged = 0;
+   var promises = [];
+   snap.forEach(function(d) {
+    var data = d.data() || {};
+    if (d.id === ownDeviceId) return; // nunca borrar el propio
+    var ageMs = nowMs - (data.updatedAtMs || 0);
+    if (ageMs > CONV.FOOTPRINT_TTL_MS) {
+     promises.push(fs.deleteDoc(d.ref).then(function() { purged++; }).catch(function(){}));
+    }
+   });
+   await Promise.all(promises);
+   if (purged > 0) console.info('[Convergence] ' + purged + ' footprint(s) caducado(s) eliminado(s) de Firestore');
+  } catch(e) {
+   console.warn('[Convergence] purgeStale error:', e && e.message);
+  }
  }
 
  // API debug expuesta
