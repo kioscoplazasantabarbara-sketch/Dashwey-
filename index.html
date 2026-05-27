@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1896";
+ var CURRENT_CACHE = "dashwey-v1-3-1897";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1896</title>
+<title>Dashwey v1.3.1897</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -16976,6 +16976,20 @@ const State = (() => {
  //   - No bloquea si Firebase no disponible (solo canary, skip flush)
  // v1.3.1148 FIX: inicializar _DashweyHealth defensivamente (puede no existir aún
  //                 si este IIFE se evalúa antes del State IIFE que lo crea)
+
+ // v1.3.1897 — Generador de IDs único garantizado para acciones de usuario.
+ //   Problema raíz: Date.now() en el mismo ms → IDs idénticos → el segundo item
+ //   sobreescribe el primero en el array (dedup por id) = pérdida silenciosa.
+ //   Solución: contador monotónico + random suffix → unicidad absoluta en sesión.
+ //   Uso: _dwId('g') → 'g1748384523123_4_a3f7k2' (ts_counter_random)
+ if (!window._dwId) {
+  var _dwIdCounter = 0;
+  window._dwId = function(prefix) {
+   _dwIdCounter++;
+   return (prefix || '') + Date.now() + '_' + _dwIdCounter + '_' + Math.random().toString(36).slice(2, 7);
+  };
+ }
+
  window._DashweyHealth = window._DashweyHealth || {
   zombiesBlocked: 0, zombiesPurged: 0,
   lastAutoPurgeAt: 0, lastAutoPurgeCount: 0,
@@ -23529,7 +23543,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1896';
+ const _APP_VERSION = 'v1.3.1897';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -38205,8 +38219,12 @@ function _openEditMovimientoSheet(id, src) {
  }
 
  function _confirmarMovimiento() {
+  // v1.3.1897 GUARD ANTI-DOBLE-TAP: doble tap rápido = 2 movimientos duplicados.
+  if (_confirmarMovimiento._running) return;
+  _confirmarMovimiento._running = true;
+  setTimeout(function() { _confirmarMovimiento._running = false; }, 1500);
   var importe = _getMovimientoImporte();
-  if (!importe || importe <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
+  if (!importe || importe <= 0) { _confirmarMovimiento._running = false; showToast('⚠️ Introduce un importe', 'warning'); return; }
 
   var cuentaAEl = document.getElementById('mov-cuenta-a');
   var cuentaBEl = document.getElementById('mov-cuenta-b');
@@ -38272,7 +38290,7 @@ function _openEditMovimientoSheet(id, src) {
    // Solo registrar en historial si toggle activo
    if (_registrarHistorial) {
     State.set.addGasto({
-     id: 'g' + Date.now(),
+     id: window._dwId('g'),
      nombre: concepto || 'Gasto',
      categoria: 'Otros',
      tipoGasto: _tipoGasto,
@@ -38301,8 +38319,8 @@ function _openEditMovimientoSheet(id, src) {
     if (_mIT === 'caja') {
      var negocioId = State.get.settings().negocioId || 'local';
      State.set.addVenta({
-      id: 'v_caja_' + Date.now(), negocioId: negocioId,
-      ticketId: 'caja_' + Date.now(), fecha: fechaISO,
+      id: window._dwId('v_caja_'), negocioId: negocioId,
+      ticketId: window._dwId('caja_'), fecha: fechaISO,
       metodo: 'efectivo', total: importe, tipoCaja: true,
       concepto: concepto,
       items: [{ prodId: '_caja', nombre: concepto || 'Caja', qty: 1, pvp: importe, coste: 0, margen: 0 }]
@@ -38310,7 +38328,7 @@ function _openEditMovimientoSheet(id, src) {
      DashweyBus.emit('venta', { total: importe, metodo: 'efectivo' });
     } else if (_mIT === 'reembolso_proveedor') {
      State.set.addIngreso({
-      id: 'i' + Date.now(), concepto: concepto || 'Reembolso proveedor',
+      id: window._dwId('i'), concepto: concepto || 'Reembolso proveedor',
       importe: importe, fecha: fechaISO, cuentaId: cuentaA,
       tipo: 'reembolso_proveedor', recurrente: false, frecuencia: 'unico', mensualEq: importe,
       estado: _estadoMov, scope: _scopeMov, // v1.3.1001+1003
@@ -38319,7 +38337,7 @@ function _openEditMovimientoSheet(id, src) {
     } else {
      // v1.3.1489: ingreso ahora respeta Único/Recurrente (subtipo unificado)
      State.set.addIngreso({
-      id: 'i' + Date.now(), concepto: concepto || 'Ingreso',
+      id: window._dwId('i'), concepto: concepto || 'Ingreso',
       importe: importe, fecha: fechaISO, cuentaId: cuentaA,
       recurrente: recurrente,
       frecuencia: recurrente ? (recurN + '_' + recurUnit) : 'unico',
@@ -38346,14 +38364,14 @@ function _openEditMovimientoSheet(id, src) {
    var _trFrec = recurrente ? (recurN + '_' + recurUnit) : 'unico';
    var _trMens = recurrente ? mensualEq : importe;
    State.set.addGasto({
-    id: 'g' + Date.now(), nombre: '🔄 Transferencia → ' + esc(cTo ? cTo.nombre : 'cuenta'),
+    id: window._dwId('g'), nombre: '🔄 Transferencia → ' + esc(cTo ? cTo.nombre : 'cuenta'),
     categoria: 'Otros', importe: importe, mensualEq: _trMens,
     fecha: _fechaISO, fechaPago: fecha,
     cuentaId: cuentaA, recurrente: recurrente, frecuencia: _trFrec,
     tipo: 'transferencia', metaTipo: 'transfer', transferId: _transferId,
    });
    State.set.addIngreso({
-    id: 'i' + (Date.now() + 1), concepto: '🔄 Transferencia ← ' + esc(cFrom ? cFrom.nombre : 'cuenta'),
+    id: window._dwId('i'), concepto: '🔄 Transferencia ← ' + esc(cFrom ? cFrom.nombre : 'cuenta'),
     importe: importe, fecha: _fechaISO,
     cuentaId: cuentaB, recurrente: recurrente, frecuencia: _trFrec, mensualEq: _trMens,
     tipo: 'transferencia', metaTipo: 'transfer', transferId: _transferId,
@@ -38364,6 +38382,7 @@ function _openEditMovimientoSheet(id, src) {
    showToast('✅ Transferencia registrada', 'success');
 
   }
+  _confirmarMovimiento._running = false;
   _closeMovimientoSheet();
  }
 
@@ -40860,6 +40879,9 @@ function _confirmBorrarCuenta(id) {
  }
 
  function _confirmarIngreso(cuentaId) {
+  if (_confirmarIngreso._running) return;
+  _confirmarIngreso._running = true;
+  setTimeout(function() { _confirmarIngreso._running = false; }, 1500);
  const importe = _calcGet();
  if (importe <= 0) { showToast('⚠️ Introduce un importe', 'warning'); return; }
  const c = State.get.cuentas().find(x => x.id === cuentaId);
@@ -40877,7 +40899,7 @@ function _confirmBorrarCuenta(id) {
  State.set.updateCuenta(cuentaId, { saldo: (c.saldo||0) + importe }); /* v1.3.1786 FASE 3: saldo derivado */
  }
  State.set.addIngreso({
-  id: 'ing' + Date.now(), fecha: _fechaISO,
+  id: window._dwId('ing'), fecha: _fechaISO,
   concepto: document.getElementById('ingreso-concepto')?.value?.trim() || 'Ingreso manual',
   importe, cuentaId,
   estado: _estadoMov, // v1.3.1431
@@ -69871,34 +69893,21 @@ window._almCarritoOptions = function() {
  let _x0 = 0, _y0 = 0, _t0 = 0, _active = false;
 
  // Orden = prioridad (mayor a menor). Mismas capas, mismo comportamiento.
+ // v1.3.1897: _getTopLayer y _close del edge-swipe unificados con _findActiveLayer
+ // (que es la fuente de verdad del back button Android — 22 capas vs 7 anteriores).
+ // Así el gesto de borde izquierdo cierra TODOS los overlays, no solo 7.
  function _getTopLayer() {
- if (document.getElementById('modal-overlay')?.classList.contains('open'))
- return 'modal'; // v1.2.24: añadido — faltaba en swipe
- if (document.getElementById('fs-overlay')?.classList.contains('open'))
- return 'fs';
- if (document.getElementById('tickets-sheet')?.classList.contains('open'))
- return 'tickets'; // v1.2.24: añadido — faltaba en swipe
- if (document.getElementById('settings-drawer')?.classList.contains('open'))
- return 'settings';
- if (document.getElementById('whats-new-overlay')?.classList.contains('open'))
- return 'whatsnew';
- if (document.getElementById('tpv-cobro-sheet')?.classList.contains('open'))
- return 'cobro';
- if (document.getElementById('dash-period-sheet')?.classList.contains('open'))
- return 'periodpicker';
- return null;
+  try {
+   var layer = (typeof _findActiveLayer === 'function') ? _findActiveLayer() : null;
+   return layer ? layer.name : null;
+  } catch(e) { return null; }
  }
 
  function _close(layer) {
- try {
- if (layer === 'modal') App?.ui?.closeModal?.();
- if (layer === 'fs') App?.ui?.closeFs?.();
- if (layer === 'tickets') App?.tpv?.closeTickets?.();
- if (layer === 'settings') App?.ui?.closeSettings?.();
- if (layer === 'whatsnew') App?.ui?.closeWhatsNew?.();
- if (layer === 'cobro') App?.tpv?.closeCobro?.();
- if (layer === 'periodpicker') App?.dash?.closeGlobalPeriodPicker?.();
- } catch(e) {}
+  try {
+   var active = (typeof _findActiveLayer === 'function') ? _findActiveLayer() : null;
+   if (active && active.closeFn) active.closeFn();
+  } catch(e) {}
  }
 
  document.addEventListener('touchstart', (e) => {
@@ -69970,6 +69979,10 @@ window._almCarritoOptions = function() {
   // v1.3.1629 CLEANUP: nav-dial entry eliminada (función _navDialClose obsoleta).
   ['aceptar-popup-overlay',    null,             function() { try { document.getElementById('aceptar-popup-overlay')?.remove(); } catch(e) {} }, { name: 'aceptar-popup' }],
   ['.dtp-overlay',             'dtp-show',       function(el) { try { el?.classList.remove('dtp-show'); setTimeout(function(){ if (el && el.parentNode) el.parentNode.removeChild(el); }, 320); } catch(e) {} }, { name: 'dtp', passEl: true }],
+  // v1.3.1897 — overlays que faltaban en _LAYERS (back Android + edge-swipe los ignoraba)
+  ['dwy-prov-picker-ov',       'show',           function() { try { var o=document.getElementById('dwy-prov-picker-ov'); if(o){o.classList.remove('show'); setTimeout(function(){if(o.parentNode)o.parentNode.removeChild(o);},280);} } catch(e) {} }, { name: 'dpp' }],
+  ['.mds-overlay',             'visible',        function(el) { try { el.classList.remove('visible'); setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el);},320); } catch(e) {} }, { name: 'mds', passEl: true }],
+  ['wrpOverlay',               'open',           function() { try { var o=document.getElementById('wrpOverlay'); if(o){o.classList.remove('open'); setTimeout(function(){if(o.parentNode)o.parentNode.removeChild(o);},320);} } catch(e) {} }, { name: 'wrapped' }],
   // ── Sheets / overlays con prioridad alta ──
   ['cm-summary-overlay',       'cm-summary-open', function() { try { window._closeCmSummary?.(); } catch(e) {} },             { name: 'cm-summary' }],
   ['alm-center-overlay',       'alm-open',       function() { try { window._closeAlmOverlay?.(); } catch(e) {} },             { name: 'alm-center' }],
