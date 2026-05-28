@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1913";
+ var CURRENT_CACHE = "dashwey-v1-3-1914";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1913</title>
+<title>Dashwey v1.3.1914</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8905,6 +8905,7 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
 .sd-chip.sd-chip-active {
  background: var(--red); border-color: var(--red); color: #fff;
 }
+.sd-chip-xs { font-size: 10px !important; padding: 2px 7px !important; }
 /* Color picker chips — círculos de color sólido */
 .sd-color-chip {
  width: 32px; height: 32px; border-radius: 50%; border: 2.5px solid transparent;
@@ -16366,6 +16367,8 @@ const State = (() => {
  // El stock se actualiza solo cuando el usuario completa la comprobación (status→'checked').
  pendingOrders: [],
  period: {type:'month', label:'Este mes', offset:0},
+ // v1.3.1914: periodo por tarjeta del Dashboard (null = usar periodo global)
+ cardPeriods: { rendimiento: null, compras: null, 'flujo-caja': null, agenda: null },
  settings: {
  notifOn: true,
  iaOn: true,
@@ -18079,6 +18082,7 @@ const State = (() => {
  selectedProv: () => _state.selectedProv,
  pendingOrders: () => _nd(_state.pendingOrders, 'pendingOrders'),
  period: () => _state.period,
+ cardPeriods: () => _state.cardPeriods || { rendimiento: null, compras: null, 'flujo-caja': null, agenda: null },
  settings: () => _state.settings,
  perfil: () => _state.perfil || DEFAULTS.perfil,
  // activeContext — llave maestra para separar Negocio / Hogar / Inversión
@@ -18240,6 +18244,7 @@ const State = (() => {
  try { window.DashweyBus && window.DashweyBus.emit('pedido'); } catch(_) {}
  },
  period: (v) => { _state.period = v; save(); },
+ cardPeriods: (v) => { _state.cardPeriods = Object.assign({rendimiento:null,compras:null,'flujo-caja':null,agenda:null}, _state.cardPeriods||{}, v); save(); },
  settings: (v) => {
   // v1.3.1420 FALLA-1 FIX: misma protección que perfil
   if (v && v.notifPrefs) { v.notifPrefs = Object.assign({}, _state.settings?.notifPrefs||{}, v.notifPrefs); }
@@ -23589,7 +23594,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1913';
+ const _APP_VERSION = 'v1.3.1914';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -50819,6 +50824,23 @@ function _confirmBorrarCuenta(id) {
    }
   }
  } catch(_) {}
+ // v1.3.1914: aplicar periodo de la tarjeta si tiene uno configurado
+ try {
+  var _cp = State.get.cardPeriods ? State.get.cardPeriods() : {};
+  var _cardP = _cp ? _cp[cardId] : null;
+  if (_cardP && _cardP.type) {
+   var _curP = State.get.period ? State.get.period() : null;
+   // Solo aplicar si el periodo es diferente al actual (evita re-renders innecesarios)
+   if (!_curP || _curP.type !== _cardP.type || (_curP.offset||0) !== (_cardP.offset||0)) {
+    State.set.period({ type: _cardP.type, label: _cardP.label || _cardP.type, offset: _cardP.offset || 0 });
+    // Actualizar el label del título del periodo en el header
+    try {
+     var _ptBtn = document.getElementById('dash-title-period-btn');
+     if (_ptBtn) _ptBtn.textContent = _cardP.label || _cardP.type;
+    } catch(_) {}
+   }
+  }
+ } catch(_cpE) {}
  try { _snapRenderCard(cardId); } catch(_e) {}
  // v1.3.1102: trigger cambio de tarjeta ELIMINADO — solo sincronizamos al abrir app + pull-down
  }
@@ -50838,6 +50860,91 @@ function _confirmBorrarCuenta(id) {
  cont.querySelectorAll('.card[data-card-id]').forEach(function(card) {
  _snapObserver.observe(card);
  });
+
+ // v1.3.1914 — Swipe horizontal en Dashboard = navegar en el tiempo
+ // Swipe derecha → periodo anterior | Swipe izquierda → periodo siguiente
+ // El "paso" depende del tipo de periodo activo (today=1día, week=1sem, month=1mes, year=1año)
+ (function() {
+  var _dSwipeX = 0, _dSwipeY = 0, _dSwipeActive = false;
+  var cont2 = document.getElementById('dash-cards-container');
+  if (!cont2) return;
+
+  cont2.addEventListener('touchstart', function(e) {
+   if (e.touches.length !== 1) return;
+   _dSwipeX = e.touches[0].clientX;
+   _dSwipeY = e.touches[0].clientY;
+   _dSwipeActive = true;
+  }, { passive: true });
+
+  cont2.addEventListener('touchmove', function(e) {
+   if (!_dSwipeActive || e.touches.length !== 1) return;
+   var adx = Math.abs(e.touches[0].clientX - _dSwipeX);
+   var ady = Math.abs(e.touches[0].clientY - _dSwipeY);
+   // Si claramente vertical, cancelar
+   if (ady > adx * 1.5 && ady > 15) _dSwipeActive = false;
+  }, { passive: true });
+
+  cont2.addEventListener('touchend', function(e) {
+   if (!_dSwipeActive) return;
+   _dSwipeActive = false;
+   var dx = e.changedTouches[0].clientX - _dSwipeX;
+   var dy = e.changedTouches[0].clientY - _dSwipeY;
+   var adx = Math.abs(dx), ady = Math.abs(dy);
+   // Umbral: 50px horizontal, ratio 1.5:1
+   if (adx < 50 || ady > adx * 0.7) return;
+   // dx > 0 = swipe derecha = PASADO (offset -1)
+   // dx < 0 = swipe izquierda = FUTURO (offset +1)
+   var dir = dx > 0 ? -1 : 1;
+   try {
+    var p = State.get.period ? State.get.period() : null;
+    if (!p || !p.type || p.type === 'custom') return;
+    var newOff = (p.offset || 0) + dir;
+    // Clamp: no ir más allá del futuro (offset > 0) — limitado a +1 (mañana/próx semana)
+    // Para tipo 'today', solo permitir offset en [-365, 1]
+    // Para otros, [-24, 1]
+    var maxOff = p.type === 'today' ? 1 : 1;
+    var minOff = p.type === 'today' ? -365 : (p.type === 'week' ? -52 : p.type === 'month' ? -24 : -10);
+    newOff = Math.max(minOff, Math.min(maxOff, newOff));
+    // Calcular nuevo label
+    var _now = new Date();
+    var _label = '';
+    if (p.type === 'today') {
+     var _d = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate() + newOff);
+     if (newOff === 0) _label = 'Hoy';
+     else if (newOff === 1) _label = 'Mañana';
+     else if (newOff === -1) _label = 'Ayer';
+     else {
+      var _days = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+      var _months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      _label = _days[_d.getDay()] + ' ' + _d.getDate() + ' ' + _months[_d.getMonth()];
+     }
+    } else if (p.type === 'week') {
+     if (newOff === 0) _label = 'Esta semana';
+     else if (newOff === -1) _label = 'Semana pasada';
+     else if (newOff === 1) _label = 'Próx. semana';
+     else _label = 'Semana ' + (newOff < 0 ? Math.abs(newOff) + ' atrás' : newOff + ' adelante');
+    } else if (p.type === 'month') {
+     var _mNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+     var _mIdx = (_now.getMonth() + newOff % 12 + 12) % 12;
+     var _yOff = Math.floor((_now.getMonth() + newOff) / 12);
+     if (newOff === 0) _label = 'Este mes';
+     else if (newOff === -1) _label = 'Mes pasado';
+     else _label = _mNames[_mIdx] + (_yOff !== 0 ? ' ' + (_now.getFullYear() + _yOff) : '');
+    } else if (p.type === 'year') {
+     var _yr = _now.getFullYear() + newOff;
+     _label = newOff === 0 ? 'Este año' : String(_yr);
+    }
+    var newP = { type: p.type, label: _label || p.label, offset: newOff };
+    State.set.period(newP);
+    // Actualizar label en header
+    var _ptBtn = document.getElementById('dash-title-period-btn');
+    if (_ptBtn) _ptBtn.textContent = _label || p.label;
+    // Re-render con haptic
+    try { if (typeof Utils !== 'undefined' && Utils.triggerHaptic) Utils.triggerHaptic('light'); } catch(_) {}
+    if (typeof _snapDoRenderAll === 'function') _snapDoRenderAll();
+   } catch(e) { console.warn('[DashSwipe]', e && e.message); }
+  }, { passive: true });
+ })();
 
  // v1.3.283: DASH-07 — fallback scroll listener con getBoundingClientRect
  // IntersectionObserver es unreliable en Android WebView con scroll-snap-type
@@ -53845,27 +53952,71 @@ window._sdOpenCardManager = function() {
  var hidden = [];
  try { hidden = (window.App && App.State ? App.State.get.hiddenCards() : State.get.hiddenCards()); } catch(_e) {}
 
+ var cardPeriods = {};
+ try { cardPeriods = State.get.cardPeriods ? (State.get.cardPeriods() || {}) : {}; } catch(_) {}
+ var PERIOD_OPTS = [
+  { val: 'today', label: 'Hoy' },
+  { val: 'week',  label: 'Sem' },
+  { val: 'month', label: 'Mes' },
+  { val: 'year',  label: 'Año' },
+ ];
  var rows = CARD_IDS.map(function(id) {
- var visible = hidden.indexOf(id) === -1;
- var label = CARD_LABELS[id] || id;
- var icon = CARD_ICONS[id] || '📊';
- return (
- '<div class="sd-row sd-toggle-row">' +
- '<div class="sd-icon" style="background:#F8FAFF">' + icon + '</div>' +
- '<div class="sd-info"><div class="sd-title">' + label + '</div></div>' +
- '<button class="sd-toggle' + (visible ? ' on' : '') + '"' +
- ' data-card="' + id + '"' +
- ' onclick="window._sdToggleCard(this.dataset.card,this)">' +
- '</button>' +
- '</div>'
- );
+  var visible = hidden.indexOf(id) === -1;
+  var label = CARD_LABELS[id] || id;
+  var icon = CARD_ICONS[id] || '📊';
+  var cardP = cardPeriods[id];
+  var cardPType = cardP && cardP.type ? cardP.type : '';
+  var chips = '<button class="sd-chip sd-chip-xs' + (!cardPType ? ' sd-chip-active' : '') + '" data-card-id="' + id + '" data-period-type="" onclick="window._sdSetCardPeriod(this)" style="font-size:10px;padding:2px 7px">Global</button>';
+  chips += PERIOD_OPTS.map(function(po) {
+   return '<button class="sd-chip sd-chip-xs' + (cardPType === po.val ? ' sd-chip-active' : '') + '" data-card-id="' + id + '" data-period-type="' + po.val + '" onclick="window._sdSetCardPeriod(this)" style="font-size:10px;padding:2px 7px">' + po.label + '</button>';
+  }).join('');
+  return (
+   '<div class="sd-row sd-toggle-row" style="flex-wrap:wrap;align-items:flex-start;padding-bottom:10px">' +
+   '<div style="display:flex;align-items:center;gap:8px;width:100%">' +
+   '<div class="sd-icon" style="background:#F8FAFF">' + icon + '</div>' +
+   '<div class="sd-info"><div class="sd-title">' + label + '</div></div>' +
+   '<button class="sd-toggle' + (visible ? ' on' : '') + '" data-card="' + id + '" onclick="window._sdToggleCard(this.dataset.card,this)"></button>' +
+   '</div>' +
+   '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:42px;margin-top:4px">' + chips + '</div>' +
+   '</div>'
+  );
  }).join('');
-
  var html = '<div class="ss-section-lbl">Tarjetas del Dashboard</div>' + rows;
  App.ui.sdSubOpen('Gestionar tarjetas', html);
  } catch(e) {
  console.error('[sdOpenCardManager]', e);
  }
+};
+
+// ── _sdSetCardPeriod v1.3.1914 — guarda el periodo específico de cada tarjeta ──
+window._sdSetCardPeriod = function(btn) {
+ if (!btn) return;
+ var cardId = btn.dataset.cardId;
+ var periodType = btn.dataset.periodType; // '' = global
+ if (!cardId) return;
+ var PERIOD_LABELS = { today: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' };
+ var newP = periodType ? { type: periodType, label: PERIOD_LABELS[periodType] || periodType, offset: 0 } : null;
+ try {
+  var update = {};
+  update[cardId] = newP;
+  State.set.cardPeriods(update);
+ } catch(e) { console.warn('[_sdSetCardPeriod]', e); }
+ // Actualizar chips del grupo
+ var container = btn.closest('.sd-row');
+ if (container) {
+  container.querySelectorAll('[data-card-id="' + cardId + '"]').forEach(function(b) {
+   b.classList.toggle('sd-chip-active', b.dataset.periodType === periodType);
+  });
+ }
+ // Si esta tarjeta está activa ahora, aplicar el periodo inmediatamente
+ try {
+  if (typeof _activeCardId !== 'undefined' && _activeCardId === cardId && newP) {
+   State.set.period(newP);
+   var _ptBtn = document.getElementById('dash-title-period-btn');
+   if (_ptBtn) _ptBtn.textContent = newP.label;
+   if (typeof _snapDoRenderAll === 'function') _snapDoRenderAll();
+  }
+ } catch(_) {}
 };
 
 // ── _sdToggleCard v1.3.260 ─────────────────────────────────────────
