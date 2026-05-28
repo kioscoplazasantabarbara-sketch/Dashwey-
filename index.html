@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1908";
+ var CURRENT_CACHE = "dashwey-v1-3-1909";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1908</title>
+<title>Dashwey v1.3.1909</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -8064,6 +8064,23 @@ body:not([data-tab="0"]) #tpv-qg-picker { display: none !important; }
  border-color: var(--red);
  background: linear-gradient(var(--red-s), var(--red-s)), var(--surface);
 }
+/* v1.3.1909 — Badges financieros catálogo */
+.alm-art-badges{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px}
+.alm-art-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:20px;font-size:9px;font-weight:var(--fw-bold);letter-spacing:.02em;white-space:nowrap;line-height:1.4}
+.alm-art-badge svg{flex-shrink:0}
+.badge-fast{background:#FFF3E0;color:#E65100}
+.badge-slow{background:#F3E5F5;color:#6A1B9A}
+.badge-margin{background:#E8F5E9;color:#1B5E20}
+.badge-lowstock{background:#FFF8E1;color:#F57F17}
+.badge-star{background:#FFF9C4;color:#F57F17}
+.badge-urgent{background:#FFEBEE;color:#B71C1C}
+.badge-lowmarg{background:#FBE9E7;color:#BF360C}
+.badge-must{background:#E8EAF6;color:#283593}
+.badge-dead{background:#ECEFF1;color:#546E7A}
+.badge-impulse{background:#FCE4EC;color:#880E4F}
+.badge-up{background:#E0F7FA;color:#006064}
+.badge-down{background:#F3E5F5;color:#4A148C}
+
 .alm-cat-item.lp-active { transform: scale(0.96); border-color: var(--red); }
 .alm-cat-thumb {
  width: 44px; height: 44px; border-radius:var(--r-sm2);
@@ -23570,7 +23587,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1908';
+ const _APP_VERSION = 'v1.3.1909';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -56688,7 +56705,8 @@ const alm = (() => {
   //   sync Loyverse, el contenedor quedaba en estado inconsistente (nodo a medio
   //   actualizar) → "mancha edge-to-edge" persistente en ese item. Confirmado: el
   //   outerHTML mostraba "(1 ud/bulto)" cuando el dato real ya era 200.
-  const newHash = `${sel}||${q}||${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto||'')+(p.cat||'')+'|'+(p.udscaja||'')+'|'+(p.stockMinimo||'')).join(',')}||${carritoStr}||po:${_poHash}`;
+  var _ventasHash = (State.get.ventas ? State.get.ventas().length : 0);
+const newHash = `${sel}||${q}||${prods.map(p=>p.id+p.nombre+p.precioCompra+p.iva+p.pvp+p.e+(p.foto||'')+(p.cat||'')+'|'+(p.udscaja||'')+'|'+(p.stockMinimo||'')).join(',')}||${carritoStr}||po:${_poHash}||v:${_ventasHash}`;
   // Controlar alm-empty antes del hash guard
   // v1.3.1215: Estado 1 (sin proveedores) → empty-no-prov; Estado 2 → empty (sin artículos)
   // v1.3.1482 BUG-AUD-18 FIX: filtrar placeholders bb_ vacíos — asimetría con
@@ -56776,6 +56794,147 @@ function _parseIva(iva) {
  return isNaN(n) ? 10 : n;
 }
 
+
+'use strict';
+
+// Simular funciones del contexto
+function _calcMargenProd(p) { return { valid: true, mg: 35 }; }
+
+var _badgeStatsCache = null;
+var _badgeStatsCacheKey = '';
+
+function _buildBadgeStats() {
+ try {
+  var ventas = (State.get.ventas ? State.get.ventas() : []).filter(function(v){return v&&!v.deleted;});
+  var productos = (State.get.productos ? State.get.productos() : []).filter(function(p){return p&&!p.deleted;});
+  var cacheKey = ventas.length + '_' + productos.length;
+  if (_badgeStatsCache && _badgeStatsCacheKey === cacheKey) return _badgeStatsCache;
+ try {
+  var ahora = Date.now();
+  var MS30 = 30 * 24 * 60 * 60 * 1000;
+  var MS60 = 60 * 24 * 60 * 60 * 1000;
+
+  var stats = {};
+  ventas.forEach(function(v) {
+   var ts = v.fecha ? new Date(v.fecha).getTime() : 0;
+   var en30 = (ahora - ts) <= MS30;
+   var en60 = (ahora - ts) <= MS60;
+   if (!en60) return;
+   var items = Array.isArray(v.items) ? v.items : [];
+   items.forEach(function(it) {
+    if (!it || !it.prodId) return;
+    var pid = it.prodId;
+    if (!stats[pid]) stats[pid] = { qty30:0, qty60:0, rev30:0, rev60:0 };
+    var q = Number(it.qty) || 0;
+    var r = q * (Number(it.pvp) || 0);
+    if (en30) { stats[pid].qty30 += q; stats[pid].rev30 += r; }
+    stats[pid].qty60 += q; stats[pid].rev60 += r;
+   });
+  });
+
+  var qtys = Object.values(stats).map(function(s){ return s.qty30; })
+   .filter(function(q){ return q > 0; })
+   .sort(function(a,b){ return a-b; });
+  var p33 = qtys.length ? qtys[Math.floor(qtys.length * 0.33)] : 0;
+  var p66 = qtys.length ? qtys[Math.floor(qtys.length * 0.66)] : 0;
+  var p80 = qtys.length ? qtys[Math.floor(qtys.length * 0.80)] : 0;
+
+  productos.forEach(function(p) {
+   var _mg = _calcMargenProd(p);
+   if (!stats[p.id]) stats[p.id] = { qty30:0, qty60:0, rev30:0, rev60:0 };
+   stats[p.id].mg = _mg.valid ? _mg.mg : null;
+   stats[p.id].stockMin = p.stockMinimo || 0;
+   stats[p.id].pvp = p.pvp || 0;
+  });
+
+  _badgeStatsCache = { stats: stats, p33: p33, p66: p66, p80: p80 };
+  _badgeStatsCacheKey = cacheKey;
+  return _badgeStatsCache;
+ } catch(e) {
+  return null;
+ }
+}
+
+// SVGs como constantes separadas — sin anidación problemática
+var _BADGE_SVG_FAST     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
+var _BADGE_SVG_SLOW     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+var _BADGE_SVG_MARGIN   = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+var _BADGE_SVG_LOWSTOCK = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+var _BADGE_SVG_STAR     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+var _BADGE_SVG_URGENT   = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+var _BADGE_SVG_LOWMARG  = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>';
+var _BADGE_SVG_MUST     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+var _BADGE_SVG_DEAD     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+var _BADGE_SVG_IMPULSE  = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+var _BADGE_SVG_UP       = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>';
+var _BADGE_SVG_DOWN     = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>';
+
+function _buildBadgesHtml(prodId, mg) {
+ try {
+  var data = _buildBadgeStats();
+  if (!data) return '';
+  var s = data.stats[prodId];
+  if (!s) return '';
+  var p33 = data.p33, p66 = data.p66, p80 = data.p80;
+  var badges = [];
+  var qty30 = s.qty30 || 0;
+  var qty60 = s.qty60 || 0;
+  var qty31_60 = qty60 - qty30;
+  var mgVal = (mg !== null && mg !== undefined) ? mg : s.mg;
+  var tendencia = (qty30 > 0 && qty31_60 > 0) ? (qty30 / qty31_60) : null;
+
+  function _addBadge(svg, cls, label) {
+   if (badges.length >= 2) return;
+   badges.push('<span class="alm-art-badge ' + cls + '">' + svg + label + '</span>');
+  }
+
+  // Urgente / poco stock
+  if (s.stock !== undefined && s.stock !== null && s.stock <= 0 && qty30 > 0) {
+   _addBadge(_BADGE_SVG_URGENT, 'badge-urgent', 'Reposición urgente');
+  } else if (s.stockMin > 0 && s.stock !== null && s.stock !== undefined && s.stock > 0 && s.stock <= s.stockMin) {
+   _addBadge(_BADGE_SVG_LOWSTOCK, 'badge-lowstock', 'Poco stock');
+  }
+  // Estrella
+  if (p80 > 0 && qty30 >= p80 && mgVal !== null && mgVal >= 25) {
+   _addBadge(_BADGE_SVG_STAR, 'badge-star', 'Producto estrella');
+  } else if (qty30 > 0 && qty31_60 > 0 && Math.abs(qty30 - qty31_60) / Math.max(qty30, qty31_60) < 0.2 && p33 > 0 && qty30 >= p33) {
+   _addBadge(_BADGE_SVG_MUST, 'badge-must', 'Imprescindible');
+  }
+  // Tendencia
+  if (tendencia !== null) {
+   if (tendencia >= 1.3) _addBadge(_BADGE_SVG_UP,   'badge-up',   'Tendencia al alza');
+   else if (tendencia <= 0.7) _addBadge(_BADGE_SVG_DOWN, 'badge-down', 'Cayendo ventas');
+  }
+  // Velocidad
+  if (p66 > 0 && qty30 >= p66) {
+   _addBadge(_BADGE_SVG_FAST, 'badge-fast', 'Se vende rapido');
+  } else if (qty30 === 0 && qty60 === 0) {
+   _addBadge(_BADGE_SVG_DEAD, 'badge-dead', 'Sin ventas');
+  } else if (p33 > 0 && qty30 < p33 && qty30 > 0) {
+   _addBadge(_BADGE_SVG_SLOW, 'badge-slow', 'Se vende lento');
+  }
+  // Margen
+  if (mgVal !== null) {
+   if (mgVal >= 40) {
+    _addBadge(_BADGE_SVG_MARGIN, 'badge-margin', 'Margen alto');
+   } else if (p66 > 0 && qty30 >= p66) {
+    _addBadge(_BADGE_SVG_LOWMARG, 'badge-lowmarg', 'Mucha venta, bajo margen');
+   }
+  }
+  // Impulso
+  if (s.pvp > 0 && s.pvp <= 1.5 && p66 > 0 && qty30 >= p66) {
+   _addBadge(_BADGE_SVG_IMPULSE, 'badge-impulse', 'Compra impulsiva');
+  }
+
+  if (!badges.length) return '';
+  return '<div class="alm-art-badges">' + badges.join('') + '</div>';
+ } catch(e) {
+  return '';
+ }
+}
+
+ window._DashweyBadgeStats = _buildBadgeStats;
+
  function _buildCatInlineItem(p, staggerIdx) {
  const nc = _ordenCarrito[p.id] || 0;
  const precioBase = p.precioCompra || 0;
@@ -56852,6 +57011,7 @@ function _parseIva(iva) {
  '<div class="alm-cat-name">' + esc(p.nombre) + '<span style="font-size:var(--fs-2xs);font-weight:var(--fw-reg);color:var(--ink-soft);margin-left:5px">(' + uc + ' ud' + (uc!==1?'s':'') + '/bulto)</span></div>' +
  '<div class="alm-cat-meta1" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + metaLine + '</div>' +
  marginLine +
+ ' + (typeof _buildBadgesHtml === 'function' ? _buildBadgesHtml(p.id, mg) : '') +
  '</div>' +
  '<div class="alm-cat-right">' + rightHtml + '</div>' +
  '</div>';
