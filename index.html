@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1924";
+ var CURRENT_CACHE = "dashwey-v1-3-1925";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1924</title>
+<title>Dashwey v1.3.1925</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23694,7 +23694,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1924';
+ const _APP_VERSION = 'v1.3.1925';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57421,6 +57421,7 @@ function _parseIva(iva) {
  // v1.3.1920 — Sistema de pestañas del Almacén (Nuevo pedido / Catálogo)
  var _almTabView = 'catalogo'; // default: catalogo
  var _unitSheetProdId = null;
+ var _unitSheetOpenedAt = 0; // v1.3.1925: guard ghost click
 
  function _setAlmTabView(view) {
   if (view !== 'pedido' && view !== 'catalogo') return;
@@ -57448,8 +57449,7 @@ function _parseIva(iva) {
   if (!prodId) return false;
   var sheet = document.getElementById('alm-unit-sheet');
   var backdrop = document.getElementById('alm-unit-sheet-backdrop');
-  console.warn('[Dashwey/SHEET] sheet=' + !!sheet + ' backdrop=' + !!backdrop);
-  if (!sheet || !backdrop) { console.warn('[Dashwey/SHEET] elementos NO existen en DOM'); return false; }
+  if (!sheet || !backdrop) return false;
   _unitSheetProdId = prodId;
   var p = State.get.prod(prodId);
   if (!p) return false;
@@ -57457,17 +57457,22 @@ function _parseIva(iva) {
   if (tEl) tEl.textContent = (p.nombre || 'Producto') + ' — Unidades';
   var inp = document.getElementById('alm-unit-input');
   if (inp) inp.value = '1';
+  // v1.3.1925: guardar timestamp para ignorar ghost clicks en _closeUnitSheet
+  _unitSheetOpenedAt = Date.now();
   sheet.classList.add('open');
   backdrop.classList.add('open');
   try { Utils.triggerHaptic('light'); } catch(_) {}
-  console.warn('[Dashwey/SHEET] modal abierto OK');
   return true;
  }
 
  function _closeUnitSheet() {
+  // v1.3.1925: ignorar ghost clicks (touchend → click sintético ~300ms después)
+  if (Date.now() - _unitSheetOpenedAt < 400) return;
   _unitSheetProdId = null;
-  document.getElementById('alm-unit-sheet').classList.remove('open');
-  document.getElementById('alm-unit-sheet-backdrop').classList.remove('open');
+  var s = document.getElementById('alm-unit-sheet');
+  var b = document.getElementById('alm-unit-sheet-backdrop');
+  if (s) s.classList.remove('open');
+  if (b) b.classList.remove('open');
  }
 
  function _unitSheetDelta(delta) {
@@ -57496,25 +57501,19 @@ function _parseIva(iva) {
  }
 
  function _catInlineTap(prodId, evt) {
- console.warn('[Dashwey/TAP] _catInlineTap prodId=' + prodId + ' tabView=' + _almTabView + ' enCarrito=' + (_ordenCarrito[prodId]||0));
  if (!prodId) return;
  const p = State.get.prod(prodId);
- if (!p) { console.warn('[Dashwey/TAP] producto no encontrado'); return; }
+ if (!p) return;
  // v1.3.1924: en pestaña Catálogo, tap → modal selector de unidades
- //   (solo si el artículo NO está ya en el carrito; si ya está, comportamiento clásico de incrementar)
  if (_almTabView === 'catalogo' && !(_ordenCarrito[prodId] > 0)) {
-  console.warn('[Dashwey/TAP] abriendo modal unidades para ' + prodId);
   var _ok = false;
-  try { _ok = _openUnitSheet(prodId); } catch(e) { console.warn('[Dashwey/TAP] _openUnitSheet ERROR: ' + (e && e.message)); }
-  // Fallback: si el modal no se pudo abrir, añadir 1 unidad directamente
+  try { _ok = _openUnitSheet(prodId); } catch(e) {}
   if (_ok === false) {
-   console.warn('[Dashwey/TAP] FALLBACK: añadiendo 1 unidad directa');
+   // Fallback: añadir 1 unidad directa si el modal no se abre
    _ordenCarrito[prodId] = (_ordenCarrito[prodId] || 0) + 1;
-   _catInlineHash = '';
-   renderCatInline();
+   _catInlineHash = ''; renderCatInline();
    try { _updateAcceptBtn(); } catch(_) {}
    try { updateBadge(); } catch(_) {}
-   try { Utils.triggerHaptic('medium'); } catch(_) {}
   }
   return;
  }
@@ -57702,7 +57701,6 @@ function _parseIva(iva) {
  }
 
  // Si el longpress NO llegó a disparar y tenemos prodId → es un tap normal
- console.warn('[Dashwey/LPEND] prodId=' + prodId + ' lpFired=' + _catInlineLpFired);
  if (!_catInlineLpFired && prodId) {
  _catInlineTap(prodId, evt);
  }
