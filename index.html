@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1929";
+ var CURRENT_CACHE = "dashwey-v1-3-1930";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1929</title>
+<title>Dashwey v1.3.1930</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23704,7 +23704,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1929';
+ const _APP_VERSION = 'v1.3.1930';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57319,21 +57319,39 @@ function _parseIva(iva) {
    var MS30 = 30*24*60*60*1000;
    var MS60 = 60*24*60*60*1000;
    var stats = {};
+   // v1.3.1930 — tracking paralelo por grupoId. Los items Loyverse de productos
+   //   agrupados llegan con prodId='_lv_xxx' (placeholder) + grupoId real. Sin
+   //   este tracking, los 48 sabores miembros muestran "Sin ventas" mientras el
+   //   grupo Gominola SÍ las tiene. Solución: agregar al groupStats y los
+   //   miembros lo heredan vía lookup en _buildBadgesHtml.
+   var groupStats = {};
    ventas.forEach(function(v) {
     var ts = v.fecha ? new Date(v.fecha).getTime() : 0;
     var en30 = (ahora - ts) <= MS30;
     if ((ahora - ts) > MS60) return;
     var items = Array.isArray(v.items) ? v.items : [];
     items.forEach(function(it) {
-     if (!it || !it.prodId) return;
-     var pid = it.prodId;
-     if (!stats[pid]) stats[pid] = {qty30:0,qty60:0,rev30:0,rev60:0};
+     if (!it) return;
      var q = Number(it.qty)||0;
      var r = q*(Number(it.pvp)||0);
-     if (en30) { stats[pid].qty30+=q; stats[pid].rev30+=r; }
-     stats[pid].qty60+=q; stats[pid].rev60+=r;
+     // Tracking por producto individual (comportamiento histórico)
+     if (it.prodId) {
+      var pid = it.prodId;
+      if (!stats[pid]) stats[pid] = {qty30:0,qty60:0,rev30:0,rev60:0};
+      if (en30) { stats[pid].qty30+=q; stats[pid].rev30+=r; }
+      stats[pid].qty60+=q; stats[pid].rev60+=r;
+     }
+     // v1.3.1930 — tracking por grupoId para herencia de badge a miembros
+     if (it.grupoId) {
+      var gid = it.grupoId;
+      if (!groupStats[gid]) groupStats[gid] = {qty30:0,qty60:0,rev30:0,rev60:0};
+      if (en30) { groupStats[gid].qty30+=q; groupStats[gid].rev30+=r; }
+      groupStats[gid].qty60+=q; groupStats[gid].rev60+=r;
+     }
     });
    });
+   // v1.3.1930 — percentiles SOLO sobre productos individuales (excluir grupos
+   //   para no inflar: un grupo agregaría qty de N miembros, falseando p80).
    var qtys = [];
    var keys = Object.keys(stats);
    for (var ki=0;ki<keys.length;ki++) { var qs=stats[keys[ki]].qty30; if(qs>0)qtys.push(qs); }
@@ -57349,7 +57367,7 @@ function _parseIva(iva) {
     stats[p.id].stockMin=p.stockMinimo||0;
     stats[p.id].pvp=p.pvp||0;
    });
-   _badgeStatsCache={stats:stats,p33:p33,p66:p66,p80:p80};
+   _badgeStatsCache={stats:stats,groupStats:groupStats,p33:p33,p66:p66,p80:p80};
    _badgeStatsCacheKey=cacheKey;
    return _badgeStatsCache;
   } catch(e) { return null; }
@@ -57358,7 +57376,26 @@ function _parseIva(iva) {
  function _buildBadgesHtml(prodId, mg) {
   try {
    var data=_buildBadgeStats(); if(!data) return '';
-   var s=data.stats[prodId]; if(!s) return '';
+   var s=data.stats[prodId];
+   // v1.3.1930 — herencia de badge para miembros de grupo: si el producto NO
+   //   tiene ventas propias (qty30=0 y qty60=0) pero pertenece a un grupoVenta
+   //   con ventas reales (caso típico de las 48 gominolas agrupadas como un
+   //   solo botón en Loyverse), usar las stats del grupo. Decisión Hung:
+   //   "no es dato real 1 a 1 articulo lo acepto" — el badge cualitativo
+   //   (imprescindible/estrella/fast) se hereda del grupo al miembro.
+   if (s && s.qty30===0 && s.qty60===0) {
+    try {
+     var prodG = State.get.prod ? State.get.prod(prodId) : null;
+     if (prodG && prodG.grupoId && data.groupStats && data.groupStats[prodG.grupoId]) {
+      var gs = data.groupStats[prodG.grupoId];
+      // Construir vista virtual con stats del grupo + metadatos del producto
+      //   (mg/stockMin/pvp del producto, qty/rev del grupo)
+      s = { qty30:gs.qty30, qty60:gs.qty60, rev30:gs.rev30, rev60:gs.rev60,
+            mg:s.mg, stockMin:s.stockMin, pvp:s.pvp, stock:s.stock };
+     }
+    } catch(_){}
+   }
+   if(!s) return '';
    var p33=data.p33, p66=data.p66, p80=data.p80;
    var qty30=s.qty30||0, qty60=s.qty60||0;
    var qty31_60=qty60-qty30;
