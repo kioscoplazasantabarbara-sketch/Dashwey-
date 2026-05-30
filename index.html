@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1925";
+ var CURRENT_CACHE = "dashwey-v1-3-1926";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1925</title>
+<title>Dashwey v1.3.1926</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23694,7 +23694,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1925';
+ const _APP_VERSION = 'v1.3.1926';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -41948,22 +41948,24 @@ function _confirmBorrarCuenta(id) {
      if (p.provId) _provConPending[p.provId]=true;
      var prov=_prov(p.provId);
      var nombre=(prov && prov.nombre) || p.provId || 'Proveedor';
-     var feOrig=_entregaPara(prov?prov.diasEntrega:[], p.date);
-     var feMid=new Date(feOrig); feMid.setHours(0,0,0,0);
-     var atras=feMid<hoy ? Math.floor((hoy-feMid)/MS_DAY) : 0;
-
-     if (_esSameDay(p.provId, fp)){
-      items.push({ ev:{tipo:'pedido_entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
-       kind:'pedido_entrega', accion:'recibir:'+p.id, titulo:'Pedido y entrega de '+nombre,
-       sub: atras>0 ? ('Vencido hace '+atras+'d · comprobar') : ('Comprobar pedido · llega '+_fmtDiaCorto(feMid)),
-       fecha: atras>0 ? feMid : hoy, atrasado: atras>0 });
-      return;
-     }
-     // entrega pendiente (pedido ya hecho, esperando recepción) → abrir para comprobar/recibir
+     // v1.3.1926 B1: el pedido YA está hecho (existe en pendings) → la acción
+     //   restante es SIEMPRE recibir, sea sameDay o no. Antes la rama sameDay
+     //   decía "Pedido y entrega" + "comprobar" cuando solo faltaba recepcionar
+     //   (confuso: sugería que también había que pedir). Además _entregaPara con
+     //   for i=1..14 saltaba el mismo día → para sameDay devolvía el SIGUIENTE
+     //   ciclo y la entrega real (el propio día del pedido) nunca marcaba vencido.
+     var _sameDayB1 = _esSameDay(p.provId, fp);
+     var feOrig = _sameDayB1 ? new Date(fp) : _entregaPara(prov?prov.diasEntrega:[], p.date);
+     var feMid = new Date(feOrig); feMid.setHours(0,0,0,0);
+     var atras = feMid<hoy ? Math.floor((hoy-feMid)/MS_DAY) : 0;
+     var _esHoyB1 = feMid.getTime() === hoy.getTime();
+     var _nItB1 = (p.items||[]).length;
      items.push({ ev:{tipo:'entrega', pedido:{id:p.id, provId:p.provId, fecha:p.date}},
       kind:'entrega', accion:'recibir:'+p.id, titulo:'Recibir pedido de '+nombre,
-      sub: atras>0 ? ('Vencida hace '+atras+'d · '+((p.items||[]).length)+' artículos') : ('Llega '+_fmtDiaCorto(feMid)+' · '+((p.items||[]).length)+' artículos · comprobar'),
-      fecha: atras>0 ? feMid : feMid, atrasado: atras>0 });
+      sub: atras>0
+         ? ('Vencida hace '+atras+'d · '+_nItB1+' artículos')
+         : (_esHoyB1 ? ('Llega hoy · '+_nItB1+' artículos') : ('Llega '+_fmtDiaCorto(feMid)+' · '+_nItB1+' artículos')),
+      fecha: feMid, atrasado: atras>0 });
     });
    } catch(_){}
 
@@ -41998,6 +42000,11 @@ function _confirmBorrarCuenta(id) {
     var provs = (S && S.get && S.get.proveedores) ? (S.get.proveedores()||[]) : [];
     // Fecha del pending real más reciente por proveedor (para saltar predichos ya cubiertos)
     var _provLatestPendCamp = {};
+    // v1.3.1926 B2: array de fechas de pedido (pending + recibidos del historial)
+    //   por provId, para detectar pedidos ADELANTADOS al ciclo. Antes el skip era
+    //   sólo por día exacto → adelantar un pedido (martes para ciclo lunes) NO
+    //   skipeaba el predicho del lunes → duplicación de entrega en la campana.
+    var _provFechasOrden = {};
     try {
      var _pendCamp = (S && S.get && S.get.pendingOrders) ? (S.get.pendingOrders()||[]) : [];
      _pendCamp.forEach(function(pp){
@@ -42006,6 +42013,16 @@ function _confirmBorrarCuenta(id) {
       _fpp.setHours(0,0,0,0);
       // v1.3.1908: mapa por día exacto (no latest)
       _provLatestPendCamp[pp.provId + '_' + _fpp.toDateString()] = _fpp;
+      (_provFechasOrden[pp.provId] = _provFechasOrden[pp.provId] || []).push(_fpp);
+     });
+     // v1.3.1926 B2: añadir también fechas del historial recibido — un pedido ya
+     //   entregado cubre el ciclo del que se adelantó (igual que un pending activo).
+     var _histB2 = (S && S.get && S.get.historialPedidos) ? (S.get.historialPedidos()||[]) : [];
+     _histB2.forEach(function(ph){
+      if (!ph || ph.deleted || !ph._recibido || !ph.provId || !ph.fecha) return;
+      var _fph = new Date(ph.fecha); if (isNaN(_fph.getTime())) return;
+      _fph.setHours(0,0,0,0);
+      (_provFechasOrden[ph.provId] = _provFechasOrden[ph.provId] || []).push(_fph);
      });
     } catch(_){}
     provs.forEach(function(p){
@@ -42027,15 +42044,37 @@ function _confirmBorrarCuenta(id) {
      }
      var _latestPend = _provLatestPendCamp[p.id] || null;
      var nombre = p.nombre || p.id;
+     // v1.3.1926 B2: marcar los pares cubiertos por algún pedido (pending o recibido)
+     //   dentro de su ventana de ciclo. Para multi-pareja (ej. lunes+jueves), el
+     //   pedido cubre el PRIMER predicho >= su fecha — no todos los predichos
+     //   dentro de cadaDias. Así adelantar un pedido cubre 1 ciclo, no varios.
+     var _coveredKeys = {};
+     try {
+      var _fechasOrd = _provFechasOrden[p.id] || [];
+      var _cadaD = 7;
+      try { if (window._DashweyProvCadaDias) _cadaD = window._DashweyProvCadaDias(p) || 7; } catch(_){}
+      for (var _io = 0; _io < _fechasOrd.length; _io++) {
+       var _fOrd = _fechasOrd[_io];
+       var _venFin = new Date(_fOrd); _venFin.setDate(_venFin.getDate() + _cadaD);
+       for (var _ip = 0; _ip < _pares.length; _ip++) {
+        var _fpi = new Date(_pares[_ip].pedido); _fpi.setHours(0,0,0,0);
+        if (_fpi.getTime() >= _fOrd.getTime() && _fpi.getTime() < _venFin.getTime()) {
+         _coveredKeys[_fpi.toDateString()] = true;
+         break;
+        }
+       }
+      }
+     } catch(_){}
      _pares.forEach(function(par, _ci){
       var fped = par.pedido, fent = par.entrega;
       if (!fped) return;
       var fpedMid = new Date(fped); fpedMid.setHours(0,0,0,0);
       if (fpedMid > horizonte) return;
-      // Saltar SOLO la fecha cubierta por un pending real (no el proveedor entero).
-      //   La sección 1 ya generó el evento del pending; este predicho sería duplicado.
-      // v1.3.1908: skip por día exacto del pendingOrder (no "todo lo anterior")
-      if (_provLatestPendCamp[p.id + '_' + fpedMid.toDateString()]) return;
+      // v1.3.1926 B2: skip si este predicho está cubierto por un pedido adelantado
+      //   (pending real o recibido del historial) dentro de la ventana del ciclo.
+      //   Antes era skip por día EXACTO → adelantar el pedido (martes para ciclo
+      //   lunes) generaba duplicación con el predicho del lunes.
+      if (_coveredKeys[fpedMid.toDateString()]) return;
       // v1.3.1903: saltar si ya hay _recibido de este proveedor ese día o el día de entrega
       var _fentC = par.entrega ? new Date(par.entrega) : null;
       if (_fentC) {
