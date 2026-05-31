@@ -747,18 +747,17 @@ html.is-apk body[data-app-ready="true"] #app {
  //   elementos del formulario son interceptados por el SO → formulario inerte.
  //   Reportado por Hung 31 may en editor de artículo tras paste en "Nombre TPV".
  //
- //   FIX: handler global en FASE DE CAPTURA. Si un touchstart llega a un
- //   elemento que NO es el input/textarea con foco, forzamos blur() del input.
+ //   FIX: handler en FASE DE CAPTURA. Si un touchend llega a un elemento que
+ //   NO es el input/textarea con foco, forzamos blur() tras setTimeout(0).
+ //   El blur se ejecuta DESPUÉS del click sintético → no reflow ANTES del tap.
  //   Esto suelta el ActionMode y restaura la respuesta al touch.
  //
- //   v1.3.1936 FIX REGRESIÓN: cambiado `touchstart` → `touchend` + setTimeout(0).
- //   En v1935 el blur se ejecutaba en touchstart, ANTES del tap → Android cerraba
- //   teclado → viewport se expandía → reflow movía elementos → el touchend caía
- //   en otro elemento. Síntoma: buscador Almacén con dropdown sugerencias, al
- //   tap una sugerencia el catálogo de fondo recibía el tap y el dropdown se
- //   perdía. AHORA: blur se ejecuta DESPUÉS del tap (touchend + setTimeout 0),
- //   el tap se procesa con el layout intacto; el blur posterior cierra teclado
- //   y libera el ActionMode pegajoso. Cumple ambos objetivos sin colisionar.
+ //   v1.3.1937 — SCOPE LIMITADO: el handler antes era global (document) y
+ //   causaba blur indeseado en otros contextos (catálogo, dashboard) — cerraba
+ //   el teclado o cambiaba foco innecesariamente. Ahora solo se activa cuando
+ //   el touch ocurre dentro de #fs-content (overlay full = editor de artículo,
+ //   editor de movimiento, ajustes). El bug del ActionMode pegajoso solo se
+ //   reportó en esos contextos, así que el scope es exacto.
  (function _dwyAttachInputRescue(){
   function setup() {
    try {
@@ -772,9 +771,14 @@ html.is-apk body[data-app-ready="true"] #app {
       if (!tgt) return;
       if (ae === tgt) return;
       if (ae.contains && ae.contains(tgt)) return;
-      // Touchend FUERA del input activo: programar blur tras el click sintético
-      // (setTimeout 0 garantiza que el tap se procese antes del blur — no reflow
-      // ANTES del click sintético).
+      // v1.3.1937: solo dentro de overlay editor full (#fs-content). Fuera
+      //   de ahí, los blurs naturales del browser ya funcionan bien.
+      var fsContent = document.getElementById('fs-content');
+      if (!fsContent) return;
+      if (!fsContent.contains(tgt)) return;
+      // Touchend FUERA del input activo, DENTRO del editor: programar blur
+      //   tras el click sintético (setTimeout 0 garantiza que el tap se procese
+      //   antes del blur — no reflow ANTES del click sintético).
       setTimeout(function(){ try { ae.blur(); } catch(_){} }, 0);
      } catch(_){}
     }, { capture: true, passive: true });
@@ -892,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1936";
+ var CURRENT_CACHE = "dashwey-v1-3-1937";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -911,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1936</title>
+<title>Dashwey v1.3.1937</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5348,10 +5352,17 @@ body.spotlight-active #bottom-tabs {
 }
 
 /* Almacén — artículos del catálogo
-   v1.3.1325: delay 50ms→30ms para reducir ventana de cards a opacity intermedia */
+   v1.3.1325: delay 50ms→30ms para reducir ventana de cards a opacity intermedia
+   v1.3.1937: SOLO en primer montaje. Tras data-mounted="1" se desactiva → no más
+     "parpadeo cascada" cada vez que se llama renderCatInline (30+ sitios). El
+     stagger se ejecuta UNA vez al entrar al Almacén; los re-renders posteriores
+     son instantáneos. Causa principal de la sensación de "inestabilidad" en alm. */
 .alm-cat-item {
  animation: staggerFadeIn 240ms var(--ease-decelerate) both;
  animation-delay: calc(var(--item-index, 0) * 30ms);
+}
+#alm-cat-inline[data-mounted="1"] .alm-cat-item {
+ animation: none;
 }
 
 /* v1.3.1212: stagger entrance para items principales del almacén */
@@ -23753,7 +23764,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1936';
+ const _APP_VERSION = 'v1.3.1937';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57330,6 +57341,15 @@ const alm = (() => {
 // Botón añadir artículo — pegado al último artículo, margen inferior para FAB
 html += '<button class="alm-prov-add-btn" onclick="try{App.alm.openNuevoArtFs();}catch(_){}" style="margin:var(--sp-1) 0 calc(var(--tab-real,68px) + 72px)"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Añadir artículo</button>';
 wrap.innerHTML = html;
+// v1.3.1937: tras el primer montaje del catálogo, deshabilitar el stagger fade-in
+//   para los re-renders sucesivos. Sin esto, cada renderCatInline (30+ sitios)
+//   re-anima toda la lista en cascada → sensación de "inestabilidad". El stagger
+//   se ejecuta SOLO al entrar al Almacén; las interacciones posteriores son
+//   instantáneas. Delay = 240ms anim + (5 cards × 30ms delay) = ~390ms; usamos
+//   500ms para asegurar que la animación completa.
+if (!wrap.dataset.mounted) {
+ setTimeout(function(){ try { wrap.dataset.mounted = '1'; } catch(_){} }, 500);
+}
 
  }
 
@@ -62600,7 +62620,7 @@ function calcIAAnalysis() {
  <input class="fi" type="number" step="0.01" id="ea-pc"
  value="${p.precioCompra||''}" placeholder="0,00"
  inputmode="decimal" enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  <span class="alm-input-suffix-label">€</span>
  </div>
  </div>
@@ -62610,7 +62630,7 @@ function calcIAAnalysis() {
  <input class="fi" type="number" step="0.01" id="ea-pvp"
  value="${p.pvp||''}" placeholder="0,00"
  inputmode="decimal" enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  <span class="alm-input-suffix-label">€</span>
  </div>
  </div>
@@ -62623,14 +62643,14 @@ function calcIAAnalysis() {
  <input class="fi" type="number" id="ea-nc"
  value="${p.stockMinimo||1}" min="1"
  inputmode="numeric" enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  </div>
  <div>
  <div class="fl">Uds/bulto</div>
  <input class="fi" type="number" id="ea-uc"
  value="${p.udscaja||12}" placeholder="12"
  inputmode="numeric" enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  </div>
  </div>
 
@@ -62652,7 +62672,7 @@ function calcIAAnalysis() {
  <input class="fi" type="text" id="ea-desc"
  value="${esc(p.descuento||'')}" placeholder="0% o 0€"
  enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  </div>
  </div>
 
@@ -62660,7 +62680,7 @@ function calcIAAnalysis() {
  <div class="fl">IVA personalizado (%)</div>
  <input class="fi" type="number" id="ea-iva-custom"
  value="${ivaCustom?ivaVal.replace('%',''):''}" placeholder="ej: 5"
- inputmode="decimal" oninput="App.alm._eaRecalc()">
+ inputmode="decimal" onchange="App.alm._eaRecalc()">
  </div>
 
  </div>
@@ -62678,7 +62698,7 @@ function calcIAAnalysis() {
  <input class="fi" type="number" id="ea-stock"
  value="${p.stockActual||0}" min="0"
  inputmode="numeric" enterkeyhint="next"
- oninput="App.alm._eaRecalc()">
+ onchange="App.alm._eaRecalc()">
  </div>
  </div>
  </div>
@@ -62959,10 +62979,14 @@ _eaRecalc();
  // v1.3.1242 FIX BUG-2: debounce var(--dur-short) — antes el innerHTML se rewriteaba en cada
  // keystroke, lo que tras 20-30 ediciones consecutivas saturaba el WebView Android
  // y se sentía como "scroll bloqueado". El debounce garantiza repaint solo tras pausa.
+ // v1.3.1937: subido a 400ms tras crash al paste reportado por Hung 31 may. Combinado
+ // con cambio oninput → onchange en campos numéricos (corta cadena del crash), el
+ // análisis solo se reescribe al blur del campo activo. Sin reescritura DOM durante
+ // el paste → ActionMode de Android no entra en estado inconsistente.
  var _eaIaDebounceTimer = null;
  function _calcIAAnalysisRunEa() {
   if (_eaIaDebounceTimer) clearTimeout(_eaIaDebounceTimer);
-  _eaIaDebounceTimer = setTimeout(_calcIAAnalysisRunEaImpl, 200);
+  _eaIaDebounceTimer = setTimeout(_calcIAAnalysisRunEaImpl, 400);
  }
  function _calcIAAnalysisRunEaImpl() {
   var box = document.getElementById('ea-ia-analysis');
