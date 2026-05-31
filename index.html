@@ -847,7 +847,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1930";
+ var CURRENT_CACHE = "dashwey-v1-3-1931";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -866,7 +866,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1930</title>
+<title>Dashwey v1.3.1931</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23704,7 +23704,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1930';
+ const _APP_VERSION = 'v1.3.1931';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51170,42 +51170,54 @@ function _confirmBorrarCuenta(id) {
     State.set.period(newP);
     // Actualizar header (título + rango de fechas)
     try { _updateDashHeader(newP); } catch(_) {}
-    // v1.3.1916 ANIMACIÓN: page-transition real (out + in)
-    // dir<0 (PASADO, swipe dx>0): card sale por derecha, entra desde izquierda
-    // dir>0 (FUTURO, swipe dx<0): card sale por izquierda, entra desde derecha
+    // v1.3.1931 ANIMACIÓN: efecto Instagram (sin hueco visible entre snapcards)
+    //   ANTES (v1916): card activa SALE → vacío 180ms → SALTA al lado opuesto →
+    //   ENTRA. El "vacío 180ms" producía un parpadeo visible.
+    //   AHORA: clonamos la card vieja como overlay; la card real se mueve al lado
+    //   opuesto SIN transition; render actualiza la card real con el contenido
+    //   del nuevo periodo (invisible aún, off-screen); animamos AMBAS a la vez:
+    //     - clon (contenido viejo): 0 → ±100% (sale en dir del swipe)
+    //     - card real (contenido nuevo): ∓100% → 0 (entra desde lado opuesto)
+    //   Resultado: ambas cards visibles simultáneamente durante la transición,
+    //   sin instante vacío. Misma sensación que swipe entre fotos de un post IG.
     try {
      var _ac = cont2.querySelector('.card[data-card-id="' + (_activeCardId||'') + '"]');
      if (!_ac) { var _allC = cont2.querySelectorAll('.card[data-card-id]'); _ac = _allC[0]||null; }
      if (_ac) {
-      var _outX = (dir < 0) ? '100%' : '-100%';   // dirección del SWIPE
-      var _inX  = (dir < 0) ? '-100%' : '100%';   // lado opuesto (entrada)
-      // Fase 1: slide OUT en la dirección del swipe (200ms)
-      _ac.style.transition = 'transform 180ms cubic-bezier(0.4,0,1,1), opacity 180ms ease';
-      _ac.style.transform = 'translateX(' + _outX + ')';
-      _ac.style.opacity = '0';
-      setTimeout(function() {
-       // Fase 2: salto INSTANTÁNEO a posición opuesta (sin transition)
-       _ac.style.transition = 'none';
-       _ac.style.transform = 'translateX(' + _inX + ')';
-       _ac.style.opacity = '0';
-       // Force reflow
-       void _ac.offsetHeight;
-       // Fase 3: slide IN desde el lado opuesto hasta 0 (380ms)
-       requestAnimationFrame(function() {
-        _ac.style.transition = 'transform 360ms cubic-bezier(0,0,0.2,1), opacity 300ms ease';
-        _ac.style.transform = 'translateX(0)';
-        _ac.style.opacity = '1';
-        setTimeout(function() { _ac.style.cssText = ''; }, 380);
-       });
-      }, 180);
+      var _outX = (dir < 0) ? '100%' : '-100%';   // clon vieja sale en dir del swipe
+      var _inX  = (dir < 0) ? '-100%' : '100%';   // card real entra desde lado opuesto
+      // Step 1: clonar la card actual (contenido viejo). Overlay posicionado encima.
+      var _clon = _ac.cloneNode(true);
+      _clon.removeAttribute('data-card-id'); // no participar en scroll-snap
+      _clon.setAttribute('data-snap-ghost', '1');
+      var _acRect = _ac.getBoundingClientRect();
+      var _contRect = cont2.getBoundingClientRect();
+      _clon.style.cssText = 'position:absolute;top:'+(_ac.offsetTop)+'px;left:0;right:0;width:100%;height:'+_acRect.height+'px;margin:0;z-index:5;pointer-events:none;transform:translateX(0);transition:none;scroll-snap-align:none;';
+      // Insertar dentro del contenedor para heredar coordenadas
+      cont2.appendChild(_clon);
+      // Step 2: posicionar card real off-screen al lado opuesto (sin transition).
+      _ac.style.transition = 'none';
+      _ac.style.transform = 'translateX(' + _inX + ')';
+      _ac.style.willChange = 'transform';
+      void _ac.offsetHeight; // force reflow
+      // Step 3: render INMEDIATO (card real recibe contenido nuevo, sigue off-screen).
+      try { if (typeof _snapDoRenderAll==='function') _snapDoRenderAll(); } catch(_){}
+      // Step 4: animar AMBAS simultáneamente (350ms cada una, mismo easing).
+      requestAnimationFrame(function() {
+       var _ease = 'cubic-bezier(0.32, 0.72, 0, 1)'; // suave tipo iOS/IG
+       _clon.style.transition = 'transform 360ms ' + _ease;
+       _clon.style.transform = 'translateX(' + _outX + ')';
+       _ac.style.transition = 'transform 360ms ' + _ease;
+       _ac.style.transform = 'translateX(0)';
+       // Cleanup tras animación (fallback 420ms — transitionend no fiable en WebView)
+       setTimeout(function() {
+        try { _clon.parentNode && _clon.parentNode.removeChild(_clon); } catch(_){}
+        _ac.style.cssText = '';
+       }, 420);
+      });
      }
     } catch(_) {}
     try { if (typeof Utils!=='undefined'&&Utils.triggerHaptic) Utils.triggerHaptic('light'); } catch(_) {}
-    // Render con debounce 50ms (animación ya visible antes del render)
-    clearTimeout(cont2._dsTimer);
-    cont2._dsTimer = setTimeout(function() {
-     try { if (typeof _snapDoRenderAll==='function') _snapDoRenderAll(); } catch(_) {}
-    }, 50);
    } catch(e) { console.warn('[DashSwipe]', e&&e.message); }
   }, { passive: true });
  })();
