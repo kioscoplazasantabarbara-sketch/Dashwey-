@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1941";
+ var CURRENT_CACHE = "dashwey-v1-3-1942";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1941</title>
+<title>Dashwey v1.3.1942</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23764,7 +23764,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1941';
+ const _APP_VERSION = 'v1.3.1942';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26576,6 +26576,155 @@ const ui = (() => {
     console.info('[Dashwey/GrupoCoherencia]', r);
    } catch(e){ showToast('⚠️ Error validando integridad de grupos: ' + e.message); }
   });
+ }
+
+ // ═══════════════════════════════════════════════════════════════════════
+ // v1.3.1942 — D4 FASE 1 INERTE · Auto-proyección recurrentes (READ-ONLY)
+ //   Helpers + dryRun + sheet diagnóstico. NO modifica datos, NO toca sync,
+ //   NO añade hook en "Confirmar pago" todavía. Solo permite VER qué pendientes
+ //   futuros se generarían si activáramos D4. Validación previa al deploy real.
+ //   4 decisiones de producto Hung confirmadas 1 jun 2026:
+ //     1. Cuándo generar = al confirmar pago anterior.
+ //     2. Cuántos meses = solo el próximo.
+ //     3. Editar importe template = actualiza futuras pendientes (no pasadas).
+ //     4. Cambiar frecuencia = borra futuras pendientes + regenera.
+ // ═══════════════════════════════════════════════════════════════════════
+
+ // Helper público: sumar N períodos (day/week/month/year) a una fecha YYYY-MM-DD
+ //   Guard de desbordamiento mensual: 31 marzo + 1 mes = 30 abril (no 1 mayo).
+ window._D4AddPeriodoSafe = function(dateStr, frecuencia) {
+  if (!dateStr || !frecuencia || frecuencia === 'unico') return null;
+  var parts = String(frecuencia).split('_');
+  var n = parseInt(parts[0], 10) || 1;
+  var unit = parts[1] || 'month';
+  var d = new Date(dateStr + 'T12:00:00Z');
+  if (isNaN(d.getTime())) return null;
+  if (unit === 'day') {
+   d.setUTCDate(d.getUTCDate() + n);
+  } else if (unit === 'week') {
+   d.setUTCDate(d.getUTCDate() + n * 7);
+  } else if (unit === 'month') {
+   var origDay = d.getUTCDate();
+   d.setUTCMonth(d.getUTCMonth() + n);
+   if (d.getUTCDate() !== origDay) d.setUTCDate(0); // último día del mes anterior
+  } else if (unit === 'year') {
+   d.setUTCFullYear(d.getUTCFullYear() + n);
+  } else {
+   return null;
+  }
+  return d.toISOString().slice(0, 10);
+ };
+
+ // Helper público: existe pendiente futuro del mismo template ya en datos?
+ window._D4ExistePendienteFuturo = function(template, items) {
+  var nextDate = window._D4AddPeriodoSafe(template.fechaPago, template.frecuencia);
+  if (!nextDate) return false;
+  var hoy = new Date().toISOString().slice(0, 10);
+  return items.some(function(g) {
+   if (!g || g.deleted) return false;
+   if (g.estado !== 'pendiente') return false;
+   if (g.fechaPago < hoy) return false;
+   if (g.parentRecurrenteId === template.id) return true;
+   if (g.nombre === template.nombre) {
+    var deltaMs = Math.abs(new Date(g.fechaPago + 'T12:00:00Z') - new Date(nextDate + 'T12:00:00Z'));
+    if (deltaMs < 7 * 86400000) return true;
+   }
+   return false;
+  });
+ };
+
+ // DryRun: calcula qué se generaría sin escribir nada
+ window._D4DryRun = function() {
+  var gastos = (App && App.State && App.State.get && App.State.get.gastosOp)
+   ? App.State.get.gastosOp().filter(function(g){ return g && !g.deleted; })
+   : [];
+  var ingresos = (App && App.State && App.State.get && App.State.get.ingresosFin)
+   ? App.State.get.ingresosFin().filter(function(i){ return i && !i.deleted; })
+   : [];
+  function _analizar(items) {
+   var templates = items.filter(function(t) {
+    return t.recurrente === true
+     && t.frecuencia
+     && t.frecuencia !== 'unico'
+     && !t.parentRecurrenteId
+     && !t.isRecurrenteInstance;
+   });
+   return templates.map(function(t) {
+    var nextDate = window._D4AddPeriodoSafe(t.fechaPago, t.frecuencia);
+    var existe = nextDate ? window._D4ExistePendienteFuturo(t, items) : false;
+    return {
+     id: t.id,
+     nombre: t.nombre,
+     frecuencia: t.frecuencia,
+     ultimoPago: t.fechaPago,
+     estado: t.estado,
+     importe: t.importe,
+     proximaFecha: nextDate || 'ERR',
+     yaExisteFuturo: existe,
+     accion: (existe || t.estado !== 'confirmado') ? 'skip' : 'GENERAR'
+    };
+   });
+  }
+  var resG = _analizar(gastos);
+  var resI = _analizar(ingresos);
+  var aGenerar = resG.concat(resI).filter(function(r){ return r.accion === 'GENERAR'; });
+  console.log('═══ D4 DRY RUN (v1.3.1942) ═══');
+  console.log('Gastos templates:', resG.length, '· Ingresos templates:', resI.length);
+  console.log('A generar:', aGenerar.length);
+  if (typeof console.table === 'function') console.table(resG.concat(resI));
+  return { gastos: resG, ingresos: resI, aGenerar: aGenerar };
+ };
+
+ // Sheet diagnóstico in-app (LESSON-053: diagnóstico > debugging ciego)
+ function _openD4DryRunSheet() {
+  var r;
+  try { r = window._D4DryRun(); }
+  catch(e) {
+   showToast('⚠️ Error en DryRun D4: ' + e.message, 'warning');
+   return;
+  }
+  var html = '<div style="padding:var(--sp-2) 16px">'
+   + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-bottom:var(--sp-3);line-height:1.5">'
+   +   '<strong>D4 · Auto-proyección recurrentes (DRY RUN)</strong><br>'
+   +   'Qué pendientes futuros se generarían si activáramos D4. '
+   +   '<strong>No se ha guardado nada.</strong>'
+   + '</div>';
+  function _seccion(titulo, lista) {
+   if (!lista.length) return '<div style="padding:var(--sp-3);color:var(--ink-soft);font-size:var(--fs-xs);text-align:center">Sin ' + titulo.toLowerCase() + ' recurrentes</div>';
+   var rows = lista.map(function(r){
+    var iconAccion = r.accion === 'GENERAR' ? '🟢' : (r.yaExisteFuturo ? '✓' : '⏸');
+    var colorAccion = r.accion === 'GENERAR' ? '#16a34a' : '#94a3b8';
+    var motivo = r.accion === 'GENERAR'
+     ? 'Sin pendiente futuro · se generaría para ' + r.proximaFecha
+     : (r.yaExisteFuturo ? 'Ya existe pendiente futuro (' + r.proximaFecha + ')' : 'Estado: ' + r.estado);
+    return '<div style="display:flex;align-items:center;gap:12px;padding:var(--sp-2_5) 0;border-bottom:1px solid var(--border-faint)">'
+     + '<div style="font-size:18px;flex:none">' + iconAccion + '</div>'
+     + '<div style="flex:1;min-width:0">'
+     +   '<div style="font-weight:600;font-size:var(--fs-sm);color:var(--ink-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (r.nombre || '—') + '</div>'
+     +   '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:2px">' + r.frecuencia + ' · último: ' + r.ultimoPago + ' · ' + Number(r.importe||0).toFixed(2) + '€</div>'
+     +   '<div style="font-size:11px;color:' + colorAccion + ';margin-top:2px">' + motivo + '</div>'
+     + '</div>'
+     + '</div>';
+   }).join('');
+   return '<div style="margin-top:var(--sp-3)"><div style="font-size:var(--fs-xs);font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:var(--sp-1)">' + titulo + ' (' + lista.length + ')</div>' + rows + '</div>';
+  }
+  html += _seccion('Gastos recurrentes', r.gastos);
+  html += _seccion('Ingresos recurrentes', r.ingresos);
+  var aGen = r.aGenerar.length;
+  html += '<div style="margin-top:var(--sp-4);padding:var(--sp-3);border-radius:var(--r-md);background:' + (aGen ? '#DCFCE7' : '#F1F5F9') + ';text-align:center">'
+   + '<div style="font-size:var(--fs-base);font-weight:700;color:' + (aGen ? '#16a34a' : '#475569') + '">'
+   +   (aGen ? '🟢 ' + aGen + ' instancia(s) a generar' : '✓ Todo al día, nada que generar')
+   + '</div>'
+   + '<div style="font-size:var(--fs-xs);color:var(--ink-soft);margin-top:4px">'
+   +   'Al activar D4, estas instancias se crearían como pendientes futuros vinculadas al template.'
+   + '</div>'
+   + '</div>';
+  html += '<div style="margin-top:var(--sp-3);padding:var(--sp-2_5) var(--sp-3);background:#FEF3C7;border-radius:var(--r-md);font-size:var(--fs-xs);color:#92400E;line-height:1.5">'
+   + '<strong>⚠️ DRY RUN</strong> · No se ha guardado nada. Para activar D4 (commit real + hook en "Confirmar pago"), siguiente deploy tras validar este reporte.'
+   + '</div>';
+  html += '</div>';
+  setFs('Recurrentes · DRY RUN (D4)', html);
+  openFs('full');
  }
 
  function _devLoyverseInspect() {
@@ -31097,6 +31246,11 @@ const ui = (() => {
    +     '<div class="sd-info"><div class="sd-title">Salud sync</div><div class="sd-sub">Diagnóstico sistema · auto-purga · métricas</div></div>'
    +     '<div class="sd-chev">›</div>'
    +   '</div>'
+   +   '<div class="sd-row" onclick="App.ui._openD4DryRunSheet()">'
+   +     '<div class="sd-icon" style="background:#FEF3C7"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 3v18"/></svg></div>'
+   +     '<div class="sd-info"><div class="sd-title">D4 · Dry Run Recurrentes</div><div class="sd-sub">Ver qué pendientes futuros se generarían (sin escribir)</div></div>'
+   +     '<div class="sd-chev">›</div>'
+   +   '</div>'
    +   '<div class="sd-row" onclick="App.ui._toggleSaldoCompare(this)">'
    +     '<div class="sd-icon" style="background:#DBEAFE"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></div>'
    +     '<div class="sd-info"><div class="sd-title">Mostrar saldo calculado</div><div class="sd-sub">Verifica convergencia: añade «Calc» bajo cada saldo</div></div>'
@@ -33206,7 +33360,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _recalcCierresMesActual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _recalcCierresMesActual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico, _openD4DryRunSheet };
 })();
 
 // ══════════════════════════════════════════
