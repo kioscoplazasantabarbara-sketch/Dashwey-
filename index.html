@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1939";
+ var CURRENT_CACHE = "dashwey-v1-3-1940";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1939</title>
+<title>Dashwey v1.3.1940</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23764,7 +23764,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1939';
+ const _APP_VERSION = 'v1.3.1940';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57606,18 +57606,138 @@ function _parseIva(iva) {
  var _unitSheetProdId = null;
  var _unitSheetOpenedAt = 0; // v1.3.1925: guard ghost click
 
- function _setAlmTabView(view) {
+ function _setAlmTabView(view, opts) {
   if (view !== 'pedido' && view !== 'catalogo') return;
+  if (view === _almTabView) return;
+  opts = opts || {};
+  var prevView = _almTabView;
+  // v1.3.1940: animación slide Instagram-style si viene de swipe
+  if (opts.animate && opts.direction) {
+   _setAlmTabViewAnimated(view, opts.direction);
+   return;
+  }
+  // Cambio sin animación (tap chip)
   _almTabView = view;
-  // Actualizar chips activos
   document.querySelectorAll('#alm-tab-bar .alm-tab-chip').forEach(function(btn) {
    btn.classList.toggle('active', btn.dataset.tab === view);
   });
-  // Re-render del catálogo con la nueva vista
   _catInlineHash = '';
   renderCatInline();
   try { Utils.triggerHaptic('selection'); } catch(_) {}
  }
+
+ // v1.3.1940 — Animación slide horizontal entre pestañas Catálogo ↔ Nuevo pedido.
+ //   Misma técnica que swipe periodos Dashboard (v1932): clon del wrapper actual
+ //   + slide simultáneo del clon (sale) y wrap real (entra desde lado opuesto).
+ //   Sin hueco visible entre vistas. El clon va a body con position:fixed
+ //   (coords del viewport) para evitar problemas de ancestros transformados.
+ function _setAlmTabViewAnimated(view, direction) {
+  var wrap = document.getElementById('alm-cat-inline');
+  if (!wrap) {
+   // Fallback sin animación si no hay wrapper
+   _almTabView = view;
+   document.querySelectorAll('#alm-tab-bar .alm-tab-chip').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.tab === view);
+   });
+   _catInlineHash = '';
+   renderCatInline();
+   return;
+  }
+  // direction: 'left' = swipe izq (sale por izq, entra por der) — catalogo→pedido
+  //            'right' = swipe der (sale por der, entra por izq) — pedido→catalogo
+  var outX = direction === 'left' ? '-100%' : '100%';
+  var inX  = direction === 'left' ? '100%' : '-100%';
+  // Step 1: clonar wrap actual con coords del viewport
+  var wrapRect = wrap.getBoundingClientRect();
+  var clon = wrap.cloneNode(true);
+  clon.removeAttribute('id');
+  clon.setAttribute('data-tab-ghost', '1');
+  clon.style.cssText = 'position:fixed;top:'+wrapRect.top+'px;left:'+wrapRect.left+'px;width:'+wrapRect.width+'px;height:'+wrapRect.height+'px;margin:0;z-index:9000;pointer-events:none;transform:translateX(0);transition:none;will-change:transform;overflow:hidden;background:var(--bg);';
+  document.body.appendChild(clon);
+  // Step 2: mover wrap real off-screen (sin transition), aplicar nueva pestaña
+  wrap.style.transition = 'none';
+  wrap.style.transform = 'translateX(' + inX + ')';
+  wrap.style.willChange = 'transform';
+  void wrap.offsetHeight; // reflow
+  // Step 3: actualizar estado + chips + render (wrap real recibe contenido nuevo off-screen)
+  _almTabView = view;
+  document.querySelectorAll('#alm-tab-bar .alm-tab-chip').forEach(function(btn) {
+   btn.classList.toggle('active', btn.dataset.tab === view);
+  });
+  _catInlineHash = '';
+  renderCatInline();
+  // Step 4: animar AMBOS simultáneamente (320ms easing iOS)
+  requestAnimationFrame(function() {
+   var ease = 'cubic-bezier(0.32, 0.72, 0, 1)';
+   clon.style.transition = 'transform 320ms ' + ease;
+   clon.style.transform = 'translateX(' + outX + ')';
+   wrap.style.transition = 'transform 320ms ' + ease;
+   wrap.style.transform = 'translateX(0)';
+   setTimeout(function() {
+    try { clon.parentNode && clon.parentNode.removeChild(clon); } catch(_){}
+    try {
+     wrap.style.transition = '';
+     wrap.style.transform = '';
+     wrap.style.willChange = '';
+    } catch(_){}
+   }, 370);
+  });
+  try { Utils.triggerHaptic('selection'); } catch(_) {}
+ }
+
+ // v1.3.1940 — Swipe horizontal Catálogo ↔ Nuevo pedido.
+ //   Handler global registrado una vez. Detecta swipe horizontal predominante
+ //   (dx>60px, |dy|<30px) en el tab Almacén (nav._cTab === 2) y cambia pestaña
+ //   con animación slide. Guards: no activo si fs-overlay, modal-overlay o
+ //   ss-overlay están abiertos. No interfiere con scroll vertical ni long-press
+ //   (handlers existentes capturan dy>10px antes de que llegue al threshold horizontal).
+ (function _installAlmSwipeTabs() {
+  if (window._almSwipeTabsInstalled) return;
+  window._almSwipeTabsInstalled = true;
+  var SWIPE_MIN = 60;       // px horizontal mínimo
+  var VERT_TOL = 30;        // px vertical tolerancia
+  var startX = 0, startY = 0, tracking = false;
+  document.addEventListener('touchstart', function(e) {
+   if (typeof nav === 'undefined' || nav._cTab !== 2) { tracking = false; return; }
+   if (!e.touches || !e.touches[0]) return;
+   // Guards: overlays abiertos
+   var fsOv = document.getElementById('fs-overlay');
+   if (fsOv && fsOv.classList.contains('open')) { tracking = false; return; }
+   var modOv = document.getElementById('modal-overlay');
+   if (modOv && modOv.classList.contains('open')) { tracking = false; return; }
+   var ssOv = document.getElementById('ss-overlay');
+   if (ssOv && ssOv.classList.contains('ss-active')) { tracking = false; return; }
+   // Unit sheet abierto
+   var uSheet = document.getElementById('alm-unit-sheet');
+   if (uSheet && uSheet.classList.contains('open')) { tracking = false; return; }
+   // Spotlight overlay abierto
+   if (window._searchOverlayOpen) { tracking = false; return; }
+   startX = e.touches[0].clientX;
+   startY = e.touches[0].clientY;
+   tracking = true;
+  }, { passive: true });
+  document.addEventListener('touchend', function(e) {
+   if (!tracking) return;
+   tracking = false;
+   if (!e.changedTouches || !e.changedTouches[0]) return;
+   var dx = e.changedTouches[0].clientX - startX;
+   var dy = e.changedTouches[0].clientY - startY;
+   // Ignorar si es scroll vertical predominante
+   if (Math.abs(dy) > VERT_TOL) return;
+   // Ignorar si no llegó al threshold horizontal
+   if (Math.abs(dx) < SWIPE_MIN) return;
+   // Ignorar si el ángulo es demasiado diagonal (más vertical que horizontal)
+   if (Math.abs(dy) > Math.abs(dx) * 0.5) return;
+   // Decidir dirección
+   if (dx < 0 && _almTabView === 'catalogo') {
+    // Swipe izquierda en Catálogo → ir a Pedido (sale por izq)
+    _setAlmTabView('pedido', { animate: true, direction: 'left' });
+   } else if (dx > 0 && _almTabView === 'pedido') {
+    // Swipe derecha en Pedido → volver a Catálogo (sale por der)
+    _setAlmTabView('catalogo', { animate: true, direction: 'right' });
+   }
+  }, { passive: true });
+ })();
 
  function _updateAlmTabBarVisibility() {
   // v1.3.1921: pestañas ahora son inline (renderizadas en _renderSugerencia)
