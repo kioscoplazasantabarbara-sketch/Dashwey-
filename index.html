@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1943";
+ var CURRENT_CACHE = "dashwey-v1-3-1944";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1943</title>
+<title>Dashwey v1.3.1944</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23764,7 +23764,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1943';
+ const _APP_VERSION = 'v1.3.1944';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26633,6 +26633,97 @@ const ui = (() => {
   });
  };
 
+ // v1.3.1944 — Crear UNA instancia recurrente (siguiente pendiente futuro) desde el template.
+ //   Safety: ID determinístico g_rec_<templateId>_<nextDate> + guard initialSync.
+ //   La instancia tiene recurrente:false + mensualEq:0 para NO duplicar prorrateo en KPIs.
+ //   El template original NUNCA se modifica.
+ //   Devuelve la instancia creada o null si skip.
+ window._D4CreateInstance = function(template, src) {
+  if (!template || !template.id || !template.frecuencia || template.frecuencia === 'unico') return null;
+  if (!window._DashweyInitialSyncDone) {
+   console.warn('[D4] Init sync incompleto, skip generación');
+   return null;
+  }
+  var nextDate = window._D4AddPeriodoSafe(template.fechaPago, template.frecuencia);
+  if (!nextDate) return null;
+  var hoy = new Date().toISOString().slice(0, 10);
+  if (nextDate < hoy) return null; // pasada, no útil
+  var newId = 'g_rec_' + template.id + '_' + nextDate;
+  // Idempotencia: si ya existe (cualquier estado, incluso deleted), skip
+  var items = src === 'gasto'
+   ? (App.State.get.gastosOp ? App.State.get.gastosOp() : [])
+   : (App.State.get.ingresosFin ? App.State.get.ingresosFin() : []);
+  if (items.some(function(x){ return x && x.id === newId; })) {
+   console.log('[D4] Instancia ya existe:', newId);
+   return null;
+  }
+  // Guard adicional: ya hay pendiente futuro del mismo template (por nombre+fecha tolerante)?
+  if (window._D4ExistePendienteFuturo(template, items)) {
+   console.log('[D4] Ya hay pendiente futuro del template', template.id, '— skip');
+   return null;
+  }
+  var now = Date.now();
+  var instance = {
+   id: newId,
+   nombre: template.nombre,
+   importe: template.importe,
+   fecha: new Date().toISOString(),
+   fechaPago: nextDate,
+   cuentaId: template.cuentaId,
+   notas: template.notas || '',
+   categoria: template.categoria,
+   tipoGasto: template.tipoGasto,
+   recurrente: false,
+   isRecurrenteInstance: true,
+   parentRecurrenteId: template.id,
+   frecuencia: 'unico',
+   mensualEq: 0,
+   estado: 'pendiente',
+   _updatedAt: now,
+   updatedAt: new Date(now).toISOString()
+  };
+  // Preservar transferId si era transferencia (template lado A+B)
+  if (template.transferId) instance.transferId = template.transferId;
+  try {
+   if (src === 'gasto') App.State.set.addGasto(instance);
+   else App.State.set.addIngreso(instance);
+   console.log('[D4] ✅ Generada instancia:', instance.id, '→', instance.fechaPago, '·', instance.importe + '€');
+   return instance;
+  } catch(e) {
+   console.error('[D4] Error addGasto/addIngreso:', e);
+   return null;
+  }
+ };
+
+ // Backfill manual: genera las instancias para todos los recurrentes confirmados sin pendiente futuro.
+ window._D4BackfillCommit = function() {
+  var gastos = (App && App.State && App.State.get && App.State.get.gastosOp)
+   ? App.State.get.gastosOp().filter(function(g){ return g && !g.deleted; })
+   : [];
+  var ingresos = (App && App.State && App.State.get && App.State.get.ingresosFin)
+   ? App.State.get.ingresosFin().filter(function(i){ return i && !i.deleted; })
+   : [];
+  var generated = 0, skipped = 0;
+  function _process(items, src) {
+   var templates = items.filter(function(t) {
+    return t.recurrente === true
+     && t.frecuencia && t.frecuencia !== 'unico'
+     && t.estado === 'confirmado'
+     && !t.parentRecurrenteId
+     && !t.isRecurrenteInstance;
+   });
+   templates.forEach(function(t) {
+    if (window._D4ExistePendienteFuturo(t, items)) { skipped++; return; }
+    var created = window._D4CreateInstance(t, src);
+    if (created) generated++; else skipped++;
+   });
+  }
+  _process(gastos, 'gasto');
+  _process(ingresos, 'ingreso');
+  console.log('[D4] Backfill commit: generated=' + generated + ' skipped=' + skipped);
+  return { generated: generated, skipped: skipped };
+ };
+
  // DryRun: calcula qué se generaría sin escribir nada
  window._D4DryRun = function() {
   var gastos = (App && App.State && App.State.get && App.State.get.gastosOp)
@@ -26727,12 +26818,38 @@ const ui = (() => {
    +   'Al activar D4, estas instancias se crearían como pendientes futuros vinculadas al template.'
    + '</div>'
    + '</div>';
+  if (aGen > 0) {
+   html += '<button onclick="App.ui._D4BackfillUserConfirm()" '
+    + 'style="margin-top:var(--sp-3);width:100%;padding:var(--sp-3) var(--sp-3_5);background:#16a34a;color:#fff;border:none;border-radius:var(--r-md);font-size:var(--fs-base);font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">'
+    + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+    + 'Generar las ' + aGen + ' instancia(s)'
+    + '</button>';
+  }
   html += '<div style="margin-top:var(--sp-3);padding:var(--sp-2_5) var(--sp-3);background:#FEF3C7;border-radius:var(--r-md);font-size:var(--fs-xs);color:#92400E;line-height:1.5">'
-   + '<strong>⚠️ DRY RUN</strong> · No se ha guardado nada. Para activar D4 (commit real + hook en "Confirmar pago"), siguiente deploy tras validar este reporte.'
+   + '<strong>⚠️ DRY RUN</strong> · No se ha guardado nada. El botón verde lo ejecuta tras confirmación. Idempotente: pulsarlo 2 veces no duplica.'
    + '</div>';
   html += '</div>';
   setFs(html);
   openFs('full');
+ }
+
+ // v1.3.1944 — Confirmación + ejecución backfill manual desde sheet Dry Run
+ function _D4BackfillUserConfirm() {
+  var r = window._D4DryRun();
+  var n = r.aGenerar.length;
+  if (n === 0) { showToast('Nada que generar', 'info'); return; }
+  window._showDestructiveConfirm({
+   title: 'Generar ' + n + ' instancia(s)',
+   message: 'Se crearán ' + n + ' pendientes futuros vinculados a los templates recurrentes. Idempotente: si ya existen no se duplican. ¿Continuar?',
+   confirmText: 'Generar',
+   destructive: false,
+   onConfirm: function() {
+    var result = window._D4BackfillCommit();
+    showToast('✅ ' + result.generated + ' generadas · ' + result.skipped + ' skip', 'success');
+    closeFs();
+    setTimeout(function(){ try { dash.render(); } catch(_){} }, 200);
+   }
+  });
  }
 
  function _devLoyverseInspect() {
@@ -33368,7 +33485,7 @@ const ui = (() => {
   }
  }
 
- return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _recalcCierresMesActual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico, _openD4DryRunSheet };
+ return { setFs, openFs, closeFs, closeFsOvl, openModal, closeModal, closeModalOvl, openSettings, closeSettings, toggleSub, toggleSetting, confirmReset, doReset, openCierreHorario, saveCierreHorario, testNotificacion, subNavL, subNavR, subNavC, exportarDatos, openPerfil, savePerfil, authTab, authLogin, authRegister, authSkip, authLogout, openSeguridad, changePassword, showAuthScreen, hideAuthScreen, setContext, _refreshCtxSelector, sdSubOpen, sdSubClose, sdSaveCierre, sdSubOpenSeguridad, sdSavePassword, checkForUpdate, doUpdate, _getAppVersion, _showUpdateBanner, showWhatsNew, closeWhatsNew, setLanguage, _openLangPicker, _loadProfilePhoto, _updateProfileAvatar, openTeamMgr, _teamAdd, _teamRemove, _teamTogglePerm, _devLoyverseSimulate, _devLoyverseInspect, _devLoyverseClean, _openHealthSheet, _openSaldoAuditSheet, _toggleSaldoCompare, _openLoyverseMapping, _openLoyverseSettings, _openBudgetBakersSettings, _saveLoyverseToken, _testLoyverseConnection, _initLoyverseTokenField, _importLoyverseCatalog, _importLoyverseReceipts, _resetTotalDashwey, _cleanTransactionsDashwey, _importBudgetBakersCsv, _importBudgetBakersCsvTodo, _importBudgetBakersCsvSoloGastos, _revertBudgetBakersImport, _revertBudgetBakersIngresos, _cleanBBPlaceholders, _cleanExceptCatalog, _cleanLotesStock, _recalcSaldosManual, _recalcCierresMesActual, _compactSilent, _calcStateSize, _exportSnapshotEmergency, _openResetMenu, _resetMenuDispatch, _resetSubcollectionsFirestore, _importLoyverseSalesSummaryCsv, _revertLoyverseSalesSummary, _lvSyncHoy, _lvFetchRangoHistorico, _openD4DryRunSheet, _D4BackfillUserConfirm };
 })();
 
 // ══════════════════════════════════════════
@@ -38443,6 +38560,34 @@ function _openEditMovimientoSheet(id, src) {
      return Object.assign({}, g, { nombre: nuevoNombre||g.nombre, importe: nuevoImporte, fecha: _fechaISO, fechaPago: nuevaFecha.slice(0,10), notas: nuevasNotas, tipoGasto: _edTgVal, recurrente: _edEsRecur, frecuencia: _edFrecStr, mensualEq: _edMensualEq, estado: _estadoEdit, _updatedAt: _nowEM, updatedAt: _nowEMiso });
     });
     State.set.setGastos(gastos);
+    // v1.3.1944 D4 HOOK: propagar a instancias futuras del template
+    //   #3 Editar importe template → actualiza importe en instancias pendientes futuras.
+    //   #4 Cambiar frecuencia template → borra instancias futuras (próximo Confirmar regenera).
+    try {
+     if (_edEsRecur && registro && !registro.parentRecurrenteId && !registro.isRecurrenteInstance) {
+      var _origImp = registro.importe;
+      var _origFrec = registro.frecuencia;
+      var _hoy = new Date().toISOString().slice(0,10);
+      var _impCambio = (Number(_origImp) !== Number(nuevoImporte));
+      var _frecCambio = (_origFrec !== _edFrecStr);
+      if (_impCambio || _frecCambio) {
+       var _gastosUpd = State.get.gastosOp().map(function(g){
+        if (!g || g.deleted) return g;
+        if (g.parentRecurrenteId !== id) return g;
+        if (g.estado !== 'pendiente') return g; // solo futuras, NO pasadas confirmadas
+        if (g.fechaPago < _hoy) return g; // solo futuras
+        if (_frecCambio) {
+         // Soft-delete: el próximo Confirmar pago del template regenerará con frecuencia nueva
+         return Object.assign({}, g, { deleted: true, _updatedAt: _nowEM, updatedAt: _nowEMiso });
+        }
+        // Solo importe cambió → propagar
+        return Object.assign({}, g, { importe: nuevoImporte, _updatedAt: _nowEM, updatedAt: _nowEMiso });
+       });
+       State.set.setGastos(_gastosUpd);
+       console.log('[D4] Propagación template', id, 'impCambio=' + _impCambio, 'frecCambio=' + _frecCambio);
+      }
+     }
+    } catch(eD4ed) { console.warn('[D4] Error hook editor template:', eD4ed); }
     // Cascade: gemelo en ingresosFin con mismo transferId (importe + fecha + notas)
     if (_transferId) {
      var _ingArr = State.get.ingresosFin() || [];
@@ -38511,6 +38656,8 @@ function _openEditMovimientoSheet(id, src) {
      /* v1.3.1704 LOTE B: sellos LWW en confirmar pago pendiente */
      var _nowCP = Date.now();
      var _nowCPiso = new Date(_nowCP).toISOString();
+     // v1.3.1944 D4: capturar fechaPago programada ANTES del update para calcular siguiente
+     var _fechaProgramadaPrev = registro.fechaPago;
      if (src === 'gasto') {
       var gastos = State.get.gastosOp().map(function(g) {
        if (g.id !== id) return g;
@@ -38537,6 +38684,29 @@ function _openEditMovimientoSheet(id, src) {
       }
       DashweyBus.emit('ingreso');
      }
+     // v1.3.1944 D4 HOOK: si era recurrente o instancia D4, generar la siguiente
+     try {
+      var esTemplate = registro.recurrente === true && registro.frecuencia && registro.frecuencia !== 'unico' && !registro.parentRecurrenteId && !registro.isRecurrenteInstance;
+      var esInstancia = registro.isRecurrenteInstance && registro.parentRecurrenteId;
+      if (esTemplate || esInstancia) {
+       var baseTemplate;
+       if (esInstancia) {
+        // Buscar el template padre real
+        var items = src === 'gasto' ? State.get.gastosOp() : State.get.ingresosFin();
+        baseTemplate = items.find(function(x){ return x && x.id === registro.parentRecurrenteId && !x.deleted; });
+       } else {
+        baseTemplate = registro;
+       }
+       if (baseTemplate && baseTemplate.frecuencia && baseTemplate.frecuencia !== 'unico') {
+        // Usar la fechaProgramada PREV (no hoy) para mantener el patrón temporal
+        var baseForCalc = Object.assign({}, baseTemplate, { fechaPago: _fechaProgramadaPrev });
+        var nuevaInstancia = window._D4CreateInstance(baseForCalc, src);
+        if (nuevaInstancia) {
+         console.log('[D4] Hook confirmar pago → siguiente generada:', nuevaInstancia.id);
+        }
+       }
+      }
+     } catch(eD4) { console.warn('[D4] Error hook confirmar pago:', eD4); }
      sheet.classList.remove('open');
      setTimeout(function(){ if(sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
      try { dash.render(); } catch(_) {}
