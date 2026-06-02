@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1945";
+ var CURRENT_CACHE = "dashwey-v1-3-1946";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1945</title>
+<title>Dashwey v1.3.1946</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20466,6 +20466,7 @@ const FinEngine = (() => {
  function _isAggregable(x) {
   if (!x) return false;
   if (x.metaTipo === 'ajuste') return false;
+  if (x.metaTipo === 'owner_draw') return false; // v1.3.1946 D3: retiradas no son gasto operativo
   return !_isTransfer(x) && !_isPendiente(x);
  }
  if (typeof window !== 'undefined') window._isAggregable = _isAggregable;
@@ -23764,7 +23765,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1945';
+ const _APP_VERSION = 'v1.3.1946';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26724,6 +26725,64 @@ const ui = (() => {
   _process(ingresos, 'ingreso');
   console.log('[D4] Backfill commit: generated=' + generated + ' skipped=' + skipped);
   return { generated: generated, skipped: skipped };
+ };
+
+ // ═══════════════════════════════════════════════════════════════════════
+ // v1.3.1946 — D3 · Retirada personal · cuenta sistema "Fuera de Dashwey"
+ //   Cuenta singleton oculta (id: sys_outside). Saldo 0, no se cuenta en total.
+ //   Aparece SOLO en selectores de cuenta destino en transferencias/retiradas.
+ //   Modelo inspirado en BudgetBakers "Out of wallet".
+ // ═══════════════════════════════════════════════════════════════════════
+
+ window._ensureSysOutsideAccount = function() {
+  if (!window._DashweyInitialSyncDone) return false;
+  if (!App || !App.State || !App.State.get || !App.State.get.cuentas) return false;
+  var cuentas = App.State.get.cuentas() || [];
+  if (cuentas.some(function(c){ return c && c.id === 'sys_outside'; })) return true;
+  try {
+   App.State.set.addCuenta({
+    id: 'sys_outside',
+    nombre: 'Fuera de Dashwey',
+    tipo: 'externa',
+    saldo: 0,
+    saldoInicial: 0,
+    oculta: true,
+    isSystem: true,
+    color: '#94a3b8'
+   });
+   console.log('[D3] ✅ Creada cuenta sys_outside (Fuera de Dashwey)');
+   return true;
+  } catch(e) {
+   console.warn('[D3] Error creando sys_outside:', e);
+   return false;
+  }
+ };
+
+ // Auto-trigger tras initialSync (cualquier path de boot)
+ try {
+  window.addEventListener('dashwey:sync-state-changed', function(e) {
+   if (e && e.detail && e.detail.initialDone) {
+    setTimeout(function(){ window._ensureSysOutsideAccount(); }, 2000);
+   }
+  });
+ } catch(_) {}
+
+ // Fallback: poll cada 5s, max 1min (por si el evento no se emite)
+ try {
+  var _sysOutTries = 0;
+  var _sysOutIv = setInterval(function(){
+   _sysOutTries++;
+   if (window._ensureSysOutsideAccount() || _sysOutTries > 12) {
+    clearInterval(_sysOutIv);
+   }
+  }, 5000);
+ } catch(_) {}
+
+ // Helper público: filtrar cuentas visibles (excluye ocultas/sistema)
+ window._cuentasVisibles = function() {
+  if (!App || !App.State || !App.State.get) return [];
+  var cuentas = App.State.get.cuentas() || [];
+  return cuentas.filter(function(c){ return c && !c.deleted && !c.oculta; });
  };
 
  // DryRun: calcula qué se generaría sin escribir nada
@@ -35473,7 +35532,8 @@ function _toggleCardFromManager(id, btn) {
 
  // ── Render tarjeta Cuentas ─────────────────────────────────
  function renderCuentas() {
- const cuentas = State.get.cuentas();
+ // v1.3.1946 D3: filtrar cuentas ocultas (sys_outside) — saldo total viene de FinEngine intacto
+ const cuentas = State.get.cuentas().filter(function(c){ return c && !c.deleted && !c.oculta; });
  const gastos = State.get.gastosOp();
 
  // ── FinEngine: fuente única de cálculo ─────────────────────
@@ -36941,7 +37001,10 @@ function _toggleCardFromManager(id, btn) {
   if (_movSheet) return;
   _movTipo = 'gasto'; // resetear tipo al abrir — evita persistencia del uso anterior
 
-  var cuentas = State.get.cuentas() || [];
+  // v1.3.1946 D3: cuentas SIN sys_outside (visibles normales)
+  var cuentas = (State.get.cuentas() || []).filter(function(c){ return c && !c.deleted && !c.oculta; });
+  // v1.3.1946 D3: lista completa CON sys_outside (solo para destino transferencia/retirada)
+  var cuentasConSysOut = (State.get.cuentas() || []).filter(function(c){ return c && !c.deleted; });
   var hoy = new Date().toISOString().slice(0, 10);
 
   // Opciones de cuenta
@@ -36950,6 +37013,18 @@ function _toggleCardFromManager(id, btn) {
    return cuentas.map(function(c) {
     var sel = (c.id === defaultId) ? ' selected' : '';
     return '<option value="' + c.id + '"' + sel + '>' + esc(c.nombre) + ' · ' + _feur(c.saldo||0) + '</option>';
+   }).join('');
+  };
+
+  // v1.3.1946 D3: opciones cuenta DESTINO con "Fuera de Dashwey" incluida
+  var _cuentaOptsDestino = function(defaultId) {
+   if (!cuentasConSysOut.length) return '<option value="">Sin cuentas</option>';
+   return cuentasConSysOut.map(function(c) {
+    var sel = (c.id === defaultId) ? ' selected' : '';
+    var lbl = c.id === 'sys_outside'
+     ? esc(c.nombre) + ' ↗'
+     : esc(c.nombre) + ' · ' + _feur(c.saldo||0);
+    return '<option value="' + c.id + '"' + sel + '>' + lbl + '</option>';
    }).join('');
   };
 
@@ -36962,6 +37037,7 @@ function _toggleCardFromManager(id, btn) {
     '<button class="mov-type-btn active" data-tipo="gasto"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:var(--sp-1)"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>Gasto</button>' +
     '<button class="mov-type-btn" data-tipo="ingreso"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:var(--sp-1)"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>Ingreso</button>' +
     '<button class="mov-type-btn" data-tipo="transferencia"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:var(--sp-1)"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>Transferencia</button>' +
+    '<button class="mov-type-btn" data-tipo="retirada" title="Retirada personal"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:var(--sp-1)"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Personal</button>' +
    '</div>' +
    // Display importe
    '<div class="mov-amount-wrap"><div class="mov-amount-inner"><input class="mov-amount-input" id="mov-amount-input" type="text" inputmode="decimal" pattern="[0-9.,]*" autocomplete="off" placeholder="0"><span class="mov-amount-euro">€</span></div></div>' +
@@ -37115,12 +37191,14 @@ function _toggleCardFromManager(id, btn) {
     });
     // Actualizar cuenta wrap según tipo
     var cuentaWrap = document.getElementById('mov-cuenta-wrap');
-    if (_movTipo === 'transferencia') {
+    if (_movTipo === 'transferencia' || _movTipo === 'retirada') {
+     // v1.3.1946 D3: retirada usa mismo UI que transfer pero destino incluye sys_outside
+     var destinoOpts = _movTipo === 'retirada' ? _cuentaOptsDestino('sys_outside') : _cuentaOpts('');
      cuentaWrap.innerHTML =
       '<div style="display:flex;gap:var(--sp-2);align-items:center">' +
       '<select class="fi" id="mov-cuenta-a" style="flex:1">' + _cuentaOpts(defaultCuenta) + '</select>' +
       '<svg width="16" height="16" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>' +
-      '<select class="fi" id="mov-cuenta-b" style="flex:1">' + _cuentaOpts('') + '</select>' +
+      '<select class="fi" id="mov-cuenta-b" style="flex:1">' + destinoOpts + '</select>' +
       '</div>';
     } else {
      cuentaWrap.innerHTML = '<select class="fi" id="mov-cuenta-a" style="width:100%">' + _cuentaOpts(defaultCuenta) + '</select>';
@@ -37130,9 +37208,9 @@ function _toggleCardFromManager(id, btn) {
     if (subtipoWrap) subtipoWrap.style.display = _movTipo === 'gasto' ? '' : 'none';
     var ingresoTipoWrap = document.getElementById('mov-ingreso-tipo-wrap');
     if (ingresoTipoWrap) ingresoTipoWrap.style.display = _movTipo === 'ingreso' ? '' : 'none';
-    // v1.3.1001 Fase 3 LOTE 2: toggle pendiente no aplica a transferencias
+    // v1.3.1001 Fase 3 LOTE 2: toggle pendiente no aplica a transferencias ni retiradas
     var pendWrap = document.getElementById('mov-pend-wrap');
-    if (pendWrap) pendWrap.style.display = _movTipo === 'transferencia' ? 'none' : 'flex';
+    if (pendWrap) pendWrap.style.display = (_movTipo === 'transferencia' || _movTipo === 'retirada') ? 'none' : 'flex';
    });
   });
 
@@ -38861,7 +38939,7 @@ function _openEditMovimientoSheet(id, src) {
   // No aplica a transferencias — siempre confirmadas.
   var _pendBtn = document.getElementById('mov-pend-toggle');
   var _esPendiente = !!(_pendBtn && _pendBtn.getAttribute('aria-pressed') === 'true');
-  if (_movTipo === 'transferencia') _esPendiente = false;
+  if (_movTipo === 'transferencia' || _movTipo === 'retirada') _esPendiente = false;
   var _estadoMov = _esPendiente ? 'pendiente' : 'confirmado';
   // v1.3.1003 Fase 5: movements heredan scope activo
   var _scopeMov = 'negocio';
@@ -38941,37 +39019,49 @@ function _openEditMovimientoSheet(id, src) {
    }
    showToast(_esPendiente ? '⏳ Ingreso pendiente registrado' : (_registrarHistorial ? '✅ Ingreso registrado' : '✅ Saldo actualizado'));
 
-  } else if (_movTipo === 'transferencia') {
+  } else if (_movTipo === 'transferencia' || _movTipo === 'retirada') {
+   // v1.3.1946 D3: retirada usa misma mecánica que transferencia pero con metaTipo:'owner_draw'
+   //   Lados gasto+ingreso compartiendo transferId. Filtros KPI excluyen owner_draw via _isAggregable.
+   //   Si destino es sys_outside, saldo destino sigue siendo 0 (cuenta oculta).
    if (!cuentaB || cuentaA === cuentaB) { showToast('⚠️ Selecciona dos cuentas distintas', 'warning'); return; }
    var cFrom = State.get.cuentas().find(function(x){ return x.id === cuentaA; });
    var cTo   = State.get.cuentas().find(function(x){ return x.id === cuentaB; });
    if (cFrom && !window._DashweyUseDerivedSaldo) State.set.updateCuenta(cuentaA, { saldo: (cFrom.saldo||0) - importe }); /* v1.3.1786 FASE 3: saldo derivado */
-   if (cTo && !window._DashweyUseDerivedSaldo)   State.set.updateCuenta(cuentaB, { saldo: (cTo.saldo||0)   + importe }); /* v1.3.1786 FASE 3: saldo derivado */
-   // v1.3.996: Fase 1B — transferencia balanceada con metaTipo + transferId compartido
-   // El motor reconoce la pareja vía transferId → cascade save/delete + exclusión KPIs.
-   // tipo:'transferencia' conservado por retrocompat (detección dual _isTransfer).
+   if (cTo && !window._DashweyUseDerivedSaldo && cTo.id !== 'sys_outside')   State.set.updateCuenta(cuentaB, { saldo: (cTo.saldo||0)   + importe }); /* sys_outside no incrementa saldo */
    var _transferId = 'tr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
    var _fechaISO = new Date(fecha + 'T' + _horaStr + ':00').toISOString();
-   // v1.3.1489: transferencia ahora respeta Único/Recurrente (subtipo unificado)
    var _trFrec = recurrente ? (recurN + '_' + recurUnit) : 'unico';
    var _trMens = recurrente ? mensualEq : importe;
+   var _esRetirada = (_movTipo === 'retirada');
+   var _metaTipoMov = _esRetirada ? 'owner_draw' : 'transfer';
+   var _iconoFrom = _esRetirada ? '↗️' : '🔄';
+   var _iconoTo   = _esRetirada ? '↘️' : '🔄';
+   var _nombreCuentaTo = cTo ? cTo.nombre : 'cuenta';
+   var _nombreCuentaFrom = cFrom ? cFrom.nombre : 'cuenta';
    State.set.addGasto({
-    id: window._dwId('g'), nombre: '🔄 Transferencia → ' + esc(cTo ? cTo.nombre : 'cuenta'),
-    categoria: 'Otros', importe: importe, mensualEq: _trMens,
+    id: window._dwId('g'),
+    nombre: _iconoFrom + ' ' + (_esRetirada ? 'Retirada → ' : 'Transferencia → ') + esc(_nombreCuentaTo),
+    categoria: _esRetirada ? 'Retirada personal' : 'Otros',
+    importe: importe, mensualEq: _trMens,
     fecha: _fechaISO, fechaPago: fecha,
     cuentaId: cuentaA, recurrente: recurrente, frecuencia: _trFrec,
-    tipo: 'transferencia', metaTipo: 'transfer', transferId: _transferId,
+    tipo: _esRetirada ? 'retirada' : 'transferencia',
+    metaTipo: _metaTipoMov,
+    transferId: _transferId,
    });
    State.set.addIngreso({
-    id: window._dwId('i'), concepto: '🔄 Transferencia ← ' + esc(cFrom ? cFrom.nombre : 'cuenta'),
+    id: window._dwId('i'),
+    concepto: _iconoTo + ' ' + (_esRetirada ? 'Retirada ← ' : 'Transferencia ← ') + esc(_nombreCuentaFrom),
     importe: importe, fecha: _fechaISO,
     cuentaId: cuentaB, recurrente: recurrente, frecuencia: _trFrec, mensualEq: _trMens,
-    tipo: 'transferencia', metaTipo: 'transfer', transferId: _transferId,
+    tipo: _esRetirada ? 'retirada' : 'transferencia',
+    metaTipo: _metaTipoMov,
+    transferId: _transferId,
    });
    DashweyBus.emit('cuenta');
    DashweyBus.emit('gasto');
    DashweyBus.emit('ingreso');
-   showToast('✅ Transferencia registrada', 'success');
+   showToast(_esRetirada ? '✅ Retirada personal registrada' : '✅ Transferencia registrada', 'success');
 
   }
   _confirmarMovimiento._running = false;
@@ -67188,6 +67278,8 @@ _eaRecalc();
  try { if (window._DashweyPerfMark) window._DashweyPerfMark('do_initial_sync_done_firstcloud'); } catch(_) {}
  // v1.3.1438: notificar UI reactiva (sd-status)
  try { window.dispatchEvent(new CustomEvent('dashwey:sync-state-changed', { detail: { initialDone: true, firstTimeCloud: true } })); } catch(_) {}
+ // v1.3.1946 D3: asegurar cuenta sistema "Fuera de Dashwey"
+ try { setTimeout(function(){ if (window._ensureSysOutsideAccount) window._ensureSysOutsideAccount(); }, 1500); } catch(_) {}
  return;
  }
 
