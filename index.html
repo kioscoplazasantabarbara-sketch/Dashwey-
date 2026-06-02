@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1951";
+ var CURRENT_CACHE = "dashwey-v1-3-1952";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1951</title>
+<title>Dashwey v1.3.1952</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -5002,9 +5002,11 @@ body.modal-bg-freeze #header {
 }
 
 body.keyboard-open #bottom-tabs {
- opacity: 0;
- pointer-events: none;
- visibility: hidden;
+ opacity: 0 !important;
+ pointer-events: none !important;
+ visibility: hidden !important;
+ transform: translateY(100%) !important;
+ transition: transform 200ms ease-out, opacity 180ms ease-out !important;
 }
 
 #bottom-tabs.nav-animating { will-change: opacity; }
@@ -23844,7 +23846,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1951';
+ const _APP_VERSION = 'v1.3.1952';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -26862,6 +26864,40 @@ const ui = (() => {
   if (!App || !App.State || !App.State.get) return [];
   var cuentas = App.State.get.cuentas() || [];
   return cuentas.filter(function(c){ return c && !c.deleted && !c.oculta; });
+ };
+
+ // v1.3.1952: helper sugerencia "Crear artículo «query»" debajo de la barra
+ //   Se llama desde el oninput de la barra permanente. Si el query no matchea
+ //   ningún producto del proveedor actual, se muestra un mini-card con la opción
+ //   de crear ese artículo. Tap → abre form Nuevo Artículo con nombre prerelleno.
+ window._almPermSearchUpdateHint = function(q) {
+  var hint = document.getElementById('alm-perm-search-hint');
+  if (!hint) return;
+  q = (q || '').trim();
+  if (!q) { hint.style.display = 'none'; hint.innerHTML = ''; return; }
+  try {
+   var sel = App && App.State && App.State.get ? App.State.get.selectedProv() : null;
+   if (!sel) { hint.style.display = 'none'; return; }
+   var prods = (App.State.get.productos() || []).filter(function(p){ return p && p.prov === sel && !p.deleted; });
+   var qLow = q.toLowerCase();
+   var hasMatch = prods.some(function(p){
+    var n = (p.nombre || '').toLowerCase();
+    var vn = (p.ventaNombre || '').toLowerCase();
+    return n.indexOf(qLow) !== -1 || vn.indexOf(qLow) !== -1;
+   });
+   if (hasMatch) { hint.style.display = 'none'; hint.innerHTML = ''; return; }
+   // Sin matches → mostrar sugerencia crear
+   var qSafe = q.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+   hint.innerHTML =
+    '<div onclick="try{if(window.App && App.alm && App.alm.openNuevoArtFs){App.alm.openNuevoArtFs(\'' + qSafe + '\');}}catch(_){}; var i=document.getElementById(\'alm-perm-search-v2\'); if(i){i.blur();}" style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3) var(--sp-3_5);background:var(--surface);border-radius:var(--r-md);box-shadow:0 1px 3px rgba(0,0,0,0.06);cursor:pointer;-webkit-tap-highlight-color:transparent;border:1px dashed var(--border);">' +
+     '<span style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--red-soft, rgba(180,30,40,0.10));color:var(--red);flex-shrink:0;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>' +
+     '<div style="flex:1;min-width:0;">' +
+      '<div style="font-size:var(--fs-base);font-weight:var(--fw-semibold);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Crear artículo "' + q.replace(/</g,'&lt;') + '"</div>' +
+      '<div style="font-size:var(--fs-xs);color:var(--ink-soft);">No existe en el catálogo del proveedor</div>' +
+     '</div>' +
+    '</div>';
+   hint.style.display = 'block';
+  } catch(_) { hint.style.display = 'none'; }
  };
 
  // DryRun: calcula qué se generaría sin escribir nada
@@ -51476,18 +51512,34 @@ function _confirmBorrarCuenta(id) {
    window._closeAlmFabDial();
    setTimeout(function() {
     try {
-     if (action === 'ped-prog') {
-      // Scroll arriba en Almacén para mostrar card "Pedido programado"
-      var scrollEl = document.querySelector('#tab-almacen .alm-scroll, #tab-almacen .scroll-container, #tab-almacen');
-      if (scrollEl) { try { scrollEl.scrollTo({ top: 0, behavior: 'smooth' }); } catch(_) { scrollEl.scrollTop = 0; } }
-     } else if (action === 'nuevo-ped') {
-      if (App.alm && App.alm._setAlmTabView) App.alm._setAlmTabView('pedido');
+     if (action === 'ped-prog' || action === 'nuevo-ped') {
+      // v1.3.1952: buscar pedido programado actual del proveedor + abrir modal
+      var sel = (App && App.State && App.State.get) ? App.State.get.selectedProv() : null;
+      var pendientes = (App && App.State && App.State.get && App.State.get.pendingOrders)
+       ? App.State.get.pendingOrders().filter(function(o){ return o && o.provId === sel && o.status === 'pending' && !o.deleted; })
+       : [];
+      if (pendientes.length > 0 && App.alm && App.alm._ldcAbrirDetallePedido) {
+       // Ordenar por fecha, abrir el más próximo
+       pendientes.sort(function(a,b){ return new Date(a.date||0) - new Date(b.date||0); });
+       App.alm._ldcAbrirDetallePedido(pendientes[0].id);
+      } else {
+       try { if (window.showToast) showToast('Sin pedidos programados. Añade artículos al catálogo.', 'info'); } catch(_) {}
+      }
      } else if (action === 'nuevo-art') {
       if (App.alm && App.alm.openNuevoArtFs) App.alm.openNuevoArtFs();
      } else if (action === 'catalogo') {
-      if (App.alm && App.alm._setAlmTabView) App.alm._setAlmTabView('catalogo');
+      // Scroll arriba en Almacén para volver al catálogo
+      var scrollEls = [
+       document.querySelector('#tab-almacen .alm-scroll'),
+       document.querySelector('#tab-almacen [data-alm-scroll]'),
+       document.querySelector('#tab-almacen .scroll-container'),
+       document.getElementById('tab-almacen')
+      ].filter(Boolean);
+      scrollEls.forEach(function(el){
+       try { el.scrollTo({ top: 0, behavior: 'smooth' }); } catch(_) { el.scrollTop = 0; }
+      });
      }
-    } catch(_) {}
+    } catch(err) { try { console.warn('[Dashwey/FAB-Dial] action error:', err && err.message); } catch(_) {} }
    }, 180);
   }, true);
  } catch(_) {}
@@ -61015,10 +61067,15 @@ function _parseIva(iva) {
     '<div class="alm-permsearch-bar" style="display:flex;align-items:center;gap:var(--sp-2_5);padding:var(--sp-2_5) 14px;background:var(--surface);border-radius:var(--r-md);box-shadow:0 1px 3px rgba(0,0,0,0.06);margin:0 var(--sp-3) var(--sp-3) var(--sp-3);">' +
      '<svg width="16" height="16" fill="none" stroke="var(--ink-soft)" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
      '<input id="alm-perm-search-v2" type="text" placeholder="Buscar artículo…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="search" enterkeyhint="search" value="' + (curQ.replace(/"/g,'&quot;')) + '" ' +
-      'oninput="window._almPermSearchQ=this.value; try{if(window.App && App.alm){ if(App.alm._setCatInlineQ) App.alm._setCatInlineQ(this.value); if(App.alm.renderCatInline) App.alm.renderCatInline(); }}catch(_){}; document.getElementById(\'alm-perm-search-v2-clear\').style.display = this.value ? \'flex\' : \'none\';" ' +
+      'onfocus="document.body.classList.add(\'keyboard-open\');" ' +
+      'onblur="document.body.classList.remove(\'keyboard-open\');" ' +
+      'oninput="window._almPermSearchQ=this.value; try{if(window.App && App.alm){ if(App.alm._setCatInlineQ) App.alm._setCatInlineQ(this.value); if(App.alm.renderCatInline) App.alm.renderCatInline(); } if(window._almPermSearchUpdateHint) window._almPermSearchUpdateHint(this.value);}catch(_){}; var c=document.getElementById(\'alm-perm-search-v2-clear\'); if(c) c.style.display = this.value ? \'flex\' : \'none\';" ' +
       'style="flex:1;background:none;border:none;outline:none;box-shadow:none;font-size:var(--fs-base);color:var(--ink);font-family:var(--font);-webkit-tap-highlight-color:transparent;-webkit-appearance:none;appearance:none;">' +
      '<button id="alm-perm-search-v2-clear" type="button" onclick="var i=document.getElementById(\'alm-perm-search-v2\'); if(i){i.value=\'\'; i.dispatchEvent(new Event(\'input\')); i.focus();}" style="display:' + (curQ ? 'flex' : 'none') + ';align-items:center;justify-content:center;background:var(--bg);border:none;color:var(--ink-mid);cursor:pointer;border-radius:50%;width:22px;height:22px;font-size:var(--fs-sm);flex-shrink:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent;">×</button>' +
-    '</div>';
+    '</div>' +
+    '<div id="alm-perm-search-hint" style="display:none;margin:0 var(--sp-3) var(--sp-3) var(--sp-3);"></div>';
+   // Si había query previo, repintar hint
+   try { if (curQ && window._almPermSearchUpdateHint) setTimeout(function(){ window._almPermSearchUpdateHint(curQ); }, 30); } catch(_) {}
    return;
    // ── CÓDIGO LEGACY (preservado por seguridad — nunca alcanzado) ──────────
    var prov = State.get.prov(sel);
@@ -64541,12 +64598,13 @@ _eaRecalc();
  }, 0);
 
  if (_carritoLineas > 0 && !_hasOverlay) {
-  // Mostrar pill — actualizar total
+  // v1.3.1952: alm-fab-pill DESACTIVADO — confirmación ahora vía ✔️ en modal pedido programado
+  //   Solo actualizar total para compat con código legacy, pero NO mostrar el pill.
   var _pTotal = document.getElementById('alm-fab-pill-total');
   var _strTotal = feur(_carritoTotal);
   if (_pTotal && _pTotal.textContent !== _strTotal) _pTotal.textContent = _strTotal;
-  if (_pill) _pill.classList.add('is-visible');
-  document.body.classList.add('has-confirm-pill');
+  if (_pill) _pill.classList.remove('is-visible');
+  document.body.classList.remove('has-confirm-pill');
  } else {
   // Ocultar pill — cesta vacía u overlay activo
   if (_pill) _pill.classList.remove('is-visible');
