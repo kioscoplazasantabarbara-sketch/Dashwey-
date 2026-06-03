@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1956";
+ var CURRENT_CACHE = "dashwey-v1-3-1957";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1956</title>
+<title>Dashwey v1.3.1957</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23869,7 +23869,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1956';
+ const _APP_VERSION = 'v1.3.1957';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -57885,6 +57885,8 @@ const alm = (() => {
  function renderCatInline() {
  const sel = State.get.selectedProv();
  const prov = State.get.prov(sel);
+ // v1.3.1957: Opción C — restore _ordenCarrito desde pedido auto si cambió de proveedor
+ try { _almRestoreCarritoFromPedidoAuto(sel); } catch(_) {}
  // v1.3.1920: actualizar visibilidad de la sub-navbar
  try { _updateAlmTabBarVisibility(); } catch(_) {}
  // v1.3.652: D01 — sugerencia de pedido
@@ -58526,7 +58528,84 @@ function _parseIva(iva) {
   try { _updateAcceptBtn(); } catch(_) {}
   // v1.3.1643: refrescar badge global del carrito
   try { updateBadge(); } catch(_) {}
+  // v1.3.1957: Opción C — sincronizar al pedido programado del proveedor
+  try { _almSyncCarritoToPedidoProgramado(); } catch(_) {}
   try { Utils.triggerHaptic('medium'); } catch(_) {}
+ }
+
+ // v1.3.1957: restore _ordenCarrito desde pedido auto del proveedor
+ //   Se ejecuta SOLO si cambió el proveedor (guard _almLastRestoreProv).
+ //   - Si _ordenCarrito vacío y existe pedido auto → restaurar items al carrito.
+ //   - Si _ordenCarrito tiene items y NO existe pedido auto → crear pedido auto.
+ var _almLastRestoreProv = null;
+ function _almRestoreCarritoFromPedidoAuto(sel) {
+  try {
+   if (!sel) return;
+   if (_almLastRestoreProv === sel) return;
+   _almLastRestoreProv = sel;
+   var hasItems = Object.keys(_ordenCarrito || {}).length > 0;
+   var auto = (State.get.pendingOrders() || [])
+    .filter(function(o){ return o && o.provId === sel && o.status === 'pending' && !o.deleted && o._autoFromCart === true; })
+    .sort(function(a,b){ return (b._updatedAt||0) - (a._updatedAt||0); })[0];
+   if (!hasItems && auto && auto.items && auto.items.length > 0) {
+    // Backward sync: carrito vacío + auto con items → restaurar
+    auto.items.forEach(function(it) {
+     if (it && it.prodId && (it.ncajas || 0) > 0) {
+      _ordenCarrito[it.prodId] = parseInt(it.ncajas, 10) || 1;
+     }
+    });
+    try { _saveCarritoLocal && _saveCarritoLocal(); } catch(_) {}
+   } else if (hasItems && !auto) {
+    // Forward sync: carrito con items pero no hay auto → crear pedido auto
+    try { _almSyncCarritoToPedidoProgramado(); } catch(_) {}
+   }
+  } catch(e) {}
+ }
+
+ // v1.3.1957: Opción C — sincronizar _ordenCarrito → pendingOrder del proveedor
+ //   Estrategia:
+ //   - Cada vez que cambia _ordenCarrito, se actualiza un pedido pendiente
+ //     "auto" del proveedor (marcado con _autoFromCart:true).
+ //   - Si no existe y hay items, se crea.
+ //   - Si _ordenCarrito queda vacío y existe pedido auto → se vacían sus items.
+ //   - Pedidos NO-auto (del coworker, históricos) NUNCA se tocan aquí.
+ function _almSyncCarritoToPedidoProgramado() {
+  var sel = State.get.selectedProv && State.get.selectedProv();
+  if (!sel) return;
+  var carritoEntries = Object.entries(_ordenCarrito || {}).filter(function(e){ return (parseInt(e[1],10) || 0) > 0; });
+  var pendientes = (State.get.pendingOrders() || [])
+   .filter(function(o){ return o && o.provId === sel && o.status === 'pending' && !o.deleted; });
+  var auto = pendientes.find(function(o){ return o._autoFromCart === true; });
+  // Construir items desde _ordenCarrito
+  var items = carritoEntries.map(function(entry) {
+   var pid = entry[0], qty = parseInt(entry[1], 10) || 1;
+   var p = State.get.prod ? State.get.prod(pid) : null;
+   return {
+    prodId: pid,
+    nombre: p ? p.nombre : '(desconocido)',
+    ncajas: qty,
+    udscaja: p ? (p.udscaja || 1) : 1,
+    precioCompra: p ? (p.precioCompra || 0) : 0,
+    iva: p ? (p.iva || 10) : 10
+   };
+  });
+  if (auto) {
+   // Actualizar items del pedido auto existente (incluso si quedan 0 items)
+   State.set.updatePendingOrder(auto.id, { items: items });
+  } else if (items.length > 0) {
+   // Crear nuevo pedido auto solo si hay items
+   var newPO = {
+    id: 'pord_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    provId: sel,
+    date: new Date().toISOString(),
+    items: items,
+    status: 'pending',
+    _autoFromCart: true,
+    _updatedAt: Date.now(),
+    updatedAt: new Date().toISOString()
+   };
+   State.set.addPendingOrder(newPO);
+  }
  }
 
  function _catInlineTap(prodId, evt) {
