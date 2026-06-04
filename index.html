@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1962";
+ var CURRENT_CACHE = "dashwey-v1-3-1963";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1962</title>
+<title>Dashwey v1.3.1963</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23869,7 +23869,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1962';
+ const _APP_VERSION = 'v1.3.1963';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -58537,23 +58537,52 @@ function _parseIva(iva) {
  //   Se ejecuta SOLO si cambió el proveedor (guard _almLastRestoreProv).
  //   - Si _ordenCarrito vacío y existe pedido auto → restaurar items al carrito.
  //   - Si _ordenCarrito tiene items y NO existe pedido auto → crear pedido auto.
+ // v1.3.1963 BUG-XPROV FIX:
+ //   1) Antes de evaluar hasItems, PURGAR del carrito cualquier item que no
+ //      pertenezca al prov entrante (residuos del prov saliente que no se
+ //      vaciaron a tiempo). Sin esto, el forward sync grababa items
+ //      contaminados al pendingOrder del prov nuevo (causa observada del bug).
+ //   2) Al restaurar desde un pendingOrder, validar que cada item pertenezca
+ //      al prov del pedido. Items cuyo producto.prov !== order.provId se
+ //      descartan (datos corruptos heredados).
  var _almLastRestoreProv = null;
  function _almRestoreCarritoFromPedidoAuto(sel) {
   try {
    if (!sel) return;
    if (_almLastRestoreProv === sel) return;
    _almLastRestoreProv = sel;
+   // v1.3.1963: purga preventiva — descartar items del carrito que no
+   //   pertenezcan al prov entrante. Esto neutraliza el residuo si por
+   //   algún path el carrito no se vació tras cambiar de prov.
+   var _purged = 0;
+   Object.keys(_ordenCarrito || {}).forEach(function(pid){
+    var p = State.get.prod ? State.get.prod(pid) : null;
+    if (!p || p.prov !== sel) { delete _ordenCarrito[pid]; _purged++; }
+   });
+   if (_purged > 0) {
+    try { console.warn('[ALM/restore] purgados ' + _purged + ' item(s) de otro prov al entrar a ' + sel); } catch(_) {}
+   }
    var hasItems = Object.keys(_ordenCarrito || {}).length > 0;
    var auto = (State.get.pendingOrders() || [])
     .filter(function(o){ return o && o.provId === sel && o.status === 'pending' && !o.deleted && o._autoFromCart === true; })
     .sort(function(a,b){ return (b._updatedAt||0) - (a._updatedAt||0); })[0];
    if (!hasItems && auto && auto.items && auto.items.length > 0) {
     // Backward sync: carrito vacío + auto con items → restaurar
+    // v1.3.1963: validar que cada item pertenezca al prov del pedido
+    var _droppedRestore = 0;
     auto.items.forEach(function(it) {
      if (it && it.prodId && (it.ncajas || 0) > 0) {
-      _ordenCarrito[it.prodId] = parseInt(it.ncajas, 10) || 1;
+      var p = State.get.prod ? State.get.prod(it.prodId) : null;
+      if (p && p.prov === sel) {
+       _ordenCarrito[it.prodId] = parseInt(it.ncajas, 10) || 1;
+      } else {
+       _droppedRestore++;
+      }
      }
     });
+    if (_droppedRestore > 0) {
+     try { console.warn('[ALM/restore] descartados ' + _droppedRestore + ' item(s) corruptos del pendingOrder ' + auto.id + ' (no pertenecen a prov ' + sel + ')'); } catch(_) {}
+    }
     try { _saveCarritoLocal && _saveCarritoLocal(); } catch(_) {}
    } else if (hasItems && !auto) {
     // Forward sync: carrito con items pero no hay auto → crear pedido auto
@@ -58569,10 +58598,31 @@ function _parseIva(iva) {
  //   - Si no existe y hay items, se crea.
  //   - Si _ordenCarrito queda vacío y existe pedido auto → se vacían sus items.
  //   - Pedidos NO-auto (del coworker, históricos) NUNCA se tocan aquí.
+ // v1.3.1963 BUG-XPROV FIX: guard defensivo cross-proveedor. Si _ordenCarrito
+ //   contiene prodIds cuyo producto.prov !== sel, se IGNORAN. Esto blinda por
+ //   construcción contra el bug observado: pendingOrder de Matutano con items
+ //   de Nestlé (cuando el carrito no se vacía a tiempo entre cambios de prov).
+ //   Invariante reforzado: ningún pendingOrder puede contener items que no
+ //   pertenezcan a su provId.
  function _almSyncCarritoToPedidoProgramado() {
   var sel = State.get.selectedProv && State.get.selectedProv();
   if (!sel) return;
-  var carritoEntries = Object.entries(_ordenCarrito || {}).filter(function(e){ return (parseInt(e[1],10) || 0) > 0; });
+  // v1.3.1963: filtrar items por producto.prov === sel (anti-contaminación)
+  var _droppedXProv = 0;
+  var carritoEntries = Object.entries(_ordenCarrito || {}).filter(function(e){
+   var qty = parseInt(e[1],10) || 0;
+   if (qty <= 0) return false;
+   var p = State.get.prod ? State.get.prod(e[0]) : null;
+   if (!p) return false; // producto no existe → descartar
+   if (p.prov !== sel) {
+    _droppedXProv++;
+    return false; // item de OTRO proveedor → descartar (no contaminar pendingOrder)
+   }
+   return true;
+  });
+  if (_droppedXProv > 0) {
+   try { console.warn('[ALM/sync] descartados ' + _droppedXProv + ' item(s) de otro proveedor al sync para prov ' + sel); } catch(_) {}
+  }
   var pendientes = (State.get.pendingOrders() || [])
    .filter(function(o){ return o && o.provId === sel && o.status === 'pending' && !o.deleted; });
   var auto = pendientes.find(function(o){ return o._autoFromCart === true; });
@@ -64456,6 +64506,93 @@ _eaRecalc();
   // Helper opcional para preguntar si hay carrito activo antes de editar
   window._dashweyGetCart = function(){
    try { return Object.assign({}, _ordenCarrito); } catch(_) { return null; }
+  };
+  // v1.3.1963: auditoría de pendingOrders con items cross-proveedor.
+  //   Devuelve un array con info de cada pedido que contiene items cuyo
+  //   producto.prov !== order.provId. Solo lectura, no muta nada.
+  window._dashweyAuditPendingOrdersXProv = function() {
+   try {
+    var orders = State.get.pendingOrders() || [];
+    var bad = [];
+    orders.forEach(function(o){
+     if (!o || o.deleted || !o.items || !o.items.length) return;
+     var prov = State.get.prov(o.provId);
+     var foreignItems = [];
+     o.items.forEach(function(it){
+      if (!it || !it.prodId) return;
+      var p = State.get.prod(it.prodId);
+      if (!p) { foreignItems.push({ prodId: it.prodId, reason: 'producto borrado', ncajas: it.ncajas }); return; }
+      if (p.prov !== o.provId) {
+       var pProv = State.get.prov(p.prov);
+       foreignItems.push({
+        prodId: it.prodId,
+        prodNombre: p.nombre,
+        ncajas: it.ncajas,
+        belongsToProv: p.prov,
+        belongsToProvNombre: (pProv && pProv.nombre) || p.prov
+       });
+      }
+     });
+     if (foreignItems.length > 0) {
+      bad.push({
+       orderId: o.id,
+       provId: o.provId,
+       provNombre: (prov && prov.nombre) || o.provId,
+       autoFromCart: !!o._autoFromCart,
+       status: o.status,
+       itemsTotal: o.items.length,
+       itemsForeign: foreignItems.length,
+       foreignItems: foreignItems,
+       updatedAt: o.updatedAt
+      });
+     }
+    });
+    console.log('[AUDIT pendingOrders X-prov] encontrados ' + bad.length + ' pedido(s) con items contaminados');
+    if (bad.length > 0) console.table(bad.map(function(x){ return { orderId: x.orderId, prov: x.provNombre, contaminados: x.itemsForeign, totalItems: x.itemsTotal, auto: x.autoFromCart }; }));
+    return bad;
+   } catch(e) { console.warn('[audit]', e); return []; }
+  };
+  // v1.3.1963: reparación dry-run/real de pendingOrders contaminados.
+  //   - dryRun=true (default): solo reporta qué haría.
+  //   - dryRun=false: filtra los items contaminados de cada pedido afectado.
+  //     Si un pedido queda SIN items tras el filtrado, se MARCA deleted (no se
+  //     borra físicamente — soft delete por filosofía bancaria, ver AUDITORIA).
+  //   Los items contaminados se PIERDEN del pedido afectado pero el pedido
+  //   original (del prov correcto) NO se toca. Si el carrito del prov correcto
+  //   tenía los items aún, se sincronizarán al volver a su catálogo.
+  window._dashweyFixPendingOrdersXProv = function(opts) {
+   opts = opts || {};
+   var dryRun = opts.dryRun !== false; // default true
+   var bad = window._dashweyAuditPendingOrdersXProv();
+   if (!bad.length) { console.log('[FIX] nada que reparar'); return { fixed: 0, deleted: 0 }; }
+   if (dryRun) {
+    console.warn('[FIX] DRY-RUN — no se aplican cambios. Para ejecutar: window._dashweyFixPendingOrdersXProv({dryRun:false})');
+    return { dryRun: true, wouldFix: bad.length, details: bad };
+   }
+   var fixed = 0, deleted = 0;
+   bad.forEach(function(rec){
+    try {
+     var order = (State.get.pendingOrders() || []).find(function(o){ return o.id === rec.orderId; });
+     if (!order) return;
+     var cleanItems = (order.items || []).filter(function(it){
+      var p = State.get.prod(it.prodId);
+      return p && p.prov === order.provId;
+     });
+     if (cleanItems.length === 0) {
+      // No quedan items legítimos → soft delete del pedido (no afecta al pedido
+      // legítimo del prov correcto, que sigue intacto)
+      State.set.updatePendingOrder(order.id, { items: [], deleted: true, status: 'cancelled' });
+      deleted++;
+     } else {
+      State.set.updatePendingOrder(order.id, { items: cleanItems });
+      fixed++;
+     }
+    } catch(e) { console.warn('[FIX] error en orderId ' + rec.orderId, e); }
+   });
+   console.log('[FIX] aplicado: ' + fixed + ' pedidos reparados, ' + deleted + ' pedidos vaciados (soft-delete)');
+   try { renderCatInline && renderCatInline(); } catch(_) {}
+   try { updateBadge && updateBadge(); } catch(_) {}
+   return { fixed: fixed, deleted: deleted };
   };
  } catch(e) { console.warn('[editPendingOrder helper]', e && e.message); }
 
