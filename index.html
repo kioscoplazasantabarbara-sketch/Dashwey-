@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1967";
+ var CURRENT_CACHE = "dashwey-v1-3-1968";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1967</title>
+<title>Dashwey v1.3.1968</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23869,7 +23869,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1967';
+ const _APP_VERSION = 'v1.3.1968';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -61756,7 +61756,49 @@ function _parseIva(iva) {
       +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--sp-2);padding-top:8px;border-top:1px solid var(--border)"><span style="font-size:var(--fs-sm);font-weight:var(--fw-semi);color:var(--ink)">Total con cargos</span><span id="ldc-imp-total" style="font-size:var(--fs-base);font-weight:var(--fw-xbold);color:var(--ink)">'+feur(totalInv)+'</span></div>'
      +'</div>'
      +'</div>';
-    if (artEl) artEl.innerHTML = html + _impuestosBlockHtml;
+    if (artEl) {
+     // v1.3.1968 BUG RAÍZ: renderArticulos se llama cada vez que el usuario
+     //   marca/desmarca un item ✓ — re-inserta TODO el HTML incluyendo el
+     //   panel de impuestos → los inputs se RECREAN y pierden sus valores.
+     //   Síntoma: usuario escribe descuento 22.94, marca un item, _redrawArticulos
+     //   destruye el input antes de que el debounce 500ms de v1967 persista al
+     //   pendingOrder → al confirmar "Pedido recibido", inputs vacíos → gasto sin
+     //   descuento. cargosExtra del pedido histórico queda null.
+     // Fix tripartito:
+     //   1) Capturar .value de inputs antes del re-render.
+     //   2) Restaurar después del innerHTML.
+     //   3) Reconectar listeners (el IIFE original solo corría una vez).
+     var _saved = {};
+     try {
+      ['ldc-imp-re','ldc-imp-pv','ldc-imp-extra','ldc-imp-desc'].forEach(function(id){
+       var el = document.getElementById(id);
+       if (el && el.value) _saved[id] = el.value;
+      });
+     } catch(_) {}
+     artEl.innerHTML = html + _impuestosBlockHtml;
+     // Restaurar valores capturados (sobrescribe los hidratados desde order.cargosExtra
+     // si el usuario tenía algo más reciente sin persistir aún)
+     try {
+      Object.keys(_saved).forEach(function(id){
+       var el = document.getElementById(id);
+       if (el) el.value = _saved[id];
+      });
+     } catch(_) {}
+     // Reconectar listeners (el IIFE inicial pierde efecto tras re-render)
+     try { if (typeof _conectarListenersCargos === 'function') _conectarListenersCargos(); } catch(_) {}
+     // Re-actualizar tarjetas + total según valores actuales
+     try {
+      var _re = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
+      var _pv = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
+      var _ex = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
+      var _dc = parseFloat(document.getElementById('ldc-imp-desc')?.value || 0) || 0;
+      var _newInv = totalInvBruto + _re + _pv + _ex - _dc;
+      var _tot = document.getElementById('ldc-imp-total');
+      if (_tot) _tot.textContent = feur(_newInv);
+      var _invEl = document.getElementById('ldc-inv-val');
+      if (_invEl) _invEl.textContent = feur(_newInv);
+     } catch(_) {}
+    }
     // Sincronizar opacidad botón Recibido
     var allChk = items.every(function(o){ return !!_checked[o.prodId]; });
     var _bR2 = document.getElementById('ldc-btn-recibido');
@@ -61976,10 +62018,25 @@ function _parseIva(iva) {
         // Antes se descartaban silenciosamente — el gasto generado no incluía cargos extra
         // v1.3.1487 BUG-3: defaults 0,00. Si usuario abrió panel y puso valores, se respetan.
         //   Si NO abrió panel, todo queda en 0 (sin recargo automático). Añadido descuento.
+        // v1.3.1968: leer inputs Y _ord2.cargosExtra como fallback. Si el
+        //   usuario escribió valores pero renderArticulos los borró (race),
+        //   los recuperamos del pendingOrder que ya los tiene persistidos.
         var _re_v1174 = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
         var _pv_v1174 = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
         var _ex_v1174 = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
         var _dc_v1487 = parseFloat(document.getElementById('ldc-imp-desc')?.value || 0) || 0;
+        // Fallback al cargosExtra persistido del pendingOrder si los inputs
+        //   están vacíos pero hay datos guardados (caso: usuario escribió,
+        //   marcó item, renderArticulos destruyó inputs antes del retoque).
+        try {
+         var _ceFallback = _ord2 && _ord2.cargosExtra;
+         if (_ceFallback) {
+          if (_re_v1174 === 0 && _ceFallback.re > 0) _re_v1174 = _ceFallback.re;
+          if (_pv_v1174 === 0 && _ceFallback.puntoVerde > 0) _pv_v1174 = _ceFallback.puntoVerde;
+          if (_ex_v1174 === 0 && _ceFallback.custom && _ceFallback.custom.importe > 0) _ex_v1174 = _ceFallback.custom.importe;
+          if (_dc_v1487 === 0 && _ceFallback.descuento > 0) _dc_v1487 = _ceFallback.descuento;
+         }
+        } catch(_) {}
         var _cargosExtra_v1174 = null;
         if (_re_v1174 > 0 || _pv_v1174 > 0 || _ex_v1174 > 0 || _dc_v1487 > 0) {
          _cargosExtra_v1174 = {
@@ -62147,11 +62204,10 @@ function _parseIva(iva) {
      });
     }
 
-    // v1.3.1967: conectar listeners de input INMEDIATAMENTE al construir
-    //   el modal (no esperar a que el usuario abra el panel). Idempotente
-    //   via dataset.bound.
-    (function _conectarListenersCargos(){
-     var _persistTimer = null;
+    // v1.3.1968: función nombrada para poder ser invocada desde renderArticulos
+    //   tras cada re-render. Sin debounce — persistencia INMEDIATA. La 500ms
+    //   anterior creaba ventana de race con _redrawArticulos.
+    var _conectarListenersCargos = function() {
      var _updateImpTotal = function() {
       var re = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
       var pv = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
@@ -62160,7 +62216,6 @@ function _parseIva(iva) {
       var _newInv = totalInvBruto + re + pv + ex - dc;
       var tot = document.getElementById('ldc-imp-total');
       if (tot) tot.textContent = feur(_newInv);
-      // Actualizar tarjetas superiores en tiempo real
       var invEl = document.getElementById('ldc-inv-val');
       if (invEl) invEl.textContent = feur(_newInv);
       var _newGan = totalVta - _newInv;
@@ -62174,35 +62229,32 @@ function _parseIva(iva) {
         }
        }
       } catch(_) {}
-      // Persistir cargosExtra al pendingOrder con debounce 500ms
+      // v1.3.1968: PERSISTIR INMEDIATAMENTE (sin debounce — race con renderArticulos)
       try {
-       if (_persistTimer) clearTimeout(_persistTimer);
-       _persistTimer = setTimeout(function(){
-        try {
-         var _hasAny = re > 0 || pv > 0 || ex > 0 || dc > 0;
-         var _newCargos = _hasAny ? {
-          re: Math.round(re * 100) / 100,
-          puntoVerde: Math.round(pv * 100) / 100,
-          custom: ex > 0 ? { label: 'Otros', importe: Math.round(ex * 100) / 100 } : null,
-          descuento: dc > 0 ? Math.round(dc * 100) / 100 : 0
-         } : null;
-         if (State.set && State.set.updatePendingOrder) {
-          State.set.updatePendingOrder(orderId, { cargosExtra: _newCargos });
-         }
-        } catch(e) { try { console.warn('[ldc/cargosExtra persist]', e); } catch(_) {} }
-       }, 500);
-      } catch(_) {}
+       var _hasAny = re > 0 || pv > 0 || ex > 0 || dc > 0;
+       var _newCargos = _hasAny ? {
+        re: Math.round(re * 100) / 100,
+        puntoVerde: Math.round(pv * 100) / 100,
+        custom: ex > 0 ? { label: 'Otros', importe: Math.round(ex * 100) / 100 } : null,
+        descuento: dc > 0 ? Math.round(dc * 100) / 100 : 0
+       } : null;
+       if (State.set && State.set.updatePendingOrder) {
+        State.set.updatePendingOrder(orderId, { cargosExtra: _newCargos });
+       }
+      } catch(e) { try { console.warn('[ldc/cargosExtra persist]', e); } catch(_) {} }
      };
      ['ldc-imp-re','ldc-imp-pv','ldc-imp-extra','ldc-imp-desc'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el && el.dataset.bound !== '1') {
        el.dataset.bound = '1';
        el.addEventListener('input', _updateImpTotal);
-       el.addEventListener('change', _updateImpTotal); // por si input no dispara
-       el.addEventListener('blur', _updateImpTotal);   // último intento al salir
+       el.addEventListener('change', _updateImpTotal);
+       el.addEventListener('blur', _updateImpTotal);
       }
      });
-    })();
+    };
+    // Primera conexión al construir el modal
+    _conectarListenersCargos();
 
     // Botón Exportar / Compartir
     var _bExp = document.getElementById('ldc-btn-exportar');
