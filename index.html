@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1964";
+ var CURRENT_CACHE = "dashwey-v1-3-1965";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1964</title>
+<title>Dashwey v1.3.1965</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23869,7 +23869,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1964';
+ const _APP_VERSION = 'v1.3.1965';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -42631,7 +42631,15 @@ function _confirmBorrarCuenta(id) {
      //   for i=1..14 saltaba el mismo día → para sameDay devolvía el SIGUIENTE
      //   ciclo y la entrega real (el propio día del pedido) nunca marcaba vencido.
      var _sameDayB1 = _esSameDay(p.provId, fp);
-     var feOrig = _sameDayB1 ? new Date(fp) : _entregaPara(prov?prov.diasEntrega:[], p.date);
+     // v1.3.1965 FIX: respetar offsetEntrega del ciclo. La heurística antigua
+     //   (próximo diasEntrega vía _entregaPara) ignoraba el ciclo y producía
+     //   entregas a +6 días en proveedores con offset +1 (caso Praviana).
+     var _feCicloB1 = (!_sameDayB1 && window._DashweyEntregaPorCiclo)
+      ? window._DashweyEntregaPorCiclo(prov, p.date)
+      : null;
+     var feOrig = _sameDayB1
+      ? new Date(fp)
+      : (_feCicloB1 || _entregaPara(prov?prov.diasEntrega:[], p.date));
      var feMid = new Date(feOrig); feMid.setHours(0,0,0,0);
      var atras = feMid<hoy ? Math.floor((hoy-feMid)/MS_DAY) : 0;
      var _esHoyB1 = feMid.getTime() === hoy.getTime();
@@ -46724,7 +46732,11 @@ function _confirmBorrarCuenta(id) {
  .filter(function(o){ return o.status==='pending'; })
  .filter(function(o){
  if(!rSA||!rEA) return true;
- var ent=calcEntA(o.date,o.provId); ent.setHours(0,0,0,0);
+ // v1.3.1965: respetar offsetEntrega del ciclo. Fallback a calcEntA local.
+ var _provE = State.get.prov ? State.get.prov(o.provId) : null;
+ var ent = (window._DashweyEntregaPorCiclo && window._DashweyEntregaPorCiclo(_provE, o.date))
+  || calcEntA(o.date,o.provId);
+ ent.setHours(0,0,0,0);
  var s=new Date(rSA);s.setHours(0,0,0,0); var e=new Date(rEA);e.setHours(23,59,59,999);
  return ent>=s && ent<=e;
  });
@@ -46816,6 +46828,81 @@ function _confirmBorrarCuenta(id) {
   }
   // Derivación al vuelo desde modelo viejo (no persiste).
   return _derivarCiclosLegacy(prov);
+ }
+
+ // v1.3.1965 — _entregaPorCiclo(prov, fechaPedido) → Date | null
+ //   Calcula la entrega CORRECTA para un pedido respetando el offsetEntrega
+ //   del ciclo (no la heurística "próximo diasEntrega" que ignoraba ciclos).
+ //   Bug observado: Praviana con offsetEntrega=1 mostraba entrega +6 días
+ //   porque calcEntA buscaba el próximo Lu/Ma sin mirar el ciclo.
+ //
+ //   Estrategia (en orden de preferencia):
+ //   1) Match exacto: pedido coincide con proyección {ancla + n*cadaDias}.
+ //   2) Match por día-de-semana del ancla.
+ //   3) Primer ciclo (caso típico: proveedor con un solo ciclo).
+ //
+ //   Devuelve null si el prov no tiene ciclos derivables → el caller usa fallback.
+ function _entregaPorCiclo(prov, fechaPedido) {
+  if (!prov || !fechaPedido) return null;
+  try {
+   var fp = new Date(fechaPedido);
+   if (isNaN(fp.getTime())) return null;
+   fp.setHours(0,0,0,0);
+   var ciclos = _provCiclos(prov);
+   if (!ciclos || !ciclos.length) return null;
+
+   var _parseAncla = function(c) {
+    if (!c || !c.fechaAncla) return null;
+    var a;
+    if (typeof c.fechaAncla === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.fechaAncla)) {
+     var pa = c.fechaAncla.split('-');
+     a = new Date(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10));
+    } else { a = new Date(c.fechaAncla); }
+    if (isNaN(a.getTime())) return null;
+    a.setHours(0,0,0,0);
+    return a;
+   };
+
+   var bestOff = null;
+
+   // 1) Match exacto por proyección
+   for (var i = 0; i < ciclos.length; i++) {
+    var c = ciclos[i];
+    if (!(c.cadaDias > 0)) continue;
+    var ancla = _parseAncla(c);
+    if (!ancla) continue;
+    var diff = Math.round((fp.getTime() - ancla.getTime()) / 86400000);
+    if (diff >= 0 && diff % c.cadaDias === 0) {
+     bestOff = (typeof c.offsetEntrega === 'number') ? c.offsetEntrega : 0;
+     break;
+    }
+   }
+
+   // 2) Match por día-de-semana del ancla
+   if (bestOff === null) {
+    var fpDow = fp.getDay() === 0 ? 6 : fp.getDay() - 1;
+    for (var j = 0; j < ciclos.length; j++) {
+     var c2 = ciclos[j];
+     var a2 = _parseAncla(c2);
+     if (!a2) continue;
+     var aDow = a2.getDay() === 0 ? 6 : a2.getDay() - 1;
+     if (aDow === fpDow) {
+      bestOff = (typeof c2.offsetEntrega === 'number') ? c2.offsetEntrega : 0;
+      break;
+     }
+    }
+   }
+
+   // 3) Fallback: primer ciclo del prov
+   if (bestOff === null && typeof ciclos[0].offsetEntrega === 'number') {
+    bestOff = ciclos[0].offsetEntrega;
+   }
+
+   if (bestOff === null) return null;
+   var ent = new Date(fp);
+   ent.setDate(fp.getDate() + bestOff);
+   return ent;
+  } catch(_) { return null; }
  }
 
  // _derivarCiclosLegacy(prov) → genera ciclos a partir de diasPedido/diasEntrega/reparto.
@@ -47081,6 +47168,7 @@ function _confirmBorrarCuenta(id) {
   window._DashweyFeedPedidosProv = _feedPedidosProv;
   window._DashweyFeedCiclosProv = _feedCiclosProv;
   window._DashweyProvCadaDias = _provCadaDias;
+  window._DashweyEntregaPorCiclo = _entregaPorCiclo; // v1.3.1965 — agenda + campana
  } catch(_) {}
 
  // v1.3.991 — LOTE B: helpers puros de recurrencia Próximo Pedido
@@ -48618,7 +48706,10 @@ function _confirmBorrarCuenta(id) {
   if (!p || !p.date) return;
   // v1.3.1902: si ya hay _recibido para este proveedor ese día → pendingOrder ya confirmado
   try {
-   var _feChkPO = (typeof calcEntA === 'function') ? calcEntA(p.date, p.provId) : null;
+   // v1.3.1965: respetar offsetEntrega del ciclo; fallback a calcEntA legacy.
+   var _provPO = State.get.prov ? State.get.prov(p.provId) : null;
+   var _feChkPO = (window._DashweyEntregaPorCiclo && window._DashweyEntregaPorCiclo(_provPO, p.date))
+    || ((typeof calcEntA === 'function') ? calcEntA(p.date, p.provId) : null);
    if (_feChkPO) {
     var _pdKey = p.provId + '_' + _feChkPO.getFullYear() + '-' + String(_feChkPO.getMonth()+1).padStart(2,'0') + '-' + String(_feChkPO.getDate()).padStart(2,'0');
     if (_recibidosByProvDay && _recibidosByProvDay[_pdKey]) return;
@@ -48638,7 +48729,9 @@ function _confirmBorrarCuenta(id) {
   //   - Caso sameDay (un solo evento) — análogo: usar próximo diasPedido del prov.
 
   // Calcular días de atraso reales (basado en fecha entrega original desde p.date)
-  var feOriginal = calcEntA(p.date, p.provId);
+  // v1.3.1965: respetar offsetEntrega del ciclo; fallback a calcEntA legacy.
+  var feOriginal = (window._DashweyEntregaPorCiclo && window._DashweyEntregaPorCiclo(_provPO, p.date))
+   || calcEntA(p.date, p.provId);
   var diasAtrasoCalc = 0;
   if (!isNaN(feOriginal.getTime())) {
    var feOrigMid = new Date(feOriginal); feOrigMid.setHours(0,0,0,0);
@@ -48691,7 +48784,10 @@ function _confirmBorrarCuenta(id) {
    _pending: true,
    _atrasado: diasAtrasoCalc > 0,
    _diasAtraso: diasAtrasoCalc,
-   _fechaOriginalEntrega: feOriginal
+   _fechaOriginalEntrega: feOriginal,
+   // v1.3.1965: _fechaEntrega para que el render use el cálculo por ciclo
+   //   (offsetEntrega real) en vez de re-derivar con calcEntA heurístico.
+   _fechaEntrega: feOriginal.toISOString()
   });
  });
 
@@ -49190,7 +49286,15 @@ function _confirmBorrarCuenta(id) {
     // v1.3.1501: orden estado — Atrasado domina sobre predicho. Predicho sin atraso
     //   = Programado. Atrasado se muestra siempre rojo (incluso si es predicho).
     var _fechaPedH = new Date(p.fecha);
-    var _fechaEntH = calcEntA(p.fecha, p.provId);
+    // v1.3.1965 FIX: respetar _fechaEntrega del ciclo (predichos ya la traen);
+    //   para reales/pendientes, calcular con _entregaPorCiclo (offsetEntrega
+    //   exacto del ciclo). Fallback a calcEntA (heurística diasEntrega) solo
+    //   si el prov NO tiene ciclos derivables.
+    var _provH = State.get.prov ? State.get.prov(p.provId) : null;
+    var _fechaEntH = ev._fechaEntrega
+     ? new Date(ev._fechaEntrega)
+     : ((window._DashweyEntregaPorCiclo && window._DashweyEntregaPorCiclo(_provH, p.fecha))
+        || calcEntA(p.fecha, p.provId));
     var _stateLblH, _stateClsH;
     if (ev._atrasado && ev._diasAtraso > 0) {
      _stateLblH = 'Atrasado · ' + ev._diasAtraso + 'd';
@@ -49243,7 +49347,11 @@ function _confirmBorrarCuenta(id) {
     //   prov.diasPedido/diasEntrega). Si atrasado, label central = "Atrasado · Nd".
     //   Centro solo estado (provider/arts ya en header).
     var fechaPed = new Date(p.fecha);
-    var fechaEntPed = calcEntA(p.fecha, p.provId);
+    // v1.3.1965 FIX (mismo patrón que header): ciclo > heurística.
+    var fechaEntPed = ev._fechaEntrega
+     ? new Date(ev._fechaEntrega)
+     : ((window._DashweyEntregaPorCiclo && window._DashweyEntregaPorCiclo(_provH, p.fecha))
+        || calcEntA(p.fecha, p.provId));
     if (!isNaN(fechaPed.getTime()) && !isNaN(fechaEntPed.getTime()) && fechaEntPed > fechaPed) {
      var _spanMs = fechaEntPed.getTime() - fechaPed.getTime();
      var _elapsedMs = ahora.getTime() - fechaPed.getTime();
