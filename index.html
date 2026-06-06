@@ -896,7 +896,7 @@ html.is-apk body[data-app-ready="true"] #app {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1968";
+ var CURRENT_CACHE = "dashwey-v1-3-1969";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -915,7 +915,7 @@ html.is-apk body[data-app-ready="true"] #app {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1968</title>
+<title>Dashwey v1.3.1969</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23869,7 +23869,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1968';
+ const _APP_VERSION = 'v1.3.1969';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -58726,6 +58726,34 @@ function _parseIva(iva) {
    } else if (hasItems && !auto) {
     // Forward sync: carrito con items pero no hay auto → crear pedido auto
     try { _almSyncCarritoToPedidoProgramado(); } catch(_) {}
+   } else if (hasItems && auto) {
+    // v1.3.1969: ambos tienen items → reconciliar.
+    //   Comparar cantidad de items y por-item para detectar divergencia.
+    //   El carrito local gana (es lo más reciente que tocó el usuario en
+    //   este device). El sync forward actualiza pendingOrder.
+    var _diverge = false;
+    try {
+     var _autoMap = {};
+     (auto.items || []).forEach(function(it){
+      if (it && it.prodId) _autoMap[it.prodId] = it.ncajas || 0;
+     });
+     var _carritoKeys = Object.keys(_ordenCarrito || {});
+     var _autoKeys = Object.keys(_autoMap);
+     if (_carritoKeys.length !== _autoKeys.length) {
+      _diverge = true;
+     } else {
+      for (var _k = 0; _k < _carritoKeys.length; _k++) {
+       var _pid = _carritoKeys[_k];
+       if ((_ordenCarrito[_pid] || 0) !== (_autoMap[_pid] || 0)) {
+        _diverge = true; break;
+       }
+      }
+     }
+    } catch(_) {}
+    if (_diverge) {
+     try { console.info('[ALM/restore] reconciliando carrito→pendingOrder (divergencia detectada)'); } catch(_) {}
+     try { _almSyncCarritoToPedidoProgramado(); } catch(_) {}
+    }
    }
   } catch(e) {}
  }
@@ -58829,6 +58857,20 @@ function _parseIva(iva) {
   } catch(_) {}
  }
 
+ // v1.3.1969 — sync debounced: cada mutación del carrito (stepper, tap, borrar)
+ //   propaga al pendingOrder en 400ms. Antes solo se sincronizaba al cambiar de
+ //   proveedor o al confirmar unitSheet → ediciones en steppers se perdían en
+ //   agenda / multi-device / modal del pedido hasta el siguiente evento gordo.
+ var _almSyncTimer = null;
+ function _almSyncDebounced() {
+  try {
+   if (_almSyncTimer) clearTimeout(_almSyncTimer);
+   _almSyncTimer = setTimeout(function(){
+    try { _almSyncCarritoToPedidoProgramado(); } catch(_) {}
+   }, 400);
+  } catch(_) {}
+ }
+
  function _catInlineTap(prodId, evt) {
  if (!prodId) return;
  const p = State.get.prod(prodId);
@@ -58845,6 +58887,7 @@ function _parseIva(iva) {
    _catInlineHash = ''; renderCatInline();
    try { _updateAcceptBtn(); } catch(_) {}
    try { updateBadge(); } catch(_) {}
+   _almSyncDebounced(); // v1.3.1969
   }
   return;
  }
@@ -58880,6 +58923,7 @@ function _parseIva(iva) {
  // Pasar coordenadas ya capturadas a _flyToCart
  _flyToCart({ clientX: _ox, clientY: _oy }, prodId);
  _saveCarritoLocal();
+ _almSyncDebounced(); // v1.3.1969
 }
 
  // ── STEP: ±1 bulto desde los botones del stepper ──────────────
@@ -58907,6 +58951,7 @@ function _parseIva(iva) {
  _updateAcceptBtn();
  updateBadge();
  _saveCarritoLocal();
+ _almSyncDebounced(); // v1.3.1969
  }
 
  // ── REFRESH: actualiza solo el item sin re-render completo ────
