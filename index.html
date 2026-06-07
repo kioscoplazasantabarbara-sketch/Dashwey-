@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1971";
+ var CURRENT_CACHE = "dashwey-v1-3-1972";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1971</title>
+<title>Dashwey v1.3.1972</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23913,7 +23913,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1971';
+ const _APP_VERSION = 'v1.3.1972';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -46784,7 +46784,61 @@ function _confirmBorrarCuenta(id) {
     }
    }
 
-   // 2) Match por día-de-semana del ancla
+   // 1.5) v1.3.1972 — SNAP A CICLO MÁS CERCANO
+   //   Cuando p.date NO coincide con la proyección exacta del ancla (caso típico:
+   //   el pendingOrder se creó con new Date() al iniciar el carrito, no con la
+   //   fecha real del ciclo de pedido), buscamos en cada ciclo la fecha de pedido
+   //   proyectada más cercana a p.date (hacia atrás o adelante) y calculamos la
+   //   entrega desde ESA fecha + offsetEntrega. Esto evita el bug histórico del
+   //   fallback que sumaba el offset desde un p.date arbitrario.
+   //
+   //   Caso real reportado 7 jun 2026:
+   //     - Matutano: ancla vie 5 jun, offset +3, cadaDias 7. p.date jue 4 jun
+   //       (carrito iniciado un día antes). Match exacto falla (diff=-1).
+   //       Sin snap → fallback jue+3=dom 7 (HOY ❌). Con snap → vie 5 + 3 = lun 8 ✅.
+   //     - Goyo: ancla lun 25 may, offset +2. p.date dom 7 jun. Match falla
+   //       (diff=13, 13%7=6). Sin snap → dom+2=mar 9 ❌. Con snap → lun 8 + 2 = mar 10 ✅.
+   //
+   //   Devuelve la entrega completa (no solo bestOff) porque la fecha base ya no
+   //   es fp sino la fecha de ciclo proyectada — return directo.
+   if (bestOff === null) {
+    var bestSnap = null;
+    for (var s = 0; s < ciclos.length; s++) {
+     var cs = ciclos[s];
+     if (!(cs.cadaDias > 0)) continue;
+     var as = _parseAncla(cs);
+     if (!as) continue;
+     var diffS = Math.round((fp.getTime() - as.getTime()) / 86400000);
+     // Fecha de ciclo hacia atrás (floor): ≤ p.date
+     var nBack = Math.floor(diffS / cs.cadaDias);
+     var fechaBack = new Date(as);
+     fechaBack.setDate(as.getDate() + nBack * cs.cadaDias);
+     fechaBack.setHours(0,0,0,0);
+     var distBack = Math.round((fp.getTime() - fechaBack.getTime()) / 86400000);
+     // Fecha de ciclo hacia adelante (siguiente): > p.date
+     var fechaFwd = new Date(fechaBack);
+     fechaFwd.setDate(fechaBack.getDate() + cs.cadaDias);
+     var distFwd = Math.round((fechaFwd.getTime() - fp.getTime()) / 86400000);
+     // Elegir la más cercana (ties → hacia adelante, mejor para la UX)
+     var pickFecha, pickDist;
+     if (distFwd <= distBack) { pickFecha = fechaFwd; pickDist = distFwd; }
+     else { pickFecha = fechaBack; pickDist = distBack; }
+     // Solo aceptar snap si la distancia es razonable (< cadaDias)
+     if (pickDist < cs.cadaDias) {
+      if (!bestSnap || pickDist < bestSnap.dist) {
+       bestSnap = { ciclo: cs, fechaPed: pickFecha, dist: pickDist };
+      }
+     }
+    }
+    if (bestSnap) {
+     var offS = (typeof bestSnap.ciclo.offsetEntrega === 'number') ? bestSnap.ciclo.offsetEntrega : 0;
+     var entS = new Date(bestSnap.fechaPed);
+     entS.setDate(bestSnap.fechaPed.getDate() + offS);
+     return entS;
+    }
+   }
+
+   // 2) Match por día-de-semana del ancla (defensa en profundidad)
    if (bestOff === null) {
     var fpDow = fp.getDay() === 0 ? 6 : fp.getDay() - 1;
     for (var j = 0; j < ciclos.length; j++) {
