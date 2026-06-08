@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1976";
+ var CURRENT_CACHE = "dashwey-v1-3-1977";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1976</title>
+<title>Dashwey v1.3.1977</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23913,7 +23913,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1976';
+ const _APP_VERSION = 'v1.3.1977';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -62528,6 +62528,16 @@ function _parseIva(iva) {
          try {
           State.set.updatePendingOrder(orderId, { items: items.map(function(o){return{prodId:o.prodId,ncajas:o.ncajas,udscaja:o.udscaja,precio:o.precio,pvp:o.pvp};}) });
          } catch(_e) { console.warn('[LDC longpress del] updatePendingOrder failed:', _e); }
+         // v1.3.1977 FIX: sincronizar _ordenCarrito al estado actualizado del
+         //   pedido. Sin esto, al volver al Almacén el sync forward (v1969)
+         //   detectaba carrito[pid] > 0 con pendingOrder sin ese item → reescribía
+         //   el pedido con el item restaurado → "borrado fantasma" (el item volvía).
+         try {
+          var _ordSync = (State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
+          if (_ordSync && typeof window._dashweySyncCartToPending === 'function') {
+           window._dashweySyncCartToPending(_ordSync);
+          }
+         } catch(_) {}
         }
         _modalEl.remove();
         renderArticulos();
@@ -62547,6 +62557,15 @@ function _parseIva(iva) {
          try {
           State.set.updatePendingOrder(orderId, { items: _pO2.items });
          } catch(_e) { console.warn('[LDC longpress] updatePendingOrder failed:', _e); }
+         // v1.3.1977 FIX: sincronizar _ordenCarrito a la nueva cantidad. Sin esto,
+         //   al volver al Almacén el sync forward reescribía el pedido con la
+         //   cantidad vieja del carrito → la edición se perdía silenciosamente.
+         try {
+          var _ordSyncE = (State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
+          if (_ordSyncE && typeof window._dashweySyncCartToPending === 'function') {
+           window._dashweySyncCartToPending(_ordSyncE);
+          }
+         } catch(_) {}
         }
         _modalEl.remove();
         try { Utils.triggerHaptic('selection'); } catch(_) {}
@@ -64966,6 +64985,36 @@ _eaRecalc();
   // Helper opcional para preguntar si hay carrito activo antes de editar
   window._dashweyGetCart = function(){
    try { return Object.assign({}, _ordenCarrito); } catch(_) { return null; }
+  };
+  // v1.3.1977 — Sync quirúrgico del carrito a un pendingOrder actualizado.
+  //   Mismo concepto que _dashweyEditPendingOrder pero NO cambia _ordenEstado
+  //   ni dispara renderCatInline. Para usar cuando el pedido se ha editado
+  //   "in situ" (borrar item via long-press, cambiar cantidad) y queremos
+  //   que el carrito refleje el cambio para que el sync forward (v1969) NO
+  //   detecte diferencia y reescriba el pedido con valores viejos.
+  //   Fix del bug: "borro item del pedido → vuelvo al Almacén → el item
+  //   reaparece" (el carrito tenía el item con su qty vieja).
+  window._dashweySyncCartToPending = function(ord) {
+   if (!ord || !Array.isArray(ord.items)) return false;
+   _ordenCarrito = {};
+   ord.items.forEach(function(it){
+    if (it && it.prodId) {
+     _ordenCarrito[it.prodId] = (it.ncajas && it.ncajas > 0) ? it.ncajas : 1;
+    }
+   });
+   // Persistir conservando el estado y provId actuales del carrito
+   try {
+    var _prev = {};
+    try { _prev = JSON.parse(localStorage.getItem(_CARRITO_KEY) || '{}'); } catch(_){}
+    localStorage.setItem(_CARRITO_KEY, JSON.stringify({
+     cart: _ordenCarrito,
+     provId: (_prev && _prev.provId) || ord.provId || State.get.selectedProv(),
+     estado: (_prev && typeof _prev.estado === 'number') ? _prev.estado : 0,
+     ts: Date.now(),
+    }));
+   } catch(_){}
+   try { updateBadge(); } catch(_){}
+   return true;
   };
   // v1.3.1963: auditoría de pendingOrders con items cross-proveedor.
   //   Devuelve un array con info de cada pedido que contiene items cuyo
