@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1977";
+ var CURRENT_CACHE = "dashwey-v1-3-1979";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1977</title>
+<title>Dashwey v1.3.1979</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23913,7 +23913,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1977';
+ const _APP_VERSION = 'v1.3.1979';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -62493,7 +62493,13 @@ function _parseIva(iva) {
       }
       if (!_lpPid) return;
       _lpTimer = setTimeout(function() {
-       var _ord = items.find(function(o){ return o.prodId === _lpPid; });
+       // v1.3.1978 FIX CRÍTICO: capturar _lpPid en variable local AHORA, antes
+       //   de que touchend (L62585) la nulifique. Los handlers de click se
+       //   ejecutan después de que el usuario levante el dedo (touchend dispara
+       //   _lpPid=null) → si usaran _lpPid directamente, findIndex devolvería
+       //   -1 y el item nunca se eliminaba (mismo bug en "Guardar").
+       var _lpPidCaptured = _lpPid;
+       var _ord = items.find(function(o){ return o.prodId === _lpPidCaptured; });
        if (!_ord) return;
        try { Utils.triggerHaptic('medium'); } catch(_) {}
        var _nom = _ord.p && _ord.p.nombre ? _ord.p.nombre : 'Artículo';
@@ -62518,7 +62524,7 @@ function _parseIva(iva) {
        _modalEl.addEventListener('click', function(ev) { if (ev.target === _modalEl) _modalEl.remove(); });
        // Eliminar artículo
        document.getElementById('ldc-lp-del').addEventListener('click', function() {
-        var idx = items.findIndex(function(o){ return o.prodId === _lpPid; });
+        var idx = items.findIndex(function(o){ return o.prodId === _lpPidCaptured; });
         if (idx >= 0) {
          items.splice(idx, 1);
          // v1.3.1704 LOTE D: usar updatePendingOrder para que persista correctamente.
@@ -62551,7 +62557,7 @@ function _parseIva(iva) {
         // Actualizar en pendingOrder
         var _pO2 = (State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
         if (_pO2) {
-         var _it2 = (_pO2.items||[]).find(function(it){return it.prodId===_lpPid;});
+         var _it2 = (_pO2.items||[]).find(function(it){return it.prodId===_lpPidCaptured;});
          if (_it2) { _it2.ncajas = newQty; _it2.precio = newPrecio; }
          // Persistir cambios via State.set.updatePendingOrder → dispara save() → Firebase
          try {
@@ -72538,11 +72544,19 @@ window._almCarritoOptions = function() {
  //   Sin esto, _isAtTop(#fs-content) siempre devolvía true → cualquier touch en la lista
  //   activaba swipe-close incluso con scroll a media página → sheet se cerraba al
  //   intentar hacer scroll. Bug P0 UX.
+ // v1.3.1978 FIX: aplicar el MISMO patrón al modal LDC (Detalle Pedido Programado).
+ //   #fs-content tiene overflow:hidden + display:flex; el scroller real es
+ //   #ldc-art-list (overflow-y:auto). Sin este alias, _isAtTop devolvía true y el
+ //   swipe-close se activaba en mitad del scroll → modal se cerraba al desplazar
+ //   la lista de artículos (muy molesto para marcar checkboxes).
  function _getActiveScroller(fsBox) {
   if (!fsBox) return null;
   // Si hay layout dc-layout activo, el scroll vive en .dc-scroll
   const dcScroll = fsBox.querySelector('.dc-scroll');
   if (dcScroll) return dcScroll;
+  // v1.3.1978: LDC (Detalle Pedido) — scroller en #ldc-art-list
+  const ldcScroll = fsBox.querySelector('#ldc-art-list');
+  if (ldcScroll) return ldcScroll;
   // Fallback legacy: el padre #fs-content scrollea
   return fsBox.querySelector('#fs-content') || document.getElementById('fs-content');
  }
@@ -75878,6 +75892,15 @@ document.addEventListener('keydown', function(e) {
   try {
    var online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
    var syncDone = !!window._DashweyInitialSyncDone;
+   // v1.3.1979 RECUPERAR v1.3.1844: el skeleton del Hero debe esperar TAMBIÉN al
+   //   primer sync de Loyverse (no solo Firestore). Sin esto se mostraba primero
+   //   la cifra LOCAL (sin ventas Loyverse frescas) y luego saltaba a la real →
+   //   parpadeo. La v1.3.1848 había quitado esta espera por velocidad de arranque,
+   //   pero genera la cifra intermedia "random" que Hung reportó. Mejor 3,5s de
+   //   skeleton honesto que un número provisional que confunde.
+   //   Tope de seguridad ya existente (L75983, 8s): si Loyverse no responde →
+   //   _DashweyLvSkeletonTimeout=true → se libera igualmente. Nunca cuelga.
+   var lvSyncDone = !!(window._DashweyLvFirstSyncDone || window._DashweyLvSkeletonTimeout);
    var state;
    var pillMode = null;
    var pillLabel = '';
@@ -75886,15 +75909,12 @@ document.addEventListener('keydown', function(e) {
     state = 'offline';
     pillMode = 'offline';
     pillLabel = 'Sin conexión';
-   } else if (!syncDone) {
+   } else if (!syncDone || !lvSyncDone) {
     state = 'pending';
     pillMode = null; // amarillo pulsante por defecto
     pillLabel = 'Sincronizando…';
    } else {
-    // v1.3.1848 OPCIÓN 1: en cuanto Firestore cargó (syncDone), quitar el gris y
-    //   mostrar la cifra LOCAL con animación de entrada (de 0). NO esperar a Loyverse
-    //   (eso costaba 3,5s de gris → arranque lento). Cuando Loyverse llega después,
-    //   actualiza en silencio sin re-animar. Sensación premium: dato al instante.
+    // Firestore + Loyverse completados → cifras definitivas, quitar gris y animar UNA vez.
     state = 'done';
     pillMode = 'done';
     pillLabel = 'Sincronizado';
