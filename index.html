@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1975";
+ var CURRENT_CACHE = "dashwey-v1-3-1976";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1975</title>
+<title>Dashwey v1.3.1976</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23913,7 +23913,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1975';
+ const _APP_VERSION = 'v1.3.1976';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -61935,6 +61935,11 @@ function _parseIva(iva) {
     +'<button id="ldc-btn-share-hdr" title="Compartir pedido" aria-label="Compartir pedido" style="width:36px;height:36px;border-radius:50%;border:none;background:var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink-soft);touch-action:manipulation;-webkit-tap-highlight-color:transparent" onclick="try{Utils.triggerHaptic(\'light\');}catch(_){}; var b=document.getElementById(\'ldc-btn-exportar\'); if(b){b.click();}">'
     +'<svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>'
     +'</button>'
+    // v1.3.1976: botón "Empezar de nuevo" — borra el pedido pendiente completo
+    //   + vacía el carrito + reset guard. Acción destructiva, color rojo suave.
+    +'<button id="ldc-btn-reset-hdr" title="Empezar de nuevo" aria-label="Empezar de nuevo" style="width:36px;height:36px;border-radius:50%;border:none;background:var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--red);touch-action:manipulation;-webkit-tap-highlight-color:transparent">'
+    +'<svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>'
+    +'</button>'
     +'<button class="mhd-close" onclick="App.ui.closeFs()" style="flex-shrink:0">×</button>'
     +'</div>'
     +'</div></div>'
@@ -62064,7 +62069,40 @@ function _parseIva(iva) {
       var _partialInv = items.reduce(function(s,o){
        return _checked[o.prodId] ? s+(o.ncajas||1)*(o.precio||0)*(1+_getIvaP(o)) : s;
       }, 0);
+      // v1.3.1976 BUG-A: incluir cargosExtra (RE + PV + Otros − Descuento) en
+      //   la KPI Inversión al marcar items. Antes _partialInv ignoraba los
+      //   impuestos → la KPI bajaba al checkear porque el cálculo original
+      //   (totalInv = totalInvBruto + extrasNet) era ignorado por este handler.
+      //   Lee los inputs en vivo si el panel está abierto, o el cargosExtra
+      //   persistido como fallback. Mismo patrón que el handler "Pedido recibido".
+      try {
+       var _re_pi = parseFloat(document.getElementById('ldc-imp-re')?.value || 0) || 0;
+       var _pv_pi = parseFloat(document.getElementById('ldc-imp-pv')?.value || 0) || 0;
+       var _ex_pi = parseFloat(document.getElementById('ldc-imp-extra')?.value || 0) || 0;
+       var _dc_pi = parseFloat(document.getElementById('ldc-imp-desc')?.value || 0) || 0;
+       if (_re_pi === 0 && _pv_pi === 0 && _ex_pi === 0 && _dc_pi === 0) {
+        var _cePI = (order && order.cargosExtra) || {};
+        _re_pi = _cePI.re || 0;
+        _pv_pi = _cePI.puntoVerde || 0;
+        _ex_pi = (_cePI.custom && _cePI.custom.importe) || 0;
+        _dc_pi = _cePI.descuento || 0;
+       }
+       _partialInv = _partialInv + _re_pi + _pv_pi + _ex_pi - _dc_pi;
+      } catch(_) {}
       _ldcCountUp('ldc-inv-val', _partialInv, 400);
+      // v1.3.1976: recalcular GANANCIA en vivo (totalVta − _partialInv) para
+      //   que la card central refleje el efecto inmediato del check + impuestos.
+      try {
+       var _newGanCheck = totalVta - _partialInv;
+       var ganElsCheck = document.querySelectorAll('.ldc-kpi-item');
+       if (ganElsCheck && ganElsCheck[2]) {
+        var gvCheck = ganElsCheck[2].querySelector('div:nth-child(2)');
+        if (gvCheck) {
+         gvCheck.textContent = feur(_newGanCheck);
+         gvCheck.style.color = _newGanCheck >= 0 ? 'var(--success)' : 'var(--error)';
+        }
+       }
+      } catch(_) {}
       // Todos marcados → secuencia de cierre
       var _allNow = items.every(function(o){ return !!_checked[o.prodId]; });
       if (_allNow) { try{ Utils.triggerHaptic('success'); }catch(_){} }
@@ -62082,16 +62120,27 @@ function _parseIva(iva) {
     var _bR = document.getElementById('ldc-btn-recibido');
     if (_bR) {
      _bR.addEventListener('click', function() {
-      var allChk=items.every(function(o){return !!_checked[o.prodId];});
-      if (!allChk) {
-       try{showToast('☑️ Comprueba los artículos recibidos primero');}catch(_){}
+      // v1.3.1976 FEATURE-C: permitir confirmar pedido PARCIAL — antes el
+      //   guard "allChk" bloqueaba si no estaban TODOS marcados. Caso real:
+      //   a veces no llega todo el pedido y Hung tiene que confirmar igualmente.
+      //   Ahora: si hay al menos UN item marcado, confirmar. Los items NO
+      //   marcados se descartan del histórico (no entran en addPedido).
+      //   Sin items marcados → mensaje guía.
+      var _chkCountR = Object.values(_checked).filter(Boolean).length;
+      if (_chkCountR === 0) {
+       try{showToast('☑️ Marca al menos un artículo recibido');}catch(_){}
        return;
       }
+      var allChk = items.every(function(o){return !!_checked[o.prodId];});
+      var _esParcial = !allChk;
       if (_bR.dataset.p==='1') return; _bR.dataset.p='1';
       try {
        var _ord2=(State.get.pendingOrders?State.get.pendingOrders():[]).find(function(o){return o.id===orderId;});
        if (_ord2) {
-        (_ord2.items||[]).forEach(function(it){
+        // v1.3.1976 FEATURE-C: filtrar items a SOLO los marcados.
+        //   Si parcial, los no marcados se descartan (no afectan stock ni gasto).
+        var _itemsConfirmados = (_ord2.items||[]).filter(function(it){ return !!_checked[it.prodId]; });
+        _itemsConfirmados.forEach(function(it){
          var p=State.get.prod(it.prodId);
          if(p){var ns=(p.stockActual||0)+(it.ncajas||1)*(it.udscaja||p.udscaja||1); State.set.updateProd(it.prodId,{stockActual:Math.max(0,ns)});}
         });
@@ -62133,12 +62182,16 @@ function _parseIva(iva) {
          id: _ord2.id.replace('pord_','ped_'),
          fecha: new Date().toISOString(),
          provId: _ord2.provId,
-         items: (_ord2.items||[]).map(function(it){ return { prodId:it.prodId, ncajas:it.ncajas||1, udscaja:it.udscaja||1, precio:it.precio||0, pvp:it.pvp||0 }; }),
+         // v1.3.1976 FEATURE-C: items filtrados a SOLO los marcados.
+         //   Los no marcados se descartan (no entran en histórico ni gasto).
+         items: _itemsConfirmados.map(function(it){ return { prodId:it.prodId, ncajas:it.ncajas||1, udscaja:it.udscaja||1, precio:it.precio||0, pvp:it.pvp||0 }; }),
          cargosExtra: _cargosExtra_v1174,
          // v1.3.1902: flag para reactivar en feed de agenda y permitir reversión
          _recibido: true,
          _recibidoAt: Date.now(),
          _pendingOrderId: _ord2.id, // para recrear pendingOrder si se desmarca
+         // v1.3.1976: marca de pedido parcial (algunos items descartados)
+         _parcial: _esParcial ? { totalEsperados: (_ord2.items||[]).length, recibidos: _itemsConfirmados.length } : null,
         };
         try { State.set.addPedido(_pedConfirmado); } catch(_e) { console.error('[LDC] addPedido failed:', _e); }
         // v1.3.1902: marcar entrega como COMPLETADA en agenda automáticamente
@@ -62159,7 +62212,12 @@ function _parseIva(iva) {
          try { App.alm._resetCarritoAuto && App.alm._resetCarritoAuto(); } catch(_) {}
         }
         try { var _Bus=window.DashweyBus||window._DashweyBus; if(_Bus) _Bus.emit('pedido_stock',{pedido:_pedConfirmado}); } catch(_){}
-        try{showToast('📦 Pedido recibido');}catch(_){}
+        // v1.3.1976 FEATURE-C: toast informativo según parcial o completo
+        if (_esParcial) {
+         try{showToast('📦 Pedido recibido parcial · ' + _itemsConfirmados.length + ' de ' + (_ord2.items||[]).length + ' artículos');}catch(_){}
+        } else {
+         try{showToast('📦 Pedido recibido');}catch(_){}
+        }
        }
       } catch(e){
         console.error('[LDC] btn pedido recibido error:', e);
@@ -62172,6 +62230,62 @@ function _parseIva(iva) {
 
 
     // v1.3.1636: botón Editar pedido — vuelve a estado creación cesta con los items cargados
+    // v1.3.1976 FEATURE-D: botón "Empezar de nuevo" — borra el pedido completo
+    //   + vacía el carrito + reset guard de sync. Acción destructiva con confirm.
+    //   Caso de uso real (Hung): a veces quiero descartar todo lo seleccionado
+    //   y empezar el pedido desde cero, sin tener que ir tildando uno a uno.
+    var _bReset = document.getElementById('ldc-btn-reset-hdr');
+    if (_bReset) {
+     _bReset.addEventListener('click', function() {
+      if (_bReset.dataset.p === '1') return;
+      _bReset.dataset.p = '1';
+      var _ord_reset = (State.get.pendingOrders ? State.get.pendingOrders() : []).find(function(o){ return o.id === orderId; });
+      var _nItems = _ord_reset && _ord_reset.items ? _ord_reset.items.length : 0;
+      var _provNomR = prov ? (prov.nombre || 'este proveedor') : 'este proveedor';
+      var _doReset = function() {
+       try {
+        // 1. Borrar pendingOrder (tombstone → sync multi-device)
+        State.set.removePendingOrder(orderId);
+        // 2. Si era auto desde carrito, vaciar también _ordenCarrito
+        try {
+         if (_ord_reset && _ord_reset._autoFromCart && App.alm && App.alm._resetCarritoAuto) {
+          App.alm._resetCarritoAuto();
+         } else if (App.alm && App.alm._resetCarritoAuto) {
+          // Si no era _autoFromCart pero el carrito apunta al mismo proveedor, vaciarlo también
+          App.alm._resetCarritoAuto();
+         }
+        } catch(_) {}
+        // 3. Cerrar modal
+        try { App.ui.closeFs(); } catch(_) {}
+        // 4. Refrescar Almacén y badge
+        setTimeout(function(){
+         try { App.alm.updateBadge && App.alm.updateBadge(); } catch(_) {}
+         try { App.alm.renderCatInline && App.alm.renderCatInline(); } catch(_) {}
+         try { Utils.triggerHaptic('medium'); } catch(_) {}
+         try { showToast('🗑️ Pedido borrado · empieza de nuevo'); } catch(_) {}
+        }, 200);
+       } catch(e) {
+        console.error('[LDC btn reset] error:', e);
+        try { showToast('⚠️ Error al borrar el pedido', 'warning'); } catch(_) {}
+       } finally {
+        _bReset.dataset.p = '';
+       }
+      };
+      try {
+       window._showDestructiveConfirm({
+        title: 'Empezar de nuevo',
+        message: 'Se borrará el pedido de ' + _provNomR + ' (' + _nItems + ' artículo' + (_nItems !== 1 ? 's' : '') + ') y se vaciará el carrito. ¿Continuar?',
+        confirmText: 'Borrar',
+        onConfirm: _doReset,
+        onCancel: function() { _bReset.dataset.p = ''; }
+       });
+      } catch(_) {
+       // Fallback sin confirm si la utilidad no está disponible
+       _doReset();
+      }
+     });
+    }
+
     var _bEdit = document.getElementById('ldc-btn-editar');
     if (_bEdit) {
      _bEdit.addEventListener('click', function() {
@@ -62456,10 +62570,13 @@ function _parseIva(iva) {
   }
 
   // _ldcSyncBotones — compat export
+  // v1.3.1976: la opacidad refleja el estado de check pero ya NO es bloqueante:
+  //   0 marcados → opacity 0.5 (guía visual: marca algo primero).
+  //   1+ marcados → opacity 1 (botón listo, aunque sea parcial).
   function _ldcSyncBotones(items, _checked) {
-   var allChk=items.every(function(o){return !!_checked[o.prodId];});
+   var chkCount = Object.values(_checked).filter(Boolean).length;
    var _bR=document.getElementById('ldc-btn-recibido');
-   if(_bR) _bR.style.opacity=allChk?'1':'0.5';
+   if(_bR) _bR.style.opacity = chkCount > 0 ? '1' : '0.5';
   }
 
 
