@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1980";
+ var CURRENT_CACHE = "dashwey-v1-3-1981";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1980</title>
+<title>Dashwey v1.3.1981</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -3472,6 +3472,18 @@ body[data-dash-landscape="1"] .dash-landscape-main .fade-sep { display: none !im
 .feed-card-title { font-size: var(--fs-2xs); font-weight: var(--fw-bold); text-transform: uppercase;
  color: var(--ink-soft); letter-spacing:var(--ls-wide);
  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* v1.3.1981: sub-label de periodo en cada card del feed (Hoy, Junio, 2026...).
+   Diseñado para convivir inline con el title oficial: lowercase y peso ligero
+   para diferenciar visualmente sin romper la jerarquía. */
+.feed-card-period {
+ font-size: var(--fs-2xs);
+ font-weight: var(--fw-reg);
+ color: var(--ink-soft);
+ text-transform: none;
+ letter-spacing: normal;
+ opacity: 0.75;
+ margin-left: var(--sp-1);
+}
 .feed-card-value { font-size: var(--fs-xl); font-weight: var(--fw-xbold); color: var(--ink);
  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .feed-card-delta { font-size: var(--fs-2xs); font-weight: var(--fw-semi); margin-top: 1px; }
@@ -23913,7 +23925,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1980';
+ const _APP_VERSION = 'v1.3.1981';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35449,7 +35461,10 @@ const dash = (() => {
  const pull = Math.min(dy * 0.4, 60);
  const ind = getPTI();
  // v1.3.1237: en cards distintas a "rendimiento", pill oculta pero gesto activo
- if (!_shouldShowPill()) {
+ // v1.3.1981 PTR-LANDSCAPE: en landscape mostrar siempre el pill (feedback visual
+ //   esperado en cualquier card del feed, el gesto sí dispara refresh).
+ var _isLandMove = document.body.getAttribute('data-dash-landscape') === '1';
+ if (!_isLandMove && !_shouldShowPill()) {
   ind.style.opacity = '0';
   ind.style.transform = 'translate3d(-50%,-60px,0)';
   return;
@@ -35481,7 +35496,14 @@ const dash = (() => {
  //   debe usar botón sync del header para resync explícito.
  //   Razón: evitar reads innecesarios a Firebase por gestos accidentales
  //   y dar control explícito al usuario sobre cuándo sincronizar.
- const _isResumenVentas = _shouldShowPill();
+ // v1.3.1981 PTR-LANDSCAPE FIX: en landscape la restricción no aplica.
+ //   El feed lateral es la interfaz principal — el usuario interactúa
+ //   constantemente con cards distintas y exigirle estar en Rendimiento
+ //   para refrescar rompe el flujo. Además en landscape el gesto es muy
+ //   deliberado (overflow-y:hidden del tab-page + scroll interno de card).
+ //   En portrait la regla v1519 sigue activa (sin cambios).
+ var _isLandRefresh = document.body.getAttribute('data-dash-landscape') === '1';
+ const _isResumenVentas = _isLandRefresh ? true : _shouldShowPill();
  if(dy > 55 && !_ptDashBusy && _isResumenVentas) {
  _ptDashBusy = true;
  ind.style.opacity = '1';
@@ -52366,9 +52388,13 @@ function _confirmBorrarCuenta(id) {
  }
 
  // Metadatos de tarjetas para feed compacto
+ // v1.3.1981: títulos alineados con _CARD_LABELS (los oficiales que usa el resto
+ //   de la app: Resumen de Ventas, Inversión en Mercancía, etc.). Antes el feed
+ //   usaba sinónimos cortos (Rendimiento/Abastecimiento) que no coincidían con
+ //   las snap cards grandes ni con el menú "Gestionar tarjetas".
  const _CARD_META_LANDSCAPE = {
- 'rendimiento': { icon: '📈', title: 'Rendimiento' },
- 'compras': { icon: '🛒', title: 'Abastecimiento' },
+ 'rendimiento': { icon: '📈', title: 'Resumen de Ventas' },
+ 'compras': { icon: '🛒', title: 'Inversión en Mercancía' },
  'flujo-caja': { icon: '💸', title: 'Flujo de Caja' },
  'agenda': { icon: '📅', title: 'Agenda' },
  // Placeholders — solo en feed landscape (tablet/PC), no en DOM principal
@@ -52377,6 +52403,34 @@ function _confirmBorrarCuenta(id) {
  '_prox3': { icon: '🤖', title: 'IA Financiera', placeholder: true },
  '_prox4': { icon: '🌐', title: 'Multi-negocio', placeholder: true },
  };
+
+ // v1.3.1981: formato corto del periodo para sub-label del feed.
+ //   today/hours → "Hoy", week → "Esta semana" / "Sem -N",
+ //   month → "Junio 2026" (respeta offset), year → "2026", custom → label real.
+ function _formatPeriodForFeed(period) {
+ if (!period || !period.type) return '';
+ var t = period.type; var off = period.offset || 0;
+ if (t === 'today' || t === 'hours') return 'Hoy';
+ if (t === 'week') {
+  if (off === 0) return 'Esta semana';
+  if (off === -1) return 'Sem. pasada';
+  if (off === 1) return 'Próx. semana';
+  return 'Sem. ' + off;
+ }
+ if (t === 'month') {
+  var MON = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var d = new Date();
+  d.setDate(1); // evitar saltos de mes por días que no existen en mes destino
+  d.setMonth(d.getMonth() + off);
+  var sameYear = d.getFullYear() === new Date().getFullYear();
+  return sameYear ? MON[d.getMonth()] : MON[d.getMonth()] + ' ' + d.getFullYear();
+ }
+ if (t === 'year') {
+  var nowY = new Date().getFullYear();
+  return String(nowY + off);
+ }
+ return period.label || '';
+ }
 
  // Obtener KPI principal de cada tarjeta para el feed compacto
  function _getLandscapeCardKPI(cardId) {
@@ -52454,13 +52508,18 @@ function _confirmBorrarCuenta(id) {
  if (meta.placeholder) return ''; // smartphone — no mostrar
 
  var kpi = _getLandscapeCardKPI(cardId);
+ // v1.3.1981: periodo per-card visible junto al título (oficial)
+ var _period = _getEffectivePeriodForCard(cardId);
+ var _periodLbl = _formatPeriodForFeed(_period);
+ var titleHtml = '<div class="feed-card-title">' + esc(meta.title) +
+ (_periodLbl ? ' <span class="feed-card-period">' + esc(_periodLbl) + '</span>' : '') +
+ '</div>';
  // Insight solo en tablet/PC (>= 768px)
  var insightHtml = '';
  if (window.innerWidth >= 768) {
  try {
  // v1.3.1980: usar el mismo periodo per-card que el KPI (paridad).
- var period = _getEffectivePeriodForCard(cardId);
- var insight = _snapBuildNarrative(cardId, period);
+ var insight = _snapBuildNarrative(cardId, _period);
  if (insight) {
  insightHtml = '<div class="feed-card-insight">' + esc(insight) + '</div>';
  }
@@ -52469,7 +52528,7 @@ function _confirmBorrarCuenta(id) {
  return '<div class="feed-card" data-card-id="' + cardId + '">' +
  '<div class="feed-card-icon">' + meta.icon + '</div>' +
  '<div class="feed-card-content">' +
- '<div class="feed-card-title">' + esc(meta.title) + '</div>' +
+ titleHtml +
  '<div class="feed-card-value">' + esc(kpi.value) + '</div>' +
  (kpi.delta ? '<div class="feed-card-delta ' + kpi.deltaClass + '">' + esc(kpi.delta) + '</div>' : '') +
  insightHtml +
