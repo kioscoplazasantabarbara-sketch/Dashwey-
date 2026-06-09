@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1979";
+ var CURRENT_CACHE = "dashwey-v1-3-1980";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1979</title>
+<title>Dashwey v1.3.1980</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23913,7 +23913,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1979';
+ const _APP_VERSION = 'v1.3.1980';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35399,8 +35399,23 @@ const dash = (() => {
  if(document.getElementById('fs-overlay')?.classList.contains('open')) return;
  if(document.getElementById('modal-overlay')?.classList.contains('open')) return;
  if(document.getElementById('ss-overlay')?.classList.contains('ss-active')) return; // v1.3.535: SideSheet guard
- const dt = document.querySelectorAll('.tab-page')[1];
- if(!dt || dt.scrollTop !== 0) return;
+ // v1.3.1980 PTR-LANDSCAPE: en landscape el tab-page tiene overflow-y:hidden y
+ //   el scroll real vive en .dash-landscape-main .card. Si está en landscape,
+ //   chequear el scrollTop de la card interna en lugar del tab-page (que siempre
+ //   sería 0 en landscape → falso "estoy arriba"). El gesto debe empezar SOBRE
+ //   la card principal o sobre el feed lateral, no sobre la navbar.
+ var _isLand = document.body.getAttribute('data-dash-landscape') === '1';
+ if (_isLand) {
+  // Origen del touch: ignorar si viene del feed (allí tiene su propio scroll/swap)
+  if (e.target && e.target.closest && e.target.closest('.dash-landscape-feed')) return;
+  var _landMainCard = document.querySelector('.dash-landscape-main .card');
+  // Si no encontramos card interna, fallback al tab-page como antes
+  var _scrollHost = _landMainCard || document.querySelectorAll('.tab-page')[1];
+  if (!_scrollHost || _scrollHost.scrollTop !== 0) return;
+ } else {
+  const dt = document.querySelectorAll('.tab-page')[1];
+  if(!dt || dt.scrollTop !== 0) return;
+ }
  ptStart = e.touches[0].clientY; ptActive = true;
  // v1.3.1237: quitar transición durante pull manual (control frame-by-frame)
  const ind = getPTI();
@@ -46605,9 +46620,22 @@ function _confirmBorrarCuenta(id) {
    saldo = snap.saldo || 0;
   }
  } catch(_) { saldo = snap.saldo || 0; }
+ // v1.3.1980 BUG-FEED-FC: usar revenue(range) y gastoGlobalPeriodo(range) — los
+ //   mismos que _snapRenderCard (L51075-91). Antes usaba revenueMesActual() y
+ //   gastoMensualTotal() (sin rango) → bal absurdo en periodos cortos (semana
+ //   reportaba "Gastas 210.733€ más de lo que ingresas esta semana"). Cambio
+ //   inocuo: NO modifica funciones de importe, solo elige qué fuente leer.
  var ing2 = 0; var gst = 0;
- try { ing2 = FinEngine.revenueMesActual() || 0; } catch(_) {}
- try { gst = FinEngine.gastoMensualTotal() || 0; } catch(_) {}
+ try {
+  var _bnRange = (typeof KPI !== 'undefined' && KPI.getRange) ? KPI.getRange(period) : null;
+  if (_bnRange && FinEngine.revenue) ing2 = FinEngine.revenue(_bnRange) || 0;
+  else ing2 = FinEngine.revenueMesActual() || 0;
+ } catch(_) { try { ing2 = FinEngine.revenueMesActual() || 0; } catch(__) {} }
+ try {
+  var _bnRange2 = (typeof KPI !== 'undefined' && KPI.getRange) ? KPI.getRange(period) : null;
+  if (_bnRange2 && FinEngine.gastoGlobalPeriodo) gst = FinEngine.gastoGlobalPeriodo(_bnRange2) || 0;
+  else gst = FinEngine.gastoMensualTotal() || 0;
+ } catch(_) { try { gst = FinEngine.gastoMensualTotal() || 0; } catch(__) {} }
  var rw = snap.runway || 0;
  var bal = ing2 - gst;
  var pLbls2 = { today:'hoy', hours:'hoy', week:'esta semana', month:'este mes', year:'este año' };
@@ -52320,6 +52348,23 @@ function _confirmBorrarCuenta(id) {
  return false;
  }
 
+ // v1.3.1980: helper para resolver el periodo per-card (Global/Hoy/Sem/Mes/Año).
+ //   Si la tarjeta tiene un cardPeriod configurado en ajustes, lo usa.
+ //   Si no (o type vacío = "Global"), cae al period global del Dashboard.
+ //   Esto permite que en landscape cada card del feed muestre sus datos según
+ //   la config per-card en lugar de ignorarla (paridad con portrait/snap mode).
+ function _getEffectivePeriodForCard(cardId) {
+ try {
+  var _cp = State.get.cardPeriods ? State.get.cardPeriods() : null;
+  var _cardP = _cp ? _cp[cardId] : null;
+  if (_cardP && _cardP.type) {
+   return { type: _cardP.type, label: _cardP.label || _cardP.type, offset: _cardP.offset || 0 };
+  }
+ } catch(_) {}
+ try { return State.get.period(); } catch(_) {}
+ return { type: 'month', offset: 0 };
+ }
+
  // Metadatos de tarjetas para feed compacto
  const _CARD_META_LANDSCAPE = {
  'rendimiento': { icon: '📈', title: 'Rendimiento' },
@@ -52336,7 +52381,9 @@ function _confirmBorrarCuenta(id) {
  // Obtener KPI principal de cada tarjeta para el feed compacto
  function _getLandscapeCardKPI(cardId) {
  try {
- var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+ // v1.3.1980: usar periodo per-card (no el global del Dashboard).
+ //   Cada card del feed respeta su config en Ajustes (Global/Hoy/Sem/Mes/Año).
+ var period = _getEffectivePeriodForCard(cardId);
  var snap = FinEngine.snapshot(period);
  if (!snap) return { value: '—', delta: '', deltaClass: 'neutral' };
  switch(cardId) {
@@ -52354,10 +52401,25 @@ function _confirmBorrarCuenta(id) {
  deltaClass: 'neutral'
  };
  case 'flujo-caja':
+ // v1.3.1980: usar revenue(range) − gastoGlobalPeriodo(range) como en
+ //   _snapRenderCard (L51075-91, v1.3.416 + v1.3.623). NO usar snap.beneficioNeto
+ //   porque mezcla gastoMensualTotal (suma histórica) con _snapFrac → da números
+ //   absurdos para rangos cortos (semana mostraba -49.587€ en vez de -149€).
+ var _bal = 0;
+ try {
+  var _r = KPI.getRange ? KPI.getRange(period) : null;
+  if (_r) {
+   var _ing = FinEngine.revenue ? (FinEngine.revenue(_r) || 0) : 0;
+   var _gst = FinEngine.gastoGlobalPeriodo ? (FinEngine.gastoGlobalPeriodo(_r) || 0) : 0;
+   _bal = _ing - _gst;
+  } else {
+   _bal = snap.beneficioNeto || 0;
+  }
+ } catch(_) { _bal = snap.beneficioNeto || 0; }
  return {
- value: feur(snap.beneficioNeto || 0),
- delta: (snap.beneficioNeto || 0) >= 0 ? 'Positivo' : 'Negativo',
- deltaClass: (snap.beneficioNeto || 0) >= 0 ? 'positive' : 'negative'
+ value: feur(_bal),
+ delta: _bal >= 0 ? 'Positivo' : 'Negativo',
+ deltaClass: _bal >= 0 ? 'positive' : 'negative'
  };
  case 'agenda':
  var pedidos = (State.get.pendingOrders ? State.get.pendingOrders() : []).length;
@@ -52396,7 +52458,8 @@ function _confirmBorrarCuenta(id) {
  var insightHtml = '';
  if (window.innerWidth >= 768) {
  try {
- var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+ // v1.3.1980: usar el mismo periodo per-card que el KPI (paridad).
+ var period = _getEffectivePeriodForCard(cardId);
  var insight = _snapBuildNarrative(cardId, period);
  if (insight) {
  insightHtml = '<div class="feed-card-insight">' + esc(insight) + '</div>';
