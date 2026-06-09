@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1987";
+ var CURRENT_CACHE = "dashwey-v1-3-1988";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1987</title>
+<title>Dashwey v1.3.1988</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1987';
+ const _APP_VERSION = 'v1.3.1988';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -40335,10 +40335,28 @@ function _openEditMovimientoSheet(id, src) {
   });
 
   // v1.3.1627: ventas TPV/Loyverse del periodo (solo lado 'ingresos')
+  // v1.3.1988: además del total, acumular desglose POR PROVEEDOR de cada venta
+  //   (decisión Hung: el sheet Ingresos debe desglosar como el de Gastos).
+  //   Mecanismo: items[].prodId → producto.prov (schema productos usa `prov`,
+  //   NO provId) → nombre proveedor. El importe real de la venta (ventaIngresos,
+  //   que respeta descuentos) se reparte PROPORCIONALMENTE al peso de las
+  //   líneas de cada proveedor — así el desglose suma EXACTO el total del hero.
+  //   Ventas sin items o sin producto mapeable → "Otras ventas".
   var ventasItems = [];
   var totalVentas = 0;
+  var ventasPorProv = {};
   if (type === 'ingresos') {
    try {
+    var _prodProvMap = {};
+    var _provNameMap = {};
+    try {
+     (State.get.proveedores ? (State.get.proveedores() || []) : []).forEach(function(pv){
+      if (pv && pv.id) _provNameMap[pv.id] = pv.nombre || '—';
+     });
+     (State.get.productos ? (State.get.productos() || []) : []).forEach(function(pr){
+      if (pr && pr.id && pr.prov) _prodProvMap[pr.id] = _provNameMap[pr.prov] || null;
+     });
+    } catch(_){}
     var ventasArr = State.get.ventas ? (State.get.ventas() || []) : [];
     ventasArr.forEach(function(v){
      if (!v || v.deleted) return;
@@ -40350,6 +40368,26 @@ function _openEditMovimientoSheet(id, src) {
       : (v.total || 0);
      if (imp <= 0) return;
      totalVentas += imp;
+     // Reparto proporcional por proveedor según peso de líneas
+     var _pesos = {}; var _pesoTotal = 0;
+     var _vIts = Array.isArray(v.items) ? v.items : [];
+     for (var _ii=0; _ii<_vIts.length; _ii++) {
+      var _it = _vIts[_ii];
+      if (!_it) continue;
+      var _linea = (Number(_it.qty)||0) * (Number(_it.precio)||0);
+      if (_linea <= 0) continue;
+      var _pn = (_it.prodId && _prodProvMap[_it.prodId]) || null;
+      var _bk = _pn || 'Otras ventas';
+      _pesos[_bk] = (_pesos[_bk] || 0) + _linea;
+      _pesoTotal += _linea;
+     }
+     if (_pesoTotal > 0) {
+      Object.keys(_pesos).forEach(function(_bk2){
+       ventasPorProv[_bk2] = (ventasPorProv[_bk2] || 0) + imp * (_pesos[_bk2] / _pesoTotal);
+      });
+     } else {
+      ventasPorProv['Otras ventas'] = (ventasPorProv['Otras ventas'] || 0) + imp;
+     }
      // Item sintetico compatible con _renderLastMovs (espera descripcion, fecha, importe)
      ventasItems.push({
       id: v.id,
@@ -40382,8 +40420,12 @@ function _openEditMovimientoSheet(id, src) {
    groups[key] = (groups[key] || 0) + (m.importe || 0);
   });
   // v1.3.1627: ventas TPV/Loyverse como categoria propia en el desglose
+  // v1.3.1988: desglosadas POR PROVEEDOR (ventasPorProv) en vez de una sola
+  //   categoría agregada "Ventas TPV / Loyverse".
   if (type === 'ingresos' && totalVentas > 0) {
-   groups['Ventas TPV / Loyverse'] = (groups['Ventas TPV / Loyverse'] || 0) + totalVentas;
+   Object.keys(ventasPorProv).forEach(function(_pk){
+    groups[_pk] = (groups[_pk] || 0) + ventasPorProv[_pk];
+   });
   }
   var groupArr = Object.keys(groups).map(function(k){ return { name: k, total: groups[k] }; });
   groupArr.sort(function(a,b){ return b.total - a.total; });
@@ -40490,7 +40532,7 @@ function _openEditMovimientoSheet(id, src) {
       subColor: deltaColor,
       meta: data.count + ' movimiento' + (data.count !== 1 ? 's' : '')
      })
-   + _ksSection(type === 'ingresos' ? 'Por categoría' : 'Por proveedor',
+   + _ksSection('Por proveedor',
       '<div class="kpi-sheet-card">' + _renderGroups() + '</div>')
    + _ksSection('Últimos movimientos', _renderLastMovs())
    + '<div class="kpi-sheet-spacer"></div>'
