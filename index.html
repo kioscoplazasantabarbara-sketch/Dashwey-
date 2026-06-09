@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1981";
+ var CURRENT_CACHE = "dashwey-v1-3-1982";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1981</title>
+<title>Dashwey v1.3.1982</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20530,6 +20530,14 @@ const KPI = (() => {
  end = now;
  start = new Date(now.getTime() - 24 * 3600 * 1000);
  break;
+ case 'global':
+ // v1.3.1982: 'global' = todo el histórico, sin filtro de periodo.
+ //   start muy en el pasado (year 2000) cubre cualquier kiosco real;
+ //   end = ahora. Útil para cards configuradas como "Global" en Ajustes
+ //   (típicamente Flujo de Caja, donde interesa el saldo acumulado).
+ start = new Date(2000, 0, 1, 0, 0, 0, 0);
+ end = now;
+ break;
  default:
  // fallback: mes actual
  start = new Date(y, m, 1, 0, 0, 0, 0);
@@ -23925,7 +23933,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1981';
+ const _APP_VERSION = 'v1.3.1982';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -34478,6 +34486,17 @@ const dash = (() => {
  
  } finally {
  _isRendering = false; // v1.2.22: liberar guard — siempre, incluso si algo lanzó
+ // v1.3.1982: tras cada render, si estamos en landscape refrescar el feed
+ //   también (KPI + insight + sub-label de periodo de cada mini-card). Antes
+ //   solo refrescaba al cambiar manualmente el periodo desde el picker, así
+ //   que un PTR, un sync remoto o un cierre de jornada no se reflejaban en
+ //   el feed hasta hacer swap. Sin guard adicional: _refreshLandscapeIfActive
+ //   ya tiene early return si data-dash-landscape !== '1'.
+ try {
+  if (document.body.getAttribute('data-dash-landscape') === '1') {
+   _refreshLandscapeIfActive();
+  }
+ } catch(_) {}
  // v1.3.1169: si llegaron renders mientras este corría, procesar trailing
  //   (un único re-render con el estado más reciente). rAF evita stack overflow.
  if (_renderQueued) {
@@ -44709,7 +44728,14 @@ function _confirmBorrarCuenta(id) {
    }
   } catch(_) {}
  }
- State.set.period(newPeriod);
+ // v1.3.1982: el picker del header escribe override EFÍMERO solo en la card
+ //   activa (modelo confirmado por Hung). _applyPeriodForActiveCard hace ambas
+ //   cosas: guarda en _sessionCardPeriods[active] + State.set.period() para
+ //   compatibilidad con el resto de renderers. Al cerrar Dashwey los overrides
+ //   se descartan y cada card vuelve a su Ajustes.
+ var _activeForPicker = (typeof _activeCardId !== 'undefined' && _activeCardId) ? _activeCardId
+                       : (App.dash && App.dash._getActiveCardId ? App.dash._getActiveCardId() : null);
+ _applyPeriodForActiveCard(newPeriod, _activeForPicker);
 
 
  // Actualizar label del botón inline en el título del Dashboard
@@ -52035,16 +52061,17 @@ function _confirmBorrarCuenta(id) {
    }
   }
  } catch(_) {}
- // v1.3.1914: aplicar periodo de la tarjeta si tiene uno configurado
+ // v1.3.1914: aplicar periodo de la tarjeta al hacer scroll/swap.
+ // v1.3.1982: usar _getEffectivePeriodForCard (incluye overrides de sesión).
+ //   Si la card tiene override efímero, se respeta. Si no, cardPeriods. Si
+ //   nada, 'global'. Header refleja el periodo "vivo" de la card activa.
  try {
-  var _cp = State.get.cardPeriods ? State.get.cardPeriods() : {};
-  var _cardP = _cp ? _cp[cardId] : null;
-  if (_cardP && _cardP.type) {
+  var _eff = _getEffectivePeriodForCard(cardId);
+  if (_eff && _eff.type) {
    var _curP = State.get.period ? State.get.period() : null;
-   if (!_curP || _curP.type !== _cardP.type || (_curP.offset||0) !== (_cardP.offset||0)) {
-    var _applyP = { type: _cardP.type, label: _cardP.label||_cardP.type, offset: _cardP.offset||0 };
-    State.set.period(_applyP);
-    try { _updateDashHeader(_applyP); } catch(_) {}
+   if (!_curP || _curP.type !== _eff.type || (_curP.offset||0) !== (_eff.offset||0)) {
+    State.set.period(_eff);
+    try { _updateDashHeader(_eff); } catch(_) {}
    }
   }
  } catch(_cpE) {}
@@ -52370,21 +52397,75 @@ function _confirmBorrarCuenta(id) {
  return false;
  }
 
- // v1.3.1980: helper para resolver el periodo per-card (Global/Hoy/Sem/Mes/Año).
- //   Si la tarjeta tiene un cardPeriod configurado en ajustes, lo usa.
- //   Si no (o type vacío = "Global"), cae al period global del Dashboard.
- //   Esto permite que en landscape cada card del feed muestre sus datos según
- //   la config per-card en lugar de ignorarla (paridad con portrait/snap mode).
+ // v1.3.1982: ARQUITECTURA DE PERIODOS POR-CARD
+ // ───────────────────────────────────────────────────────────────────
+ // Modelo de Hung (confirmado D1-D4):
+ //   1. Periodo configurado en Ajustes (cardPeriods, PERSISTE en Firebase/localStorage)
+ //      → es el DEFAULT de cada card cada vez que arranca Dashwey.
+ //   2. Selector global del header (picker) cambia el periodo SOLO de la
+ //      tarjeta actualmente activa, EFÍMERO (vive en memoria, NO persiste).
+ //   3. Al cerrar y reabrir Dashwey los overrides efímeros se descartan
+ //      y cada card vuelve al periodo de Ajustes.
+ //   4. El header muestra el periodo "vivo" de la card activa (override si
+ //      existe, sino el de Ajustes).
+ //
+ // Prioridad de lectura en _getEffectivePeriodForCard:
+ //   _sessionCardPeriods[id]  ← override efímero (más prioritario)
+ //   cardPeriods[id]          ← configurado en Ajustes
+ //   { type:'global' }        ← default si nada configurado
+ //
+ // _sessionCardPeriods vive en este closure y NUNCA se persiste.
+ var _sessionCardPeriods = {};
+
+ // v1.3.1980: helper para resolver el periodo per-card.
+ // v1.3.1982: añadida capa de overrides de sesión + default 'global'.
  function _getEffectivePeriodForCard(cardId) {
  try {
+  // 1. Override efímero de sesión (cambio desde el picker del header)
+  var _ov = _sessionCardPeriods[cardId];
+  if (_ov && _ov.type) return _ov;
+ } catch(_) {}
+ try {
+  // 2. Configurado en Ajustes (persistente)
   var _cp = State.get.cardPeriods ? State.get.cardPeriods() : null;
   var _cardP = _cp ? _cp[cardId] : null;
   if (_cardP && _cardP.type) {
    return { type: _cardP.type, label: _cardP.label || _cardP.type, offset: _cardP.offset || 0 };
   }
  } catch(_) {}
- try { return State.get.period(); } catch(_) {}
- return { type: 'month', offset: 0 };
+ // 3. Default: 'global' (todo el histórico). Antes caía a State.get.period
+ //    pero ese modelo es lo que rompía la separación entre cards.
+ return { type: 'global', label: 'Global', offset: 0 };
+ }
+
+ // Helper de escritura: aplica override efímero + sincroniza State.set.period
+ //   para que el resto del sistema (renderers, header label, etc.) lo vea.
+ //   Si activeCardId es null, no se guarda override pero sí se aplica al global.
+ function _applyPeriodForActiveCard(period, activeCardId) {
+ try {
+  if (activeCardId && period && period.type) {
+   _sessionCardPeriods[activeCardId] = {
+    type: period.type,
+    label: period.label || period.type,
+    offset: period.offset || 0,
+    customStart: period.customStart,
+    customEnd: period.customEnd,
+    userSet: true
+   };
+  }
+ } catch(_) {}
+ try { if (period) State.set.period(period); } catch(_) {}
+ }
+
+ // v1.3.1982: limpiar override efímero de una card concreta. Lo llama
+ //   _sdSetCardPeriod cuando el usuario cambia Ajustes — si dejamos el override
+ //   pegado, el cambio de Ajustes parece no surtir efecto.
+ function _clearSessionOverride(cardId) {
+ try {
+  if (cardId && _sessionCardPeriods[cardId]) {
+   delete _sessionCardPeriods[cardId];
+  }
+ } catch(_) {}
  }
 
  // Metadatos de tarjetas para feed compacto
@@ -52407,9 +52488,11 @@ function _confirmBorrarCuenta(id) {
  // v1.3.1981: formato corto del periodo para sub-label del feed.
  //   today/hours → "Hoy", week → "Esta semana" / "Sem -N",
  //   month → "Junio 2026" (respeta offset), year → "2026", custom → label real.
+ // v1.3.1982: añadido 'global' → "Global".
  function _formatPeriodForFeed(period) {
  if (!period || !period.type) return '';
  var t = period.type; var off = period.offset || 0;
+ if (t === 'global') return 'Global';
  if (t === 'today' || t === 'hours') return 'Hoy';
  if (t === 'week') {
   if (off === 0) return 'Esta semana';
@@ -52754,6 +52837,21 @@ function _confirmBorrarCuenta(id) {
 
  setTimeout(function() {
  _activeCardId = newMainId;
+ // v1.3.1982: aplicar periodo efectivo de la nueva card (override sesión
+ //   si existe, sino Ajustes, sino global). El header y los datos del feed
+ //   reflejan ese periodo desde el instante del swap. Antes solo lo hacía
+ //   _snapRenderCard (al final del flow); ponerlo aquí evita el flash de
+ //   ver datos del periodo viejo durante la animación de entrada.
+ try {
+  var _effSwap = _getEffectivePeriodForCard(newMainId);
+  if (_effSwap && _effSwap.type) {
+   var _curSwap = State.get.period ? State.get.period() : null;
+   if (!_curSwap || _curSwap.type !== _effSwap.type || (_curSwap.offset||0) !== (_effSwap.offset||0)) {
+    State.set.period(_effSwap);
+    try { if (window._dashUpdateHeader) window._dashUpdateHeader(_effSwap); } catch(_) {}
+   }
+  }
+ } catch(_) {}
  _renderLandscape(); // reconstruye main + feed + clon + comportamiento
 
  // ENTRADA — nueva tarjeta entra desde derecha
@@ -54919,6 +55017,10 @@ function _confirmBorrarCuenta(id) {
  }
 
  return { render: _renderRAFThrottled, refresh, shiftPeriod, selPeriod, applyCustom, openIAReport, renderVentas, renderTopArticulos, renderRendimiento, renderFlujoCaja, openTopVentasModal, _evShowTip, _evHideTip, removeCard, _undoRemoveCard, openCardManager, _toggleCardFromManager, _applyHidden, _restoreAllCards, openFinModal, renderFinanciero, renderPedidosCalendario, _addCuenta, _addGasto, _deleteGasto, _calcKey, _confirmBorrarCuenta, _borrarCuenta, _openIngresoSheet, _openEditCuentaSheet, _confirmarEditCuenta, _openDetalleCuenta, _openDetalleCuentaGlobal, _confirmarIngreso, _confirmarNuevoIngreso, _openMovimientoSheet, _openMovimientoFullscreen, _openAddCuentaFs, _openEditMovimientoSheet, _openAjusteSaldoSheet, _openAjusteSaldoChooser, _openSaldoInicialSheet, _openCierreCajaSheet, _openCierreHistorialSheet, _openComprasCompletasSheet, _openTicketsPeriodoSheet, _openTicketsDelDia, _openTicketsDelCierre, _openTicketDetalle, renderVisitasComerciales, renderEventos: renderVisitasComerciales, _openRecordatorioSheet, _openRecordatorioPreview, _openAlertasInteligente, _alrtGoArt, _startNotifScheduler, notifWhatsNew, notifCierreDiario, notifPedidoRealizado, notifPedidoGuardado, notifCaducidadProxima, openNotifPrefsPanel, _notifPrefToggle, _notifGlobalToggle, _notifPrefTimeChange, _notifPrefNumChange, _notifRequestAndShow, openGlobalPeriodPicker, closeGlobalPeriodPicker, selGlobalPeriod, applyGlobalCustom, _applyPeriodSheet, _dpsQuickRange, _openCardInsights, _closeCardInsights, _openVisitasPeriodPicker, _applyVisitasPeriod, openDashSettings, _setDashMode, _togglePin, _applyDashMode, _shimmerAllCards, _animateCardAppear, renderAgenda, renderCuentas, renderGastos, renderIngresosFin, _applyDashLandscape, _getActiveCardId, _snapRenderCard, _toggleScope, _renderCierresPendientesBanner, _renderCierresPendientesHeaderIcon, _openCierresPendientesPicker, _openAjusteCierreSheet, _confirmarRevisionCierre,
+ // v1.3.1982 ARQUITECTURA PERIODO POR-CARD
+ _refreshLandscapeIfActive: _refreshLandscapeIfActive,
+ _clearSessionOverride: _clearSessionOverride,
+ _getEffectivePeriodForCard: _getEffectivePeriodForCard,
  // v1.3.1636: exposición _snapRenderTimeline para re-render desde _dwyEvMarkDone
  _snapRenderAgenda: _snapRenderTimeline,
  _snapRenderTimeline: _snapRenderTimeline,
@@ -55308,13 +55410,27 @@ window._sdSetCardPeriod = function(btn) {
  var cardId = btn.dataset.cardId;
  var periodType = btn.dataset.periodType; // '' = global
  if (!cardId) return;
- var PERIOD_LABELS = { today: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año' };
- var newP = periodType ? { type: periodType, label: PERIOD_LABELS[periodType] || periodType, offset: 0 } : null;
+ var PERIOD_LABELS = { today: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año', global: 'Global' };
+ // v1.3.1982: "Global" ahora es un tipo real (todo el histórico) en lugar de
+ //   la ausencia de periodo. Guardar explícitamente { type:'global' } para que
+ //   _getEffectivePeriodForCard lo distinga del default.
+ var newP;
+ if (periodType === '') {
+  newP = { type: 'global', label: 'Global', offset: 0 };
+ } else {
+  newP = { type: periodType, label: PERIOD_LABELS[periodType] || periodType, offset: 0 };
+ }
  try {
   var update = {};
   update[cardId] = newP;
   State.set.cardPeriods(update);
  } catch(e) { console.warn('[_sdSetCardPeriod]', e); }
+ // v1.3.1982: descartar el override efímero de esta card — el usuario acaba
+ //   de cambiar el default en Ajustes y espera ver el cambio inmediatamente.
+ //   Si dejamos el override, "tapa" silenciosamente el cambio de Ajustes.
+ try {
+  if (App.dash && App.dash._clearSessionOverride) App.dash._clearSessionOverride(cardId);
+ } catch(_) {}
  // Actualizar chips del grupo
  var container = btn.closest('.sd-row');
  if (container) {
@@ -55329,6 +55445,14 @@ window._sdSetCardPeriod = function(btn) {
    var _ptBtn = document.getElementById('dash-title-period-btn');
    if (_ptBtn) _ptBtn.textContent = newP.label;
    if (typeof _snapDoRenderAll === 'function') _snapDoRenderAll();
+   // v1.3.1982: en landscape refrescar el feed para que el sub-label de
+   //   la card afectada actualice su periodo visible.
+   try {
+    if (document.body.getAttribute('data-dash-landscape') === '1' &&
+        App.dash && App.dash._refreshLandscapeIfActive) {
+     App.dash._refreshLandscapeIfActive();
+    }
+   } catch(_) {}
   }
  } catch(_) {}
 };
