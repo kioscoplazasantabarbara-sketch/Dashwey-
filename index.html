@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1989";
+ var CURRENT_CACHE = "dashwey-v1-3-1990";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1989</title>
+<title>Dashwey v1.3.1990</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1989';
+ const _APP_VERSION = 'v1.3.1990';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29980,29 +29980,46 @@ const ui = (() => {
      }
     }
    });
-
-   if (estampados > 0) {
-    console.info('[Reconciliación v1.3.1405] ✓ ' + estampados + ' ventas tardías estampadas retroactivamente');
-    /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable al recalcular totales del cierre.
-       Consistente con recalcularCierre y _autoCierreCrearCierreReal. */
-    var _aggReconcile = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
-    // Recalcular totales de cada cierre afectado desde scratch
-    cierresValidos.forEach(function(c){
-     if (!afectados[c.id]) return;
-     var ventasCierre = ventas.filter(function(v){
-      return v && !v.deleted && v.closureId === c.id && _aggReconcile(v);
-     });
-     var sumNew = ventasCierre.reduce(function(s, v){
-      return s + (typeof v.total === 'number' ? v.total : 0);
-     }, 0);
-     c.ventas = Math.round(sumNew * 100) / 100;
-     c.saldoEsperado = c.ventas;
-     c.saldoReal = c.ventas;
-     c.nVentas = ventasCierre.length;
+   /* v1.3.1990 FIX BUG-CIERRE-CONGELADO: el recálculo de c.ventas estaba
+      DENTRO de `if (estampados>0)`. Si las ventas ya tenían closureId (se
+      estamparon en su día con sync parcial, o por una pasada previa), no se
+      estampa nada nuevo → estampados=0 → el c.ventas/nVentas PARCIAL queda
+      congelado para siempre, aunque todas las ventas del día estén ya bien
+      asignadas a ese cierre. Saldo y total mensual quedaban bien (suman
+      v.total directo, no c.ventas), pero el movimiento "Cierre del día"
+      mostraba un subconjunto (ej. día 5: 19/155 tickets, 38,10€/247,90€).
+      Fix: recalcular SIEMPRE todos los cierres válidos desde sus ventas ya
+      estampadas. Idempotente — solo marca dirty si el total difiere. Esto es
+      auto-curación: en cada sync los cierres convergen a sus ventas reales.
+      No toca control-flow financiero (HARD RULE) — solo recalcula el cache
+      c.ventas a partir de la fuente de verdad (ventas con closureId). */
+   var _aggReconcile = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
+   var _recalcCount = 0;
+   cierresValidos.forEach(function(c){
+    var ventasCierre = ventas.filter(function(v){
+     return v && !v.deleted && v.closureId === c.id && _aggReconcile(v);
+    });
+    var sumNew = Math.round(ventasCierre.reduce(function(s, v){
+     return s + (typeof v.total === 'number' ? v.total : 0);
+    }, 0) * 100) / 100;
+    var nNew = ventasCierre.length;
+    var prev = Math.round((Number(c.ventas)||0) * 100) / 100;
+    // Solo escribir si difiere (idempotencia — evita writes y tormentas)
+    if (prev !== sumNew || c.nVentas !== nNew) {
+     c.ventas = sumNew;
+     c.saldoEsperado = sumNew;
+     c.saldoReal = sumNew;
+     c.nVentas = nNew;
      if (!c.eventIds) c.eventIds = { ventas: [], gastos: [], ingresos: [] };
      c.eventIds.ventas = ventasCierre.map(function(v){return v.id;});
      try { window._DashweyMarkDirty('cierresCaja', c.id); } catch(_) {}
-    });
+     _recalcCount++;
+    }
+   });
+
+   if (estampados > 0 || _recalcCount > 0) {
+    if (estampados > 0) console.info('[Reconciliación v1.3.1405] ✓ ' + estampados + ' ventas tardías estampadas retroactivamente');
+    if (_recalcCount > 0) console.info('[Reconciliación v1.3.1990] ✓ ' + _recalcCount + ' cierres recalculados (desincronizados)');
     try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
     try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
    }
