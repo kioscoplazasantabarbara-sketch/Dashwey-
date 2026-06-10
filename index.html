@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1990";
+ var CURRENT_CACHE = "dashwey-v1-3-1991";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1990</title>
+<title>Dashwey v1.3.1991</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1990';
+ const _APP_VERSION = 'v1.3.1991';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -52989,6 +52989,45 @@ function _confirmBorrarCuenta(id) {
  });
  }
 
+ // v1.3.1991: swipe horizontal en la card principal del landscape.
+ //   Lista ordenada de cards reales visibles (sin placeholders ni ocultas).
+ function _landscapeRealCards() {
+  var hidden = [];
+  try { hidden = _getHidden ? _getHidden() : []; } catch(_) {}
+  return Object.keys(_CARD_META_LANDSCAPE).filter(function(cid){
+   var m = _CARD_META_LANDSCAPE[cid];
+   if (m && m.placeholder) return false;
+   if (hidden.indexOf(cid) !== -1) return false;
+   return true;
+  });
+ }
+ function _attachMainSwipe(mainEl) {
+  if (!mainEl || mainEl._swipeAttached) return;
+  mainEl._swipeAttached = true;
+  var sx = 0, sy = 0, tracking = false;
+  mainEl.addEventListener('touchstart', function(e){
+   if (!e.touches || !e.touches[0]) return;
+   sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
+  }, { passive: true });
+  mainEl.addEventListener('touchend', function(e){
+   if (!tracking || !e.changedTouches || !e.changedTouches[0]) return;
+   tracking = false;
+   var dx = e.changedTouches[0].clientX - sx;
+   var dy = e.changedTouches[0].clientY - sy;
+   // Gesto horizontal claro: |dx|>60 y predominante sobre el vertical
+   if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+   var cards = _landscapeRealCards();
+   var idx = cards.indexOf(_activeCardId);
+   if (idx === -1) return;
+   // swipe izquierda (dx<0) → siguiente; derecha (dx>0) → anterior. Cíclico.
+   var nextIdx = dx < 0 ? (idx + 1) % cards.length : (idx - 1 + cards.length) % cards.length;
+   var nextId = cards[nextIdx];
+   if (nextId && nextId !== _activeCardId) {
+    try { _swapMainCard(nextId); } catch(_) {}
+   }
+  }, { passive: true });
+ }
+
  function _renderLandscape() {
  var cont = document.getElementById('dash-cards-container');
  if (!cont) return;
@@ -53051,6 +53090,23 @@ function _confirmBorrarCuenta(id) {
  mainEl.appendChild(activeCard);
  }
 
+ // v1.3.1991 FIX landscape carga inicial: aplicar el periodo EFECTIVO de la
+ //   card activa ANTES de hidratarla (igual que hace _swapMainCard). Sin esto
+ //   la card grande arrancaba con el periodo GLOBAL del Dashboard (ej. "Hoy" =
+ //   0€ si aún no hay ventas) mientras el feed mostraba el periodo per-card
+ //   (Mes = valores reales) → inconsistencia "la card no se actualiza hasta
+ //   que toco el feed". Ahora card y feed comparten periodo desde el frame 1.
+ try {
+  var _effInit = _getEffectivePeriodForCard(activeId);
+  if (_effInit && _effInit.type) {
+   var _curInit = State.get.period ? State.get.period() : null;
+   if (!_curInit || _curInit.type !== _effInit.type || (_curInit.offset||0) !== (_effInit.offset||0)) {
+    State.set.period(_effInit);
+    try { if (window._dashUpdateHeader) window._dashUpdateHeader(_effInit); } catch(_) {}
+   }
+  }
+ } catch(_) {}
+
  // Crear feed lateral con tarjetas compactas
  var feedEl = document.createElement('div');
  feedEl.className = 'dash-landscape-feed';
@@ -53065,6 +53121,13 @@ function _confirmBorrarCuenta(id) {
 
  cont.appendChild(mainEl);
  cont.appendChild(feedEl);
+
+ // v1.3.1991: swipe horizontal sobre la card PRINCIPAL para cambiar de card
+ //   (antes solo se podía tocando el feed lateral — el usuario esperaba poder
+ //   deslizar sobre la card grande). Cicla entre las cards reales no ocultas,
+ //   en el orden de _CARD_META_LANDSCAPE. Swipe izq → siguiente, der → anterior.
+ //   Reutiliza _swapMainCard (misma animación + aplicación de periodo).
+ try { _attachMainSwipe(mainEl); } catch(_) {}
 
  // Fase 5.6: detener scroll previo + adjuntar comportamiento swipe/tap
  _stopFeedScroll();
