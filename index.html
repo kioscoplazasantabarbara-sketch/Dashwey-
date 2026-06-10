@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1993";
+ var CURRENT_CACHE = "dashwey-v1-3-1994";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1993</title>
+<title>Dashwey v1.3.1994</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1993';
+ const _APP_VERSION = 'v1.3.1994';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35503,10 +35503,18 @@ const dash = (() => {
   if (!_mainWrap) return;
   if (!(e.target && e.target.closest && e.target.closest('.dash-landscape-main'))) return;
   var _landCard = _mainWrap.querySelector('.card');
-  var _cardTop = _landCard ? _landCard.scrollTop : 0;
-  var _wrapTop = _mainWrap.scrollTop || 0;
-  // En el tope si ambos hosts visibles están a 0 (tolerancia 1px por subpíxel)
-  if (_cardTop > 1 || _wrapTop > 1) return;
+  // v1.3.1994 PTR-LANDSCAPE FIX (tablet Xiaomi): solo bloquear si un host que
+  //   REALMENTE puede scrollear no está en su tope. Si la card/wrapper no
+  //   desborda (scrollHeight ≈ clientHeight) su scrollTop es irrelevante y se
+  //   trata como tope. Antes, una card alta marcaba scrollTop>1 y bloqueaba el
+  //   PTR para siempre en la tablet. Tolerancia 4px por subpíxeles/momentum.
+  var _atTop = function(el) {
+   if (!el) return true;
+   var scrollable = (el.scrollHeight - el.clientHeight) > 4;
+   if (!scrollable) return true;       // no desborda → siempre en el tope
+   return (el.scrollTop || 0) <= 4;    // desborda → exigir tope real
+  };
+  if (!_atTop(_landCard) || !_atTop(_mainWrap)) return;
  } else {
   const dt = document.querySelectorAll('.tab-page')[1];
   if(!dt || dt.scrollTop !== 0) return;
@@ -52279,17 +52287,19 @@ function _confirmBorrarCuenta(id) {
      var _ht = window._hdrDashTitles ? window._hdrDashTitles(newP) : null;
      if (_ht) newP.label = _ht.title;
     } catch(_) {}
-    State.set.period(newP);
-    // Actualizar header (título + rango de fechas)
-    try { _updateDashHeader(newP); } catch(_) {}
-
-    // v1.3.1993 FIX swipe landscape: en paisaje el swipe cambia la FECHA igual
-    //   que en portrait, pero NO debe ejecutar la animación de clones de snap
-    //   ni _snapDoRenderAll (que re-renderiza TODAS las cards del modo snap y
-    //   metía cards ajenas — "compras y suministros" — dentro del layout
-    //   landscape, partiéndolo). En landscape: cambiar fecha + refrescar SOLO
-    //   la card activa y el feed. Comportamiento = portrait + feed lateral.
+    // v1.3.1994 FIX RAÍZ swipe landscape: el valor de ventas no cambiaba al
+    //   hacer swipe (quedaba clavado en el periodo per-card, ej. "Hoy" 47,90€)
+    //   aunque el header sí cambiaba de fecha. Causa: el swipe escribía solo el
+    //   periodo GLOBAL (State.set.period) pero la card y el feed leen el periodo
+    //   EFECTIVO per-card vía _getEffectivePeriodForCard, que daba prioridad al
+    //   override de sesión per-card y pisaba el cambio. FIX: escribir el periodo
+    //   con _applyPeriodForActiveCard (misma vía canónica que el picker del
+    //   header) → actualiza _sessionCardPeriods[activa] + global a la vez, así la
+    //   card activa cambia de fecha igual que en portrait y el feed queda
+    //   coherente. (Se sustituye el State.set.period directo de más arriba.)
     if (document.body.getAttribute('data-dash-landscape') === '1') {
+     try { _applyPeriodForActiveCard(newP, _activeCardId); } catch(_) { try { State.set.period(newP); } catch(__){} }
+     try { _updateDashHeader(newP); } catch(_) {}
      try {
       var _lc = document.querySelector('.dash-landscape-main .card');
       if (_lc) {
@@ -52302,8 +52312,9 @@ function _confirmBorrarCuenta(id) {
       // Re-render de la card activa con el nuevo periodo + feed
       try { _snapRenderCard(_activeCardId); } catch(_) {}
       try {
-       if (_activeCardId === 'rendimiento') _snapRenderChart('rendimiento', newP);
-       else if (_activeCardId === 'compras') _snapRenderChart('compras', newP);
+       var _effNow = _getEffectivePeriodForCard(_activeCardId);
+       if (_activeCardId === 'rendimiento') _snapRenderChart('rendimiento', _effNow);
+       else if (_activeCardId === 'compras') _snapRenderChart('compras', _effNow);
        else if (_activeCardId === 'flujo-caja') _snapRenderFCDist();
        else if (_activeCardId === 'agenda') _snapRenderTimeline();
       } catch(_) {}
@@ -52320,6 +52331,9 @@ function _confirmBorrarCuenta(id) {
      } catch(_) {}
      return; // landscape gestionado — no caer en la animación de snap
     }
+    State.set.period(newP);
+    // Actualizar header (título + rango de fechas)
+    try { _updateDashHeader(newP); } catch(_) {}
     // v1.3.1931 ANIMACIÓN: efecto Instagram (sin hueco visible entre snapcards)
     //   ANTES (v1916): card activa SALE → vacío 180ms → SALTA al lado opuesto →
     //   ENTRA. El "vacío 180ms" producía un parpadeo visible.
@@ -53166,18 +53180,19 @@ function _confirmBorrarCuenta(id) {
  var _hydrateActive = function(retries) {
   try { _snapRenderCard(activeId); } catch(_) {}
   try {
-   var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+   var period = _getEffectivePeriodForCard(activeId);
    if (activeId === 'rendimiento') _snapRenderChart('rendimiento', period);
    else if (activeId === 'compras') _snapRenderChart('compras', period);
    else if (activeId === 'flujo-caja') _snapRenderFCDist();
    else if (activeId === 'agenda') _snapRenderTimeline();
   } catch(_) {}
-  // Refrescar también el feed (KPIs por card) ahora que hay datos
-  try { _refreshLandscapeIfActive(); } catch(_) {}
-  // Si el sync inicial aún no acabó, reintentar (hasta ~5s) — así la card
-  //   pasa de 0€ a los datos reales en cuanto Firestore/Loyverse hidratan,
-  //   sin que el usuario tenga que tocar nada.
-  if (retries > 0 && !window._DashweyInitialSyncDone) {
+  // ¿Hay ya datos reales? Si el sync inicial terminó O el snapshot ya trae
+  //   ingresos, no hace falta seguir reintentando (evita el lag de repetir
+  //   la hidratación 10×). Solo se reintenta mientras initialSync sigue en
+  //   curso Y la card aún no tiene datos.
+  var _hasData = false;
+  try { _hasData = !!window._DashweyInitialSyncDone; } catch(_) {}
+  if (!_hasData && retries > 0) {
    setTimeout(function(){ _hydrateActive(retries - 1); }, 500);
   }
  };
