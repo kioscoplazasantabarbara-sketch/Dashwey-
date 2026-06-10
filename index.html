@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1992";
+ var CURRENT_CACHE = "dashwey-v1-3-1993";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1992</title>
+<title>Dashwey v1.3.1993</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1992';
+ const _APP_VERSION = 'v1.3.1993';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -52282,6 +52282,44 @@ function _confirmBorrarCuenta(id) {
     State.set.period(newP);
     // Actualizar header (título + rango de fechas)
     try { _updateDashHeader(newP); } catch(_) {}
+
+    // v1.3.1993 FIX swipe landscape: en paisaje el swipe cambia la FECHA igual
+    //   que en portrait, pero NO debe ejecutar la animación de clones de snap
+    //   ni _snapDoRenderAll (que re-renderiza TODAS las cards del modo snap y
+    //   metía cards ajenas — "compras y suministros" — dentro del layout
+    //   landscape, partiéndolo). En landscape: cambiar fecha + refrescar SOLO
+    //   la card activa y el feed. Comportamiento = portrait + feed lateral.
+    if (document.body.getAttribute('data-dash-landscape') === '1') {
+     try {
+      var _lc = document.querySelector('.dash-landscape-main .card');
+      if (_lc) {
+       var _outXL = (dir < 0) ? '-24px' : '24px';
+       _lc.style.transition = 'none';
+       _lc.style.opacity = '0';
+       _lc.style.transform = 'translateX(' + _outXL + ')';
+       void _lc.offsetHeight;
+      }
+      // Re-render de la card activa con el nuevo periodo + feed
+      try { _snapRenderCard(_activeCardId); } catch(_) {}
+      try {
+       if (_activeCardId === 'rendimiento') _snapRenderChart('rendimiento', newP);
+       else if (_activeCardId === 'compras') _snapRenderChart('compras', newP);
+       else if (_activeCardId === 'flujo-caja') _snapRenderFCDist();
+       else if (_activeCardId === 'agenda') _snapRenderTimeline();
+      } catch(_) {}
+      try { _refreshLandscapeIfActive(); } catch(_) {}
+      requestAnimationFrame(function() {
+       var _lc2 = document.querySelector('.dash-landscape-main .card');
+       if (_lc2) {
+        _lc2.style.transition = 'transform 280ms cubic-bezier(0.32,0.72,0,1), opacity 240ms ease';
+        _lc2.style.transform = 'translateX(0)';
+        _lc2.style.opacity = '';
+        setTimeout(function(){ try { _lc2.style.cssText = _lc2.style.cssText.replace(/transition:[^;]*;?/,''); } catch(_){} }, 300);
+       }
+      });
+     } catch(_) {}
+     return; // landscape gestionado — no caer en la animación de snap
+    }
     // v1.3.1931 ANIMACIÓN: efecto Instagram (sin hueco visible entre snapcards)
     //   ANTES (v1916): card activa SALE → vacío 180ms → SALTA al lado opuesto →
     //   ENTRA. El "vacío 180ms" producía un parpadeo visible.
@@ -53118,23 +53156,37 @@ function _confirmBorrarCuenta(id) {
  _stopFeedScroll();
  _attachFeedBehavior(feedEl);
 
- // Hidratar tarjeta principal — datos + gráficas
- // Doble rAF: primer frame hidrata datos, segundo frame dibuja gráficas
+ // v1.3.1993 FIX RAÍZ landscape arranque: la hidratación de la card y el
+ //   arranque del autoscroll eran interdependientes y dependían de timing.
+ //   Si la card se hidrataba antes de que initialSync/FinEngine tuvieran datos
+ //   → 0,00€ hasta tocar una card. Y el autoscroll, anidado al final de la
+ //   cadena de rAF de las gráficas, no arrancaba si esa cadena fallaba.
+ //   AHORA: (1) autoscroll arranca por su cuenta, independiente de los datos;
+ //   (2) la card se hidrata con reintentos hasta que los datos estén listos.
+ var _hydrateActive = function(retries) {
+  try { _snapRenderCard(activeId); } catch(_) {}
+  try {
+   var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+   if (activeId === 'rendimiento') _snapRenderChart('rendimiento', period);
+   else if (activeId === 'compras') _snapRenderChart('compras', period);
+   else if (activeId === 'flujo-caja') _snapRenderFCDist();
+   else if (activeId === 'agenda') _snapRenderTimeline();
+  } catch(_) {}
+  // Refrescar también el feed (KPIs por card) ahora que hay datos
+  try { _refreshLandscapeIfActive(); } catch(_) {}
+  // Si el sync inicial aún no acabó, reintentar (hasta ~5s) — así la card
+  //   pasa de 0€ a los datos reales en cuanto Firestore/Loyverse hidratan,
+  //   sin que el usuario tenga que tocar nada.
+  if (retries > 0 && !window._DashweyInitialSyncDone) {
+   setTimeout(function(){ _hydrateActive(retries - 1); }, 500);
+  }
+ };
  requestAnimationFrame(function() {
- try { _snapRenderCard(activeId); } catch(_) {}
- requestAnimationFrame(function() {
- requestAnimationFrame(function() {
- try {
- var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
- if (activeId === 'rendimiento') _snapRenderChart('rendimiento', period);
- else if (activeId === 'compras') _snapRenderChart('compras', period);
- else if (activeId === 'flujo-caja') _snapRenderFCDist();
- else if (activeId === 'agenda') _snapRenderTimeline();
- } catch(_) {}
- // Fase 5.5: arrancar auto-scroll del feed
- _startFeedScroll();
- });
- });
+  requestAnimationFrame(function() {
+   _hydrateActive(10);
+   // Autoscroll arranca por su cuenta — no depende de la hidratación de datos
+   _startFeedScroll();
+  });
  });
  }
 
