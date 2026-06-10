@@ -922,7 +922,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-1991";
+ var CURRENT_CACHE = "dashwey-v1-3-1992";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -941,7 +941,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) body[data-tab="2"] #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.1991</title>
+<title>Dashwey v1.3.1992</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -23969,7 +23969,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.1991';
+ const _APP_VERSION = 'v1.3.1992';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -35492,10 +35492,21 @@ const dash = (() => {
  if (_isLand) {
   // Origen del touch: ignorar si viene del feed (allí tiene su propio scroll/swap)
   if (e.target && e.target.closest && e.target.closest('.dash-landscape-feed')) return;
-  var _landMainCard = document.querySelector('.dash-landscape-main .card');
-  // Si no encontramos card interna, fallback al tab-page como antes
-  var _scrollHost = _landMainCard || document.querySelectorAll('.tab-page')[1];
-  if (!_scrollHost || _scrollHost.scrollTop !== 0) return;
+  // v1.3.1992 PTR-LANDSCAPE FIX (tablet Xiaomi): el gesto debe empezar SOBRE el
+  //   área principal. El scroll real puede vivir en `.dash-landscape-main .card`
+  //   O en `.dash-landscape-main` según cuánto contenido tenga la card — antes
+  //   solo se miraba la card interna; si el host real era el main (o la card no
+  //   existía aún en ese frame), scrollTop daba un valor inesperado y el gesto
+  //   no arrancaba. Ahora: exigir que el touch nazca dentro del main, y aceptar
+  //   el gesto si CUALQUIERA de los dos hosts candidatos está en el tope.
+  var _mainWrap = document.querySelector('.dash-landscape-main');
+  if (!_mainWrap) return;
+  if (!(e.target && e.target.closest && e.target.closest('.dash-landscape-main'))) return;
+  var _landCard = _mainWrap.querySelector('.card');
+  var _cardTop = _landCard ? _landCard.scrollTop : 0;
+  var _wrapTop = _mainWrap.scrollTop || 0;
+  // En el tope si ambos hosts visibles están a 0 (tolerancia 1px por subpíxel)
+  if (_cardTop > 1 || _wrapTop > 1) return;
  } else {
   const dt = document.querySelectorAll('.tab-page')[1];
   if(!dt || dt.scrollTop !== 0) return;
@@ -52764,24 +52775,44 @@ function _confirmBorrarCuenta(id) {
  feed.appendChild(clone);
  feed._loopCloned = true;
  feed.scrollTop = 0; // reset posición al reconstruir
- // Calcular origHeight tras añadir el clon
- requestAnimationFrame(function() {
+ // v1.3.1992 FIX autoscroll inicial: calcular origHeight SÍNCRONO (antes
+ //   estaba en un rAF asíncrono → step() corría en el frame 0 con origHeight=0
+ //   → abortaba y programaba retry; en la carga inicial del landscape el DOM
+ //   aún se estabilizaba (gráficas dibujándose) → reintento también fallaba →
+ //   el autoscroll no arrancaba hasta tocar una card. Síncrono + self-heal en
+ //   step() lo arranca al primer frame estable, sin depender de timing externo.
  feed._origHeight = feed.scrollHeight / 2;
- });
  }
 
  function step(ts) {
  var feed = document.querySelector('.dash-landscape-feed');
  if (!feed || !_feedRafId) { _feedRafId = null; return; }
+ // v1.3.1992: si origHeight aún es 0 (DOM no estabilizado en el frame inicial),
+ //   recalcular EN VEZ DE abortar. Se auto-cura en cuanto el layout asienta.
  var origHeight = feed._origHeight || 0;
+ if (origHeight <= 0) {
+  origHeight = feed.scrollHeight / 2;
+  feed._origHeight = origHeight;
+ }
  var scrollH = feed.scrollHeight;
  var clientH = feed.clientHeight;
  var max = scrollH - clientH;
  if (max <= 0 || origHeight <= 0) {
- _feedRafId = null;
- _feedPauseTimer = setTimeout(_startFeedScroll, 500);
+ // v1.3.1992: dar margen de ~30 frames (~0.5s) para que el DOM asiente.
+ //   Si tras eso sigue sin haber scroll, es que de verdad no hay suficientes
+ //   cards → pausar de verdad (sin quemar CPU en un rAF infinito).
+ feed._settleFrames = (feed._settleFrames || 0) + 1;
+ if (feed._settleFrames > 30) {
+  feed._settleFrames = 0;
+  _feedRafId = null;
+  _feedPauseTimer = setTimeout(_startFeedScroll, 1500);
+  return;
+ }
+ _feedLastTs = 0;
+ _feedRafId = requestAnimationFrame(step);
  return;
  }
+ feed._settleFrames = 0;
  if (_feedLastTs > 0) {
  var elapsed = (ts - _feedLastTs) / 1000;
  var speed = clientH > 0 ? (clientH * (window.innerWidth < 768 ? 8 : 12)) / 100 : 30;
@@ -52989,45 +53020,6 @@ function _confirmBorrarCuenta(id) {
  });
  }
 
- // v1.3.1991: swipe horizontal en la card principal del landscape.
- //   Lista ordenada de cards reales visibles (sin placeholders ni ocultas).
- function _landscapeRealCards() {
-  var hidden = [];
-  try { hidden = _getHidden ? _getHidden() : []; } catch(_) {}
-  return Object.keys(_CARD_META_LANDSCAPE).filter(function(cid){
-   var m = _CARD_META_LANDSCAPE[cid];
-   if (m && m.placeholder) return false;
-   if (hidden.indexOf(cid) !== -1) return false;
-   return true;
-  });
- }
- function _attachMainSwipe(mainEl) {
-  if (!mainEl || mainEl._swipeAttached) return;
-  mainEl._swipeAttached = true;
-  var sx = 0, sy = 0, tracking = false;
-  mainEl.addEventListener('touchstart', function(e){
-   if (!e.touches || !e.touches[0]) return;
-   sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
-  }, { passive: true });
-  mainEl.addEventListener('touchend', function(e){
-   if (!tracking || !e.changedTouches || !e.changedTouches[0]) return;
-   tracking = false;
-   var dx = e.changedTouches[0].clientX - sx;
-   var dy = e.changedTouches[0].clientY - sy;
-   // Gesto horizontal claro: |dx|>60 y predominante sobre el vertical
-   if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
-   var cards = _landscapeRealCards();
-   var idx = cards.indexOf(_activeCardId);
-   if (idx === -1) return;
-   // swipe izquierda (dx<0) → siguiente; derecha (dx>0) → anterior. Cíclico.
-   var nextIdx = dx < 0 ? (idx + 1) % cards.length : (idx - 1 + cards.length) % cards.length;
-   var nextId = cards[nextIdx];
-   if (nextId && nextId !== _activeCardId) {
-    try { _swapMainCard(nextId); } catch(_) {}
-   }
-  }, { passive: true });
- }
-
  function _renderLandscape() {
  var cont = document.getElementById('dash-cards-container');
  if (!cont) return;
@@ -53121,13 +53113,6 @@ function _confirmBorrarCuenta(id) {
 
  cont.appendChild(mainEl);
  cont.appendChild(feedEl);
-
- // v1.3.1991: swipe horizontal sobre la card PRINCIPAL para cambiar de card
- //   (antes solo se podía tocando el feed lateral — el usuario esperaba poder
- //   deslizar sobre la card grande). Cicla entre las cards reales no ocultas,
- //   en el orden de _CARD_META_LANDSCAPE. Swipe izq → siguiente, der → anterior.
- //   Reutiliza _swapMainCard (misma animación + aplicación de periodo).
- try { _attachMainSwipe(mainEl); } catch(_) {}
 
  // Fase 5.6: detener scroll previo + adjuntar comportamiento swipe/tap
  _stopFeedScroll();
