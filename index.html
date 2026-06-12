@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2016";
+ var CURRENT_CACHE = "dashwey-v1-3-2017";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2016</title>
+<title>Dashwey v1.3.2017</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24138,7 +24138,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2016';
+ const _APP_VERSION = 'v1.3.2017';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -51433,7 +51433,16 @@ function _confirmBorrarCuenta(id) {
  }
 
  function _snapRenderCard(cardId, _sharedSnap) {
- var period = State.get.period ? State.get.period() : { type: 'month', offset: 0 };
+ // v1.3.2017: el periodo interno (usado por getBeneficioNeto, deltas, charts)
+ //   debe ser el EFECTIVO de la card, no el global. Antes leía State.get.period
+ //   → la card respetaba el snapshot pasado pero recalculaba beneficio/etc con
+ //   el global = incoherencia. Ahora todo coherente con el periodo de Ajustes.
+ var period;
+ try {
+  period = (typeof _getEffectivePeriodForCard === 'function')
+   ? _getEffectivePeriodForCard(cardId)
+   : (State.get.period ? State.get.period() : { type: 'month', offset: 0 });
+ } catch(_) { period = State.get.period ? State.get.period() : { type: 'month', offset: 0 }; }
  var snap = null;
  // v1.3.605: aceptar snapshot precalculado de _snapDoRenderAll — evita N llamadas
  // a FinEngine.snapshot() durante forEach; si no se pasa, calcular localmente
@@ -52257,20 +52266,40 @@ function _confirmBorrarCuenta(id) {
  // Fase 5.3: persistir tarjeta activa para landscape mode
  if (activeId) _activeCardId = activeId;
 
+ // v1.3.2017: sincronizar el header con el periodo EFECTIVO de la card activa
+ //   también en el render inicial (no solo al hacer scroll). Sin esto, al
+ //   arrancar el dashboard el header podía mostrar un periodo (p.ej. "Global")
+ //   distinto al configurado en Ajustes para esa card (p.ej. "Mes").
+ if (activeId) {
+  try {
+   var _effA = _getEffectivePeriodForCard(activeId);
+   if (_effA && _effA.type) {
+    var _curA = State.get.period ? State.get.period() : null;
+    if (!_curA || _curA.type !== _effA.type || (_curA.offset||0) !== (_effA.offset||0)) {
+     State.set.period(_effA);
+     try { if (typeof _updateDashHeader === 'function') _updateDashHeader(_effA); } catch(_) {}
+    }
+   }
+  } catch(_) {}
+ }
+
  // v1.3.1843: el reset del Hero para PTR/periodo se hace en los callsites concretos
  //   (marcando _DashweyHeroUserAction). Aquí NO se resetea — _snapDoRenderAll se llama
  //   también en boot y renders automáticos, donde el Hero NO debe re-animar.
 
  // v1.3.583: precalcular snapshot una vez para todas las cards
- var _sharedSnap = null;
- try { var _sp = State.get.period ? State.get.period() : {type:'month',offset:0}; _sharedSnap = FinEngine.snapshot(_sp); } catch(_) {}
- // v1.3.1139 FIX#1: renderizar SOLO la card activa. Las demás se marcan como
- //                  stale; se renderizan lazy cuando entren al viewport (observer).
- // Antes: forEach sobre 4 cards cada llamada → var(--dur-short) de trabajo aunque 3 no visibles.
+ // v1.3.2017 FIX RAÍZ "las cards no respetan el periodo de Ajustes": el
+ //   _sharedSnap se calculaba con el periodo GLOBAL (State.get.period) y se
+ //   pasaba a TODAS las cards → ninguna respetaba su periodo configurado en
+ //   Ajustes (cardPeriods). Síntoma: Flujo de Caja mostraba "Global" aunque
+ //   Ajustes dijera "Mes". Ahora cada card se renderiza con SU periodo efectivo
+ //   (_getEffectivePeriodForCard: override sesión → Ajustes → global). El
+ //   snapshot ya no se comparte ciegamente; se calcula por card. (El landscape
+ //   ya se arregló así en v2007; esto lo extiende al dashboard normal.)
  cards.forEach(function(card) {
   var cid = card.dataset.cardId;
   if (cid === activeId) {
-   // Card visible — render completo
+   // Card visible — render completo con SU periodo efectivo
    var textEl = document.getElementById('snap-text-' + cid);
    if (textEl && textEl._snapTypewriterCancel) {
     textEl._snapTypewriterCancel();
@@ -52278,7 +52307,9 @@ function _confirmBorrarCuenta(id) {
     textEl.innerHTML = '';
    }
    _stopInsightCarousel(cid);
-   _snapRenderCard(cid, _sharedSnap);
+   var _cardSnap = null;
+   try { _cardSnap = FinEngine.snapshot(_getEffectivePeriodForCard(cid)); } catch(_) {}
+   _snapRenderCard(cid, _cardSnap || undefined);
   } else {
    // Card no visible — marcar stale; el scroll observer la renderizará al activarse
    card.dataset.stale = '1';
