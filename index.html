@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2020";
+ var CURRENT_CACHE = "dashwey-v1-3-2021";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2020</title>
+<title>Dashwey v1.3.2021</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24138,7 +24138,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2020';
+ const _APP_VERSION = 'v1.3.2021';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33649,10 +33649,20 @@ const ui = (() => {
       .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // quitar acentos
     };
     var prodByTpvName = {};
+    // v1.3.2021: contador de productos vivos por nombre TPV — para detectar
+    //   nombres COMPARTIDOS (grupo natural) y no descontar stock en ambigüedad.
+    var _tpvNameCount = {};
     productos.forEach(function(p){
      if (!p || p.deleted) return;
      var key = _normName(p.ventaNombre || p.nombre);
      if (key && !prodByTpvName[key]) prodByTpvName[key] = p;
+     // v1.3.2021: contar SOLO ventaNombre explícitos (el campo de agrupación).
+     //   El nombre propio del producto no cuenta — un producto sin ventaNombre
+     //   nunca es "miembro de grupo" por accidente de nombre.
+     if (p.ventaNombre) {
+      var _vk = _normName(p.ventaNombre);
+      if (_vk) _tpvNameCount[_vk] = (_tpvNameCount[_vk] || 0) + 1;
+     }
     });
     var ventasExistentes = new Set();
     // v1.3.1145 FIX: usar State.raw.ventas (incluye items con deleted:true) para evitar
@@ -33776,10 +33786,18 @@ const ui = (() => {
       //   forma determinista de saber cuál se vendió (decisión D1 pendiente).
       try {
        items.forEach(function(it) {
-        if (!it || it.grupoId) return;                       // grupos: no descontar (ambiguo)
+        if (!it || it.grupoId) return;                       // grupos (modelo viejo): no descontar (ambiguo)
         if (!it.prodId || it.prodId.indexOf('_lv_') === 0) return; // sin mapear: ignorar
         var _pStk = State.get.prod ? State.get.prod(it.prodId) : null;
         if (!_pStk || _pStk.trackStock === false) return;    // tracking desactivado: respetar
+        // v1.3.2021 (refactor grupos→ventaNombre): si el ventaNombre del producto
+        //   está COMPARTIDO por más de un producto vivo, el item es de un grupo
+        //   natural → ambiguo qué producto físico se vendió → no descontar
+        //   (misma regla que grupoId, pero sobre el agrupador nuevo).
+        if (_pStk.ventaNombre) {
+         var _vnK = _normName(_pStk.ventaNombre);
+         if (_vnK && _tpvNameCount[_vnK] > 1) return;
+        }
         var _q = (typeof it.qty === 'number' && it.qty > 0) ? it.qty : 0;
         if (_q <= 0) return;
         var _nuevo = (_pStk.stockActual || 0) - _q;          // puede quedar negativo: stock real desfasado, informativo
@@ -59052,6 +59070,13 @@ function _parseIva(iva) {
    //   grupo Gominola SÍ las tiene. Solución: agregar al groupStats y los
    //   miembros lo heredan vía lookup en _buildBadgesHtml.
    var groupStats = {};
+   // v1.3.2021 FASE A refactor grupos→ventaNombre: tracking paralelo por NOMBRE
+   //   TPV normalizado del item. El item de venta lleva it.nombre (el item_name
+   //   de Loyverse). Acumular por nombre permite que los miembros hereden stats
+   //   por su ventaNombre SIN necesitar la entidad gruposVenta. Convive con
+   //   groupStats (fallback) durante la transición.
+   var nameStats = {};
+   var _bNorm = function(s){ return String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); };
    ventas.forEach(function(v) {
     var ts = v.fecha ? new Date(v.fecha).getTime() : 0;
     var en30 = (ahora - ts) <= MS30;
@@ -59075,6 +59100,13 @@ function _parseIva(iva) {
       if (en30) { groupStats[gid].qty30+=q; groupStats[gid].rev30+=r; }
       groupStats[gid].qty60+=q; groupStats[gid].rev60+=r;
      }
+     // v1.3.2021: tracking por nombre TPV del item (agrupador natural)
+     var nk = _bNorm(it.nombre);
+     if (nk) {
+      if (!nameStats[nk]) nameStats[nk] = {qty30:0,qty60:0,rev30:0,rev60:0};
+      if (en30) { nameStats[nk].qty30+=q; nameStats[nk].rev30+=r; }
+      nameStats[nk].qty60+=q; nameStats[nk].rev60+=r;
+     }
     });
    });
    // v1.3.1930 — percentiles SOLO sobre productos individuales (excluir grupos
@@ -59094,7 +59126,7 @@ function _parseIva(iva) {
     stats[p.id].stockMin=p.stockMinimo||0;
     stats[p.id].pvp=p.pvp||0;
    });
-   _badgeStatsCache={stats:stats,groupStats:groupStats,p33:p33,p66:p66,p80:p80};
+   _badgeStatsCache={stats:stats,groupStats:groupStats,nameStats:nameStats,p33:p33,p66:p66,p80:p80};
    _badgeStatsCacheKey=cacheKey;
    return _badgeStatsCache;
   } catch(e) { return null; }
@@ -59113,7 +59145,22 @@ function _parseIva(iva) {
    if (s && s.qty30===0 && s.qty60===0) {
     try {
      var prodG = State.get.prod ? State.get.prod(prodId) : null;
-     if (prodG && prodG.grupoId && data.groupStats && data.groupStats[prodG.grupoId]) {
+     // v1.3.2021 FASE A refactor: herencia PRIMERO por ventaNombre (el
+     //   agrupador natural — nombre del item en TPV Loyverse). Si el producto
+     //   tiene ventaNombre y hay ventas acumuladas bajo ese nombre, hereda esas
+     //   stats. FALLBACK al modelo viejo (grupoId/gruposVenta) para grupos aún
+     //   no migrados — compat total durante la transición, cero pérdida.
+     var _heredado = false;
+     if (prodG && prodG.ventaNombre && data.nameStats) {
+      var _nk2 = String(prodG.ventaNombre||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+      var ns = _nk2 ? data.nameStats[_nk2] : null;
+      if (ns && (ns.qty30 > 0 || ns.qty60 > 0)) {
+       s = { qty30:ns.qty30, qty60:ns.qty60, rev30:ns.rev30, rev60:ns.rev60,
+             mg:s.mg, stockMin:s.stockMin, pvp:s.pvp, stock:s.stock };
+       _heredado = true;
+      }
+     }
+     if (!_heredado && prodG && prodG.grupoId && data.groupStats && data.groupStats[prodG.grupoId]) {
       var gs = data.groupStats[prodG.grupoId];
       // Construir vista virtual con stats del grupo + metadatos del producto
       //   (mg/stockMin/pvp del producto, qty/rev del grupo)
@@ -69296,6 +69343,60 @@ _eaRecalc();
     Idempotente: tras corregir, i.coste ≈ cu → el check de "inflado" ya no entra.
     Fire-and-forget en idle, igual que _DashweyMigrateLVSourceNames.
     ══════════════════════════════════════════════════════════════════ */
+ // ── v1.3.2021 · MIGRACIÓN gruposVenta → ventaNombre (FASE A del refactor) ──
+ //   Decisión Hung (4 jun, ejecutada 12 jun): el agrupador real es el nombre en
+ //   TPV Loyverse (prod.ventaNombre). La entidad gruposVenta es una capa
+ //   intermedia redundante. Esta migración copia el loyverseName de cada grupo
+ //   activo al ventaNombre de sus miembros que no lo tengan ya.
+ //   - Idempotente: re-ejecutar no cambia nada si ya migrado.
+ //   - dryRun: window._DashweyMigrarGruposAVentaNombre({dryRun:true}) → informe sin escribir.
+ //   - NO borra gruposVenta ni toca grupoId (compat hacia atrás durante la
+ //     transición — la herencia de badges tiene fallback al grupo).
+ //   - NO pisa ventaNombre existentes distintos (los reporta como conflicto).
+ window._DashweyMigrarGruposAVentaNombre = function(opts) {
+  opts = opts || {};
+  var dryRun = !!opts.dryRun;
+  try {
+   var App = window.App;
+   if (!App || !App.State) return { ok: false, reason: 'no-state' };
+   var grupos = (App.State.raw && App.State.raw.gruposVenta) ? App.State.raw.gruposVenta()
+              : (App.State.get.gruposVenta ? App.State.get.gruposVenta() : []);
+   var prods = App.State.get.productos ? (App.State.get.productos() || []) : [];
+   var prodMap = {};
+   prods.forEach(function(p){ if (p && p.id) prodMap[p.id] = p; });
+
+   var copiados = 0, yaOk = 0, conflictos = [], gruposProc = 0, detalle = [];
+   (grupos || []).forEach(function(g) {
+    if (!g || g.deleted || g.activo === false) return;
+    var lvName = (g.loyverseName || '').trim();
+    if (!lvName) { detalle.push({ grupo: g.nombre || g.id, skip: 'sin loyverseName' }); return; }
+    gruposProc++;
+    var ids = Array.isArray(g.articuloIds) ? g.articuloIds : [];
+    ids.forEach(function(pid) {
+     var p = prodMap[pid];
+     if (!p || p.deleted) return;
+     var actual = (p.ventaNombre || '').trim();
+     if (actual === lvName) { yaOk++; return; }
+     if (actual && actual !== lvName) {
+      // Conflicto: el producto ya tiene OTRO ventaNombre — no pisar, reportar.
+      conflictos.push({ prod: p.nombre, actual: actual, grupo: lvName });
+      return;
+     }
+     copiados++;
+     detalle.push({ prod: p.nombre, ventaNombre: lvName });
+     if (!dryRun) {
+      App.State.set.updateProd(pid, { ventaNombre: lvName });
+     }
+    });
+   });
+   var res = { ok: true, dryRun: dryRun, gruposProcesados: gruposProc,
+               copiados: copiados, yaCorrectos: yaOk,
+               conflictos: conflictos, detalle: detalle.slice(0, 60) };
+   console.info('[Dashwey/MigrarGrupos]', JSON.stringify({ dryRun: dryRun, grupos: gruposProc, copiados: copiados, yaOk: yaOk, conflictos: conflictos.length }));
+   return res;
+  } catch(e) { return { ok: false, reason: String(e && e.message) }; }
+ };
+
  window._DashweyMigrateLVItemCoste = function(opts) {
   opts = opts || {};
   var dryRun = !!opts.dryRun;
