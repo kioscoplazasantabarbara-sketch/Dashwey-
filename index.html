@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2018";
+ var CURRENT_CACHE = "dashwey-v1-3-2019";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2018</title>
+<title>Dashwey v1.3.2019</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24138,7 +24138,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2018';
+ const _APP_VERSION = 'v1.3.2019';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -33761,6 +33761,31 @@ const ui = (() => {
        sourceRefId: receiptId,
       });
       totalVentasCreated++;
+
+      // v1.3.2019 — DESCUENTO DE STOCK POR VENTAS LOYVERSE.
+      //   Antes: el stock SUBÍA con cada pedido recibido pero solo BAJABA por
+      //   ventas del TPV interno (pausado indefinidamente) o mermas → stockActual
+      //   y valorStock se inflaban sin parar (datos no fiables). Ahora cada venta
+      //   de Loyverse descuenta el stock real de los productos mapeados.
+      //   SEGURO E IDEMPOTENTE: estamos dentro de la rama de venta NUEVA (las
+      //   existentes salieron en el guard `ventasExistentes.has(ventaId)` arriba),
+      //   así que cada receipt descuenta stock exactamente UNA vez aunque se
+      //   re-importe. Solo descuenta productos mapeados (no _lv_unknown) con
+      //   trackStock !== false. Items agrupados (grupoId) NO descuentan stock de
+      //   un producto concreto — el grupo representa varios productos y no hay
+      //   forma determinista de saber cuál se vendió (decisión D1 pendiente).
+      try {
+       items.forEach(function(it) {
+        if (!it || it.grupoId) return;                       // grupos: no descontar (ambiguo)
+        if (!it.prodId || it.prodId.indexOf('_lv_') === 0) return; // sin mapear: ignorar
+        var _pStk = State.get.prod ? State.get.prod(it.prodId) : null;
+        if (!_pStk || _pStk.trackStock === false) return;    // tracking desactivado: respetar
+        var _q = (typeof it.qty === 'number' && it.qty > 0) ? it.qty : 0;
+        if (_q <= 0) return;
+        var _nuevo = (_pStk.stockActual || 0) - _q;          // puede quedar negativo: stock real desfasado, informativo
+        State.set.updateProd(it.prodId, { stockActual: _nuevo });
+       });
+      } catch(_eStk) { /* el descuento de stock nunca debe romper el commit de ventas */ }
      } catch(_e) { totalErrors++; }
     });
 
