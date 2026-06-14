@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2021";
+ var CURRENT_CACHE = "dashwey-v1-3-2022";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2021</title>
+<title>Dashwey v1.3.2022</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24138,7 +24138,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2021';
+ const _APP_VERSION = 'v1.3.2022';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29289,6 +29289,57 @@ const ui = (() => {
  }
  window._DashweyLVStartRealtime = _lvStartRealtimePoll;
  window._DashweyLVStopRealtime = _lvStopRealtimePoll;
+
+ // ── v1.3.2022 · BACKFILL MANUAL Loyverse por RANGO de fechas ──
+ //   Problema: la API granular de Loyverse a veces tiene drift retroactivo —
+ //   avanza el cursor incremental sin haber traído todos los receipts del
+ //   intervalo → huecos permanentes (ej. 12 jun: 124 IDs en rango, 112 ventas).
+ //   Esta herramienta IGNORA el cursor incremental y pide TODOS los receipts
+ //   del rango directamente a la API. Es SEGURO ejecutarlo cuantas veces se
+ //   quiera: _lvCommitReceipts deduplica por `v_lv_<receiptId>` y el descuento
+ //   de stock (v2019) NO se dispara para ventas ya existentes (mismo guard).
+ //   Solo se cierran huecos reales. Si todos los IDs ya están, no hace nada.
+ //
+ //   Uso desde consola (PC):
+ //     await window._DashweyLVBackfillRange('2026-06-11', '2026-06-14')
+ //   Devuelve un resumen: {pedidos, traidosLV, yaEnDashwey, nuevasAplicadas}.
+ window._DashweyLVBackfillRange = function(desdeYmd, hastaYmd) {
+  return new Promise(function(resolve){
+   try {
+    var token = localStorage.getItem('dashwey_lv_token') || '';
+    if (!token) { resolve({ ok:false, reason:'sin token Loyverse' }); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(desdeYmd) || !/^\d{4}-\d{2}-\d{2}$/.test(hastaYmd)) {
+     resolve({ ok:false, reason:'fechas YYYY-MM-DD requeridas' }); return;
+    }
+    // Rango UTC ampliado: cubrir todo el día Madrid (UTC-2h margen por seguridad)
+    var desde = new Date(desdeYmd + 'T00:00:00.000Z'); desde.setUTCHours(desde.getUTCHours() - 2);
+    var hastaD = new Date(hastaYmd + 'T00:00:00.000Z'); hastaD.setUTCDate(hastaD.getUTCDate() + 1); hastaD.setUTCHours(hastaD.getUTCHours() + 2);
+    var endMs = hastaD.getTime();
+    console.info('[LV/Backfill] solicitando rango', desde.toISOString(), '→', new Date(endMs).toISOString());
+    // Ventas que ya teníamos antes (para contar nuevasAplicadas tras commit)
+    var antesIds = new Set();
+    try { (window.State.raw && window.State.raw.ventas() || []).forEach(function(v){ if (v && v.id && v.id.indexOf('v_lv_')===0) antesIds.add(v.id); }); } catch(_) {}
+    _lvFetchHistPaginated(token, [], null, desde, endMs, function(receipts, _abort, errored){
+     if (errored) { resolve({ ok:false, reason:'error fetch API', traidos:receipts.length }); return; }
+     try {
+      _lvCommitReceipts(receipts, null, false, true /* silent */);
+     } catch(eC) { console.warn('[LV/Backfill] commit error:', eC); }
+     // Contar cuántos receipts no estaban antes (cierre real de huecos)
+     var nuevos = 0, yaEstaban = 0;
+     receipts.forEach(function(r){
+      var id = 'v_lv_' + (r.id || r.receipt_number);
+      if (antesIds.has(id)) yaEstaban++; else nuevos++;
+     });
+     var resumen = { ok:true, pedidos:1, traidosLV:receipts.length, yaEnDashwey:yaEstaban, nuevasAplicadas:nuevos };
+     console.info('[LV/Backfill] ✓ resumen:', resumen);
+     // Tras backfill: reconciliar closureId para que las nuevas ventas se
+     //   estampen en sus cierres existentes (idempotente).
+     try { if (window._DashweyReconciliarClosureId) { var n = window._DashweyReconciliarClosureId(); if (n>0) console.info('[LV/Backfill] ✓', n, 'ventas reconciliadas a cierres'); } } catch(_) {}
+     resolve(resumen);
+    });
+   } catch(e) { resolve({ ok:false, reason:String(e && e.message) }); }
+  });
+ };
 
  // ══════════════════════════════════════════════════════════════════════
  // v1.3.1162 AUTO-CIERRE SCHEDULER
