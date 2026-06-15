@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2024";
+ var CURRENT_CACHE = "dashwey-v1-3-2025";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2024</title>
+<title>Dashwey v1.3.2025</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24186,7 +24186,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2024';
+ const _APP_VERSION = 'v1.3.2025';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -69050,17 +69050,21 @@ _eaRecalc();
   var result = Object.values(map);
 
   // ════════════════════════════════════════════════════════════════════════
-  // v1.3.1703 BUG-8 SHADOW LOG: ejecutar _mergeById_v2 en paralelo y comparar
+  // v1.3.1703 BUG-8 SHADOW LOG + v1.3.2025 ACTIVACIÓN GATEADA: v2 tombstones-LWW
   // ════════════════════════════════════════════════════════════════════════
   // v2 difiere SOLO en el bloque tombstone: con v1 el tombstone gana SIEMPRE,
   // con v2 solo gana si su timestamp es >= la edición opuesta. Sin esto,
   // tablet edita item X (_updatedAt=2000) + Pixel borra item X (deletedAt=1000)
-  // → tombstone Pixel gana → edición tablet perdida.
-  // Shadow log: NO aplicamos v2, solo registramos divergencias para validar
-  // 7 días antes de activar como default (sesión futura).
+  // → tombstone Pixel gana → edición tablet perdida (BUG-N1).
+  // v1.3.2025: computamos v2Result SIEMPRE (defensivo: nunca devolver undefined)
+  //   y la activación va gateada por window._DashweyUseMergeV2 (default OFF →
+  //   comportamiento IDÉNTICO a v1, despliegue sin riesgo). El shadow log sigue
+  //   registrando divergencias para telemetría. Para activar v2 en caliente
+  //   (reversible al instante, sin redeploy): window._DashweyUseMergeV2 = true.
+  var v2Result = null;
+  try { v2Result = _mergeById_v2(localArr, remoteArr); } catch(eV2) { v2Result = null; }
   try {
-   if (window._DashweyMergeShadowEnabled !== false) {
-    var v2Result = _mergeById_v2(localArr, remoteArr);
+   if (window._DashweyMergeShadowEnabled !== false && Array.isArray(v2Result)) {
     _mergeShadowCompare(result, v2Result, localArr, remoteArr);
    }
   } catch(eShadow) {
@@ -69070,6 +69074,12 @@ _eaRecalc();
    }
   }
 
+  // ★ Activación gateada + defensiva: solo devuelve v2 si el flag está ON y v2
+  //   computó un array válido. En cualquier otro caso → v1 (result). Imposible
+  //   devolver undefined aunque _mergeById_v2 lanzara.
+  if (window._DashweyUseMergeV2 === true && Array.isArray(v2Result)) {
+   return v2Result;
+  }
   return result;
  }
 
@@ -69205,6 +69215,52 @@ _eaRecalc();
    console.warn('[MergeShadow] divergencia v1/v2:', diffIds.length, 'items |', diffIds.slice(0, 3));
   }
  }
+
+ // ─────────────────────────────────────────────────────────────────────────
+ // v1.3.2025: Harness de validación read-only de _mergeById_v2 (BUG-N1)
+ // ─────────────────────────────────────────────────────────────────────────
+ // Compara v1 vs v2 en las 4 direcciones con datos SINTÉTICOS (no toca State
+ //   ni Firebase). Accesible desde consola: window._DashweyTestMerge()
+ window._DashweyTestMerge = function() {
+  var out = [];
+  function st(arr){ var i = arr.find(function(x){return x && x.id==='t';}); return !i?'AUSENTE':(i.deleted?'BORRADO':'VIVO:'+(i.nombre||'')); }
+  function run(name, local, remote, esperadoV1, debeDivergir){
+   var r1, r2;
+   try { r1 = _mergeById_v2 ? null : null; } catch(_){}
+   // Llamar a v1 puro (sin pasar por el flag): replicamos invocando _mergeById
+   //   con el flag forzado OFF temporalmente para leer SIEMPRE el resultado v1.
+   var prevFlag = window._DashweyUseMergeV2;
+   window._DashweyUseMergeV2 = false;
+   try { r1 = _mergeById(local, remote); } catch(e){ r1 = []; }
+   window._DashweyUseMergeV2 = prevFlag;
+   try { r2 = _mergeById_v2(local, remote); } catch(e){ r2 = []; }
+   var s1 = st(r1), s2 = st(r2);
+   var diverge = (s1 !== s2);
+   var okV1 = (s1 === esperadoV1);
+   var okDiv = (diverge === debeDivergir);
+   out.push({ caso: name, v1: s1, v2: s2, divergen: diverge, esperado_v1: esperadoV1, ok: (okV1 && okDiv) });
+  }
+  run('1) A borra(1000) + B edita DESPUES(2000) [BUG-N1]',
+      [{id:'t',nombre:'editado',_updatedAt:2000}],
+      [{id:'t',deleted:true,deletedAt:1000,_updatedAt:1000}], 'BORRADO', true);
+  run('2) A edita(1000) + B borra DESPUES(2000)',
+      [{id:'t',nombre:'editado',_updatedAt:1000}],
+      [{id:'t',deleted:true,deletedAt:2000,_updatedAt:2000}], 'BORRADO', false);
+  run('3) tombstone nuevo(2000) vs edicion vieja(1000)',
+      [{id:'t',deleted:true,deletedAt:2000,_updatedAt:2000}],
+      [{id:'t',nombre:'editado',_updatedAt:1000}], 'BORRADO', false);
+  run('4) ambos vivos, remoto mas nuevo',
+      [{id:'t',nombre:'A',_updatedAt:1000}],
+      [{id:'t',nombre:'B',_updatedAt:2000}], 'VIVO:B', false);
+  var todosOk = out.every(function(x){ return x.ok; });
+  console.log('═══ TEST _mergeById_v2 (read-only) ═══');
+  out.forEach(function(x){
+   console.log((x.ok?'✅':'❌'), x.caso);
+   console.log('     v1='+x.v1+'  v2='+x.v2+'  divergen='+x.divergen);
+  });
+  console.log(todosOk ? '✅ TODOS OK — v2 correcto en las 4 direcciones, solo diverge el caso 1 (el fix)' : '❌ ALGÚN CASO FALLA — NO activar v2');
+  return { todosOk: todosOk, casos: out };
+ };
 
  // ─────────────────────────────────────────────────────────────
  // v1.3.1075: Command Channel para acciones globales (resets)
