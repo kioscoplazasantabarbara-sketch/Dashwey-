@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2022";
+ var CURRENT_CACHE = "dashwey-v1-3-2023";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2022</title>
+<title>Dashwey v1.3.2023</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -20974,6 +20974,21 @@ const FinEngine = (() => {
  return money(vtaTotal + ingFin);
  }
 
+ // ── VENTAS-ONLY (sin ingresos financieros) — v1.3.2023 ───────────
+ // La tarjeta "Resumen de Ventas → Ventas del periodo" debe mostrar SOLO
+ //   ventas reales (Loyverse/manuales), NO ingresos como devoluciones de
+ //   Hacienda o transferencias. revenue() mezcla ventas + ingresosFin (correcto
+ //   para beneficio/margen/flujo), pero NO para el hero de "Ventas". Esta función
+ //   replica EXACTAMENTE la rama de ventas de revenue() (mismos filtros visibles),
+ //   omitiendo la rama de ingresosFin. Aditiva — no toca revenue() ni su control flow.
+ function ventasPeriodo(range) {
+ const ventas = State.get.ventas();
+ return money(ventas
+ .filter(v => { const d = new Date(v.fecha); return d >= range.start && d < range.end; })
+ .filter(v => _isKpiVisible(v))
+ .reduce((s, v) => s + ventaIngresos(v), 0));
+ }
+
  // revenueMesActual(): ingresos del mes calendario actual
  function revenueMesActual() {
  return revenue(mesActualRange());
@@ -21611,6 +21626,33 @@ const FinEngine = (() => {
  return Math.round((actual - anterior) / anterior * 100);
  }
 
+ // ── delta VENTAS (ventas-only) vs periodo anterior — v1.3.2023 ───
+ // Igual que deltaRevenue pero usando ventasPeriodo (solo ventas, sin ingresosFin).
+ //   Para el hero "Resumen de Ventas": el % debe comparar ventas vs ventas, no
+ //   income total vs income total. null si no hay datos previos. Aditiva.
+ function deltaVentas(period) {
+ const now = new Date();
+ let rangeActual, rangeAnt;
+ if (period && period.type) {
+ rangeActual = _rangeFromPeriod(period);
+ const durMs = rangeActual.end - rangeActual.start;
+ rangeAnt = {
+ start: new Date(rangeActual.start.getTime() - durMs),
+ end: new Date(rangeActual.start)
+ };
+ } else {
+ rangeActual = mesActualRange();
+ rangeAnt = {
+ start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+ end: new Date(now.getFullYear(), now.getMonth(), 1)
+ };
+ }
+ const actual = ventasPeriodo(rangeActual);
+ const anterior = ventasPeriodo(rangeAnt);
+ if (anterior === 0) return null;
+ return Math.round((actual - anterior) / anterior * 100);
+ }
+
  // ── 10. COMPROMETIDO (gastos fijos recurrentes) ──────────────────
  function comprometido() {
  return money(
@@ -21672,11 +21714,16 @@ const FinEngine = (() => {
  const tkMedio = ticketMedio(range);
  const delta = deltaRevenue(period); // v1.3.294: pasar period para delta correcto
  const deltaCom = deltaCompras(period); // v1.3.1615 Lote 6.4
+ // v1.3.2023: ventas-only para el hero "Resumen de Ventas" (sin ingresosFin)
+ const vtasOnly = ventasPeriodo(range);
+ const deltaVtas = deltaVentas(period);
  const comp = comprometido();
 
  return {
  // Ingresos
  ingresos: ing,
+ ventasTPV: vtasOnly,      // v1.3.2023: ventas reales (sin ingresosFin) — hero "Resumen de Ventas"
+ deltaVentas: deltaVtas,   // v1.3.2023: % ventas vs periodo anterior (ventas-only)
  ingresosMes: revenueMesActual(),
  ingresos30d: revenue30d(),
  ticketMedio: tkMedio,
@@ -21731,6 +21778,7 @@ const FinEngine = (() => {
  revenue,
  revenueMesActual,
  revenue30d,
+ ventasPeriodo, // v1.3.2023: ventas-only (sin ingresosFin)
 
  // Costs
  costeVentas, costeVentasMesActual,
@@ -21755,7 +21803,7 @@ const FinEngine = (() => {
  ticketMedio, ticketMedioMesActual,
 
  // Delta
- deltaRevenue, deltaCompras, comprometido,
+ deltaRevenue, deltaCompras, deltaVentas, comprometido,
 
  // Master snapshot
  snapshot,
@@ -24138,7 +24186,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2022';
+ const _APP_VERSION = 'v1.3.2023';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -47006,8 +47054,8 @@ function _confirmBorrarCuenta(id) {
 
  // ── RENDIMIENTO ──────────────────────────────────────────────────
  if (cardId === 'rendimiento') {
- var ing = snap.ingresos || 0;
- var delta = snap.deltaRevenue || 0;
+ var ing = (snap.ventasTPV != null ? snap.ventasTPV : (snap.ingresos || 0)); // v1.3.2023 ventas-only
+ var delta = ('deltaVentas' in snap ? snap.deltaVentas : snap.deltaRevenue) || 0;
  var mg = snap.margenBruto || 0;
  var ticket = snap.ticketMedio || 0;
  var top3 = KPI.getTopVentas(period) || [];
@@ -51567,8 +51615,10 @@ function _confirmBorrarCuenta(id) {
  var fmt = _snapFmt;
 
  if (cardId === 'rendimiento') {
- var ing = snap.ingresos || 0;
- var delta = snap.deltaRevenue; // null = sin datos periodo anterior
+ // v1.3.2023: hero "Ventas del periodo" = ventas reales (sin ingresosFin como
+ //   devoluciones de Hacienda). Fallback a snap.ingresos si el snapshot es viejo.
+ var ing = (snap.ventasTPV != null ? snap.ventasTPV : (snap.ingresos || 0));
+ var delta = ('deltaVentas' in snap) ? snap.deltaVentas : snap.deltaRevenue; // null = sin datos periodo anterior
  var ticket = snap.ticketMedio || 0;
  var mg = snap.margenBruto || 0;
  // v1.3.1604: KPI 3 "Hora pico" sustituido por "Beneficio neto".
@@ -53069,10 +53119,10 @@ function _confirmBorrarCuenta(id) {
  switch(cardId) {
  case 'rendimiento':
  return {
- value: feur(snap.ingresos || 0),
+ value: feur(snap.ventasTPV != null ? snap.ventasTPV : (snap.ingresos || 0)),
  // v1.3.577: deltaRevenue null = sin periodo anterior → mostrar '—' en vez de '-0.0%'
- delta: snap.deltaRevenue == null ? '—' : (snap.deltaRevenue >= 0 ? '+' : '') + snap.deltaRevenue.toFixed(1) + '%',
- deltaClass: snap.deltaRevenue == null ? 'neutral' : snap.deltaRevenue >= 0 ? 'positive' : 'negative'
+ delta: (function(){ var dv = ('deltaVentas' in snap) ? snap.deltaVentas : snap.deltaRevenue; return dv == null ? '—' : (dv >= 0 ? '+' : '') + dv.toFixed(1) + '%'; })(),
+ deltaClass: (function(){ var dv = ('deltaVentas' in snap) ? snap.deltaVentas : snap.deltaRevenue; return dv == null ? 'neutral' : dv >= 0 ? 'positive' : 'negative'; })()
  };
  case 'compras':
  return {
