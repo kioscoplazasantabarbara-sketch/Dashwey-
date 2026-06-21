@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2034";
+ var CURRENT_CACHE = "dashwey-v1-3-2035";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2034</title>
+<title>Dashwey v1.3.2035</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24196,7 +24196,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2034';
+ const _APP_VERSION = 'v1.3.2035';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -37337,7 +37337,15 @@ function _toggleCardFromManager(id, btn) {
   // Agrupar ventas (sin closureId) por cuenta + día Madrid
   var _fcGrupoVentas = {}; // key → { total, count, fechaRep, cuentaId, day }
   _ventas.forEach(function(v){
-   if (!v || v.deleted || v.closureId) return;
+   // v1.3.2035 — NO excluir v.closureId: los días con cierre PRELIMINAR
+   //   (cierre_caja_auto pendienteRevision, p.ej. "ayer") estampan closureId
+   //   en sus ventas pero NO son cierre 'cerrado' → quedaban fuera tanto del
+   //   venta-dia (este filtro) como del bloque de cierres reales = día sin
+   //   movimiento en el card. El anti-duplicado por día real (_fcDiasCierreReal)
+   //   ya suprime los días CERRADOS, así que incluir closureId aquí solo añade
+   //   los días preliminares como "💰 Cierre del día · Loyverse" (coherente con
+   //   la ficha de cuenta / Vista global que tampoco filtran closureId).
+   if (!v || v.deleted) return;
    // v1.3.1403 — usar cuenta primaria como fallback (era '?', causaba que
    //   _openTicketsDelDia filtrara por cuenta inexistente y devolviera 0 tickets)
    var cuentaId = v.cuentaId || _fcPrimCtaId;
@@ -41024,6 +41032,9 @@ function _openEditMovimientoSheet(id, src) {
    try { if (typeof _matchesScope === 'function' && !_matchesScope(m)) return false; } catch(_){}
    if (m.tipo === 'transfer' || m.tipo === 'ajuste') return false;
    if (m.estado === 'pendiente') return false;
+   // v1.3.2035 — el ingreso preliminar cierre_caja_auto se muestra agregado vía
+   //   la fila "💰 Cierre del día" (bloque cierres abajo), no como ingreso suelto.
+   if (m.origen === 'cierre_caja_auto') return false;
    var d = new Date(m.fecha);
    return range && d >= range.start && d < range.end;
   }).map(function(m){ return Object.assign({}, m, { _kind: 'ingreso' }); });
@@ -41037,7 +41048,63 @@ function _openEditMovimientoSheet(id, src) {
    return range && d >= range.start && d < range.end;
   }).map(function(m){ return Object.assign({}, m, { _kind: 'gasto' }); });
 
-  var todos = ingresos.concat(gastos).sort(function(a,b){
+  // v1.3.2035 — CIERRES DEL DÍA (faltaban en este modal; la ficha de cuenta sí
+  //   los muestra). Mismo modelo que _openDetalleCuentaGlobal: derivados Loyverse
+  //   (venta-dia agrupada) + reales Dashwey, anti-duplicado por día con cierre real.
+  //   Solo presentación — no toca saldo/cálculo/sync.
+  var cierres = [];
+  try {
+   var _umCuentas = State.get.cuentas ? (State.get.cuentas() || []) : [];
+   var _umPrim = _umCuentas.find(function(c){ return c && !c.deleted && c.isPrimary; });
+   var _umPrimId = _umPrim ? _umPrim.id : (_umCuentas[0] ? _umCuentas[0].id : '?');
+   var _umDayKey = function(iso){
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso)); }
+    catch(_) { return ''; }
+   };
+   var _umInRange = function(iso){ var d = new Date(iso); return range && d >= range.start && d < range.end; };
+   var _umCierres = State.get.cierresCaja ? (State.get.cierresCaja() || []) : [];
+   // Set de días (cuenta|dayKey) con cierre REAL cerrado → prioridad
+   var _umDiasReal = new Set();
+   _umCierres.forEach(function(c){
+    if (!c || c.deleted || c.estado !== 'cerrado' || !c.cierreTs) return;
+    var jKey = c.jornadaLabel || _umDayKey(c.cierreTs);
+    _umDiasReal.add((c.cuentaId || _umPrimId) + '|' + jKey);
+   });
+   // 1. Derivados Loyverse: agrupar ventas por cuenta+día (incluye closureId; excluye días con cierre real)
+   var _umGrupo = {};
+   (State.get.ventas ? (State.get.ventas() || []) : []).forEach(function(v){
+    if (!v || v.deleted || v.metaTipo === 'ajuste') return;
+    var cid = v.cuentaId || _umPrimId;
+    var day = _umDayKey(v.fecha);
+    if (!day) return;
+    if (_umDiasReal.has(cid + '|' + day)) return;
+    var imp = (typeof v.total === 'number') ? v.total : (v.items || []).reduce(function(s,it){ return s + (it.pvp||0)*(it.qty||0); }, 0);
+    if (imp <= 0) return;
+    var k = cid + '|' + day;
+    if (!_umGrupo[k]) _umGrupo[k] = { total: 0, count: 0, fechaRep: v.fecha };
+    _umGrupo[k].total += imp; _umGrupo[k].count++;
+    if (new Date(v.fecha) > new Date(_umGrupo[k].fechaRep)) _umGrupo[k].fechaRep = v.fecha;
+   });
+   Object.keys(_umGrupo).forEach(function(k){
+    var g = _umGrupo[k];
+    if (!_umInRange(g.fechaRep)) return;
+    cierres.push({ _kind: 'cierre', _neto: 1, importe: Math.round(g.total * 100) / 100, fecha: g.fechaRep,
+     _sub: g.count + ' ticket' + (g.count !== 1 ? 's' : '') + ' · Loyverse' });
+   });
+   // 2. Reales Dashwey (neto)
+   _umCierres.forEach(function(c){
+    if (!c || c.deleted || c.estado !== 'cerrado' || !c.cierreTs) return;
+    var neto = (Number(c.ventas) || 0) + (Number(c.ingresos) || 0) - (Number(c.gastos) || 0);
+    if (neto === 0) return;
+    var visualFecha = (c.jornadaLabel && /^\d{4}-\d{2}-\d{2}$/.test(c.jornadaLabel)) ? c.jornadaLabel + 'T11:00:00.000Z' : new Date(c.cierreTs).toISOString();
+    if (!_umInRange(visualFecha)) return;
+    var nT = Number(c.nVentas) || 0;
+    cierres.push({ _kind: 'cierre', _neto: neto, importe: Math.abs(neto), fecha: visualFecha,
+     _sub: (nT ? (nT + ' ticket' + (nT !== 1 ? 's' : '') + ' · Dashwey') : 'Dashwey') });
+   });
+  } catch(_eUmC) { try { console.warn('[UltimosMovs] cierres error:', _eUmC); } catch(__){} }
+
+  var todos = ingresos.concat(gastos).concat(cierres).sort(function(a,b){
    return new Date(b.fecha || 0) - new Date(a.fecha || 0);
   });
 
@@ -41049,6 +41116,15 @@ function _openEditMovimientoSheet(id, src) {
   var currentPage = 1;
 
   function _renderMovRow(m) {
+   if (m._kind === 'cierre') {
+    var cNeg = (m._neto || 0) < 0;
+    return _ksListRow({
+     primary: '💰 Cierre del día',
+     secondary: _ksFdate(m.fecha) + (m._sub ? ' · ' + m._sub : ''),
+     rightPrimary: (cNeg ? '− ' : '+ ') + _ksFeur(m.importe || 0),
+     rightPrimaryColor: cNeg ? 'var(--red)' : 'var(--success)'
+    });
+   }
    var isIng = m._kind === 'ingreso';
    var label;
    if (isIng) {
