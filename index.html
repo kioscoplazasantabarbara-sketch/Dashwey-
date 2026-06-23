@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2035";
+ var CURRENT_CACHE = "dashwey-v1-3-2036";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2035</title>
+<title>Dashwey v1.3.2036</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -24196,7 +24196,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2035';
+ const _APP_VERSION = 'v1.3.2036';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -31810,6 +31810,31 @@ const ui = (() => {
   try { _autoCierreStart(); } catch(_) {}
  }, 5000);
 
+ // v1.3.2036 — PREFETCH de arranque (paralelo a Firebase auth + initialSync).
+ //   La API Loyverse usa su PROPIO token (localStorage), NO depende de Firebase,
+ //   así que se puede pedir desde el primer instante del boot, mientras Firebase
+ //   resuelve sesión (~1.3s) e initialSync lee Firestore (~0.5s). Esto SOLO hace
+ //   el FETCH de red y guarda los receipts en un buffer; el COMMIT lo hace
+ //   _lvSyncHoy DESPUÉS de initialSync (sin tocar el gating de seguridad).
+ //   Resultado: las ventas del día aparecen ~1-2s antes (la latencia de red se
+ //   solapa con auth+sync en vez de ir DESPUÉS). Si falla o no hay token, no pasa
+ //   nada: _lvSyncHoy hace el fetch normal como siempre.
+ function _lvPrefetchBoot() {
+  try {
+   if (window._DashweyLvPrefetch && window._DashweyLvPrefetch.status === 'fetching') return;
+   var token = localStorage.getItem('dashwey_lv_token') || '';
+   if (!token || !navigator.onLine) return;
+   var hoy00 = new Date(Date.now() - 28 * 3600 * 1000); // misma ventana corta que el boot sync
+   window._DashweyLvPrefetch = { status: 'fetching', ts: Date.now(), receipts: null, limitePlan: false };
+   _lvSyncHoyPaginated(token, [], null, hoy00, function(receipts, limitePlan) {
+    window._DashweyLvPrefetch = { status: 'ready', ts: Date.now(), receipts: receipts || [], limitePlan: !!limitePlan };
+   });
+  } catch(_e) {
+   try { window._DashweyLvPrefetch = null; } catch(__){}
+  }
+ }
+ window._DashweyLvPrefetchBoot = _lvPrefetchBoot;
+
  function _lvSyncHoy(opts) {
   opts = opts || {};
   // Guards silenciosos: sin token, sin red, o ya en curso
@@ -31858,8 +31883,9 @@ const ui = (() => {
   var _ventanaH = (typeof opts.ventanaHoras === 'number' && opts.ventanaHoras > 0) ? opts.ventanaHoras : 72;
   var hoy00 = new Date(Date.now() - _ventanaH * 3600 * 1000);
 
-  // Paginación: traer páginas hasta que receipt_date < hoy00
-  _lvSyncHoyPaginated(token, [], null, hoy00, function(receipts, limitePlan) {
+  // v1.3.2036 — commit extraído a función nombrada para poder alimentarlo desde
+  //   el fetch normal O desde el prefetch de arranque (receipts ya en buffer).
+  function _lvProcess(receipts, limitePlan) {
    try {
     var ventasAntes = (State.get.ventas ? State.get.ventas().length : 0);
     _lvCommitReceipts(receipts, null, limitePlan || false, true); // silent=true
@@ -31898,7 +31924,29 @@ const ui = (() => {
      }
     } catch(_) {}
    }
-  });
+  } // fin _lvProcess
+
+  // v1.3.2036 — si el PREFETCH de arranque ya trajo los receipts (en paralelo con
+  //   auth+initialSync), consumirlos directamente en vez de re-pedir a la API.
+  //   Recorta del "tiempo hasta ver ventas" la latencia de auth+initialSync.
+  var _pf = window._DashweyLvPrefetch;
+  if (_pf && _pf.status === 'ready' && Array.isArray(_pf.receipts) && (Date.now() - _pf.ts) < 90000) {
+   _pf.status = 'consumed';
+   _lvProcess(_pf.receipts, _pf.limitePlan);
+   return;
+  }
+  // Prefetch aún en vuelo → esperar a que termine (evita doble fetch a la API)
+  if (_pf && _pf.status === 'fetching' && (Date.now() - _pf.ts) < 90000) {
+   var _w = (opts._pfWait || 0) + 1;
+   if (_w <= 30) { // ~6s máx de espera
+    _lvSyncInFlight = false;
+    setTimeout(function(){ _lvSyncHoy(Object.assign({}, opts, { _pfWait: _w })); }, 200);
+    return;
+   }
+   // prefetch tardó demasiado → seguir con fetch normal
+  }
+  // Sin prefetch (o caducado/fallido) → fetch normal como siempre
+  _lvSyncHoyPaginated(token, [], null, hoy00, _lvProcess);
  }
 
  // Paginador recursivo: acumula tickets >= hoy00 y corta cuando sale del rango
@@ -70828,8 +70876,11 @@ _eaRecalc();
   // v1.3.1845: ACELERAR ARRANQUE — ventana corta 28h (solo ventas de hoy, igual que el
   //   PTR v1808) → 1 sola página en vez de paginar 72h → datos al segundo, el gris dura
   //   mucho menos. Delay 1500→700ms (empieza antes pero deja respirar al 1er render).
+  // v1.3.2036: 700→200ms. Con el prefetch paralelo, este disparo ya solo CONSUME
+  //   el buffer (commit) en vez de iniciar la red → el shimmer del Hero se limpia
+  //   antes. El render del commit va coalesced (no compite con el 1er paint).
   try {
-   setTimeout(function(){ try { App.ui._lvSyncHoy({ ventanaHoras: 28 }); } catch(_) {} }, 700);
+   setTimeout(function(){ try { App.ui._lvSyncHoy({ ventanaHoras: 28 }); } catch(_) {} }, 200);
   } catch(_) {}
  }
 }
@@ -71146,6 +71197,11 @@ window._DashweyDeviceId = (() => {
  })();
 
  // Ejecutar sync: si ya está listo, inmediatamente; si no, esperar evento
+ // v1.3.2036 — disparar el PREFETCH de Loyverse YA, en paralelo con la resolución
+ //   de Firebase auth e initialSync (la API LV no depende de Firebase). Así la
+ //   petición de red se solapa con esos ~1.8s en vez de ir después.
+ try { if (window._DashweyLvPrefetchBoot) window._DashweyLvPrefetchBoot(); } catch(_) {}
+
  if (_fb?.ready) {
  _doInitialSync();
  } else {
