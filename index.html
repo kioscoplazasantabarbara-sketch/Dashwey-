@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2036";
+ var CURRENT_CACHE = "dashwey-v1-3-2037";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2036</title>
+<title>Dashwey v1.3.2037</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18192,7 +18192,17 @@ const State = (() => {
    const _ts0 = Date.now();
    const _did0 = window._DashweyDeviceId || 'unknown';
    if (_state.user) { _state.user.lastSyncAt = _ts0; _state.user.lastDeviceId = _did0; }
-   _writeLocal(_archivePayload(_state));
+   // v1.3.2037 PERF: en apply remoto en RÁFAGA (6 subcolecciones al arrancar),
+   //   _writeLocal serializa TODO el estado (~3MB) + sorts (pedidos/mermas) en CADA
+   //   setter → ×6 = freeze. Los datos vienen de Firestore (ya persistidos), así
+   //   que coalescemos la escritura local en UNA, debounced 500ms tras la última.
+   //   Respaldo de durabilidad: el re-save() de Firebase programado abajo (+600ms)
+   //   reescribe local por la vía normal cuando el apply ya terminó. El timer no
+   //   depende del flag de apply, así que SIEMPRE acaba escribiendo.
+   clearTimeout(window._DashweyApplyLocalWriteTimer);
+   window._DashweyApplyLocalWriteTimer = setTimeout(function() {
+    try { _writeLocal(_archivePayload(_state)); } catch(_) {}
+   }, 500);
   } catch(_) {}
   // Reprogramar para subir a Firebase cuando termine el apply remoto
   if (!window._DashweySaveScheduled) {
@@ -18536,6 +18546,14 @@ const State = (() => {
  window._DashweyCanonStringify = _canonStringify;
  const _diffMarkDirty = (stateKey, _unused, newArr) => {
   try {
+   // v1.3.2037 PERF: durante la aplicación de un snapshot REMOTO, _DashweyMarkDirty
+   //   ya es no-op (guard _DashweyApplyingRemote en su cuerpo). Por tanto el bucle
+   //   de _canonStringify por item de este diff es PURO DESPERDICIO — y en el
+   //   arranque corre sobre ventas (~5000) + gastos + pedidos… = miles de
+   //   stringify síncronos que CONGELAN el hilo. Saltarlo no cambia nada funcional
+   //   (los items vienen de Firestore, ya están sincronizados; los locales-only
+   //   conservan su dirty por la lógica selectiva del merge handler).
+   if (window._DashweyApplyingRemote) return;
    if (!Array.isArray(newArr)) return;
    if (!window._DashweyLastSyncedSnap) window._DashweyLastSyncedSnap = {};
    if (!window._DashweyLastSyncedSnap[stateKey]) window._DashweyLastSyncedSnap[stateKey] = {};
@@ -24196,7 +24214,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2036';
+ const _APP_VERSION = 'v1.3.2037';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
