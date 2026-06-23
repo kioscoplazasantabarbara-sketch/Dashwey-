@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2037";
+ var CURRENT_CACHE = "dashwey-v1-3-2038";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2037</title>
+<title>Dashwey v1.3.2038</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -18494,7 +18494,12 @@ const State = (() => {
  const _ndCache = new Map(); // stateKey → { arrRef, filtered }
  let _ndCacheHits = 0;
  let _ndCacheMisses = 0;
- function _ndInvalidate() { _ndCache.clear(); }
+ // v1.3.2038 PERF: caché de FinEngine.snapshot. Mismo ciclo de vida que _ndCache:
+ //   se vacía en cada _ndInvalidate() (= cada save / cambio de datos). Ver wrapper
+ //   snapshot() en FinEngine. periodSig → { snap, ts }.
+ const _snapCache = new Map();
+ const _SNAP_TTL = 30000; // ms — cota de deriva para periodos relativos ('hoy') en idle
+ function _ndInvalidate() { _ndCache.clear(); try { _snapCache.clear(); } catch(_) {} }
  // v1.3.1074: helper de filtrado soft-delete — transparente para items viejos sin flag
  // v1.3.1471 LOTE 5: cacheada. Firma compatible (sin segundo parámetro pasa por
  //                   fast path sin cache). Para hits cacheados se pasa stateKey.
@@ -21691,7 +21696,26 @@ const FinEngine = (() => {
 
  // ── 11. RESUMEN FINANCIERO COMPLETO ──────────────────────────────
  // snapshot(): un objeto con TODAS las métricas → único punto de acceso para la UI
+ // v1.3.2038 PERF: memoización de snapshot. La MISMA (period, estado-de-datos)
+ //   produce el MISMO resultado, pero snapshot() se llama VARIAS veces por render
+ //   (una por tarjeta + header + charts) y de nuevo en cada swipe → recomputar el
+ //   resumen sobre ~5000 ventas era el cuello de la fluidez al tocar/navegar.
+ //   Se cachea por firma de periodo y se INVALIDA en _ndInvalidate() (cada save /
+ //   cambio de datos, idéntico a _ndCache) + TTL 30s (cubre la deriva de periodos
+ //   relativos como 'hoy' al cruzar medianoche en idle). NO toca ningún cálculo:
+ //   _snapshotCompute es el cuerpo original, intacto.
  function snapshot(period) {
+  var _sig;
+  try {
+   _sig = period ? (period.type + '|' + (period.offset || 0) + '|' + (period.customStart || '') + '|' + (period.customEnd || '')) : '_mesActual';
+   var _c = _snapCache.get(_sig);
+   if (_c && (Date.now() - _c.ts) < _SNAP_TTL) return _c.snap;
+  } catch(_) { _sig = null; }
+  var _r = _snapshotCompute(period);
+  try { if (_sig) _snapCache.set(_sig, { snap: _r, ts: Date.now() }); } catch(_) {}
+  return _r;
+ }
+ function _snapshotCompute(period) {
  const range = period ? _rangeFromPeriod(period) : mesActualRange();
  const ing = revenue(range);
  const cogs = costeVentas(range);
@@ -24214,7 +24238,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2037';
+ const _APP_VERSION = 'v1.3.2038';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
