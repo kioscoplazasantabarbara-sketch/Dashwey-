@@ -1004,7 +1004,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
  });
  }).catch(function(){});
  if ("caches" in window) {
- var CURRENT_CACHE = "dashwey-v1-3-2039";
+ var CURRENT_CACHE = "dashwey-v1-3-2038";
  // Limpiar caches antiguos — CURRENT_CACHE se sincroniza con CACHE_NAME del sw.js
  caches.keys().then(function(keys) {
  keys.forEach(function(key) {
@@ -1023,7 +1023,7 @@ html[data-theme="dark"]:not(.boot-glass-ok) #bottom-tabs {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&display=swap">
-<title>Dashwey v1.3.2039</title>
+<title>Dashwey v1.3.2038</title>
 <style>
 /* ════════════════════════════════════════════════════════════════════
  DASHWEY v8.4 · CSS LIMPIO — UN SOLO BLOQUE, CERO CAPAS
@@ -19315,12 +19315,20 @@ const State = (() => {
      return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
     };
 
-    // v1.3.2039 DÍA CALENDARIO: rango = día natural Madrid [00:00 D, 00:00 D+1). Ignora horario.
-    const aperturaTs = _tzToUtc(dateKey, 0, 0, zona);
-    const _paSig = dateKey.split('-');
-    const _dSig = new Date(Date.UTC(parseInt(_paSig[0],10), parseInt(_paSig[1],10)-1, parseInt(_paSig[2],10)));
-    _dSig.setUTCDate(_dSig.getUTCDate() + 1);
-    const cierreTsDiaContable = _tzToUtc(_dSig.toISOString().slice(0,10), 0, 0, zona);
+    // Apertura: HH:MM_apertura del dateKey (en horario nocturno, apertura es del día anterior)
+    let _aperturaDateKey = dateKey;
+    if (_esNocturno) {
+     // Restar 1 día en zona kiosco para apertura
+     const _pa = dateKey.split('-');
+     const _ayer = new Date(Date.UTC(parseInt(_pa[0],10), parseInt(_pa[1],10)-1, parseInt(_pa[2],10)));
+     _ayer.setUTCDate(_ayer.getUTCDate() - 1);
+     _aperturaDateKey = _ayer.toISOString().slice(0, 10);
+    }
+    const aperturaTs = _tzToUtc(_aperturaDateKey, _hhA, _mmA, zona);
+
+    // Cierre del día contable: HH:MM_cierre del dateKey (siempre en el dateKey original,
+    //   porque dateKey YA representa el día contable, no la fecha de apertura)
+    const cierreTsDiaContable = _tzToUtc(dateKey, _hhC, _mmC, zona);
 
     const cierreTs = i.revisadoEn || Date.now();
     _cierreRealId = 'cierre_promo_' + cierreTs;
@@ -24230,7 +24238,7 @@ const ui = (() => {
  }
 
  /* ── Actualizaciones PWA ── */
- const _APP_VERSION = 'v1.3.2039';
+ const _APP_VERSION = 'v1.3.2038';
  function _getAppVersion() { return _APP_VERSION; }
 
  // ── checkForUpdate — usa version.txt, fallback a HTML ──────
@@ -29533,49 +29541,47 @@ const ui = (() => {
  // v1.3.1276 FASE 1 — calcular bruto exacto en rango horarioApertura→horarioCierre
  // v1.3.1283 FIX TZ — respeta perfil.zona
  // Devuelve {bruto, nTickets, ticketMedio, rangoStr}
- // v1.3.2039 — MODELO DÍA CALENDARIO: un cierre = un día natural Madrid (00:00–23:59),
- //   idéntico a Loyverse Dashboard. Se IGNORA el horario de negocio para agrupar ventas.
- //   Helper canónico: día calendario (en zona) al que pertenece una fecha.
- function _diaMadridKey(fecha, zona) {
-  try {
-   return new Intl.DateTimeFormat('en-CA', { timeZone: zona || 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(fecha));
-  } catch(_) {
-   return (typeof fecha === 'string') ? fecha.slice(0, 10) : '';
-  }
- }
- try { window._DashweyDiaMadridKey = _diaMadridKey; } catch(_) {}
-
- // v1.3.1276 FASE 1 — bruto del día. v1.3.2039: agrupa por día calendario Madrid (ignora horario).
- //   targetKey = día a cerrar (YYYY-MM-DD). Si falta, se asume el día que acaba de terminar (ayer).
- function _autoCierreCalcBruto(perfil, targetKey) {
+ function _autoCierreCalcBruto(perfil) {
   try {
    var ventas = (State.get.ventas && State.get.ventas()) || [];
+   var hAp = perfil.horarioApertura;
+   var hCi = perfil.horarioCierre;
    var zona = perfil.zona || 'Europe/Madrid';
-   var dKey = targetKey;
-   if (!dKey) {
-    var pa = _autoCierreTzNow(zona).dateKey.split('-');
+   var tzNow = _autoCierreTzNow(zona);
+   var hoy = tzNow.dateKey;
+   var [hhA, mmA] = (hAp||'00:00').split(':').map(Number);
+   var [hhC, mmC] = (hCi||'23:59').split(':').map(Number);
+   // Soporte horario nocturno (apertura > cierre): apertura es AYER en zona kiosco
+   var aperturaKey = hoy;
+   if (hhA*60+mmA > hhC*60+mmC) {
+    // Restar 1 día en zona kiosco
+    var pa = hoy.split('-');
     var ayer = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
     ayer.setUTCDate(ayer.getUTCDate() - 1);
-    dKey = ayer.toISOString().slice(0, 10);
+    aperturaKey = ayer.toISOString().slice(0, 10);
    }
+   var aperturaTs = _autoCierreTzToUtc(aperturaKey, hhA, mmA, zona);
+   var cierreTs = _autoCierreTzToUtc(hoy, hhC, mmC, zona);
    var bruto = 0;
    var nTickets = 0;
    /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable (excluir transferencias/ajustes/pendientes)
       y excluir ventas ya estampadas con closureId (evita doble contabilidad).
-      v1.3.2039: pertenencia por día calendario Madrid (_diaMadridKey === dKey). */
+      Boundary: < cierreTs (exclusive, consistente con _autoCierreCrearCierreReal). */
    var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
    ventas.forEach(function(v){
     if (!v || v.deleted) return;
     if (!_aggCheck(v)) return;
     if (v.closureId) return;
-    if (_diaMadridKey(v.fecha, zona) !== dKey) return;
-    var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
-    bruto += imp;
-    nTickets++;
+    var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
+    if (ts >= aperturaTs && ts < cierreTs) {
+     var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
+     bruto += imp;
+     nTickets++;
+    }
    });
    var ticketMedio = nTickets > 0 ? (bruto / nTickets) : 0;
-   var rangoStr = 'día ' + dKey;
-   return { bruto: Math.round(bruto*100)/100, nTickets: nTickets, ticketMedio: Math.round(ticketMedio*100)/100, rangoStr: rangoStr, zona: zona, dateKey: dKey };
+   var rangoStr = (hAp || '?') + '–' + (hCi || '?');
+   return { bruto: Math.round(bruto*100)/100, nTickets: nTickets, ticketMedio: Math.round(ticketMedio*100)/100, rangoStr: rangoStr, zona: zona };
   } catch(e) {
    console.warn('[AutoCierre] calcBruto err', e);
    return { bruto: 0, nTickets: 0, ticketMedio: 0, rangoStr: '' };
@@ -29599,7 +29605,7 @@ const ui = (() => {
  // v1.3.1397 — Bifurcación según perfil.cierreAutomatico_modoArchivo:
  //   'revisar' (default): comportamiento original — crea ingreso preliminar pendiente
  //   'directo': crea cierre real directamente con closureId estampado en ventas
- function _autoCierreRegistrarPreliminar(perfil, targetKey) {
+ function _autoCierreRegistrarPreliminar(perfil) {
   try {
    // v1.3.1462 GUARD OFFLINE: ver _autoCierreCrearCierreReal para razón completa.
    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -29608,22 +29614,16 @@ const ui = (() => {
    }
    var cuentaId = perfil.cierreCajaCuentaDestino;
    if (!cuentaId) return false;
-   var zona = perfil.zona || 'Europe/Madrid';
-   // v1.3.2039 DÍA CALENDARIO: cerramos el día natural que terminó (targetKey o ayer Madrid)
-   var hoy = targetKey;
-   if (!hoy) {
-    var _tz = _autoCierreTzNow(zona).dateKey.split('-');
-    var _ay = new Date(Date.UTC(parseInt(_tz[0],10), parseInt(_tz[1],10)-1, parseInt(_tz[2],10)));
-    _ay.setUTCDate(_ay.getUTCDate() - 1);
-    hoy = _ay.toISOString().slice(0,10);
-   }
-   var info = _autoCierreCalcBruto(perfil, hoy);
+   var info = _autoCierreCalcBruto(perfil);
    // Caso 0€ — solo registrar si setting activo
    if (info.bruto <= 0 && info.nTickets === 0 && !perfil.registrarSinVentas) {
     console.info('[AutoCierre] sin ventas y registrarSinVentas=false → no se registra');
     return true; // tratamos como exitoso (no es error)
    }
    var now = Date.now();
+   // v1.3.1283 FIX TZ: dateKey en zona del kiosco (no del dispositivo)
+   var zona = perfil.zona || 'Europe/Madrid';
+   var hoy = _autoCierreTzNow(zona).dateKey;
 
    // ═══════════════════════════════════════════════════════════════════════
    // v1.3.1397 — MODO DIRECTO: crear cierre real sin paso preliminar
@@ -29695,7 +29695,15 @@ const ui = (() => {
    var importe = info.bruto;
    var nTickets = info.nTickets;
 
-   // v1.3.2039 DÍA CALENDARIO: rango = día natural Madrid [00:00 D, 00:00 D+1). Ignora horario.
+   // Calcular rango temporal del día contable original
+   var hAp = (perfil.horarioApertura || '00:00').match(/^(\d{2}):(\d{2})$/);
+   var hCi = (perfil.horarioCierre || '23:59').match(/^(\d{2}):(\d{2})$/);
+   var hhA = hAp ? parseInt(hAp[1], 10) : 0;
+   var mmA = hAp ? parseInt(hAp[2], 10) : 0;
+   var hhC = hCi ? parseInt(hCi[1], 10) : 23;
+   var mmC = hCi ? parseInt(hCi[2], 10) : 59;
+   var esNocturno = (hhA * 60 + mmA) > (hhC * 60 + mmC);
+
    var tzToUtc = function(dKey, hh, mm){
     try {
      if (typeof window._DashweyAutoCierreTzToUtc === 'function') {
@@ -29705,11 +29713,16 @@ const ui = (() => {
     var pad = function(n){ return String(n).padStart(2,'0'); };
     return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
    };
-   var _paC = dateKey.split('-');
-   var _sigC = new Date(Date.UTC(parseInt(_paC[0],10), parseInt(_paC[1],10)-1, parseInt(_paC[2],10)));
-   _sigC.setUTCDate(_sigC.getUTCDate() + 1);
-   var aperturaTs = tzToUtc(dateKey, 0, 0);
-   var cierreTsDiaContable = tzToUtc(_sigC.toISOString().slice(0,10), 0, 0);
+
+   var aperturaDateKey = dateKey;
+   if (esNocturno) {
+    var pa = dateKey.split('-');
+    var ayer = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    ayer.setUTCDate(ayer.getUTCDate() - 1);
+    aperturaDateKey = ayer.toISOString().slice(0, 10);
+   }
+   var aperturaTs = tzToUtc(aperturaDateKey, hhA, mmA);
+   var cierreTsDiaContable = tzToUtc(dateKey, hhC, mmC);
 
    // Idempotencia: ¿ya hay cierre cerrado para este dateKey + cuenta?
    // v1.3.1894: ampliar a c.fecha.startsWith(dateKey) — captura _nocta y otros IDs no canónicos.
@@ -29771,9 +29784,9 @@ const ui = (() => {
    ventasAll.forEach(function(v){
     if (!v || v.deleted || v.closureId) return;
     if (!_aggCheck(v)) return; // excluir transfer + ajuste + pendiente
-    // v1.3.2039 DÍA CALENDARIO: estampar ventas cuyo día-Madrid == dateKey (ignora horario)
-    if (_diaMadridKey(v.fecha, zona) !== dateKey) return;
-    {
+    var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+    if (!isFinite(t)) return;
+    if (t >= aperturaTs && t < cierreTsDiaContable) {
      var cidV = v.cuentaId || cuentaId;
      if (cidV !== cuentaId) return;
      v.closureId = cierreId;
@@ -29846,14 +29859,11 @@ const ui = (() => {
    var tzNow = _autoCierreTzNow(zona);
    var nowHHMM = String(tzNow.hh).padStart(2,'0') + ':' + String(tzNow.mm).padStart(2,'0');
    var today = tzNow.dateKey;
-   // v1.3.2039 DÍA CALENDARIO: disparar a MEDIANOCHE (00:00–00:09) y cerrar el día natural
-   //   que acaba de terminar (ayer Madrid). Se ignora el horario de negocio.
+   // Ventana: hora_cierre..hora_cierre+5min
+   var _toMin = function(s){ var p=s.split(':'); return parseInt(p[0])*60+parseInt(p[1]); };
    var nowM = tzNow.minOfDay;
-   if (nowM > 9) return;
-   var _paT = today.split('-');
-   var _ayD = new Date(Date.UTC(parseInt(_paT[0],10), parseInt(_paT[1],10)-1, parseInt(_paT[2],10)));
-   _ayD.setUTCDate(_ayD.getUTCDate() - 1);
-   var diaCerrar = _ayD.toISOString().slice(0, 10);
+   var targetM = _toMin(horarioCierre);
+   if (nowM < targetM || nowM > targetM + 5) return;
    // Detectar jornada abierta
    var jornadaAbierta = false;
    try {
@@ -29876,13 +29886,11 @@ const ui = (() => {
    //   marcamos lastFired y skip. Esto evita que el scheduler cree otro cierre
    //   cuando el usuario ya cerró manualmente antes de llegar la hora.
    try {
-    var _ccLock = (State.get.cierresCaja && State.get.cierresCaja()) || [];
-    var _yaCerrado = _ccLock.some(function(c){ return c && !c.deleted && c.estado === 'cerrado' && c.jornadaLabel === diaCerrar; });
-    if (_yaCerrado) {
+    if (typeof window._DashweyYaHayCierreHoy === 'function' && window._DashweyYaHayCierreHoy()) {
      if (_autoCierreLastFired !== today) {
       _autoCierreLastFired = today;
       try { localStorage.setItem('dashwey_autocierre_lastfired', today); } catch(_) {}
-      console.info('[AutoCierre] skip — ya hay cierre cerrado para ' + diaCerrar + ' (lock mutuo)');
+      console.info('[AutoCierre] skip — ya hay cierre cerrado hoy (lock mutuo v1.3.1361)');
      }
      return; // No disparar
     }
@@ -29896,9 +29904,9 @@ const ui = (() => {
      // v1.3.1397 — log distinto según modo
      var _modoArchivo = perfil.cierreAutomatico_modoArchivo === 'directo' ? 'directo' : 'preliminar revisable';
      console.info('[AutoCierre] modo ' + _modoArchivo + ' — disparando ' + horarioCierre);
-     var ok = _autoCierreRegistrarPreliminar(perfil, diaCerrar);
+     var ok = _autoCierreRegistrarPreliminar(perfil);
      if (ok) {
-      var info = _autoCierreCalcBruto(perfil, diaCerrar);
+      var info = _autoCierreCalcBruto(perfil);
       var _notifTitle = _modoArchivo === 'directo' ? 'Dashwey · Cierre archivado' : 'Dashwey · Cierre automático';
       _autoCierreNotify(_notifTitle, 'Registrado: ' + info.bruto.toFixed(2) + '€ · ' + info.nTickets + ' tickets · ' + info.rangoStr);
      } else {
@@ -30065,11 +30073,14 @@ const ui = (() => {
     // Calcular el timestamp UTC del cierre del día candidato:
     //   - horario normal (apertura < cierre): cierre es en el mismo día candidate
     //   - horario nocturno (apertura > cierre): cierre es a la mañana del día SIGUIENTE
-    // v1.3.2039 DÍA CALENDARIO: el día D es cerrable una vez ha terminado (now ≥ 00:00 de D+1).
-    var pa2 = candidateKey.split('-');
-    var siguiente = new Date(Date.UTC(parseInt(pa2[0],10), parseInt(pa2[1],10)-1, parseInt(pa2[2],10)));
-    siguiente.setUTCDate(siguiente.getUTCDate() + 1);
-    var cierreTs = _autoCierreTzToUtc(siguiente.toISOString().slice(0, 10), 0, 0, zona);
+    var cierreDateKey = candidateKey;
+    if (esNocturno) {
+     var pa2 = candidateKey.split('-');
+     var siguiente = new Date(Date.UTC(parseInt(pa2[0],10), parseInt(pa2[1],10)-1, parseInt(pa2[2],10)));
+     siguiente.setUTCDate(siguiente.getUTCDate() + 1);
+     cierreDateKey = siguiente.toISOString().slice(0, 10);
+    }
+    var cierreTs = _autoCierreTzToUtc(cierreDateKey, hhC, mmC, zona);
 
     // v1.3.1286 FIX: NO procesar días anteriores a la activación de la feature
     if (cierreTs < activadoEnTs) {
@@ -30167,22 +30178,35 @@ const ui = (() => {
    var zona = perfil.zona || 'Europe/Madrid';
    var [hhA, mmA] = (hAp||'00:00').split(':').map(Number);
    var [hhC, mmC] = (hCi||'23:59').split(':').map(Number);
+   var aperturaKey = dayKey;
+   var cierreKey = dayKey;
+   if (hhA*60+mmA > hhC*60+mmC) {
+    // Horario nocturno: cierre es al día SIGUIENTE
+    var pa = dayKey.split('-');
+    var siguiente = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    siguiente.setUTCDate(siguiente.getUTCDate() + 1);
+    cierreKey = siguiente.toISOString().slice(0, 10);
+   }
+   var aperturaTs = _autoCierreTzToUtc(aperturaKey, hhA, mmA, zona);
+   var cierreTs = _autoCierreTzToUtc(cierreKey, hhC, mmC, zona);
    var bruto = 0;
    var nTickets = 0;
-   /* v1.3.2039 DÍA CALENDARIO: pertenencia por día calendario Madrid (_diaMadridKey === dayKey).
-      Filtra _isAggregable + excluye ventas ya estampadas con closureId. Ignora horario. */
+   /* v1.3.1706 BUG-DATOS-003 FIX: filtrar _isAggregable y closureId (misma lógica que _autoCierreCalcBruto).
+      Boundary < cierreTs (exclusive, consistente con _autoCierreCrearCierreReal). */
    var _aggCheck = window._isAggregable || function(x){ return !!(x && x.metaTipo !== 'transfer'); };
    ventas.forEach(function(v){
     if (!v || v.deleted) return;
     if (!_aggCheck(v)) return;
     if (v.closureId) return;
-    if (_diaMadridKey(v.fecha, zona) !== dayKey) return;
-    var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
-    bruto += imp;
-    nTickets++;
+    var ts = v.fecha ? new Date(v.fecha).getTime() : (v.ts || 0);
+    if (ts >= aperturaTs && ts < cierreTs) {
+     var imp = (typeof v.total === 'number') ? v.total : (typeof v.importe === 'number' ? v.importe : 0);
+     bruto += imp;
+     nTickets++;
+    }
    });
    var ticketMedio = nTickets > 0 ? (bruto / nTickets) : 0;
-   var rangoStr = 'día ' + dayKey;
+   var rangoStr = (hAp || '?') + '–' + (hCi || '?');
    return { bruto: Math.round(bruto*100)/100, nTickets: nTickets, ticketMedio: Math.round(ticketMedio*100)/100, rangoStr: rangoStr };
   } catch(e) {
    console.warn('[AutoCierre] _calcBrutoForDay err', e);
@@ -30239,11 +30263,22 @@ const ui = (() => {
     return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
    };
 
-   // v1.3.2039 DÍA CALENDARIO: cada cierre captura las ventas cuyo día-Madrid == jornadaLabel.
-   //   Se ignora el horario; misma agrupación que Loyverse y que el motor de cierre.
-   var _mdKeyR = window._DashweyDiaMadridKey || function(f){ try { return new Intl.DateTimeFormat('en-CA',{timeZone:zona,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(f)); } catch(_){ return (typeof f==='string'?f.slice(0,10):''); } };
+   // Pre-calcular rango UTC [aperturaTs, cierreTsDiaContable) por cada cierre
    var rangos = cierresValidos.map(function(c){
-    return { cierre: c, id: c.id, cuentaId: c.cuentaId, diaKey: c.jornadaLabel };
+    var cierreKey = c.jornadaLabel;
+    if (esNocturno) {
+     var pa = c.jornadaLabel.split('-');
+     var sig = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+     sig.setUTCDate(sig.getUTCDate() + 1);
+     cierreKey = sig.toISOString().slice(0, 10);
+    }
+    return {
+     cierre: c,
+     id: c.id,
+     cuentaId: c.cuentaId,
+     from: c.aperturaTs,
+     to: tzToUtc(cierreKey, hhC, mmC)
+    };
    });
 
    var estampados = 0;
@@ -30254,7 +30289,7 @@ const ui = (() => {
     if (!isFinite(t)) return;
     for (var i = 0; i < rangos.length; i++) {
      var r = rangos[i];
-     if (_mdKeyR(v.fecha, zona) === r.diaKey) {
+     if (t >= r.from && t < r.to) {
       var cidV = v.cuentaId || r.cuentaId;
       if (cidV !== r.cuentaId) continue; // sigue buscando otro cierre compatible
       v.closureId = r.id;
@@ -30429,136 +30464,6 @@ const ui = (() => {
   } catch(e) {
    console.warn('[YaHayCierreHoy] error:', e && e.message);
    return false; // En caso de error, NO bloquear (degradación segura)
-  }
- };
-
- // ═══════════════════════════════════════════════════════════════════════════
- // v1.3.2039 — RECUPERAR CIERRES POR DÍA CALENDARIO (Loyverse Dashboard)
- //   Recalcula los cierres de un rango agrupando ventas por DÍA NATURAL Madrid
- //   (00:00–23:59), igual que Loyverse. Repara desfases (cierre con ventas del
- //   día anterior) y combinaciones (un cierre con 2 días juntos).
- //   USO (consola PC):
- //     _DashweyRecomputarCierres('2026-06-16','2026-06-22')           → DRY-RUN (no escribe)
- //     _DashweyRecomputarCierres('2026-06-16','2026-06-22',{dryRun:false}) → APLICA
- //   Tras aplicar: await window._DashweyFlushDirty(); esperar 3s; recargar.
- // ═══════════════════════════════════════════════════════════════════════════
- window._DashweyRecomputarCierres = function(desde, hasta, opts) {
-  opts = opts || {};
-  var dryRun = opts.dryRun !== false; // por defecto DRY-RUN
-  try {
-   var S = window.State;
-   if (!S || !S.get) { console.warn('State no disponible'); return; }
-   var perfil = (S.get.perfil && S.get.perfil()) || {};
-   var zona = perfil.zona || 'Europe/Madrid';
-   var mdKey = window._DashweyDiaMadridKey || function(f){ try { return new Intl.DateTimeFormat('en-CA',{timeZone:zona,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(f)); } catch(_){ return (typeof f==='string'?f.slice(0,10):''); } };
-   var agg = window._isAggregable || function(x){ return !!(x && x.metaTipo!=='transfer'); };
-   var ventas = (S.get.ventas && S.get.ventas()) || [];
-   var cierres = (S.get.cierresCaja && S.get.cierresCaja()) || [];
-
-   // Lista de días del rango
-   var dias = [];
-   var d0 = new Date(desde + 'T12:00:00Z'), d1 = new Date(hasta + 'T12:00:00Z');
-   if (!isFinite(d0) || !isFinite(d1) || d1 < d0) { console.warn('Rango de fechas inválido'); return; }
-   for (var t = d0.getTime(); t <= d1.getTime(); t += 86400000) { dias.push(new Date(t).toISOString().slice(0,10)); }
-
-   // Plan por día: objetivo (Loyverse = día calendario) vs cierres actuales
-   var plan = dias.map(function(D){
-    var vs = ventas.filter(function(v){ return v && !v.deleted && agg(v) && mdKey(v.fecha) === D; });
-    var objetivo = Math.round(vs.reduce(function(s,v){ return s + (typeof v.total==='number'?v.total:0); }, 0) * 100) / 100;
-    var cs = cierres.filter(function(c){ return c && !c.deleted && c.estado === 'cerrado' && c.jornadaLabel === D; });
-    var actual = Math.round(cs.reduce(function(s,c){ return s + (+c.ventas||0); }, 0) * 100) / 100;
-    return { dia:D, objetivo:objetivo, nObjetivo:vs.length, vs:vs, cierres:cs, actual:actual, difiere: Math.abs(objetivo-actual) > 0.01 || cs.length > 1 };
-   });
-
-   console.table(plan.map(function(p){ return {
-    'Día': p.dia,
-    'Loyverse (objetivo)': p.objetivo.toFixed(2) + '€ / ' + p.nObjetivo + 'tk',
-    'Dashwey (actual)': p.actual.toFixed(2) + '€',
-    'nCierres': p.cierres.length,
-    'estado': p.difiere ? '⚠️ recalcular' : '✓ ok'
-   }; }));
-
-   if (dryRun) {
-    console.log('%c[DRY-RUN] No se ha escrito nada. Compara la columna "Loyverse (objetivo)" con tu Dashboard de Loyverse.', 'color:#d80;font-weight:bold');
-    console.log('Para APLICAR: _DashweyRecomputarCierres("' + desde + '","' + hasta + '",{dryRun:false})');
-    return plan;
-   }
-
-   // ── APLICAR ──
-   var recalc = 0, creados = 0, borrados = 0, estampadas = 0, liberadas = 0;
-   var now = Date.now();
-
-   // 1) Liberar closureId de todas las ventas del rango (calendario) → re-estampamos limpio
-   var diasSet = {}; dias.forEach(function(D){ diasSet[D] = true; });
-   ventas.forEach(function(v){
-    if (v && !v.deleted && v.closureId && diasSet[mdKey(v.fecha)]) {
-     v.closureId = null; v._updatedAt = now; v.updatedAt = new Date(now).toISOString();
-     try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {}
-     liberadas++;
-    }
-   });
-
-   plan.forEach(function(p){
-    var D = p.dia;
-    // Cuenta destino: la del primer cierre del día, o la configurada en perfil
-    var cuentaId = (p.cierres[0] && p.cierres[0].cuentaId) || perfil.cierreCajaCuentaDestino;
-    // Ventas del día calendario (ya liberadas)
-    var vsDia = ventas.filter(function(v){ return v && !v.deleted && agg(v) && mdKey(v.fecha) === D && (cuentaId ? (v.cuentaId || cuentaId) === cuentaId : true); });
-    var sum = Math.round(vsDia.reduce(function(s,v){ return s + (typeof v.total==='number'?v.total:0); }, 0) * 100) / 100;
-
-    if (p.cierres.length === 0) {
-     // Día sin cierre → si hay ventas, crear uno nuevo (ID determinista día calendario)
-     if (vsDia.length === 0 && !perfil.registrarSinVentas) return;
-     if (!cuentaId) { console.warn('[Recomputar] ' + D + ': sin cuenta destino, skip'); return; }
-     var nuevoId = 'cierre_auto_' + D + '_' + cuentaId;
-     var evIds = [];
-     vsDia.forEach(function(v){ v.closureId = nuevoId; v._updatedAt = now; v.updatedAt = new Date(now).toISOString(); evIds.push(v.id); try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {} });
-     estampadas += evIds.length;
-     var _pa = D.split('-'); var _sig = new Date(Date.UTC(+_pa[0], +_pa[1]-1, +_pa[2])); _sig.setUTCDate(_sig.getUTCDate()+1);
-     var nuevo = {
-      id: nuevoId, jornadaLabel: D,
-      aperturaTs: (window._DashweyAutoCierreTzToUtc ? window._DashweyAutoCierreTzToUtc(D,0,0,zona) : new Date(D+'T00:00:00').getTime()),
-      cierreTs: now, cuentaId: cuentaId,
-      saldoInicial: 0, saldoEsperado: sum, saldoReal: sum, diferencia: 0,
-      ventas: sum, gastos: 0, ingresos: 0, nVentas: evIds.length, nGastos: 0, nIngresos: 0,
-      movimientos: [], notas: 'Recomputado día calendario · ' + D, estado: 'cerrado', origen: 'auto_directo',
-      eventIds: { ventas: evIds, gastos: [], ingresos: [] }, isCached: true, cachedAt: now, createdAt: now
-     };
-     if (S.set.addCierre) S.set.addCierre(nuevo); else { var st = S._raw && S._raw(); if (st && st.cierresCaja) st.cierresCaja.push(nuevo); try { window._DashweyMarkDirty('cierresCaja', nuevoId); } catch(_) {} }
-     creados++;
-     console.info('[Recomputar] + creado ' + D + ': ' + sum.toFixed(2) + '€ / ' + evIds.length + 'tk');
-    } else {
-     // Recalcular en sitio el primer cierre del día; soft-delete extras (combinados)
-     var principal = p.cierres[0];
-     if (vsDia.length === 0 && !perfil.registrarSinVentas) {
-      // Día sin ventas reales → soft-delete todos los cierres de ese día
-      p.cierres.forEach(function(c){ c.deleted = true; c._updatedAt = now; c.updatedAt = new Date(now).toISOString(); try { window._DashweyMarkDirty('cierresCaja', c.id); } catch(_) {} borrados++; });
-      console.info('[Recomputar] - ' + D + ': sin ventas → cierre(s) eliminados');
-      return;
-     }
-     var evIds2 = [];
-     vsDia.forEach(function(v){ v.closureId = principal.id; v._updatedAt = now; v.updatedAt = new Date(now).toISOString(); evIds2.push(v.id); try { window._DashweyMarkDirty('ventas', v.id); } catch(_) {} });
-     estampadas += evIds2.length;
-     principal.ventas = sum; principal.saldoEsperado = sum; principal.saldoReal = sum; principal.diferencia = 0;
-     principal.nVentas = evIds2.length;
-     principal.eventIds = { ventas: evIds2, gastos: (principal.eventIds&&principal.eventIds.gastos)||[], ingresos: (principal.eventIds&&principal.eventIds.ingresos)||[] };
-     principal.isCached = true; principal.cachedAt = now; principal._updatedAt = now; principal.updatedAt = new Date(now).toISOString();
-     principal.notas = 'Recomputado día calendario · ' + D;
-     try { window._DashweyMarkDirty('cierresCaja', principal.id); } catch(_) {}
-     recalc++;
-     // Extras del mismo día (combinados) → soft-delete
-     for (var k = 1; k < p.cierres.length; k++) { var ex = p.cierres[k]; ex.deleted = true; ex._updatedAt = now; ex.updatedAt = new Date(now).toISOString(); try { window._DashweyMarkDirty('cierresCaja', ex.id); } catch(_) {} borrados++; }
-     console.info('[Recomputar] ~ recalculado ' + D + ': ' + sum.toFixed(2) + '€ / ' + evIds2.length + 'tk' + (p.cierres.length>1?(' (−'+(p.cierres.length-1)+' combinados)'):''));
-    }
-   });
-
-   try { window._recalcSaldosCuentas && window._recalcSaldosCuentas(); } catch(_) {}
-   try { window.DashweyBus && window.DashweyBus.emit('cierre'); } catch(_) {}
-   console.log('%c✓ Recomputado: ' + recalc + ' recalculados, ' + creados + ' creados, ' + borrados + ' eliminados, ' + estampadas + ' ventas estampadas, ' + liberadas + ' liberadas.', 'color:#0a0;font-weight:bold');
-   console.log('%cAhora ejecuta: await window._DashweyFlushDirty()  → espera 3s → recarga la app.', 'color:#06c;font-weight:bold');
-   return plan;
-  } catch(e) {
-   console.warn('[Recomputar] error:', e && e.message, e);
   }
  };
 
@@ -41411,14 +41316,23 @@ function _openEditMovimientoSheet(id, src) {
     return new Date(dKey + 'T' + pad(hh) + ':' + pad(mm) + ':00').getTime();
    };
 
-   // v1.3.2039 DÍA CALENDARIO: ventas del día = día-Madrid(fecha) == dateKey (ignora horario)
-   var _mdKeyT = window._DashweyDiaMadridKey || function(f){ try { return new Intl.DateTimeFormat('en-CA',{timeZone:zona,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(f)); } catch(_){ return (typeof f==='string'?f.slice(0,10):''); } };
+   var aperturaDateKey = dateKey;
+   if (esNocturno) {
+    var pa = dateKey.split('-');
+    var ayer = new Date(Date.UTC(parseInt(pa[0],10), parseInt(pa[1],10)-1, parseInt(pa[2],10)));
+    ayer.setUTCDate(ayer.getUTCDate() - 1);
+    aperturaDateKey = ayer.toISOString().slice(0, 10);
+   }
+   var aperturaTs = tzToUtc(aperturaDateKey, hhA, mmA);
+   var cierreTs = tzToUtc(dateKey, hhC, mmC);
 
    // Filtrar ventas del día
    var todasVentas = (State.get.ventas && State.get.ventas()) || [];
    var ventasDia = todasVentas.filter(function(v) {
     if (!v || v.deleted) return false;
-    if (_mdKeyT(v.fecha, zona) !== dateKey) return false;
+    var t = (typeof v.fecha === 'number') ? v.fecha : new Date(v.fecha).getTime();
+    if (!isFinite(t)) return false;
+    if (t < aperturaTs || t > cierreTs) return false;
     // v1.3.1403 — tratar '?' como null (sin filtro de cuenta)
     var _cidFiltro = (cuentaId === '?' || !cuentaId) ? null : cuentaId;
     if (_cidFiltro) {
